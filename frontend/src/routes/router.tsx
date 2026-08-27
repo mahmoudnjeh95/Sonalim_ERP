@@ -1,0 +1,75 @@
+import { lazy, Suspense } from "react";
+import { createBrowserRouter, Navigate, Outlet } from "react-router-dom";
+import { useAuth } from "../lib/auth";
+import { AppLayout } from "./AppLayout";
+import { LoginPage } from "./LoginPage";
+import { LeadsPage } from "../features/crm/leads/LeadsPage";
+import { PartnersPage } from "../features/partners/PartnersPage";
+import { PartnerDetailsPage } from "../features/partners/PartnerDetailsPage";
+import { OpportunitiesPage } from "../features/crm/opportunities/OpportunitiesPage";
+import { PipelinePage } from "../features/crm/opportunities/PipelinePage";
+import { ActivitiesPage } from "../features/crm/activities/ActivitiesPage";
+import { UsersPage } from "../features/admin/users/UsersPage";
+import { ProductionPage } from "../features/production/ProductionPage";
+import { WarehousePage } from "../features/warehouse/WarehousePage";
+import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
+import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
+import { SettingsPage } from "../features/settings/SettingsPage";
+import { HrPage } from "../features/hr/HrPage";
+import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
+import { ProductsPage } from "../features/products/ProductsPage";
+import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
+
+// Lazy-loaded: pulls in recharts, which is the single largest dependency in
+// the bundle — keeping it out of the main chunk means pages that never touch
+// a chart don't pay for it.
+const CrmDashboardPage = lazy(() =>
+  import("../features/crm/dashboard/CrmDashboardPage").then((m) => ({ default: m.CrmDashboardPage })),
+);
+
+function ProtectedRoute() {
+  const { session } = useAuth();
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+  return (
+    <AppLayout>
+      <Outlet />
+    </AppLayout>
+  );
+}
+
+export const router = createBrowserRouter([
+  { path: "/login", element: <LoginPage /> },
+  {
+    element: <ProtectedRoute />,
+    children: [
+      { path: "/", element: <Navigate to="/crm" replace /> },
+      {
+        path: "/crm",
+        element: (
+          <Suspense fallback={null}>
+            <CrmDashboardPage />
+          </Suspense>
+        ),
+      },
+      { path: "/crm/leads", element: <LeadsPage /> },
+      { path: "/crm/partners", element: <PartnersPage /> },
+      { path: "/crm/partners/:partnerId", element: <PartnerDetailsPage /> },
+      { path: "/crm/opportunities", element: <OpportunitiesPage /> },
+      { path: "/crm/pipeline", element: <PipelinePage /> },
+      { path: "/crm/activities", element: <ActivitiesPage /> },
+      { path: "/production", element: <ProductionPage /> },
+      { path: "/warehouse", element: <WarehousePage /> },
+      { path: "/products", element: <ProductsPage /> },
+      { path: "/inventories", element: <InventoriesPage /> },
+      { path: "/shipments", element: <ShipmentsPage /> },
+      { path: "/procurement", element: <PurchaseOrdersPage /> },
+      { path: "/sales", element: <SalesOrdersPage /> },
+      { path: "/finance", element: <FinanceInvoicesPage /> },
+      { path: "/admin/users", element: <UsersPage /> },
+      { path: "/settings", element: <SettingsPage /> },
+      { path: "/hr", element: <HrPage /> },
+    ],
+  },
+]);

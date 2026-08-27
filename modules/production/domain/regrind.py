@@ -1,0 +1,32 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from core.domain.result import Err, Ok, Result
+
+VALID_SCRAP_TYPES = {"filling_dosing", "cutting"}
+
+
+@dataclass(frozen=True)
+class ScrapRecord:
+    id: str
+    work_order_id: str | None
+    operation_step_id: str | None
+    scrap_type: str
+    product_id: str
+    quantity: float
+    is_reground: bool
+    work_center_id: str | None = None
+    source_note: str | None = None
+
+
+def validate_scrap(
+    *, scrap_type: str, quantity: float, work_order_id: str | None, source_note: str | None
+) -> Result[None]:
+    if scrap_type not in VALID_SCRAP_TYPES:
+        return Err("INVALID_SCRAP_TYPE", f"scrap_type must be one of {sorted(VALID_SCRAP_TYPES)}")
+    if quantity <= 0:
+        return Err("INVALID_QUANTITY", "scrap quantity must be positive")
+    if not (work_order_id or (source_note and source_note.strip())):
+        return Err("MISSING_SOURCE", "either a work order or a source note is required")
+    return Ok(None)

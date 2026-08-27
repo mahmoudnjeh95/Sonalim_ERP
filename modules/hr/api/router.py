@@ -1,0 +1,157 @@
+from __future__ import annotations
+
+import datetime
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+from core.db import get_connection
+from core.domain.result import Err
+from core.tenancy import TenantContext, require_permission
+from modules.hr.api.service import DepartmentService, EmployeeService, LeaveService
+from modules.hr.api.contract_service import ContractService
+from modules.hr.api.payroll_service import AttendanceService, PayrollService
+
+router = APIRouter(prefix="/hr", tags=["hr"])
+
+class EmployeeBody(BaseModel):
+    employee_no: str
+    first_name: str
+    last_name: str
+    email: str | None = None
+    phone: str | None = None
+    department_id: str | None = None
+    job_title: str | None = None
+    hire_date: datetime.date
+    status: str = "active"
+
+class DepartmentBody(BaseModel):
+    code: str
+    name: str
+
+class LeaveBody(BaseModel):
+    employee_id: str
+    leave_type: str
+    start_date: datetime.date
+    end_date: datetime.date
+    reason: str | None = None
+
+class LeaveReviewBody(BaseModel):
+    status: str
+
+class ContractBody(BaseModel):
+    employee_id: str
+    contract_type: str
+    start_date: datetime.date
+    end_date: datetime.date | None = None
+    salary: float = 0
+    currency: str = "USD"
+    status: str = "active"
+
+class AttendanceBody(BaseModel):
+    employee_id: str
+    attendance_date: datetime.date
+    status: str
+    hours_worked: float = 0
+    note: str | None = None
+
+class PayrollBody(BaseModel):
+    period_month: datetime.date
+    bonuses: float = 0
+    deductions: float = 0
+    taxes: float = 0
+
+def fail(result: Err) -> None:
+    code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT if result.code.startswith("DUPLICATE") else status.HTTP_422_UNPROCESSABLE_ENTITY
+    raise HTTPException(code, {"code": result.code, "message": result.message})
+
+@router.get("/employees")
+def employees(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection: return EmployeeService(connection).list_employees(tenant.tenant_id, status_filter)
+
+@router.post("/employees", status_code=status.HTTP_201_CREATED)
+def create_employee(body: EmployeeBody, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
+    with get_connection() as connection:
+        result = EmployeeService(connection).create_employee(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.patch("/employees/{employee_id}")
+def update_employee(employee_id: str, body: EmployeeBody, tenant: TenantContext = Depends(require_permission("hr.admin_employees"))):
+    data = body.model_dump(exclude={"employee_no"})
+    with get_connection() as connection:
+        result = EmployeeService(connection).update_employee(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, **data)
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.get("/departments")
+def departments(tenant: TenantContext = Depends(require_permission("hr.view_departments"))):
+    with get_connection() as connection: return DepartmentService(connection).list_departments(tenant.tenant_id)
+
+@router.post("/departments", status_code=status.HTTP_201_CREATED)
+def create_department(body: DepartmentBody, tenant: TenantContext = Depends(require_permission("hr.manage_departments"))):
+    with get_connection() as connection:
+        result = DepartmentService(connection).create_department(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.get("/leave-requests")
+def leave_requests(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_leave"))):
+    with get_connection() as connection: return LeaveService(connection).list_requests(tenant.tenant_id, status_filter)
+
+@router.post("/leave-requests", status_code=status.HTTP_201_CREATED)
+def create_leave(body: LeaveBody, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
+    with get_connection() as connection:
+        result = LeaveService(connection).create_request(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.post("/leave-requests/{request_id}/review")
+def review_leave(request_id: str, body: LeaveReviewBody, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
+    with get_connection() as connection:
+        result = LeaveService(connection).review_request(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, request_id=request_id, status=body.status)
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.get("/contracts")
+def contracts(employee_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_contracts"))):
+    with get_connection() as connection: return ContractService(connection).list_contracts(tenant.tenant_id, employee_id)
+
+@router.post("/contracts", status_code=status.HTTP_201_CREATED)
+def create_contract(body: ContractBody, tenant: TenantContext = Depends(require_permission("hr.manage_contracts"))):
+    with get_connection() as connection:
+        result = ContractService(connection).create_contract(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.get("/dashboard")
+def dashboard(tenant: TenantContext = Depends(require_permission("hr.view_dashboard"))):
+    with get_connection() as connection:
+        employees = EmployeeService(connection).list_employees(tenant.tenant_id)
+        leave = LeaveService(connection).list_requests(tenant.tenant_id)
+        departments = DepartmentService(connection).list_departments(tenant.tenant_id)
+    return {"employee_count": len(employees), "active_employee_count": sum(e["status"] == "active" for e in employees), "department_count": len(departments), "pending_leave_count": sum(item["status"] == "pending" for item in leave), "on_leave_count": sum(e["status"] == "on_leave" for e in employees)}
+
+@router.get("/attendance")
+def attendance(tenant: TenantContext = Depends(require_permission("hr.view_attendance"))):
+    with get_connection() as connection: return AttendanceService(connection).list_records(tenant_id=tenant.tenant_id)
+
+@router.post("/attendance", status_code=status.HTTP_201_CREATED)
+def record_attendance(body: AttendanceBody, tenant: TenantContext = Depends(require_permission("hr.manage_attendance"))):
+    with get_connection() as connection:
+        result = AttendanceService(connection).record(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.get("/payroll-runs")
+def payroll_runs(tenant: TenantContext = Depends(require_permission("hr.view_payroll"))):
+    with get_connection() as connection: return PayrollService(connection).list_runs(tenant.tenant_id)
+
+@router.post("/payroll-runs", status_code=status.HTTP_201_CREATED)
+def create_payroll_run(body: PayrollBody, tenant: TenantContext = Depends(require_permission("hr.manage_payroll"))):
+    with get_connection() as connection:
+        result = PayrollService(connection).create_run(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value
+
+@router.get("/payslips")
+def payslips(run_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_payroll"))):
+    with get_connection() as connection: return PayrollService(connection).get_payslips(tenant_id=tenant.tenant_id, run_id=run_id)

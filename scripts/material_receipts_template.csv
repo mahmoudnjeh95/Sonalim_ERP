@@ -1,0 +1,2 @@
+status,product_sku,location_code,supplier_name,invoice_number,invoice_date,origin_country,quantity_containers,quantity_tons,unit_price,unit_price_currency,base_cost,license_fee,insurance_fee,transit_fee,transport_fee,customs_duty,carrier
+received,SEMOULE-BD-SALEM,raw-materials,,1040225,2025-02-03,Turkiye,10,240,570,CFA,90972000,569699,123698,3175280,19977510,15429770,KOUMA AHMAD

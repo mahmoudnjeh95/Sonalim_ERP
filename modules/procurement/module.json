@@ -1,0 +1,15 @@
+{
+  "name": "procurement",
+  "version": "0.1.0",
+  "depends": ["core"],
+  "optional_depends": ["warehouse"],
+  "provides_api": ["PurchaseOrderService"],
+  "publishes_events": ["procurement.purchase_order.status_changed", "procurement.purchase_order_receipt.confirmed"],
+  "subscribes_events": [],
+  "migrations_path": "./migrations",
+  "permissions": [
+    "procurement.view_purchase_orders",
+    "procurement.manage_purchase_orders",
+    "procurement.admin_purchase_orders"
+  ]
+}

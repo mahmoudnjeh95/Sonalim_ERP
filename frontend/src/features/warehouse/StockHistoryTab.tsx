@@ -1,0 +1,323 @@
+import { useState } from "react";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { useForm } from "react-hook-form";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { History, Plus } from "lucide-react";
+import { toast } from "sonner";
+import { z } from "zod";
+import { useAuth } from "../../lib/auth";
+import { useI18n } from "../../lib/i18n";
+import { ApiError } from "../../lib/api";
+import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { Input } from "../../components/ui/input";
+import { Label } from "../../components/ui/label";
+import { Select } from "../../components/ui/select";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
+import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
+import { Skeleton } from "../../components/ui/skeleton";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "../../components/ui/dialog";
+import { EmptyState } from "../../components/patterns/EmptyState";
+import { FilterTabs } from "../../components/patterns/FilterTabs";
+import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
+import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
+import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { MOVE_TYPE_VARIANT, useMoveTypeLabels } from "../../lib/stockMoveTypes";
+import { adjustStock, listLocations, listProducts, listStockMoves, type StockMove, type StockMoveType } from "./api";
+
+const adjustSchema = z.object({
+  product_id: z.string().min(1, "Required"),
+  location_id: z.string().min(1, "Required"),
+  delta: z.coerce.number().refine((v) => v !== 0, "Must not be zero"),
+  reason: z.string().min(1, "Required"),
+});
+type AdjustForm = z.infer<typeof adjustSchema>;
+
+const MOVES_QUERY_KEY = ["warehouse", "stock", "moves"] as const;
+const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
+const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
+type MoveTypeFilter = "all" | StockMoveType;
+
+function formatWhen(iso: string, language: string) {
+  return new Date(iso).toLocaleString(language === "fr" ? "fr-FR" : "en-US", { dateStyle: "medium", timeStyle: "short" });
+}
+
+export function StockHistoryTab() {
+  const { session } = useAuth();
+  const { t, language } = useI18n();
+  const token = session!.token;
+  const queryClient = useQueryClient();
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [moveTypeFilter, setMoveTypeFilter] = useState<MoveTypeFilter>("all");
+
+  const MOVE_TYPE_LABEL = useMoveTypeLabels();
+
+  const { data: moves = [], isLoading } = useQuery({ queryKey: MOVES_QUERY_KEY, queryFn: () => listStockMoves(token) });
+  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
+  const locationName = (id: string) => locations.find((l) => l.id === id)?.name ?? id;
+  const moveTypeFilteredMoves = moveTypeFilter === "all" ? moves : moves.filter((m) => m.move_type === moveTypeFilter);
+
+  const columnFilterFields: FilterField<StockMove>[] = [
+    { key: "product", kind: "text", getValue: (m) => productName(m.product_id) },
+    { key: "location", kind: "text", getValue: (m) => locationName(m.location_id) },
+    { key: "quantity", kind: "range", getValue: (m) => m.quantity },
+    { key: "reference", kind: "text", getValue: (m) => m.reference },
+    { key: "reason", kind: "text", getValue: (m) => m.reason },
+  ];
+  const columnFilters = useColumnFilters(columnFilterFields);
+  const filteredMoves = columnFilters.apply(moveTypeFilteredMoves);
+
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<AdjustForm>({ resolver: zodResolver(adjustSchema) });
+
+  const adjustMutation = useMutation({
+    mutationFn: (input: AdjustForm) => adjustStock(token, input),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: MOVES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "stock"] });
+      setDialogOpen(false);
+      reset();
+      toast.success(t("warehouse.stockHistory.adjusted"));
+    },
+    onError: (error) => {
+      toast.error(t("warehouse.stockHistory.adjustError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const columns: ColumnDef<StockMove>[] = [
+    {
+      key: "when",
+      header: t("warehouse.stockHistory.column.when"),
+      defaultWidth: 180,
+      cell: (move) => <span className="whitespace-nowrap text-muted-foreground">{formatWhen(move.created_at, language)}</span>,
+    },
+    {
+      key: "product",
+      header: t("warehouse.stockHistory.column.product"),
+      defaultWidth: 200,
+      cell: (move) => <span className="font-medium">{productName(move.product_id)}</span>,
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.product ?? "",
+        onChange: (v) => columnFilters.setTextValue("product", v),
+        placeholder: t("warehouse.stockHistory.column.product"),
+      },
+    },
+    {
+      key: "location",
+      header: t("warehouse.stockHistory.column.location"),
+      defaultWidth: 160,
+      cell: (move) => <span className="text-muted-foreground">{locationName(move.location_id)}</span>,
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.location ?? "",
+        onChange: (v) => columnFilters.setTextValue("location", v),
+        placeholder: t("warehouse.stockHistory.column.location"),
+      },
+    },
+    {
+      key: "type",
+      header: t("warehouse.stockHistory.column.type"),
+      defaultWidth: 160,
+      cell: (move) => (
+        <Badge variant={MOVE_TYPE_VARIANT[move.move_type]} dot>
+          {MOVE_TYPE_LABEL[move.move_type]}
+        </Badge>
+      ),
+    },
+    {
+      key: "quantity",
+      header: t("warehouse.stockHistory.column.quantity"),
+      defaultWidth: 140,
+      cell: (move) => (
+        <span className={`tabular-nums ${move.quantity < 0 || move.move_type === "issue" ? "text-destructive" : "text-success"}`}>
+          {move.move_type === "issue" ? "-" : move.quantity > 0 && move.move_type !== "adjustment" ? "+" : ""}
+          {move.quantity}
+        </span>
+      ),
+      filterCell: {
+        type: "range",
+        min: columnFilters.range.quantity?.min ?? "",
+        max: columnFilters.range.quantity?.max ?? "",
+        onMinChange: (v) => columnFilters.setRangeValue("quantity", "min", v),
+        onMaxChange: (v) => columnFilters.setRangeValue("quantity", "max", v),
+      },
+    },
+    {
+      key: "reference",
+      header: t("warehouse.stockHistory.column.reference"),
+      defaultWidth: 180,
+      cell: (move) => <span className="text-muted-foreground">{move.reference}</span>,
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.reference ?? "",
+        onChange: (v) => columnFilters.setTextValue("reference", v),
+        placeholder: t("warehouse.stockHistory.column.reference"),
+      },
+    },
+    {
+      key: "reason",
+      header: t("warehouse.stockHistory.column.reason"),
+      defaultWidth: 200,
+      cell: (move) => <span className="text-muted-foreground">{move.reason ?? "—"}</span>,
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.reason ?? "",
+        onChange: (v) => columnFilters.setTextValue("reason", v),
+        placeholder: t("warehouse.stockHistory.column.reason"),
+      },
+    },
+  ];
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
+    "warehouse.stockHistory",
+    columns,
+  );
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex flex-wrap items-center gap-3">
+          <div>
+            <CardTitle>{t("warehouse.stockHistory.title")}</CardTitle>
+            <CardDescription>{t("warehouse.stockHistory.subtitle")}</CardDescription>
+          </div>
+          <FilterTabs
+            value={moveTypeFilter}
+            onChange={setMoveTypeFilter}
+            options={[
+              { value: "all", label: t("common.all") },
+              { value: "receipt", label: t("warehouse.stockHistory.type.receipt") },
+              { value: "issue", label: t("warehouse.stockHistory.type.issue") },
+              { value: "adjustment", label: t("warehouse.stockHistory.type.adjustment") },
+              { value: "reservation", label: t("warehouse.stockHistory.type.reservation") },
+              { value: "production", label: t("warehouse.stockHistory.type.production") },
+            ]}
+          />
+          {columnFilters.isActive && (
+            <Button variant="ghost" size="sm" onClick={columnFilters.reset}>
+              {t("common.clearFilters")}
+            </Button>
+          )}
+          <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
+        </div>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button variant="outline" size="sm" disabled={products.length === 0 || locations.length === 0}>
+              <Plus className="h-3.5 w-3.5" />
+              {t("warehouse.stockHistory.adjustStock")}
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>{t("warehouse.stockHistory.dialog.title")}</DialogTitle>
+              <DialogDescription>{t("warehouse.stockHistory.dialog.description")}</DialogDescription>
+            </DialogHeader>
+            <form className="space-y-4" onSubmit={handleSubmit((input) => adjustMutation.mutate(input))}>
+              <div className="space-y-1.5">
+                <Label htmlFor="adjust_product_id">{t("warehouse.stockHistory.field.product")}</Label>
+                <Select id="adjust_product_id" {...register("product_id")}>
+                  <option value="">—</option>
+                  {products.map((product) => (
+                    <option key={product.id} value={product.id}>
+                      {product.name}
+                    </option>
+                  ))}
+                </Select>
+                {errors.product_id && <p className="text-sm text-destructive">{errors.product_id.message}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="adjust_location_id">{t("warehouse.stockHistory.field.location")}</Label>
+                <Select id="adjust_location_id" {...register("location_id")}>
+                  <option value="">—</option>
+                  {locations.map((location) => (
+                    <option key={location.id} value={location.id}>
+                      {location.name}
+                    </option>
+                  ))}
+                </Select>
+                {errors.location_id && <p className="text-sm text-destructive">{errors.location_id.message}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="adjust_delta">{t("warehouse.stockHistory.field.delta")}</Label>
+                <Input id="adjust_delta" type="number" step="any" placeholder="e.g. -5 or 3.2" {...register("delta")} />
+                {errors.delta && <p className="text-sm text-destructive">{errors.delta.message}</p>}
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="adjust_reason">{t("warehouse.stockHistory.field.reason")}</Label>
+                <Input id="adjust_reason" placeholder="e.g. Physical count correction" {...register("reason")} />
+                {errors.reason && <p className="text-sm text-destructive">{errors.reason.message}</p>}
+              </div>
+              {adjustMutation.isError && (
+                <p className="text-sm text-destructive">
+                  {adjustMutation.error instanceof ApiError ? adjustMutation.error.message : t("warehouse.stockHistory.adjustError")}
+                </p>
+              )}
+              <Button type="submit" className="w-full" disabled={adjustMutation.isPending}>
+                {adjustMutation.isPending ? t("warehouse.stockHistory.adjusting") : t("warehouse.stockHistory.adjust")}
+              </Button>
+            </form>
+          </DialogContent>
+        </Dialog>
+      </CardHeader>
+      <CardContent className="p-0">
+        <Table colWidths={colWidths}>
+          <TableHeader>
+            <TableRow>
+              {visibleColumns.map((column) => (
+                <ResizableTableHead
+                  key={column.key}
+                  width={getWidth(column.key)}
+                  onResize={(width) => setWidth(column.key, width)}
+                  className={column.headerClassName}
+                >
+                  {column.header}
+                </ResizableTableHead>
+              ))}
+            </TableRow>
+            <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
+          </TableHeader>
+          <TableBody>
+            {isLoading &&
+              Array.from({ length: 4 }).map((_, i) => (
+                <TableRow key={i}>
+                  <TableCell colSpan={visibleColumns.length}>
+                    <Skeleton className="h-5 w-full" />
+                  </TableCell>
+                </TableRow>
+              ))}
+            {!isLoading && filteredMoves.length === 0 && (
+              <TableRow>
+                <TableCell colSpan={visibleColumns.length} className="p-0">
+                  <EmptyState icon={<History className="h-5 w-5" />} title={t("warehouse.stockHistory.empty.title")} description={t("warehouse.stockHistory.empty.description")} />
+                </TableCell>
+              </TableRow>
+            )}
+            {filteredMoves.map((move) => (
+              <TableRow key={move.id}>
+                {visibleColumns.map((column) => (
+                  <TableCell key={column.key} className={column.cellClassName}>
+                    {column.cell(move)}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}

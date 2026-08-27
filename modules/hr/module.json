@@ -1,0 +1,29 @@
+{
+  "name": "hr",
+  "version": "0.1.0",
+  "depends": ["core"],
+  "optional_depends": [],
+  "provides_api": ["EmployeeService", "DepartmentService", "LeaveService", "HrDashboardService"],
+  "publishes_events": [],
+  "subscribes_events": [],
+  "migrations_path": "./migrations",
+  "permissions": [
+    "hr.view_employees",
+    "hr.manage_employees",
+    "hr.admin_employees",
+    "hr.view_departments",
+    "hr.manage_departments",
+    "hr.admin_departments",
+    "hr.view_contracts",
+    "hr.manage_contracts",
+    "hr.admin_contracts",
+    "hr.view_leave",
+    "hr.manage_leave",
+    "hr.admin_leave",
+    "hr.view_dashboard"
+    ,"hr.view_attendance"
+    ,"hr.manage_attendance"
+    ,"hr.view_payroll"
+    ,"hr.manage_payroll"
+  ]
+}

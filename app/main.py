@@ -1,16 +1,75 @@
 import os
+from contextlib import asynccontextmanager
 
 import psycopg
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
-app = FastAPI(title="3S ERP", version="0.1.0")
+from core.audit import router as core_audit_router
+from core.auth import router as auth_router
+from core.exchange_rates import currencies_router as core_currencies_router
+from core.exchange_rates import router as core_exchange_rates_router
+from core.migrations.runner import apply_all_migrations
+from core.partners import router as core_partners_router
+from core.products import attributes_router as core_product_attributes_router
+from core.products import router as core_products_router
+from core.products import tags_router as core_product_tags_router
+from core.products import uoms_router as core_uoms_router
+from core.table_preferences import router as core_table_preferences_router
+from core.users import router as core_users_router
+from modules.crm.api.router import router as crm_router
+from modules.finance.api.router import router as finance_router
+from modules.production.api.router import router as production_router
+from modules.sales.api.router import router as sales_router
+from modules.warehouse.api.router import router as warehouse_router
+from modules.hr.api.router import router as hr_router
+from modules.procurement.api.router import router as procurement_router
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    apply_all_migrations()
+    yield
+
+
+app = FastAPI(title="Sonalim ERP", version="0.1.0", lifespan=lifespan)
 Instrumentator().instrument(app).expose(app)
+
+# Dev-only: the Vite dev server and the API run on different origins (ports),
+# so the browser blocks every request without this. Restrict to configured
+# frontend origins rather than "*" since requests carry a Bearer session token.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=os.environ.get("FRONTEND_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(","),
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+app.include_router(auth_router)
+app.include_router(core_users_router)
+app.include_router(core_partners_router)
+app.include_router(core_exchange_rates_router)
+app.include_router(core_currencies_router)
+app.include_router(core_products_router)
+app.include_router(core_product_attributes_router)
+app.include_router(core_product_tags_router)
+app.include_router(core_uoms_router)
+app.include_router(core_table_preferences_router)
+app.include_router(core_audit_router)
+app.include_router(warehouse_router)
+app.include_router(production_router)
+app.include_router(crm_router)
+app.include_router(sales_router)
+app.include_router(finance_router)
+app.include_router(hr_router)
+app.include_router(procurement_router)
 
 
 @app.get("/")
 def index() -> dict[str, str]:
-    return {"service": "3S ERP", "status": "running"}
+    return {"service": "Sonalim ERP", "status": "running"}
 
 
 @app.get("/health")

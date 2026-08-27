@@ -10,6 +10,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY worker ./worker
+COPY core ./core
+COPY modules ./modules
+COPY events ./events
+COPY scripts ./scripts
 
 EXPOSE 8000
 

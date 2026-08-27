@@ -1,0 +1,126 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from pydantic import BaseModel
+
+from core.api.service import CoreService
+from core.db import get_connection
+from core.domain.partner import Partner
+from core.domain.result import Err
+from core.tenancy import TenantContext, require_permission
+
+router = APIRouter(prefix="/core/partners", tags=["core.partners"])
+
+
+def partner_response(partner: Partner) -> dict:
+    return {
+        "id": partner.id,
+        "name": partner.name,
+        "kind": partner.kind,
+        "industry": partner.industry,
+        "website": partner.website,
+        "phone": partner.phone,
+        "email": partner.email,
+        "status": partner.status,
+    }
+
+
+class CreatePartnerRequest(BaseModel):
+    name: str
+    kind: str
+    industry: str | None = None
+    website: str | None = None
+    phone: str | None = None
+    email: str | None = None
+
+
+class UpdatePartnerRequest(BaseModel):
+    name: str | None = None
+    kind: str | None = None
+    industry: str | None = None
+    website: str | None = None
+    phone: str | None = None
+    email: str | None = None
+
+
+@router.post("", status_code=status.HTTP_201_CREATED)
+def create_partner(
+    body: CreatePartnerRequest, tenant: TenantContext = Depends(require_permission("core.manage_partners"))
+) -> dict:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        result = service.create_partner(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            name=body.name,
+            kind=body.kind,
+            industry=body.industry,
+            website=body.website,
+            phone=body.phone,
+            email=body.email,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": result.code, "message": result.message})
+        connection.commit()
+    return partner_response(result.value)
+
+
+@router.get("")
+def list_partners(
+    kind: str | None = None,
+    status_filter: str | None = None,
+    tenant: TenantContext = Depends(require_permission("core.view_partners")),
+) -> list[dict]:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        partners = service.list_partners(tenant_id=tenant.tenant_id, kind=kind, status=status_filter)
+    return [partner_response(partner) for partner in partners]
+
+
+@router.get("/{partner_id}")
+def get_partner(partner_id: str, tenant: TenantContext = Depends(require_permission("core.view_partners"))) -> dict:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        partner = service.get_partner(tenant.tenant_id, partner_id)
+    if partner is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"partner {partner_id} not found"})
+    return partner_response(partner)
+
+
+@router.patch("/{partner_id}")
+def update_partner(
+    partner_id: str, body: UpdatePartnerRequest, tenant: TenantContext = Depends(require_permission("core.admin_partners"))
+) -> dict:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        result = service.update_partner(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            partner_id=partner_id,
+            name=body.name,
+            kind=body.kind,
+            industry=body.industry,
+            website=body.website,
+            phone=body.phone,
+            email=body.email,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return partner_response(result.value)
+
+
+@router.post("/{partner_id}/archive")
+def archive_partner(partner_id: str, tenant: TenantContext = Depends(require_permission("core.manage_partners"))) -> dict:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        result = service.archive_partner(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, partner_id=partner_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return partner_response(result.value)

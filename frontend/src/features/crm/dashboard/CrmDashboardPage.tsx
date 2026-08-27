@@ -1,0 +1,353 @@
+import { useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
+import {
+  AlertTriangle,
+  CalendarClock,
+  MessageSquare,
+  Phone,
+  PieChart as PieChartIcon,
+  Target,
+  Trophy,
+  CheckSquare,
+} from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Cell,
+  Legend,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import { useAuth } from "../../../lib/auth";
+import { useI18n, type Language } from "../../../lib/i18n";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
+import { Skeleton } from "../../../components/ui/skeleton";
+import { StatCard } from "../../../components/patterns/StatCard";
+import { EmptyState } from "../../../components/patterns/EmptyState";
+import { StatusBadge } from "../../../components/patterns/StatusBadge";
+import { getCrmDashboard, type RecentActivity } from "./api";
+
+const CHART_COLORS = {
+  primary: "hsl(217 91% 45%)",
+  primarySoft: "hsl(217 91% 88%)",
+  accent: "hsl(258 90% 66%)",
+  success: "hsl(152 69% 31%)",
+  warning: "hsl(38 92% 42%)",
+  destructive: "hsl(0 72% 51%)",
+  muted: "hsl(215 16% 70%)",
+};
+
+const STAGE_COLORS: Record<string, string> = {
+  prospecting: CHART_COLORS.muted,
+  qualification: CHART_COLORS.primary,
+  proposal: CHART_COLORS.accent,
+  negotiation: CHART_COLORS.warning,
+  won: CHART_COLORS.success,
+  lost: CHART_COLORS.destructive,
+};
+
+const KIND_COLORS: Record<string, string> = {
+  comment: CHART_COLORS.primarySoft,
+  task: CHART_COLORS.warning,
+  call: CHART_COLORS.success,
+};
+
+const KIND_ICON: Record<string, typeof MessageSquare> = {
+  comment: MessageSquare,
+  task: CheckSquare,
+  call: Phone,
+};
+
+const MONTH_LABELS = {
+  en: ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"],
+  fr: ["Jan", "Fév", "Mar", "Avr", "Mai", "Juin", "Juil", "Août", "Sep", "Oct", "Nov", "Déc"],
+};
+
+function relativeTime(iso: string, language: Language) {
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const diffMinutes = Math.round(diffMs / 60000);
+  const rtf = new Intl.RelativeTimeFormat(language === "fr" ? "fr-FR" : "en-US", { numeric: "auto" });
+  if (Math.abs(diffMinutes) < 60) return rtf.format(-diffMinutes, "minute");
+  const diffHours = Math.round(diffMinutes / 60);
+  if (Math.abs(diffHours) < 24) return rtf.format(-diffHours, "hour");
+  const diffDays = Math.round(diffHours / 24);
+  return rtf.format(-diffDays, "day");
+}
+
+const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
+
+export function CrmDashboardPage() {
+  const { session } = useAuth();
+  const { t, language } = useI18n();
+  const token = session!.token;
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: DASHBOARD_QUERY_KEY,
+    queryFn: () => getCrmDashboard(token),
+  });
+
+  const months = MONTH_LABELS[language];
+  const monthlyData = data
+    ? months.map((label, i) => ({
+        month: label,
+        [String(data.opportunities_by_month.previous_year)]: data.opportunities_by_month.previous[i],
+        [String(data.opportunities_by_month.current_year)]: data.opportunities_by_month.current[i],
+      }))
+    : [];
+
+  const pipelineData = data
+    ? Object.entries(data.pipeline_by_stage)
+        .filter(([stage]) => stage !== "won" && stage !== "lost")
+        .map(([stage, bucket]) => ({ stage, count: bucket.count, amount: bucket.amount }))
+    : [];
+
+  const activityMixData = data
+    ? Object.entries(data.activities_by_kind).map(([kind, count]) => ({ kind, count }))
+    : [];
+
+  const leadsTotal = data ? Object.values(data.leads_by_status).reduce((sum, n) => sum + n, 0) : 0;
+  const partnersTotal = data ? Object.values(data.partners_by_status).reduce((sum, n) => sum + n, 0) : 0;
+
+  return (
+    <div className="space-y-6">
+      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+        <h1 className="text-xl font-semibold tracking-tight">{t("crm.dashboard.title")}</h1>
+        <p className="text-sm text-muted-foreground">{t("crm.dashboard.subtitle")}</p>
+      </motion.div>
+
+      {isError && (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-destructive">{t("crm.dashboard.loadError")}</CardContent>
+        </Card>
+      )}
+
+      {isLoading && (
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-20 rounded-xl" />
+          ))}
+        </div>
+      )}
+
+      {data && (
+        <>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard
+              label={t("crm.dashboard.stat.forecast")}
+              value={Math.round(data.forecast.amount)}
+              icon={<Target className="h-5 w-5" />}
+              accent="primary"
+              prefix="$"
+            />
+            <StatCard
+              label={t("crm.dashboard.stat.won")}
+              value={Math.round(data.won_amount)}
+              icon={<Trophy className="h-5 w-5" />}
+              accent="success"
+              prefix="$"
+            />
+            <StatCard
+              label={t("crm.dashboard.stat.dueThisWeek")}
+              value={data.due_this_week.count}
+              icon={<CalendarClock className="h-5 w-5" />}
+              accent="warning"
+            />
+            <StatCard
+              label={t("crm.dashboard.stat.overdue")}
+              value={data.overdue.count}
+              icon={<AlertTriangle className="h-5 w-5" />}
+              accent="destructive"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <div>
+                  <CardTitle>{t("crm.dashboard.chart.opportunities.title")}</CardTitle>
+                  <CardDescription>{t("crm.dashboard.chart.opportunities.description")}</CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={280}>
+                  <BarChart data={monthlyData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
+                    <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
+                    <YAxis allowDecimals={false} tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
+                    <Tooltip
+                      contentStyle={{
+                        borderRadius: 10,
+                        border: "1px solid hsl(214 20% 88%)",
+                        fontSize: 13,
+                        fontFamily: "Inter, sans-serif",
+                      }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 12 }} />
+                    <Bar
+                      dataKey={String(data.opportunities_by_month.previous_year)}
+                      fill={CHART_COLORS.primarySoft}
+                      radius={[4, 4, 0, 0]}
+                    />
+                    <Bar
+                      dataKey={String(data.opportunities_by_month.current_year)}
+                      fill={CHART_COLORS.primary}
+                      radius={[4, 4, 0, 0]}
+                    />
+                  </BarChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+
+            <Card>
+              <CardHeader>
+                <div>
+                  <CardTitle>{t("crm.dashboard.chart.pipeline.title")}</CardTitle>
+                </div>
+                <PieChartIcon className="h-4 w-4 text-muted-foreground" />
+              </CardHeader>
+              <CardContent>
+                {pipelineData.length === 0 || pipelineData.every((d) => d.count === 0) ? (
+                  <EmptyState
+                    icon={<Target className="h-5 w-5" />}
+                    title={t("crm.dashboard.chart.pipeline.empty")}
+                    description=""
+                  />
+                ) : (
+                  <>
+                    <ResponsiveContainer width="100%" height={200}>
+                      <PieChart>
+                        <Pie data={pipelineData} dataKey="count" nameKey="stage" innerRadius={50} outerRadius={80} paddingAngle={2}>
+                          {pipelineData.map((entry) => (
+                            <Cell key={entry.stage} fill={STAGE_COLORS[entry.stage] ?? CHART_COLORS.muted} />
+                          ))}
+                        </Pie>
+                        <Tooltip
+                          contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13 }}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                    <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
+                      {pipelineData.map((entry) => (
+                        <div key={entry.stage} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                          <span
+                            className="h-2 w-2 rounded-full"
+                            style={{ backgroundColor: STAGE_COLORS[entry.stage] ?? CHART_COLORS.muted }}
+                          />
+                          <StatusBadge status={entry.stage} />
+                          <span className="tabular-nums">{entry.count}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
+            <Card className="lg:col-span-2">
+              <CardHeader>
+                <div>
+                  <CardTitle>{t("crm.dashboard.activity.title")}</CardTitle>
+                  <CardDescription>{t("crm.dashboard.activity.description")}</CardDescription>
+                </div>
+              </CardHeader>
+              <CardContent>
+                {data.recent_activities.length === 0 ? (
+                  <EmptyState
+                    icon={<MessageSquare className="h-5 w-5" />}
+                    title={t("crm.dashboard.activity.empty.title")}
+                    description={t("crm.dashboard.activity.empty.description")}
+                  />
+                ) : (
+                  <ul className="scrollbar-thin max-h-72 space-y-1 overflow-y-auto">
+                    {data.recent_activities.map((activity, i) => (
+                      <ActivityRow key={activity.id} activity={activity} index={i} language={language} />
+                    ))}
+                  </ul>
+                )}
+              </CardContent>
+            </Card>
+
+            <div className="space-y-4">
+              <Card>
+                <CardHeader>
+                  <div>
+                    <CardTitle>{t("crm.dashboard.activityMix.title")}</CardTitle>
+                    <CardDescription>{t("crm.dashboard.activityMix.subtitle")}</CardDescription>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {activityMixData.length === 0 ? (
+                    <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.dashboard.activityMix.empty")}</p>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={140}>
+                      <PieChart>
+                        <Pie data={activityMixData} dataKey="count" nameKey="kind" innerRadius={30} outerRadius={55} paddingAngle={2}>
+                          {activityMixData.map((entry) => (
+                            <Cell key={entry.kind} fill={KIND_COLORS[entry.kind] ?? CHART_COLORS.muted} />
+                          ))}
+                        </Pie>
+                        <Tooltip contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13 }} />
+                        <Legend
+                          wrapperStyle={{ fontSize: 11 }}
+                          formatter={(value: string) => t(`crm.activity.kind.${value}` as Parameters<typeof t>[0])}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  )}
+                </CardContent>
+              </Card>
+
+              <Card>
+                <CardHeader>
+                  <CardTitle>{t("crm.dashboard.snapshot.title")}</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{t("crm.dashboard.snapshot.leads")}</span>
+                    <span className="font-semibold tabular-nums">{leadsTotal}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">{t("crm.dashboard.snapshot.accounts")}</span>
+                    <span className="font-semibold tabular-nums">{partnersTotal}</span>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ActivityRow({ activity, index, language }: { activity: RecentActivity; index: number; language: Language }) {
+  const { t } = useI18n();
+  const Icon = KIND_ICON[activity.kind] ?? MessageSquare;
+  return (
+    <motion.li
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0, transition: { delay: Math.min(index * 0.03, 0.2) } }}
+      className="flex items-start gap-3 rounded-lg px-2 py-2.5 hover:bg-muted/50"
+    >
+      <div
+        className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full"
+        style={{ backgroundColor: `${KIND_COLORS[activity.kind] ?? CHART_COLORS.muted}22`, color: KIND_COLORS[activity.kind] ?? CHART_COLORS.muted }}
+      >
+        <Icon className="h-3.5 w-3.5" />
+      </div>
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm">{activity.note}</p>
+        <p className="text-xs text-muted-foreground">
+          {t(`crm.activity.subject.${activity.subject_type}` as Parameters<typeof t>[0])} · {relativeTime(activity.created_at, language)}
+        </p>
+      </div>
+    </motion.li>
+  );
+}

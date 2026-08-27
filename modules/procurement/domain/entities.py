@@ -1,0 +1,195 @@
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from core.domain.result import Err, Ok, Result
+
+# Manual, caller-initiated transitions only. "partially_received" and "fully_received" are
+# deliberately unreachable here — they can only be reached through receive_against_order,
+# which derives them from actual line receipts. This stops a caller from marking an order
+# partially/fully received without a goods receipt ever being recorded.
+PURCHASE_ORDER_MANUAL_TRANSITIONS = {
+    "draft": {"validated", "canceled"},
+    "validated": {"approved", "refused", "canceled"},
+    "approved": {"ordered", "canceled"},
+    "ordered": {"canceled"},
+    "partially_received": {"canceled"},
+    "fully_received": set(),
+    "canceled": set(),
+    "refused": set(),
+}
+
+RECEIVING_ELIGIBLE_STATUSES = {"ordered", "partially_received"}
+
+
+@dataclass(frozen=True)
+class PurchaseOrder:
+    id: str
+    tenant_id: str
+    supplier_id: str | None
+    status: str
+    order_date: str | None
+    expected_date: str | None
+    currency_code: str
+    notes: str | None
+
+
+def validate_new_purchase_order(*, currency_code: str) -> Result[None]:
+    if not currency_code.strip():
+        return Err("INVALID_CURRENCY", "currency_code is required")
+    return Ok(None)
+
+
+def transition_purchase_order(order: PurchaseOrder, new_status: str) -> Result[PurchaseOrder]:
+    if new_status not in PURCHASE_ORDER_MANUAL_TRANSITIONS.get(order.status, set()):
+        return Err("INVALID_TRANSITION", f"cannot move purchase order from {order.status} to {new_status}")
+    return Ok(_with_status(order, new_status))
+
+
+def receive_against_order(order: PurchaseOrder, line_statuses: list[str]) -> Result[PurchaseOrder]:
+    """Recomputes the order's receiving status from its lines' statuses after a goods
+    receipt is confirmed. Only legal once the order has actually been placed — this is the
+    only path to 'partially_received' / 'fully_received'."""
+    if order.status not in RECEIVING_ELIGIBLE_STATUSES:
+        return Err("INVALID_TRANSITION", f"cannot record a receipt against a purchase order in status {order.status}")
+    return Ok(_with_status(order, derive_order_status(line_statuses)))
+
+
+def _with_status(order: PurchaseOrder, new_status: str) -> PurchaseOrder:
+    return PurchaseOrder(
+        id=order.id,
+        tenant_id=order.tenant_id,
+        supplier_id=order.supplier_id,
+        status=new_status,
+        order_date=order.order_date,
+        expected_date=order.expected_date,
+        currency_code=order.currency_code,
+        notes=order.notes,
+    )
+
+
+def derive_order_status(line_statuses: list[str]) -> str:
+    """Order-level receiving status, derived from its lines' statuses. Only ever returns a
+    value in {ordered, partially_received, fully_received} — the pre-order (draft/
+    validated/approved) and terminal (canceled/refused) statuses are explicit transitions
+    the caller applies directly via transition_purchase_order, never derived here."""
+    if not line_statuses:
+        return "ordered"
+    if all(status == "fully_received" for status in line_statuses):
+        return "fully_received"
+    if any(status != "pending" for status in line_statuses):
+        return "partially_received"
+    return "ordered"
+
+
+@dataclass(frozen=True)
+class PurchaseOrderLine:
+    id: str
+    tenant_id: str
+    purchase_order_id: str
+    product_id: str
+    uom_id: str
+    quantity_ordered: float
+    quantity_received: float
+    status: str
+    unit_price: float
+    unit_price_currency: str
+
+
+def validate_new_purchase_order_line(*, quantity_ordered: float, unit_price: float = 0) -> Result[None]:
+    if quantity_ordered <= 0:
+        return Err("INVALID_QUANTITY", "quantity_ordered must be positive")
+    if unit_price < 0:
+        return Err("INVALID_PRICE", "unit_price cannot be negative")
+    return Ok(None)
+
+
+def apply_receipt_to_line(line: PurchaseOrderLine, quantity: float) -> Result[PurchaseOrderLine]:
+    """Records that `quantity` more of this line's product has physically arrived in one
+    goods receipt. Example: a line ordered for 10t, already at 0 received, gets a 5t
+    delivery -> quantity_received becomes 5, status becomes 'partially_received'; a later
+    5t delivery brings it to 10/10 -> 'fully_received'."""
+    if quantity <= 0:
+        return Err("INVALID_QUANTITY", "received quantity must be positive")
+    new_received = line.quantity_received + quantity
+    if new_received > line.quantity_ordered:
+        return Err(
+            "OVER_RECEIPT",
+            f"cannot receive {quantity}, only {line.quantity_ordered - line.quantity_received} still outstanding on this line",
+        )
+    return Ok(
+        PurchaseOrderLine(
+            id=line.id,
+            tenant_id=line.tenant_id,
+            purchase_order_id=line.purchase_order_id,
+            product_id=line.product_id,
+            uom_id=line.uom_id,
+            quantity_ordered=line.quantity_ordered,
+            quantity_received=new_received,
+            status=_line_status(line.quantity_ordered, new_received),
+            unit_price=line.unit_price,
+            unit_price_currency=line.unit_price_currency,
+        )
+    )
+
+
+def _line_status(quantity_ordered: float, quantity_received: float) -> str:
+    if quantity_received <= 0:
+        return "pending"
+    if quantity_received >= quantity_ordered:
+        return "fully_received"
+    return "partially_received"
+
+
+@dataclass(frozen=True)
+class PurchaseOrderReceipt:
+    id: str
+    tenant_id: str
+    purchase_order_id: str
+    location_id: str
+    status: str
+    invoice_number: str | None
+    invoice_date: str | None
+    origin_country: str | None
+    carrier: str | None
+    base_cost: float
+    license_fee: float
+    insurance_fee: float
+    transit_fee: float
+    transport_fee: float
+    customs_duty: float
+    total_cost: float
+    confirmed_at: str | None
+
+
+def confirm_purchase_order_receipt(status: str) -> Result[str]:
+    if status != "draft":
+        return Err("INVALID_TRANSITION", f"cannot confirm a goods receipt already in status {status}")
+    return Ok("confirmed")
+
+
+@dataclass(frozen=True)
+class PurchaseOrderReceiptLine:
+    id: str
+    tenant_id: str
+    purchase_order_receipt_id: str
+    purchase_order_line_id: str
+    quantity: float
+    lot_number: str | None
+    cost_per_unit: float
+
+
+def compute_landed_cost(
+    *,
+    base_cost: float,
+    license_fee: float,
+    insurance_fee: float,
+    transit_fee: float,
+    transport_fee: float,
+    customs_duty: float,
+    quantity: float,
+) -> Result[tuple[float, float]]:
+    if quantity <= 0:
+        return Err("INVALID_QUANTITY", "quantity must be positive")
+    total_cost = base_cost + license_fee + insurance_fee + transit_fee + transport_fee + customs_duty
+    return Ok((total_cost, total_cost / quantity))
