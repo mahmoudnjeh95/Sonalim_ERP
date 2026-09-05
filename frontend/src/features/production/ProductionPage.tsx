@@ -1,31 +1,46 @@
-import { useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Beaker, Boxes, ClipboardList, Factory, Recycle, Tag, Wrench } from "lucide-react";
+import { Beaker, Boxes, ClipboardCheck, ClipboardList, Disc3, Factory, LayoutDashboard, NotebookPen, PackageCheck, Recycle, Settings, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
 import { WorkOrdersTab } from "./WorkOrdersTab";
 import { PackagingBomsTab } from "./PackagingBomsTab";
 import { ProductClassificationsTab } from "./ProductClassificationsTab";
 import { WorkCentersTab } from "./WorkCentersTab";
-import { MachinesTab } from "./MachinesTab";
+import { MoldsTab } from "./MoldsTab";
 import { RecipesTab } from "./RecipesTab";
 import { RegrindTab } from "./RegrindTab";
+import { DailyReportsTab } from "./DailyReportsTab";
+import { ConditionnementTab } from "./ConditionnementTab";
+import { ValidationCenterTab } from "./ValidationCenterTab";
+import { ProductionDashboardTab } from "./ProductionDashboardTab";
+import { ProductionSettingsTab } from "./ProductionSettingsTab";
 
 const TABS = [
+  { value: "dashboard", labelKey: "production.tabs.dashboard", icon: LayoutDashboard, Component: ProductionDashboardTab },
   { value: "work-orders", labelKey: "production.tabs.workOrders", icon: ClipboardList, Component: WorkOrdersTab },
+  { value: "daily-reports", labelKey: "production.tabs.dailyReports", icon: NotebookPen, Component: DailyReportsTab },
+  { value: "conditionnement", labelKey: "production.tabs.conditionnement", icon: PackageCheck, Component: ConditionnementTab },
+  { value: "validation", labelKey: "production.tabs.validation", icon: ClipboardCheck, Component: ValidationCenterTab },
   { value: "recipes", labelKey: "production.tabs.recipes", icon: Beaker, Component: RecipesTab },
   { value: "regrind", labelKey: "production.tabs.regrind", icon: Recycle, Component: RegrindTab },
   { value: "work-centers", labelKey: "production.tabs.workCenters", icon: Factory, Component: WorkCentersTab },
-  { value: "machines", labelKey: "production.tabs.machines", icon: Wrench, Component: MachinesTab },
+  { value: "molds", labelKey: "production.tabs.molds", icon: Disc3, Component: MoldsTab },
   { value: "packaging-boms", labelKey: "production.tabs.packagingBoms", icon: Boxes, Component: PackagingBomsTab },
   { value: "classifications", labelKey: "production.tabs.classifications", icon: Tag, Component: ProductClassificationsTab },
+  { value: "settings", labelKey: "production.tabs.settings", icon: Settings, Component: ProductionSettingsTab },
 ] as const;
 
 type TabValue = (typeof TABS)[number]["value"];
 
 export function ProductionPage() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<TabValue>("work-orders");
+  const [searchParams, setSearchParams] = useSearchParams();
+  // The tab lives in the URL so a dashboard alert, a bookmark or a shared link
+  // can land straight on the right screen.
+  const requested = searchParams.get("tab") as TabValue | null;
+  const tab: TabValue = TABS.some((entry) => entry.value === requested) ? requested! : "dashboard";
+  const setTab = (value: TabValue) => setSearchParams({ tab: value }, { replace: true });
   const ActiveTab = TABS.find((t) => t.value === tab)!.Component;
 
   return (

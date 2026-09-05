@@ -55,10 +55,19 @@ class AdminSetStockRequest(BaseModel):
 class CreateLocationRequest(BaseModel):
     code: str
     name: str
+    # A blocked location holds stock that cannot be promised — quarantine above all.
+    is_blocked: bool = False
+    blocked_reason: str | None = None
 
 
 def _location_response(location: Location) -> dict:
-    return {"id": location.id, "code": location.code, "name": location.name}
+    return {
+        "id": location.id,
+        "code": location.code,
+        "name": location.name,
+        "is_blocked": location.is_blocked,
+        "blocked_reason": location.blocked_reason,
+    }
 
 
 @router.get("/locations")
@@ -75,7 +84,14 @@ def create_location(
 ) -> dict:
     with get_connection() as connection:
         service = LocationService(connection)
-        location = service.create_location(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, code=body.code, name=body.name)
+        location = service.create_location(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            code=body.code,
+            name=body.name,
+            is_blocked=body.is_blocked,
+            blocked_reason=body.blocked_reason,
+        )
         connection.commit()
     return _location_response(location)
 
@@ -83,6 +99,8 @@ def create_location(
 class UpdateLocationRequest(BaseModel):
     code: str | None = None
     name: str | None = None
+    is_blocked: bool | None = None
+    blocked_reason: str | None = None
 
 
 @router.patch("/locations/{location_id}")
@@ -94,7 +112,13 @@ def update_location(
     with get_connection() as connection:
         service = LocationService(connection)
         result = service.update_location(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, location_id=location_id, code=body.code, name=body.name
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            location_id=location_id,
+            code=body.code,
+            name=body.name,
+            is_blocked=body.is_blocked,
+            blocked_reason=body.blocked_reason,
         )
         if isinstance(result, Err):
             connection.rollback()

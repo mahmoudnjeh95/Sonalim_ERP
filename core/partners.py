@@ -5,11 +5,32 @@ from pydantic import BaseModel
 
 from core.api.service import CoreService
 from core.db import get_connection
-from core.domain.partner import Partner
+from core.domain.partner import Partner, PartnerTagLink
 from core.domain.result import Err
 from core.tenancy import TenantContext, require_permission
 
 router = APIRouter(prefix="/core/partners", tags=["core.partners"])
+
+
+class SetPartnerTagsRequest(BaseModel):
+    tag_ids: list[str]
+
+
+class UpdatePartnerTagLinkRequest(BaseModel):
+    is_preferred: bool | None = None
+    lead_time_days: int | None = None
+    min_order_qty: float | None = None
+
+
+def partner_tag_link_response(link: PartnerTagLink) -> dict:
+    return {
+        "partner_id": link.partner_id,
+        "tag_id": link.tag_id,
+        "tag_name": link.tag_name,
+        "is_preferred": link.is_preferred,
+        "lead_time_days": link.lead_time_days,
+        "min_order_qty": link.min_order_qty,
+    }
 
 
 def partner_response(partner: Partner) -> dict:
@@ -124,3 +145,56 @@ def archive_partner(partner_id: str, tenant: TenantContext = Depends(require_per
             raise HTTPException(code, {"code": result.code, "message": result.message})
         connection.commit()
     return partner_response(result.value)
+
+
+@router.get("/{partner_id}/tags")
+def list_partner_tags(partner_id: str, tenant: TenantContext = Depends(require_permission("core.view_partners"))) -> list[dict]:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        links = service.list_tags_for_partner(tenant.tenant_id, partner_id)
+    return [partner_tag_link_response(link) for link in links]
+
+
+@router.put("/{partner_id}/tags")
+def set_partner_tags(
+    partner_id: str,
+    body: SetPartnerTagsRequest,
+    tenant: TenantContext = Depends(require_permission("core.manage_partners")),
+) -> list[dict]:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        result = service.set_partner_tags(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, partner_id=partner_id, tag_ids=body.tag_ids
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return [partner_tag_link_response(link) for link in result.value]
+
+
+@router.patch("/{partner_id}/tags/{tag_id}")
+def update_partner_tag_link(
+    partner_id: str,
+    tag_id: str,
+    body: UpdatePartnerTagLinkRequest,
+    tenant: TenantContext = Depends(require_permission("core.manage_partners")),
+) -> dict:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        result = service.update_partner_tag_link(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            partner_id=partner_id,
+            tag_id=tag_id,
+            is_preferred=body.is_preferred,
+            lead_time_days=body.lead_time_days,
+            min_order_qty=body.min_order_qty,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return partner_tag_link_response(result.value)

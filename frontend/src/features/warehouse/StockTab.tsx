@@ -20,6 +20,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
+import { productRequiresIntegerQuantity } from "../../lib/units";
 import { ApiError } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { Button } from "../../components/ui/button";
@@ -135,8 +136,13 @@ export function StockTab() {
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
-  const productName = (productId: string) => products.find((p) => p.id === productId)?.name ?? productId;
-  const uomCode = (uomId: string) => uoms.find((u) => u.id === uomId)?.code ?? uomId;
+  const productName = (productId: string) => products.find((p) => p.id === productId)?.name ?? "—";
+  // The printed form, not the code: "pièce" is what a reader expects beside a
+  // count, and `code` stays the key imports and integrations match on.
+  const uomCode = (uomId: string) => {
+    const uom = uoms.find((u) => u.id === uomId);
+    return uom ? uom.symbol || uom.code : uomId;
+  };
   const productUomCode = (productId: string) => {
     const product = products.find((p) => p.id === productId);
     return product ? uomCode(product.uom_id) : "?";
@@ -152,8 +158,10 @@ export function StockTab() {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm<ReserveForm>({ resolver: zodResolver(reserveSchema) });
+  const reserveProductId = watch("product_id");
 
   const reserveMutation = useMutation({
     mutationFn: (input: ReserveForm) => reserveStock(token, input),
@@ -210,7 +218,7 @@ export function StockTab() {
   }
 
   function locationName(id: string) {
-    return locations.find((l) => l.id === id)?.name ?? id;
+    return locations.find((l) => l.id === id)?.name ?? "—";
   }
 
   function invalidateStock() {
@@ -318,12 +326,14 @@ export function StockTab() {
         onChange: (v) => columnFilters.setTextValue("product", v),
         placeholder: t("warehouse.stock.column.product"),
       },
+      sortValue: (item) => productName(item.product_id),
     },
     {
       key: "unit",
       header: t("warehouse.stock.column.unit"),
       defaultWidth: 100,
       cell: (item) => <span className="text-muted-foreground">{productUomCode(item.product_id)}</span>,
+      sortValue: (item) => productUomCode(item.product_id),
     },
     {
       key: "location",
@@ -336,6 +346,7 @@ export function StockTab() {
         onChange: (v) => columnFilters.setTextValue("location", v),
         placeholder: t("warehouse.stock.column.location"),
       },
+      sortValue: (item) => locationName(item.location_id),
     },
     {
       key: "quantity_on_hand",
@@ -349,6 +360,7 @@ export function StockTab() {
         onMinChange: (v) => columnFilters.setRangeValue("quantity_on_hand", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("quantity_on_hand", "max", v),
       },
+      sortValue: (item) => item.quantity_on_hand,
     },
     {
       key: "quantity_reserved",
@@ -367,6 +379,7 @@ export function StockTab() {
         onMinChange: (v) => columnFilters.setRangeValue("quantity_reserved", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("quantity_reserved", "max", v),
       },
+      sortValue: (item) => item.quantity_reserved,
     },
     {
       key: "quantity_in_production",
@@ -378,6 +391,7 @@ export function StockTab() {
       ),
       defaultWidth: 140,
       cell: (item) => <span className="tabular-nums text-muted-foreground">{item.quantity_in_production}</span>,
+      sortValue: (item) => item.quantity_in_production,
     },
     {
       key: "quantity_available",
@@ -395,6 +409,7 @@ export function StockTab() {
         onMinChange: (v) => columnFilters.setRangeValue("quantity_available", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("quantity_available", "max", v),
       },
+      sortValue: (item) => item.quantity_available,
     },
     {
       key: "modifier",
@@ -481,10 +496,9 @@ export function StockTab() {
         ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "warehouse.stock",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("warehouse.stock", columns);
+  const sortedItems = sortRows(visibleItems);
 
   return (
     <div className="space-y-6">
@@ -662,8 +676,16 @@ export function StockTab() {
                   {errors.product_id && <p className="text-sm text-destructive">{errors.product_id.message}</p>}
                 </div>
                 <div className="space-y-1.5">
-                  <Label htmlFor="quantity">{t("warehouse.stock.field.quantity")}</Label>
-                  <Input id="quantity" type="number" step="any" {...register("quantity")} />
+                  <Label htmlFor="quantity">
+                    {t("warehouse.stock.field.quantity")}
+                    {reserveProductId && <span className="text-muted-foreground"> ({productUomCode(reserveProductId)})</span>}
+                  </Label>
+                  <Input
+                    id="quantity"
+                    type="number"
+                    step={productRequiresIntegerQuantity(reserveProductId, products, uoms) ? "1" : "any"}
+                    {...register("quantity")}
+                  />
                   {errors.quantity && <p className="text-sm text-destructive">{errors.quantity.message}</p>}
                 </div>
                 <div className="space-y-1.5">
@@ -693,6 +715,8 @@ export function StockTab() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -721,7 +745,7 @@ export function StockTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {visibleItems.map((item, i) => (
+                {sortedItems.map((item, i) => (
                   <motion.tr
                     key={`${item.location_id}:${item.product_id}`}
                     layout
@@ -768,8 +792,17 @@ export function StockTab() {
           </DialogHeader>
           <form className="space-y-4" onSubmit={rowAdjustForm.handleSubmit((input) => rowAdjustMutation.mutate(input))}>
             <div className="space-y-1.5">
-              <Label htmlFor="row_adjust_delta">{t("warehouse.stockHistory.field.delta")}</Label>
-              <Input id="row_adjust_delta" type="number" step="any" placeholder="e.g. -5 or 3.2" {...rowAdjustForm.register("delta")} />
+              <Label htmlFor="row_adjust_delta">
+                {t("warehouse.stockHistory.field.delta")}
+                {rowAction && <span className="text-muted-foreground"> ({productUomCode(rowAction.item.product_id)})</span>}
+              </Label>
+              <Input
+                id="row_adjust_delta"
+                type="number"
+                step={rowAction && productRequiresIntegerQuantity(rowAction.item.product_id, products, uoms) ? "1" : "any"}
+                placeholder="e.g. -5 or 3.2"
+                {...rowAdjustForm.register("delta")}
+              />
               {rowAdjustForm.formState.errors.delta && (
                 <p className="text-sm text-destructive">{rowAdjustForm.formState.errors.delta.message}</p>
               )}
@@ -804,22 +837,40 @@ export function StockTab() {
           <form className="space-y-4" onSubmit={adminSetForm.handleSubmit((input) => adminSetMutation.mutate(input))}>
             <div className="grid grid-cols-3 gap-3">
               <div className="space-y-1.5">
-                <Label htmlFor="admin_on_hand">{t("warehouse.stock.column.onHand")}</Label>
-                <Input id="admin_on_hand" type="number" step="any" {...adminSetForm.register("quantity_on_hand")} />
+                <Label htmlFor="admin_on_hand">
+                  {t("warehouse.stock.column.onHand")}
+                  {rowAction && <span className="text-muted-foreground"> ({productUomCode(rowAction.item.product_id)})</span>}
+                </Label>
+                <Input
+                  id="admin_on_hand"
+                  type="number"
+                  step={rowAction && productRequiresIntegerQuantity(rowAction.item.product_id, products, uoms) ? "1" : "any"}
+                  {...adminSetForm.register("quantity_on_hand")}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="admin_reserved" className="inline-flex items-center gap-1">
                   {t("warehouse.stock.column.reserved")}
                   <HelpTooltip text={t("warehouse.stock.help.reserved")} />
                 </Label>
-                <Input id="admin_reserved" type="number" step="any" {...adminSetForm.register("quantity_reserved")} />
+                <Input
+                  id="admin_reserved"
+                  type="number"
+                  step={rowAction && productRequiresIntegerQuantity(rowAction.item.product_id, products, uoms) ? "1" : "any"}
+                  {...adminSetForm.register("quantity_reserved")}
+                />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="admin_in_production" className="inline-flex items-center gap-1">
                   {t("warehouse.stock.column.inProduction")}
                   <HelpTooltip text={t("warehouse.stock.help.inProduction")} />
                 </Label>
-                <Input id="admin_in_production" type="number" step="any" {...adminSetForm.register("quantity_in_production")} />
+                <Input
+                  id="admin_in_production"
+                  type="number"
+                  step={rowAction && productRequiresIntegerQuantity(rowAction.item.product_id, products, uoms) ? "1" : "any"}
+                  {...adminSetForm.register("quantity_in_production")}
+                />
               </div>
             </div>
             {adminSetMutation.isError && (
@@ -861,7 +912,10 @@ export function StockTab() {
             </div>
             <div className="space-y-1.5">
               <div className="flex items-center justify-between gap-3">
-                <Label htmlFor="transfer_quantity">{t("warehouse.stock.field.quantity")}</Label>
+                <Label htmlFor="transfer_quantity">
+                  {t("warehouse.stock.field.quantity")}
+                  {rowAction && <span className="text-muted-foreground"> ({productUomCode(rowAction.item.product_id)})</span>}
+                </Label>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Checkbox
                     checked={transferAll}
@@ -876,7 +930,12 @@ export function StockTab() {
                   <span className="tabular-nums">({rowAction?.item.quantity_available ?? 0})</span>
                 </label>
               </div>
-              <Input id="transfer_quantity" type="number" step="any" {...transferForm.register("quantity")} />
+              <Input
+                id="transfer_quantity"
+                type="number"
+                step={rowAction && productRequiresIntegerQuantity(rowAction.item.product_id, products, uoms) ? "1" : "any"}
+                {...transferForm.register("quantity")}
+              />
               {transferForm.formState.errors.quantity && (
                 <p className="text-sm text-destructive">{transferForm.formState.errors.quantity.message}</p>
               )}

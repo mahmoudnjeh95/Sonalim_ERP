@@ -30,13 +30,16 @@ class PurchaseOrder:
     status: str
     order_date: str | None
     expected_date: str | None
-    currency_code: str
+    currency_code: str | None
     notes: str | None
 
 
-def validate_new_purchase_order(*, currency_code: str) -> Result[None]:
-    if not currency_code.strip():
-        return Err("INVALID_CURRENCY", "currency_code is required")
+def validate_new_purchase_order(*, currency_code: str | None = None) -> Result[None]:
+    """currency_code is optional at order creation -- it's decided at receiving instead
+    (see PurchaseOrderService.create_receipt), once an explicitly-passed blank string is
+    still rejected rather than silently treated as "not set"."""
+    if currency_code is not None and not currency_code.strip():
+        return Err("INVALID_CURRENCY", "currency_code cannot be blank")
     return Ok(None)
 
 
@@ -148,10 +151,13 @@ class PurchaseOrderReceipt:
     purchase_order_id: str
     location_id: str
     status: str
+    currency_code: str
     invoice_number: str | None
     invoice_date: str | None
     origin_country: str | None
     carrier: str | None
+    transport_company_name: str | None
+    driver_name: str | None
     base_cost: float
     license_fee: float
     insurance_fee: float
@@ -193,3 +199,16 @@ def compute_landed_cost(
         return Err("INVALID_QUANTITY", "quantity must be positive")
     total_cost = base_cost + license_fee + insurance_fee + transit_fee + transport_fee + customs_duty
     return Ok((total_cost, total_cost / quantity))
+
+
+@dataclass(frozen=True)
+class LastPrice:
+    """The most recent unit price a supplier was ordered at for a product, derived from
+    purchase order line history. Not a standalone price catalog -- see the "priced" chip
+    tradeoff in the vendor-suggestion feature: no vendor SKU/ref, no quote before a first
+    real order."""
+
+    product_id: str
+    unit_price: float
+    unit_price_currency: str
+    order_date: str | None

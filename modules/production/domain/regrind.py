@@ -4,7 +4,12 @@ from dataclasses import dataclass
 
 from core.domain.result import Err, Ok, Result
 
-VALID_SCRAP_TYPES = {"filling_dosing", "cutting"}
+# Where a scrap record came from. filling_dosing (versement) and cutting (découpe)
+# are the two hand-entered stages; daily_report is written by the service when a
+# daily report validates with rebroyat above zero, which is how scrap_records
+# turns from a typed-in record into a derived ledger. The non-conformity sources
+# join this set with the qc module.
+VALID_SCRAP_TYPES = {"filling_dosing", "cutting", "daily_report", "non_conformity"}
 
 
 @dataclass(frozen=True)
@@ -29,4 +34,10 @@ def validate_scrap(
         return Err("INVALID_QUANTITY", "scrap quantity must be positive")
     if not (work_order_id or (source_note and source_note.strip())):
         return Err("MISSING_SOURCE", "either a work order or a source note is required")
+    return Ok(None)
+
+
+def validate_team_assignment(team: str) -> Result[None]:
+    if not team.strip():
+        return Err("MISSING_TEAM", "a regrind batch needs a team to assign it to")
     return Ok(None)

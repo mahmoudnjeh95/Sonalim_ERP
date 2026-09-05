@@ -8,6 +8,7 @@ export interface Product {
   name: string;
   uom_id: string;
   net_weight_grams: number | null;
+  packets_per_carton: number | null;
 }
 
 export interface CreateProductInput {
@@ -22,6 +23,7 @@ export interface UpdateProductInput {
   name?: string;
   uom_id?: string;
   net_weight_grams?: number;
+  packets_per_carton?: number;
 }
 
 export interface UnitOfMeasure {
@@ -130,18 +132,24 @@ export function archivePackagingBom(token: string, bomId: string) {
 
 // --- Work orders -------------------------------------------------------
 
-export type WorkOrderStatus = "draft" | "in_progress" | "completed";
+export type WorkOrderStatus = "planned" | "ongoing" | "suspended" | "closed" | "cancelled";
 
 export interface WorkOrder {
   id: string;
   reference: string;
-  product_id: string;
-  quantity: number;
+  // Null until Conditionnement names one, with the order's first packaging report.
+  product_id: string | null;
+  planned_quantity: number | null;
   status: WorkOrderStatus;
   work_center_id: string | null;
   recipe_id: string | null;
   packaging_bom_id: string | null;
-  actual_output_quantity: number | null;
+  start_date: string | null;
+  product_type: string | null;
+  notes: string | null;
+  created_by: string | null;
+  closed_at: string | null;
+  closed_by: string | null;
 }
 
 export interface PouredInputInput {
@@ -150,19 +158,26 @@ export interface PouredInputInput {
 }
 
 export interface CreateWorkOrderInput {
-  product_id: string;
-  quantity: number;
-  work_center_id?: string;
+  work_center_id: string;
+  product_id?: string;
+  planned_quantity?: number;
   recipe_id?: string;
+  start_date?: string;
+  product_type?: string;
+  notes?: string;
   pouredInputs?: PouredInputInput[];
   pouredInputsLocationId?: string;
 }
 
 export interface UpdateWorkOrderInput {
-  quantity?: number;
+  product_id?: string;
+  planned_quantity?: number;
   work_center_id?: string;
   recipe_id?: string;
   packaging_bom_id?: string;
+  start_date?: string;
+  product_type?: string;
+  notes?: string;
 }
 
 export function listWorkOrders(token: string) {
@@ -175,9 +190,12 @@ export function createWorkOrder(token: string, input: CreateWorkOrderInput) {
     token,
     body: {
       product_id: input.product_id,
-      quantity: input.quantity,
+      planned_quantity: input.planned_quantity,
       work_center_id: input.work_center_id,
       recipe_id: input.recipe_id,
+      start_date: input.start_date,
+      product_type: input.product_type,
+      notes: input.notes,
       poured_inputs: (input.pouredInputs ?? []).map((i) => ({ product_id: i.productId, quantity: i.quantity })),
       poured_inputs_location_id: input.pouredInputsLocationId,
     },
@@ -207,41 +225,66 @@ export function startWorkOrder(token: string, workOrderId: string) {
   });
 }
 
-export interface MaterialUsedInput {
-  product_id: string;
-  quantity: number;
+export function suspendWorkOrder(token: string, workOrderId: string, reason?: string) {
+  return apiFetch<WorkOrder>(`/production/work-orders/${workOrderId}/suspend`, {
+    method: "POST",
+    token,
+    body: { reason },
+  });
 }
 
-export interface ScrapEntryInput {
-  scrapType: ScrapType;
-  productId: string;
-  quantity: number;
+export function resumeWorkOrder(token: string, workOrderId: string) {
+  return apiFetch<WorkOrder>(`/production/work-orders/${workOrderId}/resume`, { method: "POST", token });
 }
 
-export interface CompleteWorkOrderInput {
-  correlationId: string;
-  locationId: string;
-  actualOutputQuantity?: number;
-  materialsUsed?: MaterialUsedInput[];
-  materialsLocationId?: string;
-  scrapEntries?: ScrapEntryInput[];
+export function cancelWorkOrder(token: string, workOrderId: string, reason?: string) {
+  return apiFetch<WorkOrder>(`/production/work-orders/${workOrderId}/cancel`, {
+    method: "POST",
+    token,
+    body: { reason },
+  });
 }
 
-export function completeWorkOrder(token: string, workOrderId: string, input: CompleteWorkOrderInput) {
-  return apiFetch<WorkOrder>(`/production/work-orders/${workOrderId}/complete`, {
+// What still stands between an OF and closure. Blockers are unfinished production
+// work; warnings are worth showing but never hold an order open — quality
+// follow-up in particular outlives production by design.
+export interface PreCloseFinding {
+  code: string;
+  count: number;
+  message: string;
+}
+
+export interface PreCloseCheck {
+  of_id: string;
+  reference: string;
+  status: WorkOrderStatus;
+  can_close: boolean;
+  blockers: PreCloseFinding[];
+  warnings: PreCloseFinding[];
+  validated_report_count: number;
+}
+
+export function getPreCloseCheck(token: string, workOrderId: string) {
+  return apiFetch<PreCloseCheck>(`/production/work-orders/${workOrderId}/pre-close-check`, { token });
+}
+
+// Closing an OF is archival: it moves no stock and deletes nothing. What was
+// produced and consumed is posted by validating the OF's reports, not here.
+// `force` closes over unfinished reports and requires a reason, which is audited.
+export function closeWorkOrder(
+  token: string,
+  workOrderId: string,
+  correlationId: string,
+  options: { force?: boolean; forceReason?: string; closedAt?: string } = {},
+) {
+  return apiFetch<WorkOrder>(`/production/work-orders/${workOrderId}/close`, {
     method: "POST",
     token,
     body: {
-      correlation_id: input.correlationId,
-      location_id: input.locationId,
-      actual_output_quantity: input.actualOutputQuantity,
-      materials_used: input.materialsUsed ?? [],
-      materials_location_id: input.materialsLocationId,
-      scrap_entries: (input.scrapEntries ?? []).map((e) => ({
-        scrap_type: e.scrapType,
-        product_id: e.productId,
-        quantity: e.quantity,
-      })),
+      correlation_id: correlationId,
+      force: options.force,
+      force_reason: options.forceReason,
+      closed_at: options.closedAt,
     },
   });
 }
@@ -293,42 +336,39 @@ export function unblockWorkCenter(token: string, workCenterId: string) {
   return apiFetch<WorkCenter>(`/production/work-centers/${workCenterId}/unblock`, { method: "POST", token });
 }
 
-export type MachineStatus = "operational" | "down" | "maintenance";
+// --- Molds ----------------------------------------------------------------
 
-export interface Machine {
+export type MoldType = "PC" | "PL";
+
+export interface Mold {
   id: string;
-  work_center_id: string;
   code: string;
   name: string;
-  status: MachineStatus;
+  type: MoldType;
 }
 
-export interface CreateMachineInput {
-  work_center_id: string;
+export interface CreateMoldInput {
   code: string;
   name: string;
+  type: MoldType;
 }
 
-export interface UpdateMachineInput {
-  work_center_id?: string;
+export interface UpdateMoldInput {
   code?: string;
   name?: string;
+  type?: MoldType;
 }
 
-export function listMachines(token: string) {
-  return apiFetch<Machine[]>("/production/machines", { token });
+export function listMolds(token: string) {
+  return apiFetch<Mold[]>("/production/molds", { token });
 }
 
-export function createMachine(token: string, input: CreateMachineInput) {
-  return apiFetch<Machine>("/production/machines", { method: "POST", token, body: input });
+export function createMold(token: string, input: CreateMoldInput) {
+  return apiFetch<Mold>("/production/molds", { method: "POST", token, body: input });
 }
 
-export function updateMachine(token: string, machineId: string, input: UpdateMachineInput) {
-  return apiFetch<Machine>(`/production/machines/${machineId}`, { method: "PATCH", token, body: input });
-}
-
-export function setMachineStatus(token: string, machineId: string, status: MachineStatus) {
-  return apiFetch<Machine>(`/production/machines/${machineId}/status`, { method: "POST", token, body: { status } });
+export function updateMold(token: string, moldId: string, input: UpdateMoldInput) {
+  return apiFetch<Mold>(`/production/molds/${moldId}`, { method: "PATCH", token, body: input });
 }
 
 // --- Recipes -------------------------------------------------------------
@@ -410,29 +450,53 @@ export interface RecordScrapInput {
   source_note?: string;
 }
 
+// The rebroyat-specific workflow shown in the UI: new (just opened, nobody
+// responsible yet) -> assigned (a responsable handed it to a team) -> finished
+// (the team weighed the real output and it is back in stock). Layered on top
+// of the OF's own status rather than replacing it — see regrind_stage() on
+// the backend.
+export type RegrindStage = "new" | "assigned" | "finished" | "suspended" | "cancelled";
+
 export interface RegrindBatch {
   work_order: WorkOrder;
   scrap_record_ids: string[];
   input_quantity_total: number;
-  loss_quantity: number;
+  actual_output_quantity: number | null;
+  loss_quantity: number | null;
+  stage: RegrindStage;
+  assigned_team: string | null;
+  assigned_by: string | null;
+  assigned_at: string | null;
 }
 
 export interface RegrindBatchSummary {
   work_order_id: string;
   output_product_id: string;
   output_quantity: number;
+  actual_output_quantity: number | null;
   status: WorkOrderStatus;
+  stage: RegrindStage;
+  assigned_team: string | null;
   work_center_id: string | null;
   input_quantity_total: number;
-  loss_quantity: number;
+  // null until the batch is finished and a real weight has been entered — an
+  // écart can only be measured once that happens.
+  loss_quantity: number | null;
   created_at: string;
 }
 
 export interface CreateRegrindBatchInput {
   scrap_record_ids: string[];
-  output_product_id: string;
   output_quantity: number;
   work_center_id?: string;
+}
+
+export function assignRegrindBatch(token: string, workOrderId: string, team: string) {
+  return apiFetch<RegrindBatch>(`/production/regrind-batches/${workOrderId}/assign`, {
+    method: "POST",
+    token,
+    body: { team },
+  });
 }
 
 export function listScrapRecords(token: string, isReground?: boolean) {
@@ -448,11 +512,42 @@ export function createRegrindBatch(token: string, input: CreateRegrindBatchInput
   return apiFetch<RegrindBatch>("/production/regrind-batches", { method: "POST", token, body: input });
 }
 
+export interface CompletedRegrindBatch {
+  work_order: WorkOrder;
+  input_quantity_total: number;
+  output_quantity: number;
+  loss_quantity: number;
+}
+
+export interface CompleteRegrindBatchInput {
+  correlationId: string;
+  locationId: string;
+  actualOutputQuantity?: number;
+}
+
+// Rebroyat is the one production output that still becomes stock on its own work
+// order: a regrind batch has no report behind it, only the scrap it was built from.
+export function completeRegrindBatch(token: string, workOrderId: string, input: CompleteRegrindBatchInput) {
+  return apiFetch<CompletedRegrindBatch>(`/production/regrind-batches/${workOrderId}/complete`, {
+    method: "POST",
+    token,
+    body: {
+      correlation_id: input.correlationId,
+      location_id: input.locationId,
+      actual_output_quantity: input.actualOutputQuantity,
+    },
+  });
+}
+
 export function listRegrindBatches(token: string) {
   return apiFetch<RegrindBatchSummary[]>("/production/regrind-batches", { token });
 }
 
-// --- Daily resource consumption (electricity, fuel, ...) -------------------
+// --- Metered resource types ------------------------------------------------
+//
+// The per-date and per-OF consumption ledgers these used to key are gone:
+// water, fuel and electricity are recorded on the daily production report now.
+// The lookup itself is kept pending the Phase 8 dashboard.
 
 export interface ResourceType {
   id: string;
@@ -473,21 +568,6 @@ export interface UpdateResourceTypeInput {
   unit?: string;
 }
 
-export interface DailyConsumption {
-  id: string;
-  consumption_date: string;
-  resource_type_id: string;
-  quantity: number;
-  note: string | null;
-}
-
-export interface RecordDailyConsumptionInput {
-  consumption_date: string;
-  resource_type_id: string;
-  quantity: number;
-  note?: string;
-}
-
 export function listResourceTypes(token: string) {
   return apiFetch<ResourceType[]>("/production/resource-types", { token });
 }
@@ -500,24 +580,15 @@ export function updateResourceType(token: string, resourceTypeId: string, input:
   return apiFetch<ResourceType>(`/production/resource-types/${resourceTypeId}`, { method: "PATCH", token, body: input });
 }
 
-export function listDailyConsumption(token: string, params: { date_from?: string; date_to?: string } = {}) {
-  const query = new URLSearchParams();
-  if (params.date_from) query.set("date_from", params.date_from);
-  if (params.date_to) query.set("date_to", params.date_to);
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return apiFetch<DailyConsumption[]>(`/production/daily-consumption${suffix}`, { token });
-}
-
-export function recordDailyConsumption(token: string, input: RecordDailyConsumptionInput) {
-  return apiFetch<DailyConsumption>("/production/daily-consumption", { method: "POST", token, body: input });
-}
-
 // --- Rendement (yield) ------------------------------------------------------
 
 export interface WorkOrderYield {
   work_order_id: string;
-  actual_output_quantity: number;
+  // Every term is summed from the OF's validated reports — nothing is cached on
+  // the order any more, so a yield always matches the reports behind it.
+  produced_quantity: number;
   rebroyat_quantity: number;
+  // Semoule plus any rebroyat poured back in — the material the line was given.
   semoule_quantity_total: number;
   yield_ratio: number;
 }
@@ -532,37 +603,616 @@ export function listWorkOrderYields(token: string) {
   return apiFetch<WorkOrderYield[]>("/production/work-orders/yields", { token });
 }
 
+// --- Team performance --------------------------------------------------------
+//
+// Output, time and waste from validated reports, bucketed by team and by
+// calendar period. Team is whatever Production Settings has configured — new
+// teams show up on their own, there is nothing to register here.
+
+export type PerformanceGrain = "day" | "week" | "month" | "year";
+
+export interface TeamPerformanceRow {
+  team: string | null;
+  period: string;
+  report_count: number;
+  semolina_quantity: number;
+  regrind_input_quantity: number;
+  material_input_quantity: number;
+  produced_quantity: number;
+  production_minutes: number;
+  downtime_minutes: number;
+  waste_by_product: { product_id: string; quantity: number }[];
+}
+
+export function listTeamPerformance(
+  token: string,
+  params: { grain: PerformanceGrain; date_from?: string; date_to?: string },
+) {
+  const query = new URLSearchParams({ grain: params.grain });
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  return apiFetch<TeamPerformanceRow[]>(`/production/reports/team-performance?${query.toString()}`, { token });
+}
+
+export interface DowntimeReasonRow {
+  reason: string;
+  minutes: number;
+  report_count: number;
+}
+
+export function listDowntimeReasons(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<DowntimeReasonRow[]>(`/production/reports/downtime-reasons${suffix}`, { token });
+}
+
+// --- Recipe correlation ------------------------------------------------------
+//
+// Each shift's water dosage and flow rate against its own OF's yield —
+// deliberately coarse (Phase 6's yield is per-OF, not per-shift), and sparse
+// until the plant has filed a few weeks of shifts with these figures recorded.
+
+export interface RecipeCorrelationRow {
+  report_id: string;
+  of_id: string;
+  product_id: string;
+  water_percentage: number | null;
+  semolina_flow_rate: number | null;
+  yield_ratio: number;
+}
+
+export function listRecipeCorrelation(token: string) {
+  return apiFetch<RecipeCorrelationRow[]>("/production/work-orders/recipe-correlation", { token });
+}
+
 export function getWorkOrderYield(token: string, workOrderId: string) {
   return apiFetch<WorkOrderYield>(`/production/work-orders/${workOrderId}/yield`, { token });
+}
+
+// --- OF consolidation -------------------------------------------------------
+//
+// What an OF produced and consumed, summed live from its validated reports.
+// Available while the order is still running: it simply reflects the shifts
+// validated so far.
+
+export interface OfConsolidation {
+  of_id: string;
+  reference: string;
+  product_id: string;
+  status: string;
+  work_center_id: string | null;
+  start_date: string | null;
+  closed_at: string | null;
+  /** Tonnes, per decision 19. Null for a mold-created OF whose quantity is not yet assigned. */
+  planned_quantity: number | null;
+  /** Tonnes: the packing reports' summed tonnage (decision 17). */
+  produced_quantity: number;
+  /** What the line counted into stock, in the product's own unit. */
+  packets_counted: number;
+  completion_ratio: number | null;
+  // Produced against what was actually poured in — semoule plus rebroyat
+  // recycled back into the mix — rather than against the schedule.
+  material_input_quantity: number;
+  transformation_ratio: number | null;
+  // The product ids say which unit each total is in. Null when the validated
+  // reports named different products, in which case no unit is true of the sum.
+  raw_material: {
+    semolina_quantity: number;
+    semolina_product_id: string | null;
+    /** Per quality, sorted largest first. Null semolina_product_id above just means more than one was poured. */
+    semolina_by_product: { product_id: string; quantity: number }[];
+    regrind_input_quantity: number;
+    regrind_input_product_id: string | null;
+    dough_quantity: number;
+  };
+  packaging: {
+    film_quantity: number;
+    film_product_id: string | null;
+    carton_quantity: number;
+    carton_product_id: string | null;
+    tape_quantity: number;
+    tape_product_id: string | null;
+  };
+  utilities: { water_quantity: number; fuel_quantity: number; electricity_quantity: number };
+  waste: {
+    /** Per stage, the way the plant's own form is laid out. */
+    by_category: Partial<Record<WasteCategory, number>>;
+    /** Per item — the only grouping a unit can be attached to. */
+    by_product: { product_id: string; quantity: number }[];
+    /**
+     * Quantity on lines that never said what was lost, from reports written
+     * before waste named its item. Shown rather than hidden so it gets fixed.
+     */
+    unattributed_quantity: number;
+    /** Not waste: recovered material that opens its own regrind OF. */
+    regrind: { quantity: number; product_id: string | null };
+  };
+  time: { production_minutes: number; downtime_minutes: number };
+  quality: {
+    validated_report_count: number;
+    conforming_cartons: number;
+    non_conforming_cartons: number;
+    conformity_rate: number | null;
+  };
+  report_counts: { daily: number; conditionnement: number; quality: number };
+}
+
+export function getWorkOrderConsolidation(token: string, workOrderId: string) {
+  return apiFetch<OfConsolidation>(`/production/work-orders/${workOrderId}/consolidation`, { token });
+}
+
+// What was poured into an OF, against the recipe it follows.
+//
+// Advisory only. Nothing in the report or validation flow reads this — the plant's
+// rule is warn, never block — so a finding here never prevents anything.
+export interface RecipeFinding {
+  code: "BELOW_MINIMUM" | "ABOVE_MAXIMUM" | "COMPONENT_NOT_POURED" | "NOT_IN_RECIPE" | "NEGATIVE_QUANTITY";
+  component_product_id: string | null;
+  severity: "hard" | "soft";
+  actual_percentage: number | null;
+  min_percentage: number | null;
+  max_percentage: number | null;
+}
+
+export interface RecipeCheck {
+  of_id: string;
+  reference: string;
+  recipe_id: string | null;
+  /** False means there was no formula to check against, not that it passed. */
+  has_recipe: boolean;
+  mix: { product_id: string; quantity: number }[];
+  mix_total: number;
+  findings: RecipeFinding[];
+  has_findings: boolean;
+  hard_finding_count: number;
+}
+
+export function getWorkOrderRecipeCheck(token: string, workOrderId: string) {
+  return apiFetch<RecipeCheck>(`/production/work-orders/${workOrderId}/recipe-check`, { token });
 }
 
 export function getRecipeYieldSummary(token: string, recipeId: string) {
   return apiFetch<RecipeYieldSummary>(`/production/recipes/${recipeId}/yield-summary`, { token });
 }
 
-// --- Per-OF utility consumption (fuel, scotch, film, ...) -------------------
+// --- Production reports -----------------------------------------------------
+//
+// A report is the team's claim about a shift until a supervisor validates it.
+// Approving and correcting are separate rights on purpose: validate accepts the
+// figures, correct changes what the team entered, and the originals are kept as
+// a revision either way.
 
-export interface WorkOrderConsumptionEntry {
+export type ReportStatus = "draft" | "submitted" | "validated" | "rejected";
+export type ReportType = "daily" | "conditionnement";
+
+export interface ProductionReport {
   id: string;
-  work_order_id: string;
-  resource_type_id: string;
+  of_id: string;
+  report_type: ReportType;
+  report_date: string;
+  status: ReportStatus;
+  revision: number;
+  team: string | null;
+  work_center_id: string | null;
+  shift: string | null;
+  created_by: string | null;
+  submitted_at: string | null;
+  validated_by: string | null;
+  validated_at: string | null;
+  rejection_reason: string | null;
+}
+
+/**
+ * Where in the process material was lost. `raw_material`, `press`, `pouring`
+ * and `cutting` belong to the daily report, `product` and `packaging` to the
+ * packing report — the backend refuses a line filed under the other one's
+ * stage.
+ */
+export type WasteCategory = "raw_material" | "press" | "pouring" | "cutting" | "product" | "packaging";
+
+export interface WasteLine {
+  category: WasteCategory;
+  /**
+   * The item lost. Optional while a draft is being typed, required to submit —
+   * without it the quantity has no unit and no one can read it.
+   */
+  product_id: string | null;
   quantity: number;
   note: string | null;
 }
 
-export interface RecordWorkOrderConsumptionInput {
-  resource_type_id: string;
+export interface SemolinaLine {
+  /** The quality poured. Optional while a draft is being typed, required to submit. */
+  product_id: string | null;
   quantity: number;
-  note?: string;
+  /** Its own store — unlike rebroyat, different qualities are routinely kept in different silos. */
+  location_id: string | null;
 }
 
-export function listWorkOrderConsumption(token: string, workOrderId: string) {
-  return apiFetch<WorkOrderConsumptionEntry[]>(`/production/work-orders/${workOrderId}/consumption`, { token });
+export interface DailyReportDetail {
+  dough_quantity: number;
+  // Recorded for yield and consolidation; it posts no stock.
+  finished_product_quantity: number;
+  regrind_quantity: number;
+  water_quantity: number;
+  // Water dosed as a percentage of the semoule poured — the operator's real
+  // input; water_quantity is derived from it and kept in sync by the form.
+  water_percentage: number;
+  fuel_quantity: number;
+  electricity_quantity: number;
+  // Débit de semoule, tonnes/hour. Recorded for future recipe statistics only.
+  semolina_flow_rate: number;
+  start_time: string | null;
+  end_time: string | null;
+  production_minutes: number;
+  downtime_minutes: number;
+  downtime_reason: string | null;
+  // Semoule poured this shift, one line per quality. Required before the report
+  // can be submitted if a line's quantity is above zero.
+  semolina_lines: SemolinaLine[];
+  // Rebroyat's own store — kept separate from the semoule lines' locations.
+  raw_material_location_id: string | null;
+  // Rebroyat poured back into the mix — deducted from stock like semolina.
+  regrind_input_quantity: number;
+  regrind_input_product_id: string | null;
+  // What this shift's rebroyat *is*: the item its scrap record and regrind OF
+  // are opened against, and what gives the figure a unit.
+  regrind_product_id: string | null;
+  // Which mold this shift ran — named per report, not on the OF.
+  mold_id: string | null;
+  // Déchets. Records what was lost; moves no stock, because the material left
+  // stock when it was poured or consumed.
+  waste_lines: WasteLine[];
 }
 
-export function recordWorkOrderConsumption(token: string, workOrderId: string, input: RecordWorkOrderConsumptionInput) {
-  return apiFetch<WorkOrderConsumptionEntry>(`/production/work-orders/${workOrderId}/consumption`, {
+export interface ConditionnementReportDetail {
+  /**
+   * Phase 9, decision 17: the tonnage off the scale, in tonnes. Feeds yield and
+   * consolidation; moves no stock on its own.
+   */
+  finished_product_quantity: number;
+  /**
+   * What the line tallied, in the product's own unit. Decision 18: this is what
+   * validation posts into the finished-goods store — never the packet count
+   * derived from the tonnage, or stock would always be the estimate and the
+   * écart could never appear in it.
+   */
+  packets_counted: number;
+  film_quantity: number;
+  carton_quantity: number;
+  tape_quantity: number;
+  machine_speed: number | null;
+  production_minutes: number;
+  downtime_minutes: number;
+  downtime_reason: string | null;
+  lot_number: string | null;
+  dlc_date: string | null;
+  film_product_id: string | null;
+  carton_product_id: string | null;
+  tape_product_id: string | null;
+  packaging_location_id: string | null;
+  // The finished product itself is the OF's product and is not restated here.
+  finished_goods_location_id: string | null;
+  waste_lines: WasteLine[];
+}
+
+export interface ProductionReportWithDetail extends ProductionReport {
+  detail: DailyReportDetail | ConditionnementReportDetail | null;
+}
+
+export interface ReportRevision {
+  revision: number;
+  detail: Record<string, unknown>;
+  reason: string | null;
+  actor_id: string | null;
+  created_at: string;
+}
+
+export interface CreateDailyReportInput {
+  of_id: string;
+  report_date: string;
+  team?: string;
+  work_center_id?: string;
+  shift?: string;
+  detail?: Partial<DailyReportDetail>;
+}
+
+export function listReports(
+  token: string,
+  params: { of_id?: string; status?: ReportStatus; report_type?: ReportType } = {},
+) {
+  const query = new URLSearchParams();
+  if (params.of_id) query.set("of_id", params.of_id);
+  if (params.status) query.set("status", params.status);
+  if (params.report_type) query.set("report_type", params.report_type);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<ProductionReport[]>(`/production/reports${suffix}`, { token });
+}
+
+export function getReport(token: string, reportId: string) {
+  return apiFetch<ProductionReportWithDetail>(`/production/reports/${reportId}`, { token });
+}
+
+export function listReportRevisions(token: string, reportId: string) {
+  return apiFetch<ReportRevision[]>(`/production/reports/${reportId}/revisions`, { token });
+}
+
+export function createDailyReport(token: string, input: CreateDailyReportInput) {
+  return apiFetch<ProductionReportWithDetail>("/production/reports/daily", { method: "POST", token, body: input });
+}
+
+export function updateDailyReport(token: string, reportId: string, detail: Partial<DailyReportDetail>) {
+  return apiFetch<ProductionReportWithDetail>(`/production/reports/daily/${reportId}`, {
+    method: "PATCH",
+    token,
+    body: { detail },
+  });
+}
+
+export interface CreateConditionnementReportInput {
+  of_id: string;
+  report_date: string;
+  team?: string;
+  work_center_id?: string;
+  shift?: string;
+  // Only required when the order has no product yet — its first packaging
+  // report is what names one.
+  product_id?: string;
+  detail?: Partial<ConditionnementReportDetail>;
+}
+
+export function createConditionnementReport(token: string, input: CreateConditionnementReportInput) {
+  return apiFetch<ProductionReportWithDetail>("/production/reports/conditionnement", {
     method: "POST",
+    token,
+    body: input,
+  });
+}
+
+export function updateConditionnementReport(
+  token: string,
+  reportId: string,
+  detail: Partial<ConditionnementReportDetail>,
+) {
+  return apiFetch<ProductionReportWithDetail>(`/production/reports/conditionnement/${reportId}`, {
+    method: "PATCH",
+    token,
+    body: { detail },
+  });
+}
+
+export function correctConditionnementReport(
+  token: string,
+  reportId: string,
+  detail: Partial<ConditionnementReportDetail>,
+  reason: string,
+) {
+  return apiFetch<ProductionReportWithDetail>(`/production/reports/conditionnement/${reportId}/correct`, {
+    method: "PATCH",
+    token,
+    body: { detail, reason },
+  });
+}
+
+// submit / validate / reject / revise are shared by both report types — the
+// header machinery does not care which detail table the figures live in.
+export function submitReport(token: string, reportId: string) {
+  return apiFetch<ProductionReport>(`/production/reports/${reportId}/submit`, { method: "POST", token });
+}
+
+// Needs production.admin_reports — the right to change the team's figures, which
+// is deliberately not the same as the right to approve them.
+export function correctDailyReport(
+  token: string,
+  reportId: string,
+  detail: Partial<DailyReportDetail>,
+  reason: string,
+) {
+  return apiFetch<ProductionReportWithDetail>(`/production/reports/daily/${reportId}/correct`, {
+    method: "PATCH",
+    token,
+    body: { detail, reason },
+  });
+}
+
+// Validation is what posts stock. A report that consumes more than the stock
+// figure holds still posts — that is deliberate — but needs a comment explaining
+// why, or the call is refused with SHORTFALL_COMMENT_REQUIRED.
+export function validateReport(
+  token: string,
+  reportId: string,
+  options: { correlationId?: string; shortfallComment?: string; regrindWorkCenterId?: string } = {},
+) {
+  return apiFetch<ProductionReport>(`/production/reports/${reportId}/validate`, {
+    method: "POST",
+    token,
+    body: {
+      correlation_id: options.correlationId,
+      shortfall_comment: options.shortfallComment,
+      regrind_work_center_id: options.regrindWorkCenterId,
+    },
+  });
+}
+
+// --- Regrind defaults -------------------------------------------------------
+//
+// Which product the regrind of a given input yields. Without one configured, a
+// daily report carrying rebroyat cannot be validated.
+
+export interface RegrindDefault {
+  input_product_id: string | null;
+  output_product_id: string;
+}
+
+export function listRegrindDefaults(token: string) {
+  return apiFetch<RegrindDefault[]>("/production/regrind-defaults", { token });
+}
+
+export function setRegrindDefault(token: string, outputProductId: string, inputProductId?: string) {
+  return apiFetch<RegrindDefault>("/production/regrind-defaults", {
+    method: "PUT",
+    token,
+    body: { output_product_id: outputProductId, input_product_id: inputProductId },
+  });
+}
+
+export function rejectReport(token: string, reportId: string, reason: string) {
+  return apiFetch<ProductionReport>(`/production/reports/${reportId}/reject`, {
+    method: "POST",
+    token,
+    body: { reason },
+  });
+}
+
+// A validated report has moved stock, so deleting it reverses those movements
+// first. Needs production.admin_reports, and a reason that lands in the audit log.
+export function deleteReport(token: string, reportId: string, reason: string) {
+  return apiFetch<{ deleted: string }>(`/production/reports/${reportId}`, {
+    method: "DELETE",
+    token,
+    body: { reason },
+  });
+}
+
+// Correcting an already-validated report: the old movements are reversed and the
+// new ones posted, so inventory always matches the figures that justify it.
+export function correctValidatedDailyReport(
+  token: string,
+  reportId: string,
+  detail: Partial<DailyReportDetail>,
+  reason: string,
+) {
+  return apiFetch<ProductionReportWithDetail>(`/production/reports/daily/${reportId}/correct-validated`, {
+    method: "PATCH",
+    token,
+    body: { detail, reason },
+  });
+}
+
+export function correctValidatedConditionnementReport(
+  token: string,
+  reportId: string,
+  detail: Partial<ConditionnementReportDetail>,
+  reason: string,
+) {
+  return apiFetch<ProductionReportWithDetail>(
+    `/production/reports/conditionnement/${reportId}/correct-validated`,
+    { method: "PATCH", token, body: { detail, reason } },
+  );
+}
+
+export function reviseReport(token: string, reportId: string) {
+  return apiFetch<ProductionReport>(`/production/reports/${reportId}/revise`, { method: "POST", token });
+}
+
+// --- Packaging reconciliation (Phase 9) --------------------------------------
+
+/**
+ * One écart. Every term it was computed from travels with the answer, because a
+ * variance nobody can decompose is a variance nobody will act on: "−412 packets"
+ * needs the net weight beside it before anyone can tell a lost pallet from a
+ * mistyped tonnage.
+ *
+ * `null` figures are honest gaps, not zeroes — without a net weight there is no
+ * way to turn a weight into a count, and `missing` says which parameter is absent.
+ */
+export interface PackagingVariance {
+  tonnage: number;
+  net_weight_grams: number | null;
+  packets_per_carton: number | null;
+  expected_packets: number | null;
+  expected_cartons: number | null;
+  counted_packets: number;
+  counted_cartons: number;
+  /** What quality has taken off the market and not given back (decision 21). */
+  rejected_packets: number;
+  /** The part of that still awaiting a disposition — shown so an open case does not read as a loss. */
+  undecided_packets: number;
+  good_packets: number;
+  /** actual − expected, so short reads negative. */
+  packet_variance: number | null;
+  packet_variance_ratio: number | null;
+  carton_variance: number | null;
+  carton_variance_ratio: number | null;
+  tolerance_percent: number;
+  within_tolerance: boolean | null;
+  missing: string[];
+}
+
+export interface ReportPackagingVariance extends PackagingVariance {
+  scope: "report";
+  report_id: string;
+  of_id: string;
+  of_reference: string;
+  product_id: string;
+  report_date: string;
+  report_status: ReportStatus;
+  /** False while the report is unvalidated: the figure moves if the product is edited. */
+  parameters_frozen: boolean;
+}
+
+export interface WorkOrderPackagingVariance extends PackagingVariance {
+  scope: "work_order";
+  of_id: string;
+  of_reference: string;
+  product_id: string;
+  report_count: number;
+  /** True when the OF's reports were frozen against different parameters. */
+  parameters_varied: boolean;
+  quality_available: boolean;
+}
+
+export interface ProductPackagingVariance extends PackagingVariance {
+  scope: "product";
+  product_id: string;
+  of_count: number;
+  report_count: number;
+  quality_available: boolean;
+  /** Per-report rows, each with its own date. Gross: quality attaches to an OF, not a date. */
+  reports: (PackagingVariance & {
+    report_id: string;
+    of_id: string;
+    of_reference: string;
+    report_date: string;
+  })[];
+}
+
+/** Écart de conditionnement — the scale against the counter, no quality adjustment. */
+export function getReportPackagingVariance(token: string, reportId: string) {
+  return apiFetch<ReportPackagingVariance>(`/production/reports/${reportId}/packaging-variance`, { token });
+}
+
+/** Écart net — the same, less what quality pulled. */
+export function getWorkOrderPackagingVariance(token: string, workOrderId: string) {
+  return apiFetch<WorkOrderPackagingVariance>(
+    `/production/work-orders/${workOrderId}/packaging-variance`,
+    { token },
+  );
+}
+
+export function listPackagingVariance(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<ProductPackagingVariance[]>(`/production/packaging-variance${suffix}`, { token });
+}
+
+export interface PackagingTolerance {
+  /** Null is the tenant-wide default row. */
+  product_id: string | null;
+  tolerance_percent: number;
+}
+
+export function listPackagingTolerances(token: string) {
+  return apiFetch<PackagingTolerance[]>("/production/packaging-tolerances", { token });
+}
+
+export function setPackagingTolerance(token: string, input: PackagingTolerance) {
+  return apiFetch<PackagingTolerance>("/production/packaging-tolerances", {
+    method: "PUT",
     token,
     body: input,
   });

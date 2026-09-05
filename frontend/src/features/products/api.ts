@@ -34,6 +34,10 @@ export function updateProduct(token: string, productId: string, input: UpdatePro
   return apiFetch<Product>(`/core/products/${productId}`, { method: "PATCH", token, body: input });
 }
 
+export function deleteProduct(token: string, productId: string) {
+  return apiFetch<void>(`/core/products/${productId}`, { method: "DELETE", token });
+}
+
 // --- Tags -------------------------------------------------------------------------------
 
 export interface ProductTag {

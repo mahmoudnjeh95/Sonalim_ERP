@@ -10,6 +10,7 @@ import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead 
 import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
@@ -40,7 +41,12 @@ export function StocksTab() {
   const { data: stockItems = [], isLoading: loadingStock } = useQuery({ queryKey: STOCK_QUERY_KEY, queryFn: () => listStock(token) });
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const isLoading = loadingProducts || loadingStock;
-  const uomCode = (uomId: string) => uoms.find((u) => u.id === uomId)?.code ?? uomId;
+  // The printed form, not the code: "pièce" is what a reader expects beside a
+  // count, and `code` stays the key imports and integrations match on.
+  const uomCode = (uomId: string) => {
+    const uom = uoms.find((u) => u.id === uomId);
+    return uom ? uom.symbol || uom.code : uomId;
+  };
 
   const byProduct = new Map<string, { onHand: number; reserved: number; available: number }>();
   for (const item of stockItems) {
@@ -82,12 +88,14 @@ export function StocksTab() {
         onChange: (v) => columnFilters.setTextValue("product", v),
         placeholder: t("products.column.label"),
       },
+      sortValue: (row) => row.product.name,
     },
     {
       key: "unit",
       header: t("products.stocks.column.unit"),
       defaultWidth: 100,
       cell: (row) => <span className="text-muted-foreground">{uomCode(row.product.uom_id)}</span>,
+      sortValue: (row) => uomCode(row.product.uom_id),
     },
     {
       key: "onHand",
@@ -101,10 +109,16 @@ export function StocksTab() {
         onMinChange: (v) => columnFilters.setRangeValue("onHand", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("onHand", "max", v),
       },
+      sortValue: (row) => row.onHand,
     },
     {
       key: "reserved",
-      header: t("products.stocks.column.reserved"),
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("products.stocks.column.reserved")}
+          <HelpTooltip text={t("warehouse.stock.help.reserved")} />
+        </span>
+      ),
       defaultWidth: 140,
       cell: (row) => <span className="tabular-nums text-muted-foreground">{row.reserved}</span>,
       filterCell: {
@@ -114,10 +128,16 @@ export function StocksTab() {
         onMinChange: (v) => columnFilters.setRangeValue("reserved", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("reserved", "max", v),
       },
+      sortValue: (row) => row.reserved,
     },
     {
       key: "available",
-      header: t("products.stocks.column.available"),
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("products.stocks.column.available")}
+          <HelpTooltip text={t("products.stocks.help.available")} />
+        </span>
+      ),
       defaultWidth: 140,
       cell: (row) => <span className="tabular-nums text-muted-foreground">{row.available}</span>,
       filterCell: {
@@ -127,10 +147,16 @@ export function StocksTab() {
         onMinChange: (v) => columnFilters.setRangeValue("available", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("available", "max", v),
       },
+      sortValue: (row) => row.available,
     },
     {
       key: "alert",
-      header: t("products.stocks.column.alert"),
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("products.stocks.column.alert")}
+          <HelpTooltip text={t("products.help.stockAlert")} />
+        </span>
+      ),
       defaultWidth: 160,
       cell: (row) =>
         row.belowAlert ? (
@@ -141,12 +167,12 @@ export function StocksTab() {
         ) : (
           "—"
         ),
+      sortValue: (row) => row.belowAlert,
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "products.stocks",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("products.stocks", columns);
+  const sortedRows = sortRows(rows);
 
   return (
     <Card>
@@ -182,6 +208,8 @@ export function StocksTab() {
                   width={getWidth(column.key)}
                   onResize={(width) => setWidth(column.key, width)}
                   className={column.headerClassName}
+                  sortDirection={sortDirectionFor(column.key)}
+                  onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                 >
                   {column.header}
                 </ResizableTableHead>
@@ -206,7 +234,7 @@ export function StocksTab() {
               </TableRow>
             )}
             <AnimatePresence initial={false}>
-              {rows.map((row, i) => (
+              {sortedRows.map((row, i) => (
                 <motion.tr
                   key={row.product.id}
                   layout

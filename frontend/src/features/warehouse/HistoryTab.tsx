@@ -13,12 +13,15 @@ import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { listAuditLog, listProducts, type AuditLogEntry } from "./api";
+import { listAuditLog, type AuditLogEntry } from "./api";
+import { listPurchaseOrders, type PurchaseOrder } from "../procurement/api";
+import { listPartners } from "../partners/api";
 
-const HISTORY_QUERY_KEY = ["core", "audit-log", "material_receipt"] as const;
-const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
+const HISTORY_QUERY_KEY = ["core", "audit-log", "purchase_order_receipt"] as const;
+const PURCHASE_ORDERS_QUERY_KEY = ["procurement", "purchase-orders"] as const;
+const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 
-const KNOWN_ACTIONS = ["created", "status_changed", "status_forced", "updated", "deleted"] as const;
+const KNOWN_ACTIONS = ["created", "confirmed"] as const;
 type ActionFilter = "all" | (typeof KNOWN_ACTIONS)[number];
 
 function actionSuffix(action: string): string {
@@ -29,25 +32,6 @@ function formatWhen(iso: string, language: string) {
   return new Date(iso).toLocaleString(language === "fr" ? "fr-FR" : "en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
-function describePayload(entry: AuditLogEntry, productName: (id: string) => string): string {
-  const payload = entry.payload;
-  if (entry.action === "material_receipt.created") {
-    const productId = payload.product_id as string | undefined;
-    return productId ? productName(productId) : "—";
-  }
-  if (entry.action === "material_receipt.status_changed" || entry.action === "material_receipt.status_forced") {
-    return `${payload.from_status ?? "?"} → ${payload.to_status ?? "?"}`;
-  }
-  if (entry.action === "material_receipt.updated") {
-    const changes = payload.changes as Record<string, string> | undefined;
-    return changes ? Object.keys(changes).join(", ") : "—";
-  }
-  if (entry.action === "material_receipt.deleted") {
-    return String(payload.invoice_number ?? payload.product_id ?? "—");
-  }
-  return "—";
-}
-
 export function HistoryTab() {
   const { session } = useAuth();
   const { t, language } = useI18n();
@@ -56,10 +40,26 @@ export function HistoryTab() {
 
   const { data: entries = [], isLoading } = useQuery({
     queryKey: HISTORY_QUERY_KEY,
-    queryFn: () => listAuditLog(token, { entity_type: "material_receipt", limit: 500 }),
+    queryFn: () => listAuditLog(token, { entity_type: "purchase_order_receipt", limit: 500 }),
   });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
-  const productName = (productId: string) => products.find((p) => p.id === productId)?.name ?? productId;
+  const { data: purchaseOrders = [] } = useQuery({ queryKey: PURCHASE_ORDERS_QUERY_KEY, queryFn: () => listPurchaseOrders(token) });
+  const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
+  const partnerName = (partnerId: string | null) => (partnerId ? partners.find((p) => p.id === partnerId)?.name ?? partnerId : "—");
+  const orderLabel = (order: PurchaseOrder | undefined) => (order ? partnerName(order.supplier_id) : "—");
+  const orderForReceipt = (entry: AuditLogEntry) => purchaseOrders.find((o) => o.id === (entry.payload.purchase_order_id as string | undefined));
+
+  function describePayload(entry: AuditLogEntry): string {
+    const payload = entry.payload;
+    if (entry.action === "purchase_order_receipt.created") {
+      const lineCount = payload.line_count as number | undefined;
+      const totalCost = payload.total_cost as number | undefined;
+      return `${lineCount ?? "?"} ${t("warehouse.history.lines")} · ${totalCost ?? "?"}`;
+    }
+    if (entry.action === "purchase_order_receipt.confirmed") {
+      return `${payload.from_status ?? "?"} → ${payload.to_status ?? "?"}`;
+    }
+    return "—";
+  }
 
   function actionLabel(action: string): string {
     const suffix = actionSuffix(action);
@@ -73,7 +73,8 @@ export function HistoryTab() {
 
   const columnFilterFields: FilterField<AuditLogEntry>[] = [
     { key: "who", kind: "text", getValue: (entry) => entry.actor_email ?? entry.actor_id },
-    { key: "details", kind: "text", getValue: (entry) => describePayload(entry, productName) },
+    { key: "supplier", kind: "text", getValue: (entry) => orderLabel(orderForReceipt(entry)) },
+    { key: "details", kind: "text", getValue: (entry) => describePayload(entry) },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
   const filteredEntries = columnFilters.apply(actionFilteredEntries);
@@ -84,6 +85,7 @@ export function HistoryTab() {
       header: t("warehouse.history.column.when"),
       defaultWidth: 180,
       cell: (entry) => <span className="whitespace-nowrap text-muted-foreground">{formatWhen(entry.occurred_at, language)}</span>,
+      sortValue: (entry) => entry.occurred_at,
     },
     {
       key: "who",
@@ -96,30 +98,45 @@ export function HistoryTab() {
         onChange: (v) => columnFilters.setTextValue("who", v),
         placeholder: t("warehouse.history.column.who"),
       },
+      sortValue: (entry) => entry.actor_email ?? entry.actor_id,
+    },
+    {
+      key: "supplier",
+      header: t("warehouse.history.column.supplier"),
+      defaultWidth: 180,
+      cell: (entry) => <span className="whitespace-nowrap">{orderLabel(orderForReceipt(entry))}</span>,
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.supplier ?? "",
+        onChange: (v) => columnFilters.setTextValue("supplier", v),
+        placeholder: t("warehouse.history.column.supplier"),
+      },
+      sortValue: (entry) => orderLabel(orderForReceipt(entry)),
     },
     {
       key: "action",
       header: t("warehouse.history.column.action"),
       defaultWidth: 180,
       cell: (entry) => <span className="whitespace-nowrap font-medium">{actionLabel(entry.action)}</span>,
+      sortValue: (entry) => actionLabel(entry.action),
     },
     {
       key: "details",
       header: t("warehouse.history.column.details"),
       defaultWidth: 240,
-      cell: (entry) => <span className="text-muted-foreground">{describePayload(entry, productName)}</span>,
+      cell: (entry) => <span className="text-muted-foreground">{describePayload(entry)}</span>,
       filterCell: {
         type: "text",
         value: columnFilters.text.details ?? "",
         onChange: (v) => columnFilters.setTextValue("details", v),
         placeholder: t("warehouse.history.column.details"),
       },
+      sortValue: (entry) => describePayload(entry),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "warehouse.history",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("warehouse.history", columns);
+  const sortedEntries = sortRows(filteredEntries);
 
   return (
     <Card>
@@ -158,6 +175,8 @@ export function HistoryTab() {
                   width={getWidth(column.key)}
                   onResize={(width) => setWidth(column.key, width)}
                   className={column.headerClassName}
+                  sortDirection={sortDirectionFor(column.key)}
+                  onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                 >
                   {column.header}
                 </ResizableTableHead>
@@ -181,7 +200,7 @@ export function HistoryTab() {
                 </TableCell>
               </TableRow>
             )}
-            {filteredEntries.map((entry) => (
+            {sortedEntries.map((entry) => (
               <TableRow key={entry.id}>
                 {visibleColumns.map((column) => (
                   <TableCell key={column.key} className={column.cellClassName}>

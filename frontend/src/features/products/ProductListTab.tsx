@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { Package, Pencil, Plus, Tag as TagIcon } from "lucide-react";
+import { Package, Pencil, Plus, Tag as TagIcon, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -18,6 +18,7 @@ import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead 
 import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
@@ -28,6 +29,7 @@ import { listProducts, listUoms, listLocations, type Product } from "../warehous
 import {
   createProduct,
   createProductTag,
+  deleteProduct,
   listProductTags,
   listTagsForProduct,
   setProductTags,
@@ -148,7 +150,9 @@ export function ProductListTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [lotTrackingFilter, setLotTrackingFilter] = useState<"all" | "none" | "lot" | "serial">("all");
+  const [sellableFilter, setSellableFilter] = useState<"sellable" | "all">("sellable");
 
   const { data: products = [], isLoading } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
@@ -157,7 +161,8 @@ export function ProductListTab() {
 
   const topLevelProducts = products
     .filter((p) => !p.parent_product_id)
-    .filter((p) => lotTrackingFilter === "all" || p.lot_serial_tracking === lotTrackingFilter);
+    .filter((p) => lotTrackingFilter === "all" || p.lot_serial_tracking === lotTrackingFilter)
+    .filter((p) => sellableFilter === "all" || p.is_sellable);
 
   const newForm = useForm<ProductForm>({ resolver: zodResolver(productSchema), defaultValues: EMPTY_DEFAULTS });
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
@@ -209,6 +214,18 @@ export function ProductListTab() {
     },
   });
 
+  const deleteMutation = useMutation({
+    mutationFn: (id: string) => deleteProduct(token, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY });
+      setDeletingId(null);
+      toast.success(t("products.deleted"));
+    },
+    onError: (error) => {
+      toast.error(t("products.deleteError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
   function openEditDialog(product: Product | null) {
     if (!product) {
       setEditingId(null);
@@ -244,6 +261,7 @@ export function ProductListTab() {
         onChange: (v) => columnFilters.setTextValue("sku", v),
         placeholder: t("products.column.ref"),
       },
+      sortValue: (product) => product.sku,
     },
     {
       key: "name",
@@ -256,6 +274,7 @@ export function ProductListTab() {
         onChange: (v) => columnFilters.setTextValue("name", v),
         placeholder: t("products.column.label"),
       },
+      sortValue: (product) => product.name,
     },
     {
       key: "sellPurchase",
@@ -270,7 +289,12 @@ export function ProductListTab() {
     },
     {
       key: "lotTracking",
-      header: t("products.column.lotTracking"),
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("products.column.lotTracking")}
+          <HelpTooltip text={t("products.help.lotTracking")} />
+        </span>
+      ),
       defaultWidth: 160,
       cell: (product) => (
         <span className="text-muted-foreground">
@@ -279,6 +303,7 @@ export function ProductListTab() {
             : t(`products.lotTracking.${product.lot_serial_tracking}` as Parameters<typeof t>[0])}
         </span>
       ),
+      sortValue: (product) => product.lot_serial_tracking,
     },
     {
       key: "sellingPrice",
@@ -292,42 +317,70 @@ export function ProductListTab() {
         onMinChange: (v) => columnFilters.setRangeValue("selling_price", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("selling_price", "max", v),
       },
+      sortValue: (product) => product.selling_price,
     },
     {
       key: "action",
       header: t("products.column.action"),
-      defaultWidth: 140,
+      defaultWidth: 200,
       alwaysVisible: true,
       headerClassName: "text-right",
       cellClassName: "text-right",
       cell: (product) => (
-        <Dialog open={editingId === product.id} onOpenChange={(open) => openEditDialog(open ? product : null)}>
-          <DialogTrigger asChild>
-            <Button size="sm" variant="outline">
-              <Pencil className="h-3.5 w-3.5" />
-              {t("products.edit")}
-            </Button>
-          </DialogTrigger>
-          <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-            <DialogHeader>
-              <DialogTitle>{t("products.dialog.editTitle")}</DialogTitle>
-              <DialogDescription>{t("products.dialog.editDescription")}</DialogDescription>
-            </DialogHeader>
-            <form className="space-y-4" onSubmit={editForm.handleSubmit((input) => updateMutation.mutate({ id: product.id, input }))}>
-              {renderFormFields(editForm, "edit", editTagIds, setEditTagIds)}
-              <Button type="submit" className="w-full" disabled={updateMutation.isPending}>
-                {updateMutation.isPending ? t("products.updating") : t("products.update")}
+        <div className="flex gap-2 justify-end">
+          <Dialog open={editingId === product.id} onOpenChange={(open) => openEditDialog(open ? product : null)}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline">
+                <Pencil className="h-3.5 w-3.5" />
+                {t("products.edit")}
               </Button>
-            </form>
-          </DialogContent>
-        </Dialog>
+            </DialogTrigger>
+            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>{t("products.dialog.editTitle")}</DialogTitle>
+                <DialogDescription>{t("products.dialog.editDescription")}</DialogDescription>
+              </DialogHeader>
+              <form className="space-y-4" onSubmit={editForm.handleSubmit((input) => updateMutation.mutate({ id: product.id, input }))}>
+                {renderFormFields(editForm, "edit", editTagIds, setEditTagIds)}
+                <Button type="submit" className="w-full" disabled={updateMutation.isPending}>
+                  {updateMutation.isPending ? t("products.updating") : t("products.update")}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={deletingId === product.id} onOpenChange={(open) => setDeletingId(open ? product.id : null)}>
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline" className="text-destructive hover:text-destructive">
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{t("products.dialog.deleteTitle")}</DialogTitle>
+                <DialogDescription>{t("products.dialog.deleteDescription")}</DialogDescription>
+              </DialogHeader>
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  {t("products.dialog.deleteConfirm")}
+                </p>
+                <div className="flex gap-2 justify-end">
+                  <Button variant="outline" onClick={() => setDeletingId(null)}>
+                    {t("common.cancel")}
+                  </Button>
+                  <Button variant="destructive" onClick={() => deleteMutation.mutate(product.id)} disabled={deleteMutation.isPending}>
+                    {deleteMutation.isPending ? t("products.deleting") : t("products.delete")}
+                  </Button>
+                </div>
+              </div>
+            </DialogContent>
+          </Dialog>
+        </div>
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "products.list",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("products.list", columns);
+  const sortedProducts = sortRows(filteredProducts);
 
   function renderTagPicker(ids: string[], onChange: (ids: string[]) => void) {
     return (
@@ -335,6 +388,7 @@ export function ProductListTab() {
         <Label className="flex items-center gap-1.5">
           <TagIcon className="h-3.5 w-3.5" />
           {t("products.field.tags")}
+          <HelpTooltip text={t("products.help.tags")} />
         </Label>
         <div className="flex flex-wrap gap-1.5">
           {tags.map((tag) => {
@@ -388,7 +442,7 @@ export function ProductListTab() {
               <option value="">—</option>
               {uoms.map((uom) => (
                 <option key={uom.id} value={uom.id}>
-                  {uom.code}
+                  {uom.symbol || uom.code}
                 </option>
               ))}
             </Select>
@@ -413,7 +467,10 @@ export function ProductListTab() {
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}_lot`}>{t("products.field.lotSerialTracking")}</Label>
+            <Label htmlFor={`${idPrefix}_lot`} className="flex items-center gap-1.5">
+              {t("products.field.lotSerialTracking")}
+              <HelpTooltip text={t("products.help.lotTracking")} />
+            </Label>
             <Select id={`${idPrefix}_lot`} {...form.register("lot_serial_tracking")}>
               <option value="none">{t("products.lotTracking.none")}</option>
               <option value="lot">{t("products.lotTracking.lot")}</option>
@@ -421,7 +478,10 @@ export function ProductListTab() {
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}_expiry`}>{t("products.field.expiryDatePolicy")}</Label>
+            <Label htmlFor={`${idPrefix}_expiry`} className="flex items-center gap-1.5">
+              {t("products.field.expiryDatePolicy")}
+              <HelpTooltip text={t("products.help.expiryDatePolicy")} />
+            </Label>
             <Select id={`${idPrefix}_expiry`} {...form.register("expiry_date_policy")}>
               <option value="none">{t("products.expiryPolicy.none")}</option>
               <option value="sell_by">{t("products.expiryPolicy.sellBy")}</option>
@@ -448,7 +508,10 @@ export function ProductListTab() {
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}_alert`}>{t("products.field.stockAlert")}</Label>
+            <Label htmlFor={`${idPrefix}_alert`} className="flex items-center gap-1.5">
+              {t("products.field.stockAlert")}
+              <HelpTooltip text={t("products.help.stockAlert")} />
+            </Label>
             <Input id={`${idPrefix}_alert`} type="number" step="any" {...form.register("stock_alert_threshold")} />
           </div>
         </div>
@@ -466,7 +529,10 @@ export function ProductListTab() {
             <Input id={`${idPrefix}_price`} type="number" step="any" disabled={!isSellable} placeholder={!isSellable ? "N/A" : undefined} {...form.register("selling_price")} />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor={`${idPrefix}_minprice`}>{t("products.field.minSellingPrice")}</Label>
+            <Label htmlFor={`${idPrefix}_minprice`} className="flex items-center gap-1.5">
+              {t("products.field.minSellingPrice")}
+              <HelpTooltip text={t("products.help.minSellingPrice")} />
+            </Label>
             <Input id={`${idPrefix}_minprice`} type="number" step="any" disabled={!isSellable} placeholder={!isSellable ? "N/A" : undefined} {...form.register("min_selling_price")} />
           </div>
           <div className="space-y-1.5">
@@ -501,6 +567,14 @@ export function ProductListTab() {
               <CardTitle>{t("products.table.title")}</CardTitle>
               <p className="mt-0.5 text-sm text-muted-foreground">{t("products.table.subtitle")}</p>
             </div>
+            <FilterTabs
+              value={sellableFilter}
+              onChange={setSellableFilter}
+              options={[
+                { value: "sellable", label: t("products.filter.sellableOnly") },
+                { value: "all", label: t("common.all") },
+              ]}
+            />
             <FilterTabs
               value={lotTrackingFilter}
               onChange={setLotTrackingFilter}
@@ -554,6 +628,8 @@ export function ProductListTab() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -578,7 +654,7 @@ export function ProductListTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredProducts.map((product, i) => (
+                {sortedProducts.map((product, i) => (
                   <motion.tr
                     key={product.id}
                     layout

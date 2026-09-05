@@ -1,0 +1,15 @@
+{
+  "name": "maintenance",
+  "version": "0.1.0",
+  "depends": ["core"],
+  "optional_depends": [],
+  "provides_api": ["EquipmentService"],
+  "publishes_events": [],
+  "subscribes_events": [],
+  "migrations_path": "./migrations",
+  "permissions": [
+    "maintenance.view_equipment",
+    "maintenance.manage_equipment",
+    "maintenance.admin_equipment"
+  ]
+}

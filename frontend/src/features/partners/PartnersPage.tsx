@@ -30,6 +30,7 @@ import {
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { archivePartner, createPartner, updatePartner, listPartners, type Partner, type PartnerKind } from "./api";
@@ -149,9 +150,37 @@ export function PartnersPage() {
   });
 
   const columns: ColumnDef<Partner>[] = [
-    { key: "name", header: t("partners.column.name"), defaultWidth: 220, cell: (partner) => <span className="font-medium">{partner.name}</span> },
-    { key: "kind", header: t("partners.column.kind"), defaultWidth: 140, cell: (partner) => <KindBadge kind={partner.kind} /> },
-    { key: "status", header: t("partners.column.status"), defaultWidth: 140, cell: (partner) => <StatusBadge status={partner.status} /> },
+    {
+      key: "name",
+      header: t("partners.column.name"),
+      defaultWidth: 220,
+      cell: (partner) => <span className="font-medium">{partner.name}</span>,
+      sortValue: (partner) => partner.name,
+    },
+    {
+      key: "kind",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("partners.column.kind")}
+          <HelpTooltip text={t("partners.help.kind")} />
+        </span>
+      ),
+      defaultWidth: 140,
+      cell: (partner) => <KindBadge kind={partner.kind} />,
+      sortValue: (partner) => partner.kind,
+    },
+    {
+      key: "status",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("partners.column.status")}
+          <HelpTooltip text={t("partners.help.status")} />
+        </span>
+      ),
+      defaultWidth: 140,
+      cell: (partner) => <StatusBadge status={partner.status} />,
+      sortValue: (partner) => partner.status,
+    },
     {
       key: "action",
       header: t("partners.column.action"),
@@ -186,10 +215,9 @@ export function PartnersPage() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "partners.list",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("partners.list", columns);
+  const sortedPartners = sortRows(filteredPartners);
 
   return (
     <div className="space-y-6">
@@ -329,6 +357,8 @@ export function PartnersPage() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -363,7 +393,7 @@ export function PartnersPage() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredPartners.map((partner, i) => (
+                {sortedPartners.map((partner, i) => (
                   <PartnerRow key={partner.id} partner={partner} index={i} columns={visibleColumns} />
                 ))}
               </AnimatePresence>

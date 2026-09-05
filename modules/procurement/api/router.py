@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from core.db import get_connection
@@ -34,7 +34,7 @@ class PurchaseOrderLineRequest(BaseModel):
 class CreatePurchaseOrderRequest(BaseModel):
     lines: list[PurchaseOrderLineRequest]
     supplier_id: str | None = None
-    currency_code: str = "EUR"
+    currency_code: str | None = None
     order_date: datetime.date | None = None
     expected_date: datetime.date | None = None
     notes: str | None = None
@@ -64,11 +64,14 @@ class ReceiptLineRequest(BaseModel):
 
 class CreateReceiptRequest(BaseModel):
     location_id: str
+    currency_code: str
     lines: list[ReceiptLineRequest]
     invoice_number: str | None = None
     invoice_date: datetime.date | None = None
     origin_country: str | None = None
     carrier: str | None = None
+    transport_company_name: str | None = None
+    driver_name: str | None = None
     base_cost: float = 0
     license_fee: float = 0
     insurance_fee: float = 0
@@ -113,10 +116,13 @@ def _receipt_response(receipt: PurchaseOrderReceipt) -> dict:
         "purchase_order_id": receipt.purchase_order_id,
         "location_id": receipt.location_id,
         "status": receipt.status,
+        "currency_code": receipt.currency_code,
         "invoice_number": receipt.invoice_number,
         "invoice_date": receipt.invoice_date,
         "origin_country": receipt.origin_country,
         "carrier": receipt.carrier,
+        "transport_company_name": receipt.transport_company_name,
+        "driver_name": receipt.driver_name,
         "base_cost": receipt.base_cost,
         "license_fee": receipt.license_fee,
         "insurance_fee": receipt.insurance_fee,
@@ -320,11 +326,14 @@ def create_purchase_order_receipt(
             actor_id=tenant.user_id,
             purchase_order_id=order_id,
             location_id=body.location_id,
+            currency_code=body.currency_code,
             lines=[line.model_dump() for line in body.lines],
             invoice_number=body.invoice_number,
             invoice_date=body.invoice_date,
             origin_country=body.origin_country,
             carrier=body.carrier,
+            transport_company_name=body.transport_company_name,
+            driver_name=body.driver_name,
             base_cost=body.base_cost,
             license_fee=body.license_fee,
             insurance_fee=body.insurance_fee,
@@ -382,6 +391,26 @@ def get_cost_summary(tenant: TenantContext = Depends(require_permission("procure
     with get_connection() as connection:
         service = PurchaseOrderService(connection)
         return service.cost_summary(tenant_id=tenant.tenant_id)
+
+
+@router.get("/last-prices")
+def list_last_prices(
+    supplier_id: str,
+    product_ids: list[str] = Query(...),
+    tenant: TenantContext = Depends(require_permission("procurement.view_purchase_orders")),
+) -> list[dict]:
+    with get_connection() as connection:
+        service = PurchaseOrderService(connection)
+        prices = service.list_last_prices(tenant_id=tenant.tenant_id, supplier_id=supplier_id, product_ids=product_ids)
+    return [
+        {
+            "product_id": price.product_id,
+            "unit_price": price.unit_price,
+            "unit_price_currency": price.unit_price_currency,
+            "order_date": price.order_date,
+        }
+        for price in prices
+    ]
 
 
 @router.get("/receipt-lines")

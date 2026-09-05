@@ -9,6 +9,8 @@ import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { productUnit } from "../../lib/units";
+import { listUoms } from "../warehouse/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -77,12 +79,14 @@ export function PackagingBomsTab() {
     queryFn: () => listPackagingBoms(token),
   });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
 
   const {
     register,
     control,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm<NewBomForm>({
     resolver: zodResolver(newBomSchema),
@@ -182,6 +186,7 @@ export function PackagingBomsTab() {
         onChange: (v) => columnFilters.setTextValue("target_product_id", v),
         placeholder: t("production.packagingBoms.column.targetProduct"),
       },
+      sortValue: (bom) => bom.target_product_id,
     },
     {
       key: "version",
@@ -195,8 +200,15 @@ export function PackagingBomsTab() {
         onMinChange: (v) => columnFilters.setRangeValue("version", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("version", "max", v),
       },
+      sortValue: (bom) => bom.version,
     },
-    { key: "status", header: t("production.packagingBoms.column.status"), defaultWidth: 140, cell: (bom) => <StatusBadge status={bom.status} /> },
+    {
+      key: "status",
+      header: t("production.packagingBoms.column.status"),
+      defaultWidth: 140,
+      cell: (bom) => <StatusBadge status={bom.status} />,
+      sortValue: (bom) => bom.status,
+    },
     {
       key: "components",
       header: t("production.packagingBoms.column.components"),
@@ -213,6 +225,7 @@ export function PackagingBomsTab() {
         onMinChange: (v) => columnFilters.setRangeValue("components", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("components", "max", v),
       },
+      sortValue: (bom) => bom.lines.length,
     },
     {
       key: "action",
@@ -255,10 +268,9 @@ export function PackagingBomsTab() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "production.packagingBoms",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("production.packagingBoms", columns);
+  const sortedBoms = sortRows(filteredBoms);
 
   return (
     <div className="space-y-6">
@@ -373,7 +385,16 @@ export function PackagingBomsTab() {
                             type="number"
                             step="any"
                             className="w-24"
-                            placeholder={t("production.packagingBoms.field.qty")}
+                            // A BOM ratio, not a stock quantity -- 0.5 cartons shared
+                            // across two finished units is legitimate here, so this
+                            // stays a plain decimal input even for an integer-only
+                            // component unit. The unit shown is a label, not a constraint.
+                            title={productUnit(watch(`lines.${index}.component_product_id`), products, uoms) ?? undefined}
+                            placeholder={
+                              productUnit(watch(`lines.${index}.component_product_id`), products, uoms)
+                                ? `${t("production.packagingBoms.field.qty")} (${productUnit(watch(`lines.${index}.component_product_id`), products, uoms)})`
+                                : t("production.packagingBoms.field.qty")
+                            }
                             {...register(`lines.${index}.quantity_per_unit` as const)}
                           />
                           <Button
@@ -427,6 +448,8 @@ export function PackagingBomsTab() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -455,7 +478,7 @@ export function PackagingBomsTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredBoms.map((bom, i) => (
+                {sortedBoms.map((bom, i) => (
                   <motion.tr
                     key={bom.id}
                     layout

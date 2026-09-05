@@ -10,7 +10,6 @@ import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -27,6 +26,7 @@ import {
 } from "../../components/ui/dialog";
 import {
   listClassifications,
+  listProducts,
   setClassification,
   type PackagingFormat,
   type ProductCategory,
@@ -38,6 +38,7 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { Badge } from "../../components/ui/badge";
@@ -62,6 +63,7 @@ const formSchema = z
 type FormValues = z.infer<typeof formSchema>;
 
 const QUERY_KEY = ["production", "product-classifications"] as const;
+const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 
 export function ProductClassificationsTab() {
   const { session } = useAuth();
@@ -87,6 +89,8 @@ export function ProductClassificationsTab() {
     queryKey: QUERY_KEY,
     queryFn: () => listClassifications(token),
   });
+  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
 
   const {
     register,
@@ -126,7 +130,7 @@ export function ProductClassificationsTab() {
     categoryFilter === "all" ? classifications : classifications.filter((c) => c.category === categoryFilter);
 
   const columnFilterFields: FilterField<ProductClassification>[] = [
-    { key: "product_id", kind: "text", getValue: (c) => c.product_id },
+    { key: "product_id", kind: "text", getValue: (c) => productName(c.product_id) },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
   const filteredClassifications = columnFilters.apply(categoryFilteredClassifications);
@@ -136,20 +140,28 @@ export function ProductClassificationsTab() {
       key: "product_id",
       header: t("production.classifications.column.productId"),
       defaultWidth: 200,
-      cell: (c) => <span className="font-medium">{c.product_id}</span>,
+      cell: (c) => <span className="font-medium">{productName(c.product_id)}</span>,
       filterCell: {
         type: "text",
         value: columnFilters.text.product_id ?? "",
         onChange: (v) => columnFilters.setTextValue("product_id", v),
         placeholder: t("production.classifications.column.productId"),
       },
+      sortValue: (c) => productName(c.product_id),
     },
-    { key: "category", header: t("production.classifications.column.category"), defaultWidth: 180, cell: (c) => <CategoryBadge category={c.category} /> },
+    {
+      key: "category",
+      header: t("production.classifications.column.category"),
+      defaultWidth: 180,
+      cell: (c) => <CategoryBadge category={c.category} />,
+      sortValue: (c) => c.category,
+    },
     {
       key: "packagingFormat",
       header: t("production.classifications.column.packagingFormat"),
       defaultWidth: 160,
       cell: (c) => <span className="text-muted-foreground">{c.packaging_format ? PACKAGING_FORMAT_LABEL[c.packaging_format] : "—"}</span>,
+      sortValue: (c) => (c.packaging_format ? PACKAGING_FORMAT_LABEL[c.packaging_format] : null),
     },
     {
       key: "regrind",
@@ -163,6 +175,7 @@ export function ProductClassificationsTab() {
         ) : (
           <span className="text-muted-foreground">—</span>
         ),
+      sortValue: (c) => c.is_regrind,
     },
     {
       key: "water",
@@ -176,12 +189,12 @@ export function ProductClassificationsTab() {
         ) : (
           <span className="text-muted-foreground">—</span>
         ),
+      sortValue: (c) => c.is_water,
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "production.classifications",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("production.classifications", columns);
+  const sortedClassifications = sortRows(filteredClassifications);
 
   return (
     <div className="space-y-6">
@@ -195,7 +208,10 @@ export function ProductClassificationsTab() {
         <CardHeader>
           <div className="flex flex-wrap items-center gap-3">
             <div>
-              <CardTitle>{t("production.classifications.table.title")}</CardTitle>
+              <CardTitle className="flex items-center gap-1.5">
+                {t("production.classifications.table.title")}
+                <HelpTooltip text={t("production.classifications.help.table")} />
+              </CardTitle>
               <p className="mt-0.5 text-sm text-muted-foreground">{t("production.classifications.table.subtitle")}</p>
             </div>
             <FilterTabs
@@ -228,7 +244,14 @@ export function ProductClassificationsTab() {
               <form className="space-y-4" onSubmit={handleSubmit((input) => mutation.mutate(input))}>
                 <div className="space-y-1.5">
                   <Label htmlFor="product_id">{t("production.classifications.field.productId")}</Label>
-                  <Input id="product_id" placeholder="e.g. semoule-fine" {...register("product_id")} />
+                  <Select id="product_id" {...register("product_id")}>
+                    <option value="">—</option>
+                    {products.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name}
+                      </option>
+                    ))}
+                  </Select>
                   {errors.product_id && <p className="text-sm text-destructive">{errors.product_id.message}</p>}
                 </div>
                 <div className="space-y-1.5">
@@ -326,6 +349,8 @@ export function ProductClassificationsTab() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -354,7 +379,7 @@ export function ProductClassificationsTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredClassifications.map((c, i) => (
+                {sortedClassifications.map((c, i) => (
                   <motion.tr
                     key={c.product_id}
                     layout

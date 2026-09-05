@@ -93,9 +93,20 @@ class LogoutRequest(BaseModel):
 
 
 def _list_permissions(connection, *, user_id: str) -> list[str]:
+    """Effective permissions: direct grants plus every permission carried by an
+    assigned role — the session's `permissions` list drives client-side UI (nav,
+    feature gating), so it must match what core.tenancy.require_permission enforces.
+    """
     rows = connection.execute(
-        "SELECT permission FROM core.user_permissions WHERE user_id = %s ORDER BY permission",
-        (user_id,),
+        """
+        SELECT permission FROM core.user_permissions WHERE user_id = %s
+        UNION
+        SELECT rp.permission FROM core.user_roles ur
+        JOIN core.role_permissions rp ON rp.role_id = ur.role_id
+        WHERE ur.user_id = %s
+        ORDER BY permission
+        """,
+        (user_id, user_id),
     ).fetchall()
     return [permission for (permission,) in rows]
 

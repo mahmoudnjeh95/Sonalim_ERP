@@ -52,3 +52,16 @@ class PayrollService:
             self.connection.execute("INSERT INTO hr.payroll_items (id,tenant_id,payroll_run_id,employee_id,base_salary,bonuses,deductions,taxes,net_salary,currency) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (str(ULID()),tenant_id,run_id,employee_id,salary,bonuses,deductions,taxes,net,currency))
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="payroll_run.calculated", entity_type="payroll_run", entity_id=run_id, payload={"period_month":period_month.isoformat(),"employee_count":len(employees)})
         return Ok({"id":run_id,"period_month":period_month.isoformat(),"status":"calculated","employee_count":len(employees)})
+
+    def update_payslip(self, *, tenant_id: str, actor_id: str, payslip_id: str, bonuses: float | None = None, deductions: float | None = None, taxes: float | None = None) -> Result[dict]:
+        row = self.connection.execute("SELECT base_salary,bonuses,deductions,taxes,currency FROM hr.payroll_items WHERE id=%s AND tenant_id=%s FOR UPDATE", (payslip_id, tenant_id)).fetchone()
+        if row is None: return Err("NOT_FOUND", "payslip not found")
+        base_salary, current_bonuses, current_deductions, current_taxes, currency = row
+        merged_bonuses = bonuses if bonuses is not None else float(current_bonuses)
+        merged_deductions = deductions if deductions is not None else float(current_deductions)
+        merged_taxes = taxes if taxes is not None else float(current_taxes)
+        if min(merged_bonuses, merged_deductions, merged_taxes) < 0: return Err("INVALID_PAYROLL", "amounts cannot be negative")
+        net = float(base_salary) + merged_bonuses - merged_deductions - merged_taxes
+        self.connection.execute("UPDATE hr.payroll_items SET bonuses=%s,deductions=%s,taxes=%s,net_salary=%s WHERE id=%s", (merged_bonuses, merged_deductions, merged_taxes, net, payslip_id))
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="payslip.updated", entity_type="payslip", entity_id=payslip_id, payload={"bonuses":merged_bonuses,"deductions":merged_deductions,"taxes":merged_taxes,"net_salary":net})
+        return Ok({"id":payslip_id,"base_salary":float(base_salary),"bonuses":merged_bonuses,"deductions":merged_deductions,"taxes":merged_taxes,"net_salary":net,"currency":currency})

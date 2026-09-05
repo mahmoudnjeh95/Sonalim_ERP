@@ -37,6 +37,31 @@ class UnitOfMeasure:
     name: str
     category: str
     ratio_to_base: float
+    # How the unit prints next to a quantity. `code` is a key -- short, ASCII,
+    # what imports and integrations match on -- and is a poor label: "5 ea" is
+    # not a thing a French plant reads. None means nothing better was recorded,
+    # and the reader falls back to the code rather than to a guess.
+    symbol: str | None = None
+    # Whether a quantity in this unit must be a whole number -- a carton or a
+    # pièce, never a kg or a litre. Separate from `category`: that names the
+    # kind of measurement, this says whether it can be split.
+    is_integer_only: bool = False
+
+    @property
+    def display(self) -> str:
+        """The form to print. Never empty, never invented."""
+        return self.symbol or self.code
+
+
+def validate_quantity_for_uom(quantity: float, uom: UnitOfMeasure) -> Result[None]:
+    """A quantity about to be recorded against this unit. Integer-only units --
+    pièces, cartons -- reject a fractional value. Floating-point noise from a
+    chain of additions (2.9999999999999996) is rounded away before the check --
+    the intent is "must be a whole count", not "must be exactly representable
+    in binary"."""
+    if uom.is_integer_only and abs(quantity - round(quantity)) > 1e-6:
+        return Err("QUANTITY_MUST_BE_INTEGER", f"{uom.display} is a whole-count unit; {quantity} is not a whole number")
+    return Ok(None)
 
 
 LOT_SERIAL_TRACKING_MODES = {"none", "lot", "serial"}
@@ -51,6 +76,10 @@ class Product:
     name: str
     uom_id: str
     net_weight_grams: float | None = None
+    # Phase 9, decision 20. Nullable because some finished goods have no carton
+    # at all -- a 4.54 kg sac is its own selling unit -- so NULL means "no carton
+    # line", not "not filled in yet".
+    packets_per_carton: float | None = None
     parent_product_id: str | None = None
     is_sellable: bool = True
     is_purchasable: bool = True
@@ -76,6 +105,7 @@ def validate_new_product(
     name: str,
     uom_id: str,
     net_weight_grams: float | None = None,
+    packets_per_carton: float | None = None,
     lot_serial_tracking: str = "none",
     expiry_date_policy: str = "none",
     selling_price: float = 0,
@@ -91,6 +121,8 @@ def validate_new_product(
         return Err("INVALID_UOM", "uom_id is required")
     if net_weight_grams is not None and net_weight_grams <= 0:
         return Err("INVALID_WEIGHT", "net_weight_grams must be positive")
+    if packets_per_carton is not None and packets_per_carton <= 0:
+        return Err("INVALID_PACKETS_PER_CARTON", "packets_per_carton must be positive")
     if lot_serial_tracking not in LOT_SERIAL_TRACKING_MODES:
         return Err("INVALID_LOT_SERIAL_TRACKING", f"lot_serial_tracking must be one of {sorted(LOT_SERIAL_TRACKING_MODES)}")
     if expiry_date_policy not in EXPIRY_DATE_POLICIES:

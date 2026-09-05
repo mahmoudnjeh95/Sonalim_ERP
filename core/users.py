@@ -14,10 +14,17 @@ router = APIRouter(prefix="/core", tags=["core.users"])
 MANAGE_PERMISSIONS = "core.manage_permissions"
 
 
+class RoleRef(BaseModel):
+    id: str
+    code: str
+    name: str
+
+
 class UserSummary(BaseModel):
     id: str
     email: str
     permissions: list[str]
+    roles: list[RoleRef]
 
 
 class GrantPermissionRequest(BaseModel):
@@ -36,16 +43,32 @@ def list_users(tenant: TenantContext = Depends(require_permission(MANAGE_PERMISS
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT u.id, u.email, COALESCE(array_agg(p.permission) FILTER (WHERE p.permission IS NOT NULL), '{}')
+            SELECT u.id, u.email,
+                   COALESCE(array_agg(DISTINCT p.permission) FILTER (WHERE p.permission IS NOT NULL), '{}'),
+                   COALESCE(
+                       json_agg(DISTINCT jsonb_build_object('id', r.id, 'code', r.code, 'name', r.name))
+                       FILTER (WHERE r.id IS NOT NULL),
+                       '[]'
+                   )
             FROM core.users u
             LEFT JOIN core.user_permissions p ON p.user_id = u.id
+            LEFT JOIN core.user_roles ur ON ur.user_id = u.id
+            LEFT JOIN core.roles r ON r.id = ur.role_id
             WHERE u.tenant_id = %s
             GROUP BY u.id, u.email
             ORDER BY u.email
             """,
             (tenant.tenant_id,),
         ).fetchall()
-    return [UserSummary(id=row[0], email=row[1], permissions=sorted(row[2])) for row in rows]
+    return [
+        UserSummary(
+            id=row[0],
+            email=row[1],
+            permissions=sorted(row[2]),
+            roles=sorted(row[3], key=lambda role: role["name"]),
+        )
+        for row in rows
+    ]
 
 
 def _assert_same_tenant(connection: psycopg.Connection, *, tenant_id: str, user_id: str) -> None:

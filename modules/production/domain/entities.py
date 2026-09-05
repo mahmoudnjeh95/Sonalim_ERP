@@ -1,42 +1,45 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import datetime
+from dataclasses import dataclass, replace
 
 from core.domain.result import Err, Ok, Result
 
+# The OF's five-value lifecycle. An OF plans work and records that it happened;
+# it never posts stock, so none of these transitions has an inventory effect —
+# that belongs to report validation. `closed` is archival: reports, validations
+# and quality history stay readable after it.
 VALID_TRANSITIONS = {
-    "draft": {"in_progress"},
-    "in_progress": {"completed"},
-    "completed": set(),
+    "planned": {"ongoing", "cancelled"},
+    "ongoing": {"suspended", "closed"},
+    "suspended": {"ongoing", "cancelled"},
+    "closed": set(),
+    "cancelled": set(),
 }
 
 
 @dataclass(frozen=True)
 class WorkOrder:
     id: str
-    product_id: str
-    quantity: float
+    # Nullable: creation names the work center, PC/PL and start date, not the
+    # product. Conditionnement backfills it with the first packaging report.
+    product_id: str | None
+    # Nullable: quantity is assigned later, once known, via update.
+    planned_quantity: float | None
     status: str
     reference: str = ""
     work_center_id: str | None = None
     recipe_id: str | None = None
     packaging_bom_id: str | None = None
-    actual_output_quantity: float | None = None
+    start_date: datetime.date | None = None
+    product_type: str | None = None
+    notes: str | None = None
+    created_by: str | None = None
+    closed_at: datetime.datetime | None = None
+    closed_by: str | None = None
 
 
 def transition(order: WorkOrder, new_status: str) -> Result[WorkOrder]:
     if new_status not in VALID_TRANSITIONS.get(order.status, set()):
         return Err("INVALID_TRANSITION", f"cannot move work order from {order.status} to {new_status}")
-    return Ok(
-        WorkOrder(
-            id=order.id,
-            product_id=order.product_id,
-            quantity=order.quantity,
-            status=new_status,
-            reference=order.reference,
-            work_center_id=order.work_center_id,
-            recipe_id=order.recipe_id,
-            packaging_bom_id=order.packaging_bom_id,
-            actual_output_quantity=order.actual_output_quantity,
-        )
-    )
+    return Ok(replace(order, status=new_status))

@@ -10,7 +10,12 @@ import { OpportunitiesPage } from "../features/crm/opportunities/OpportunitiesPa
 import { PipelinePage } from "../features/crm/opportunities/PipelinePage";
 import { ActivitiesPage } from "../features/crm/activities/ActivitiesPage";
 import { UsersPage } from "../features/admin/users/UsersPage";
+import { RolesPage } from "../features/admin/roles/RolesPage";
 import { ProductionPage } from "../features/production/ProductionPage";
+import { QualityPage } from "../features/qc/QualityPage";
+import { AnalyticsPage } from "../features/analytics/AnalyticsPage";
+import { MaintenancePage } from "../features/maintenance/MaintenancePage";
+import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPage";
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
 import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
@@ -60,6 +65,10 @@ export const router = createBrowserRouter([
       { path: "/crm/pipeline", element: <PipelinePage /> },
       { path: "/crm/activities", element: <ActivitiesPage /> },
       { path: "/production", element: <ProductionPage /> },
+      { path: "/production/work-orders/:workOrderId", element: <WorkOrderDetailsPage /> },
+      { path: "/quality", element: <QualityPage /> },
+      { path: "/analytics", element: <AnalyticsPage /> },
+      { path: "/maintenance", element: <MaintenancePage /> },
       { path: "/warehouse", element: <WarehousePage /> },
       { path: "/products", element: <ProductsPage /> },
       { path: "/inventories", element: <InventoriesPage /> },
@@ -68,6 +77,7 @@ export const router = createBrowserRouter([
       { path: "/sales", element: <SalesOrdersPage /> },
       { path: "/finance", element: <FinanceInvoicesPage /> },
       { path: "/admin/users", element: <UsersPage /> },
+      { path: "/admin/roles", element: <RolesPage /> },
       { path: "/settings", element: <SettingsPage /> },
       { path: "/hr", element: <HrPage /> },
     ],

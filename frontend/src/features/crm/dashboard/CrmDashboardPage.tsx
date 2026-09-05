@@ -28,6 +28,7 @@ import { useI18n, type Language } from "../../../lib/i18n";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { StatCard } from "../../../components/patterns/StatCard";
+import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
 import { EmptyState } from "../../../components/patterns/EmptyState";
 import { StatusBadge } from "../../../components/patterns/StatusBadge";
 import { getCrmDashboard, type RecentActivity } from "./api";
@@ -136,6 +137,10 @@ export function CrmDashboardPage() {
 
       {data && (
         <>
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            {t("crm.dashboard.help.forecastLabel")}
+            <HelpTooltip text={t("crm.dashboard.help.forecast")} />
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <StatCard
               label={t("crm.dashboard.stat.forecast")}

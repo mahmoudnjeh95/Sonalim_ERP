@@ -3,7 +3,9 @@ from __future__ import annotations
 import psycopg
 from ulid import ULID
 
+from core.api.service import CoreService
 from core.audit import record_audit
+from core.domain.entities import validate_quantity_for_uom
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.warehouse.domain.entities import (
@@ -23,6 +25,16 @@ class StockService:
 
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
+
+    def _validate_quantity(self, *, tenant_id: str, product_id: str, quantity: float) -> Result[None]:
+        """Every quantity that lands in warehouse.stock_items must respect its
+        product's own unit -- a whole number of cartons/pièces, any real number
+        of kg/litres. An unresolvable product/uom is a catalog-data problem, not
+        this call's to invent a new error for, so it passes through."""
+        uom = CoreService(self._connection).get_product_uom(tenant_id, product_id)
+        if uom is None:
+            return Ok(None)
+        return validate_quantity_for_uom(quantity, uom)
 
     def list_stock_items(self, tenant_id: str, location_id: str | None = None) -> list[StockLevel]:
         if location_id is not None:
@@ -59,17 +71,28 @@ class StockService:
         ]
 
     def get_available_quantity(self, tenant_id: str, product_id: str, location_id: str) -> float:
+        """What this location can actually promise.
+
+        Stock in a blocked location — quarantine — is deliberately zero here. The
+        goods exist and stay on the books at value, but they are awaiting a
+        disposition decision, so no other module may promise or reserve them. That
+        control is the whole reason non-conforming product is segregated rather
+        than merely flagged.
+        """
         row = self._connection.execute(
             """
-            SELECT quantity_on_hand, quantity_reserved
-            FROM warehouse.stock_items
-            WHERE tenant_id = %s AND product_id = %s AND location_id = %s
+            SELECT si.quantity_on_hand, si.quantity_reserved, COALESCE(l.is_blocked, FALSE)
+            FROM warehouse.stock_items si
+            LEFT JOIN warehouse.locations l ON l.id = si.location_id AND l.tenant_id = si.tenant_id
+            WHERE si.tenant_id = %s AND si.product_id = %s AND si.location_id = %s
             """,
             (tenant_id, product_id, location_id),
         ).fetchone()
         if row is None:
             return 0.0
-        quantity_on_hand, quantity_reserved = row
+        quantity_on_hand, quantity_reserved, is_blocked = row
+        if is_blocked:
+            return 0.0
         return float(quantity_on_hand - quantity_reserved)
 
     def reserve_stock(
@@ -83,6 +106,10 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
     ) -> Result[StockLevel]:
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
+        if isinstance(validation, Err):
+            return validation
+
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -140,6 +167,10 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
     ) -> Result[StockLevel]:
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
+        if isinstance(validation, Err):
+            return validation
+
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -179,6 +210,234 @@ class StockService:
         )
         return result
 
+    def post_production_movement(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        location_id: str,
+        quantity: float,
+        direction: str,
+        correlation_id: str,
+        reference: str,
+        move_type: str,
+        actor_id: str | None = None,
+        source_type: str | None = None,
+        source_id: str | None = None,
+        of_id: str | None = None,
+    ) -> Result[StockLevel]:
+        """Post a movement that records what physically happened, shortfall or not.
+
+        The one place on this service where a withdrawal is allowed to drive a
+        balance negative. A validated production report states what the line
+        actually consumed; refusing it because inventory disagrees would make the
+        record follow the stock figure instead of the other way round, so the
+        movement goes through and the resulting variance is surfaced to whoever
+        reconciles stock. Every other path — reservations above all — keeps its
+        INSUFFICIENT_STOCK refusal, because those are promises about the future
+        rather than records of the past.
+
+        `source_type`, `source_id` and `of_id` are what let a number in inventory
+        be traced back to the report and OF that produced it.
+        """
+        if quantity <= 0:
+            return Err("INVALID_QUANTITY", "movement quantity must be positive")
+        if direction not in ("in", "out"):
+            return Err("INVALID_DIRECTION", "direction must be 'in' or 'out'")
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
+        if isinstance(validation, Err):
+            return validation
+
+        row = self._connection.execute(
+            """
+            SELECT quantity_on_hand, quantity_reserved
+            FROM warehouse.stock_items
+            WHERE tenant_id = %s AND product_id = %s AND location_id = %s
+            FOR UPDATE
+            """,
+            (tenant_id, product_id, location_id),
+        ).fetchone()
+        current_on_hand = float(row[0]) if row else 0.0
+        current_reserved = float(row[1]) if row else 0.0
+
+        delta = quantity if direction == "in" else -quantity
+        new_on_hand = current_on_hand + delta
+
+        self._connection.execute(
+            """
+            INSERT INTO warehouse.stock_items (tenant_id, location_id, product_id, quantity_on_hand, quantity_reserved)
+            VALUES (%s, %s, %s, %s, %s)
+            ON CONFLICT (tenant_id, location_id, product_id)
+            DO UPDATE SET quantity_on_hand = EXCLUDED.quantity_on_hand
+            """,
+            (tenant_id, location_id, product_id, new_on_hand, current_reserved),
+        )
+        self._connection.execute(
+            """
+            INSERT INTO warehouse.stock_moves
+                (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id,
+                 source_type, source_id, of_id)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (
+                str(ULID()),
+                tenant_id,
+                location_id,
+                product_id,
+                quantity,
+                move_type,
+                reference,
+                actor_id,
+                source_type,
+                source_id,
+                of_id,
+            ),
+        )
+        publish_event(
+            self._connection,
+            event_type="warehouse.stock.received" if direction == "in" else "warehouse.stock.issued",
+            producer="warehouse",
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            payload={
+                "product_id": product_id,
+                "location_id": location_id,
+                "quantity": quantity,
+                "reference": reference,
+            },
+        )
+        return Ok(
+            StockLevel(
+                location_id=location_id,
+                product_id=product_id,
+                quantity_on_hand=new_on_hand,
+                quantity_reserved=current_reserved,
+            )
+        )
+
+    def transfer_to_quarantine(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        from_location_id: str,
+        quarantine_location_id: str,
+        quantity: float,
+        correlation_id: str,
+        reference: str,
+        actor_id: str | None = None,
+        source_type: str | None = None,
+        source_id: str | None = None,
+        of_id: str | None = None,
+    ) -> Result[None]:
+        """Move product out of sellable stock and into a blocked location.
+
+        The destination must actually be blocked — the whole point of quarantine is
+        that the goods stop being promisable the moment they are pulled, and a
+        quarantine that is merely a normal shelf would leave rejected product
+        sellable on paper while it sits in a crate in the QC room.
+
+        The goods stay on the books at value: they have not been written off, they
+        are awaiting a decision.
+        """
+        row = self._connection.execute(
+            "SELECT is_blocked FROM warehouse.locations WHERE id = %s AND tenant_id = %s",
+            (quarantine_location_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"location {quarantine_location_id} not found")
+        if not row[0]:
+            return Err("LOCATION_NOT_BLOCKED", "quarantine must be a blocked location, or the product stays sellable")
+
+        out = self.post_production_movement(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            location_id=from_location_id,
+            quantity=quantity,
+            direction="out",
+            correlation_id=correlation_id,
+            reference=reference,
+            move_type="transfer_out",
+            actor_id=actor_id,
+            source_type=source_type,
+            source_id=source_id,
+            of_id=of_id,
+        )
+        if isinstance(out, Err):
+            return out
+
+        into = self.post_production_movement(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            location_id=quarantine_location_id,
+            quantity=quantity,
+            direction="in",
+            correlation_id=correlation_id,
+            reference=reference,
+            move_type="transfer_in",
+            actor_id=actor_id,
+            source_type=source_type,
+            source_id=source_id,
+            of_id=of_id,
+        )
+        if isinstance(into, Err):
+            return into
+        return Ok(None)
+
+    def release_from_quarantine(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        quarantine_location_id: str,
+        quantity: float,
+        correlation_id: str,
+        reference: str,
+        actor_id: str | None = None,
+        source_type: str | None = None,
+        source_id: str | None = None,
+        of_id: str | None = None,
+    ) -> Result[None]:
+        """Take dispositioned product back out of quarantine.
+
+        Only the finished product moves. The packaging inside it already left stock
+        when the conditionnement report was validated, so the film, carton and tape
+        are recorded as déchet and never deducted a second time.
+        """
+        released = self.post_production_movement(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            location_id=quarantine_location_id,
+            quantity=quantity,
+            direction="out",
+            correlation_id=correlation_id,
+            reference=reference,
+            move_type="issue",
+            actor_id=actor_id,
+            source_type=source_type,
+            source_id=source_id,
+            of_id=of_id,
+        )
+        if isinstance(released, Err):
+            return released
+        return Ok(None)
+
+    def would_go_negative(self, *, tenant_id: str, product_id: str, location_id: str, quantity: float) -> bool:
+        """Whether withdrawing `quantity` here would drive on-hand below zero.
+
+        Used by report validation to decide up front whether the validator must
+        explain a shortfall, before anything is written.
+        """
+        row = self._connection.execute(
+            """
+            SELECT quantity_on_hand FROM warehouse.stock_items
+            WHERE tenant_id = %s AND product_id = %s AND location_id = %s
+            """,
+            (tenant_id, product_id, location_id),
+        ).fetchone()
+        on_hand = float(row[0]) if row else 0.0
+        return on_hand - quantity < 0
+
     def receive_stock(
         self,
         *,
@@ -191,6 +450,10 @@ class StockService:
         actor_id: str | None = None,
         move_type: str = "receipt",
     ) -> Result[StockLevel]:
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
+        if isinstance(validation, Err):
+            return validation
+
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -250,6 +513,10 @@ class StockService:
         move_type: str = "issue",
     ) -> Result[StockLevel]:
         """Records a "sortie" — physical consumption of stock (e.g. a receipt moving into production use)."""
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
+        if isinstance(validation, Err):
+            return validation
+
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -301,6 +568,10 @@ class StockService:
     ) -> Result[StockLevel]:
         """Moves raw material out of on-hand into "en production" — called when a work
         order is created with poured raw-material quantities (see modules.production)."""
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
+        if isinstance(validation, Err):
+            return validation
+
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved, quantity_in_production
@@ -353,6 +624,10 @@ class StockService:
     ) -> Result[StockLevel]:
         """Fully consumes raw material previously sent to "en production" — called when
         the work order that poured it completes."""
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
+        if isinstance(validation, Err):
+            return validation
+
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved, quantity_in_production
@@ -404,6 +679,10 @@ class StockService:
         actor_id: str | None = None,
     ) -> Result[StockLevel]:
         """Records an "ajustement" — a manual correction to on-hand quantity (e.g. a physical count)."""
+        validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=delta)
+        if isinstance(validation, Err):
+            return validation
+
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -550,6 +829,10 @@ class StockService:
         each other; this doesn't). Always audited since it's a direct correction."""
         if quantity_on_hand < 0 or quantity_reserved < 0 or quantity_in_production < 0:
             return Err("INVALID_QUANTITY", "quantities cannot be negative")
+        for value in (quantity_on_hand, quantity_reserved, quantity_in_production):
+            validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=value)
+            if isinstance(validation, Err):
+                return validation
 
         row = self._connection.execute(
             """

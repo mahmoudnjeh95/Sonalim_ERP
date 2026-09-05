@@ -8,6 +8,7 @@ import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -31,7 +32,7 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { MOVE_TYPE_VARIANT, useMoveTypeLabels } from "../../lib/stockMoveTypes";
-import { adjustStock, listLocations, listProducts, listStockMoves, type StockMove, type StockMoveType } from "./api";
+import { adjustStock, listLocations, listProducts, listStockMoves, listUoms, type StockMove, type StockMoveType } from "./api";
 
 const adjustSchema = z.object({
   product_id: z.string().min(1, "Required"),
@@ -63,8 +64,9 @@ export function StockHistoryTab() {
   const { data: moves = [], isLoading } = useQuery({ queryKey: MOVES_QUERY_KEY, queryFn: () => listStockMoves(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
-  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
-  const locationName = (id: string) => locations.find((l) => l.id === id)?.name ?? id;
+  const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
+  const locationName = (id: string) => locations.find((l) => l.id === id)?.name ?? "—";
   const moveTypeFilteredMoves = moveTypeFilter === "all" ? moves : moves.filter((m) => m.move_type === moveTypeFilter);
 
   const columnFilterFields: FilterField<StockMove>[] = [
@@ -81,8 +83,10 @@ export function StockHistoryTab() {
     register,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm<AdjustForm>({ resolver: zodResolver(adjustSchema) });
+  const adjustProductId = watch("product_id");
 
   const adjustMutation = useMutation({
     mutationFn: (input: AdjustForm) => adjustStock(token, input),
@@ -104,6 +108,7 @@ export function StockHistoryTab() {
       header: t("warehouse.stockHistory.column.when"),
       defaultWidth: 180,
       cell: (move) => <span className="whitespace-nowrap text-muted-foreground">{formatWhen(move.created_at, language)}</span>,
+      sortValue: (move) => move.created_at,
     },
     {
       key: "product",
@@ -116,6 +121,7 @@ export function StockHistoryTab() {
         onChange: (v) => columnFilters.setTextValue("product", v),
         placeholder: t("warehouse.stockHistory.column.product"),
       },
+      sortValue: (move) => productName(move.product_id),
     },
     {
       key: "location",
@@ -128,6 +134,7 @@ export function StockHistoryTab() {
         onChange: (v) => columnFilters.setTextValue("location", v),
         placeholder: t("warehouse.stockHistory.column.location"),
       },
+      sortValue: (move) => locationName(move.location_id),
     },
     {
       key: "type",
@@ -138,6 +145,7 @@ export function StockHistoryTab() {
           {MOVE_TYPE_LABEL[move.move_type]}
         </Badge>
       ),
+      sortValue: (move) => MOVE_TYPE_LABEL[move.move_type],
     },
     {
       key: "quantity",
@@ -156,6 +164,7 @@ export function StockHistoryTab() {
         onMinChange: (v) => columnFilters.setRangeValue("quantity", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("quantity", "max", v),
       },
+      sortValue: (move) => move.quantity,
     },
     {
       key: "reference",
@@ -168,6 +177,7 @@ export function StockHistoryTab() {
         onChange: (v) => columnFilters.setTextValue("reference", v),
         placeholder: t("warehouse.stockHistory.column.reference"),
       },
+      sortValue: (move) => move.reference,
     },
     {
       key: "reason",
@@ -180,12 +190,12 @@ export function StockHistoryTab() {
         onChange: (v) => columnFilters.setTextValue("reason", v),
         placeholder: t("warehouse.stockHistory.column.reason"),
       },
+      sortValue: (move) => move.reason,
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "warehouse.stockHistory",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("warehouse.stockHistory", columns);
+  const sortedMoves = sortRows(filteredMoves);
 
   return (
     <Card>
@@ -252,8 +262,19 @@ export function StockHistoryTab() {
                 {errors.location_id && <p className="text-sm text-destructive">{errors.location_id.message}</p>}
               </div>
               <div className="space-y-1.5">
-                <Label htmlFor="adjust_delta">{t("warehouse.stockHistory.field.delta")}</Label>
-                <Input id="adjust_delta" type="number" step="any" placeholder="e.g. -5 or 3.2" {...register("delta")} />
+                <Label htmlFor="adjust_delta">
+                  {t("warehouse.stockHistory.field.delta")}
+                  {productUnit(adjustProductId, products, uoms) && (
+                    <span className="text-muted-foreground"> ({productUnit(adjustProductId, products, uoms)})</span>
+                  )}
+                </Label>
+                <Input
+                  id="adjust_delta"
+                  type="number"
+                  step={productRequiresIntegerQuantity(adjustProductId, products, uoms) ? "1" : "any"}
+                  placeholder="e.g. -5 or 3.2"
+                  {...register("delta")}
+                />
                 {errors.delta && <p className="text-sm text-destructive">{errors.delta.message}</p>}
               </div>
               <div className="space-y-1.5">
@@ -283,6 +304,8 @@ export function StockHistoryTab() {
                   width={getWidth(column.key)}
                   onResize={(width) => setWidth(column.key, width)}
                   className={column.headerClassName}
+                  sortDirection={sortDirectionFor(column.key)}
+                  onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                 >
                   {column.header}
                 </ResizableTableHead>
@@ -306,7 +329,7 @@ export function StockHistoryTab() {
                 </TableCell>
               </TableRow>
             )}
-            {filteredMoves.map((move) => (
+            {sortedMoves.map((move) => (
               <TableRow key={move.id}>
                 {visibleColumns.map((column) => (
                   <TableCell key={column.key} className={column.cellClassName}>

@@ -5,10 +5,12 @@ import datetime
 import psycopg
 from ulid import ULID
 
+from core.api.service import CoreService
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.procurement.domain.entities import (
+    LastPrice,
     PurchaseOrder,
     PurchaseOrderLine,
     PurchaseOrderReceipt,
@@ -30,8 +32,9 @@ _LINE_COLUMNS = (
     "status, unit_price, unit_price_currency"
 )
 _RECEIPT_COLUMNS = (
-    "id, tenant_id, purchase_order_id, location_id, status, invoice_number, invoice_date, origin_country, "
-    "carrier, base_cost, license_fee, insurance_fee, transit_fee, transport_fee, customs_duty, total_cost, confirmed_at"
+    "id, tenant_id, purchase_order_id, location_id, status, currency_code, invoice_number, invoice_date, origin_country, "
+    "carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee, "
+    "customs_duty, total_cost, confirmed_at"
 )
 _RECEIPT_LINE_COLUMNS = "id, tenant_id, purchase_order_receipt_id, purchase_order_line_id, quantity, lot_number, cost_per_unit"
 
@@ -68,8 +71,9 @@ def _row_to_line(row: tuple) -> PurchaseOrderLine:
 
 def _row_to_receipt(row: tuple) -> PurchaseOrderReceipt:
     (
-        rid, tenant_id, purchase_order_id, location_id, status, invoice_number, invoice_date, origin_country,
-        carrier, base_cost, license_fee, insurance_fee, transit_fee, transport_fee, customs_duty, total_cost, confirmed_at,
+        rid, tenant_id, purchase_order_id, location_id, status, currency_code, invoice_number, invoice_date, origin_country,
+        carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee,
+        customs_duty, total_cost, confirmed_at,
     ) = row
     return PurchaseOrderReceipt(
         id=rid,
@@ -77,10 +81,13 @@ def _row_to_receipt(row: tuple) -> PurchaseOrderReceipt:
         purchase_order_id=purchase_order_id,
         location_id=location_id,
         status=status,
+        currency_code=currency_code,
         invoice_number=invoice_number,
         invoice_date=invoice_date.isoformat() if invoice_date else None,
         origin_country=origin_country,
         carrier=carrier,
+        transport_company_name=transport_company_name,
+        driver_name=driver_name,
         base_cost=float(base_cost),
         license_fee=float(license_fee),
         insurance_fee=float(insurance_fee),
@@ -109,6 +116,25 @@ class PurchaseOrderService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
+    def _check_line_uom(self, *, tenant_id: str, product_id: str, uom_id: str) -> Result[None]:
+        """A PO line may legitimately order in a unit other than the product's own
+        (tons for a kg-tracked product) -- confirm_receipt converts between them.
+        What it must never do is cross into a different *category* of measurement
+        (a kg-tracked film ordered in pièces), which is what silently corrupted the
+        historical `gasoil`/`film-*` lines this check is here to stop happening again."""
+        core_service = CoreService(self._connection)
+        product_uom = core_service.get_product_uom(tenant_id, product_id)
+        line_uom = core_service.get_uom(tenant_id, uom_id)
+        if product_uom is None or line_uom is None:
+            return Err("NOT_FOUND", "product or unit of measure not found")
+        if line_uom.category != product_uom.category:
+            return Err(
+                "UOM_CATEGORY_MISMATCH",
+                f"line unit {line_uom.code} ({line_uom.category}) does not match product's unit "
+                f"{product_uom.code} ({product_uom.category})",
+            )
+        return Ok(None)
+
     # --- Orders -------------------------------------------------------------------------
 
     def create_purchase_order(
@@ -118,7 +144,7 @@ class PurchaseOrderService:
         actor_id: str,
         lines: list[dict],
         supplier_id: str | None = None,
-        currency_code: str = "EUR",
+        currency_code: str | None = None,
         order_date: datetime.date | None = None,
         expected_date: datetime.date | None = None,
         notes: str | None = None,
@@ -134,6 +160,9 @@ class PurchaseOrderService:
             )
             if isinstance(line_validation, Err):
                 return line_validation
+            uom_validation = self._check_line_uom(tenant_id=tenant_id, product_id=line["product_id"], uom_id=line["uom_id"])
+            if isinstance(uom_validation, Err):
+                return uom_validation
 
         order_id = str(ULID())
         self._connection.execute(
@@ -203,6 +232,29 @@ class PurchaseOrderService:
         ).fetchall()
         return [_row_to_line(row) for row in rows]
 
+    def list_last_prices(self, *, tenant_id: str, supplier_id: str, product_ids: list[str]) -> list[LastPrice]:
+        """Most recent unit price this supplier was ordered at for each product, derived
+        from order history rather than a standalone price catalog (none exists yet)."""
+        if not product_ids:
+            return []
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT ON (pol.product_id) pol.product_id, pol.unit_price, pol.unit_price_currency, po.order_date
+            FROM procurement.purchase_order_lines pol
+            JOIN procurement.purchase_orders po ON po.id = pol.purchase_order_id AND po.tenant_id = pol.tenant_id
+            WHERE pol.tenant_id = %s AND po.supplier_id = %s AND pol.product_id = ANY(%s)
+            ORDER BY pol.product_id, po.order_date DESC NULLS LAST, pol.created_at DESC
+            """,
+            (tenant_id, supplier_id, product_ids),
+        ).fetchall()
+        return [
+            LastPrice(
+                product_id=r[0], unit_price=float(r[1]), unit_price_currency=r[2],
+                order_date=r[3].isoformat() if r[3] else None,
+            )
+            for r in rows
+        ]
+
     def add_line(
         self,
         *,
@@ -223,6 +275,9 @@ class PurchaseOrderService:
         validation = validate_new_purchase_order_line(quantity_ordered=quantity_ordered, unit_price=unit_price)
         if isinstance(validation, Err):
             return validation
+        uom_validation = self._check_line_uom(tenant_id=tenant_id, product_id=product_id, uom_id=uom_id)
+        if isinstance(uom_validation, Err):
+            return uom_validation
 
         line_id = str(ULID())
         self._connection.execute(
@@ -352,11 +407,14 @@ class PurchaseOrderService:
         actor_id: str,
         purchase_order_id: str,
         location_id: str,
+        currency_code: str,
         lines: list[dict],
         invoice_number: str | None = None,
         invoice_date: datetime.date | None = None,
         origin_country: str | None = None,
         carrier: str | None = None,
+        transport_company_name: str | None = None,
+        driver_name: str | None = None,
         base_cost: float = 0,
         license_fee: float = 0,
         insurance_fee: float = 0,
@@ -372,6 +430,8 @@ class PurchaseOrderService:
             return Err("NOT_FOUND", f"purchase order {purchase_order_id} not found")
         if order.status not in ("ordered", "partially_received"):
             return Err("INVALID_TRANSITION", f"cannot record a receipt against a purchase order in status {order.status}")
+        if not currency_code or not currency_code.strip():
+            return Err("INVALID_CURRENCY", "currency_code is required when recording a receipt")
         if not lines:
             return Err("INVALID_LINES", "a goods receipt needs at least one line")
         for line in lines:
@@ -396,13 +456,15 @@ class PurchaseOrderService:
         self._connection.execute(
             f"""
             INSERT INTO procurement.purchase_order_receipts
-                (id, tenant_id, purchase_order_id, location_id, status, invoice_number, invoice_date, origin_country,
-                 carrier, base_cost, license_fee, insurance_fee, transit_fee, transport_fee, customs_duty, total_cost)
-            VALUES (%s, %s, %s, %s, 'draft', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (id, tenant_id, purchase_order_id, location_id, status, currency_code, invoice_number, invoice_date, origin_country,
+                 carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee,
+                 customs_duty, total_cost)
+            VALUES (%s, %s, %s, %s, 'draft', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                receipt_id, tenant_id, purchase_order_id, location_id, invoice_number, invoice_date, origin_country,
-                carrier, base_cost, license_fee, insurance_fee, transit_fee, transport_fee, customs_duty, total_cost,
+                receipt_id, tenant_id, purchase_order_id, location_id, currency_code, invoice_number, invoice_date, origin_country,
+                carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee,
+                customs_duty, total_cost,
             ),
         )
         for line in lines:
@@ -486,9 +548,17 @@ class PurchaseOrderService:
             if isinstance(applied, Err):
                 return applied
             updated_line = applied.value
+            # unit_price is never entered at order creation (see PurchaseOrdersPage) -- it's
+            # derived here from the receipt's actual landed cost (freight/customs/etc. divided
+            # across quantity), so it reflects real cost instead of a guess made before receiving.
+            # Priced in the receipt's own currency (not the order's, which may still be unset).
             self._connection.execute(
-                "UPDATE procurement.purchase_order_lines SET quantity_received = %s, status = %s WHERE id = %s",
-                (updated_line.quantity_received, updated_line.status, updated_line.id),
+                """
+                UPDATE procurement.purchase_order_lines
+                SET quantity_received = %s, status = %s, unit_price = %s, unit_price_currency = %s
+                WHERE id = %s
+                """,
+                (updated_line.quantity_received, updated_line.status, receipt_line.cost_per_unit, receipt.currency_code, updated_line.id),
             )
             event_lines.append(
                 {
@@ -505,6 +575,13 @@ class PurchaseOrderService:
             return order_result
         updated_order = order_result.value
 
+        if order.currency_code is None:
+            # First receipt on an order that had no currency at creation -- now that one's
+            # known, backfill the order record so lists/reports have something to show.
+            self._connection.execute(
+                "UPDATE procurement.purchase_orders SET currency_code = %s WHERE id = %s",
+                (receipt.currency_code, order.id),
+            )
         self._connection.execute(
             "UPDATE procurement.purchase_orders SET status = %s WHERE id = %s", (updated_order.status, updated_order.id)
         )
@@ -531,12 +608,29 @@ class PurchaseOrderService:
         # later never reprocesses it and double-posts this receipt's stock.
         stock_service = StockService(self._connection)
         lot_service = LotService(self._connection)
+        core_service = CoreService(self._connection)
         for event_line in event_lines:
+            # The receipt line was placed against `event_line["uom_id"]` (the PO
+            # line's own unit), which may legitimately differ from the product's
+            # stocked unit (ordered in tons, tracked in kg) -- convert via
+            # ratio_to_base before this touches stock, or the raw number gets
+            # posted as if it were already in the product's own unit.
+            product_uom = core_service.get_product_uom(tenant_id, event_line["product_id"])
+            line_uom = core_service.get_uom(tenant_id, event_line["uom_id"])
+            if product_uom is None or line_uom is None:
+                return Err("NOT_FOUND", "product or unit of measure not found")
+            if line_uom.category != product_uom.category:
+                return Err(
+                    "UOM_CATEGORY_MISMATCH",
+                    f"line unit {line_uom.code} does not match product unit {product_uom.code}",
+                )
+            converted_quantity = event_line["quantity"] * float(line_uom.ratio_to_base) / float(product_uom.ratio_to_base)
+
             stock_result = stock_service.receive_stock(
                 tenant_id=tenant_id,
                 product_id=event_line["product_id"],
                 location_id=receipt.location_id,
-                quantity=event_line["quantity"],
+                quantity=converted_quantity,
                 correlation_id=correlation_id,
                 reference=f"purchase_order_receipt:{receipt_id}",
                 actor_id=actor_id,
@@ -549,7 +643,7 @@ class PurchaseOrderService:
                     product_id=event_line["product_id"],
                     location_id=receipt.location_id,
                     lot_number=event_line["lot_number"],
-                    quantity=event_line["quantity"],
+                    quantity=converted_quantity,
                     actor_id=actor_id,
                     source_type="purchase_order_receipt",
                     source_id=receipt_id,

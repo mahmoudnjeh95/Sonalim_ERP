@@ -16,7 +16,7 @@ export interface PurchaseOrder {
   status: PurchaseOrderStatus;
   order_date: string | null;
   expected_date: string | null;
-  currency_code: string;
+  currency_code: string | null;
   notes: string | null;
 }
 
@@ -94,11 +94,14 @@ export interface CreateReceiptLineInput {
 
 export interface CreateReceiptInput {
   location_id: string;
+  currency_code: string;
   lines: CreateReceiptLineInput[];
   invoice_number?: string;
   invoice_date?: string;
   origin_country?: string;
   carrier?: string;
+  transport_company_name?: string;
+  driver_name?: string;
   base_cost?: number;
   license_fee?: number;
   insurance_fee?: number;
@@ -112,10 +115,13 @@ export interface PurchaseOrderReceipt {
   purchase_order_id: string;
   location_id: string;
   status: "draft" | "confirmed";
+  currency_code: string;
   invoice_number: string | null;
   invoice_date: string | null;
   origin_country: string | null;
   carrier: string | null;
+  transport_company_name: string | null;
+  driver_name: string | null;
   base_cost: number;
   license_fee: number;
   insurance_fee: number;
@@ -162,4 +168,18 @@ export interface PurchaseOrderReceiptLine {
 
 export function listPurchaseOrderReceiptLines(token: string, receiptId: string) {
   return apiFetch<PurchaseOrderReceiptLine[]>(`/procurement/receipts/${receiptId}/lines`, { token });
+}
+
+export interface LastPrice {
+  product_id: string;
+  unit_price: number;
+  unit_price_currency: string;
+  order_date: string | null;
+}
+
+export function listLastPrices(token: string, supplierId: string, productIds: string[]) {
+  if (productIds.length === 0) return Promise.resolve<LastPrice[]>([]);
+  const params = new URLSearchParams({ supplier_id: supplierId });
+  productIds.forEach((productId) => params.append("product_ids", productId));
+  return apiFetch<LastPrice[]>(`/procurement/last-prices?${params.toString()}`, { token });
 }

@@ -26,7 +26,7 @@ export function PipelinePage() {
     onSuccess: () => { queryClient.invalidateQueries({ queryKey }); toast.success("Pipeline updated"); },
     onError: (error) => toast.error("Could not update pipeline", { description: error instanceof ApiError ? error.message : undefined }),
   });
-  const partnerName = (id: string) => partners.find((partner) => partner.id === id)?.name ?? id;
+  const partnerName = (id: string) => partners.find((partner) => partner.id === id)?.name ?? "—";
   function handleDrop(stage: OpportunityStage) {
     if (!draggedOpportunity) return;
     setDragOverStage(null);

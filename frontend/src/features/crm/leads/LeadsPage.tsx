@@ -29,6 +29,7 @@ import { StatusBadge } from "../../../components/patterns/StatusBadge";
 import { FilterTabs } from "../../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
+import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import { convertLead, createLead, listLeads, qualifyLead, updateLead, type Lead } from "./api";
@@ -153,6 +154,7 @@ export function LeadsPage() {
         onChange: (v) => columnFilters.setTextValue("contact_name", v),
         placeholder: t("crm.leads.column.contact"),
       },
+      sortValue: (lead) => lead.contact_name,
     },
     {
       key: "email",
@@ -165,8 +167,20 @@ export function LeadsPage() {
         onChange: (v) => columnFilters.setTextValue("email", v),
         placeholder: t("crm.leads.column.email"),
       },
+      sortValue: (lead) => lead.email,
     },
-    { key: "status", header: t("crm.leads.column.status"), defaultWidth: 140, cell: (lead) => <StatusBadge status={lead.status} /> },
+    {
+      key: "status",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("crm.leads.column.status")}
+          <HelpTooltip text={t("crm.leads.help.status")} />
+        </span>
+      ),
+      defaultWidth: 140,
+      cell: (lead) => <StatusBadge status={lead.status} />,
+      sortValue: (lead) => lead.status,
+    },
     {
       key: "action",
       header: t("crm.leads.column.action"),
@@ -205,10 +219,9 @@ export function LeadsPage() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "crm.leads",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("crm.leads", columns);
+  const sortedLeads = sortRows(filteredLeads);
 
   return (
     <div className="space-y-6">
@@ -319,6 +332,8 @@ export function LeadsPage() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -354,7 +369,7 @@ export function LeadsPage() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredLeads.map((lead, i) => (
+                {sortedLeads.map((lead, i) => (
                   <motion.tr
                     key={lead.id}
                     layout

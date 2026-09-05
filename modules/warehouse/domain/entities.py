@@ -12,6 +12,10 @@ class Location:
     id: str
     code: str
     name: str
+    # A blocked location holds stock that exists but must not be promised —
+    # quarantine above all. Excluded from available quantity.
+    is_blocked: bool = False
+    blocked_reason: str | None = None
 
 
 @dataclass(frozen=True)

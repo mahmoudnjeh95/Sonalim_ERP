@@ -53,11 +53,11 @@ def seed(tenant_id: str) -> None:
         for code, name, category, ratio_to_base in UOMS:
             connection.execute(
                 """
-                INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base)
-                VALUES (%s, %s, %s, %s, %s, %s)
+                INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base, is_integer_only)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (tenant_id, code) DO UPDATE SET name = EXCLUDED.name
                 """,
-                (str(ULID()), tenant_id, code, name, category, ratio_to_base),
+                (str(ULID()), tenant_id, code, name, category, ratio_to_base, category == "unit"),
             )
 
         uom_ids = {

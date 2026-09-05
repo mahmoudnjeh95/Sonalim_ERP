@@ -101,8 +101,16 @@ export function ActivitiesPage() {
           </div>
         );
       },
+      sortValue: (activity) => activity.kind,
     },
-    { key: "note", header: "Note", defaultWidth: 260, cellClassName: "max-w-sm truncate", cell: (activity) => activity.note },
+    {
+      key: "note",
+      header: "Note",
+      defaultWidth: 260,
+      cellClassName: "max-w-sm truncate",
+      cell: (activity) => activity.note,
+      sortValue: (activity) => activity.note,
+    },
     {
       key: "record",
       header: "Record",
@@ -115,12 +123,19 @@ export function ActivitiesPage() {
         </>
       ),
     },
-    { key: "due", header: "Due", defaultWidth: 160, cell: (activity) => formatDate(activity.due_at) },
+    {
+      key: "due",
+      header: "Due",
+      defaultWidth: 160,
+      cell: (activity) => formatDate(activity.due_at),
+      sortValue: (activity) => activity.due_at,
+    },
     {
       key: "status",
       header: "Status",
       defaultWidth: 140,
       cell: (activity) => (activity.completed_at ? <StatusBadge status="completed" /> : <StatusBadge status="in_progress" />),
+      sortValue: (activity) => (activity.completed_at ? "completed" : "in_progress"),
     },
     {
       key: "action",
@@ -138,10 +153,9 @@ export function ActivitiesPage() {
         ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "crm.activities",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("crm.activities", columns);
+  const sortedActivities = sortRows(filteredActivities);
 
   return (
     <div className="space-y-6">
@@ -195,6 +209,8 @@ export function ActivitiesPage() {
                       width={getWidth(column.key)}
                       onResize={(width) => setWidth(column.key, width)}
                       className={column.headerClassName}
+                      sortDirection={sortDirectionFor(column.key)}
+                      onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                     >
                       {column.header}
                     </ResizableTableHead>
@@ -202,7 +218,7 @@ export function ActivitiesPage() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {filteredActivities.map((activity) => (
+                {sortedActivities.map((activity) => (
                   <TableRow key={activity.id}>
                     {visibleColumns.map((column) => (
                       <TableCell key={column.key} className={column.cellClassName}>

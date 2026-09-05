@@ -12,6 +12,7 @@ import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { listProducts } from "../warehouse/api";
 import {
   createProductAttribute,
@@ -149,7 +150,10 @@ export function VariantAttributesTab() {
 
       <Card>
         <CardHeader>
-          <CardTitle>{t("products.variantAttributes.createVariant")}</CardTitle>
+          <CardTitle className="flex items-center gap-1.5">
+            {t("products.variantAttributes.createVariant")}
+            <HelpTooltip text={t("products.variantAttributes.help.createVariant")} />
+          </CardTitle>
           <p className="mt-0.5 text-sm text-muted-foreground">{t("products.variantAttributes.createVariantSubtitle")}</p>
         </CardHeader>
         <CardContent className="space-y-3">

@@ -103,7 +103,13 @@ export function ExchangeRatesCard() {
   }
 
   const columns: ColumnDef<TodayRate>[] = [
-    { key: "currency", header: t("settings.exchangeRates.column.currency"), defaultWidth: 140, cell: (rate) => <span className="font-medium">{rate.currency_code}</span> },
+    {
+      key: "currency",
+      header: t("settings.exchangeRates.column.currency"),
+      defaultWidth: 140,
+      cell: (rate) => <span className="font-medium">{rate.currency_code}</span>,
+      sortValue: (rate) => rate.currency_code,
+    },
     {
       key: "rate",
       header: t("settings.exchangeRates.column.rate"),
@@ -122,6 +128,7 @@ export function ExchangeRatesCard() {
           />
         );
       },
+      sortValue: (rate) => rate.rate_to_base,
     },
     {
       key: "updated",
@@ -136,6 +143,7 @@ export function ExchangeRatesCard() {
           </Badge>
         );
       },
+      sortValue: (rate) => rate.effective_date,
     },
     {
       key: "action",
@@ -167,10 +175,9 @@ export function ExchangeRatesCard() {
       },
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "settings.exchangeRates",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("settings.exchangeRates", columns);
+  const sortedRates = sortRows(rates);
 
   return (
     <Card>
@@ -225,6 +232,8 @@ export function ExchangeRatesCard() {
                   width={getWidth(column.key)}
                   onResize={(width) => setWidth(column.key, width)}
                   className={column.headerClassName}
+                  sortDirection={sortDirectionFor(column.key)}
+                  onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                 >
                   {column.header}
                 </ResizableTableHead>
@@ -232,7 +241,7 @@ export function ExchangeRatesCard() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {rates.map((rate) => (
+            {sortedRates.map((rate) => (
               <TableRow key={rate.currency_code}>
                 {visibleColumns.map((column) => (
                   <TableCell key={column.key} className={column.cellClassName}>

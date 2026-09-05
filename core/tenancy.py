@@ -38,17 +38,25 @@ def require_session(authorization: str | None = Header(default=None)) -> TenantC
 
 
 def require_permission(permission: str):
-    """Dependency factory: proves the session's user was explicitly granted `permission`.
+    """Dependency factory: proves the session's user holds `permission`, directly or via a role.
 
     require_session only proves *who* is calling; this proves *what* they're
-    allowed to do, checked against core.user_permissions.
+    allowed to do, checked against core.user_permissions and, live, every role
+    (core.user_roles -> core.role_permissions) the user is currently assigned.
     """
 
     def dependency(tenant: TenantContext = Depends(require_session)) -> TenantContext:
         with get_connection() as connection:
             row = connection.execute(
-                "SELECT 1 FROM core.user_permissions WHERE user_id = %s AND permission = %s",
-                (tenant.user_id, permission),
+                """
+                SELECT 1 FROM core.user_permissions WHERE user_id = %s AND permission = %s
+                UNION
+                SELECT 1 FROM core.user_roles ur
+                JOIN core.role_permissions rp ON rp.role_id = ur.role_id
+                WHERE ur.user_id = %s AND rp.permission = %s
+                LIMIT 1
+                """,
+                (tenant.user_id, permission, tenant.user_id, permission),
             ).fetchone()
         if row is None:
             raise HTTPException(

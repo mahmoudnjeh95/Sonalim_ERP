@@ -11,7 +11,9 @@ import {
   Contact,
   Factory,
   FileText,
+  KeyRound,
   LayoutDashboard,
+  LineChart,
   BriefcaseBusiness,
   LogOut,
   PackageSearch,
@@ -21,8 +23,7 @@ import {
   Target,
   Truck,
   UserCircle,
-  Wallet,
-} from "lucide-react";
+  Wallet, FlaskConical, Wrench } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useI18n, type Language } from "../lib/i18n";
 import { cn } from "../lib/utils";
@@ -47,6 +48,9 @@ interface NavItem {
     | "nav.activities"
       | "nav.pipeline"
     | "nav.production"
+    | "nav.quality"
+    | "nav.analytics"
+    | "nav.maintenance"
     | "nav.warehouse"
     | "nav.products"
     | "nav.inventories"
@@ -55,13 +59,23 @@ interface NavItem {
     | "nav.sales"
     | "nav.finance"
     | "nav.users"
+    | "nav.roles"
     | "nav.hr";
   icon: typeof Contact;
   exact?: boolean;
 }
 
 interface NavGroup {
-  labelKey: "nav.crm" | "nav.operations" | "nav.productsServices" | "nav.commerce" | "nav.administration" | "nav.hr";
+  labelKey:
+    | "nav.crm"
+    | "nav.operations"
+    | "nav.quality"
+    | "nav.analytics"
+    | "nav.maintenance"
+    | "nav.productsServices"
+    | "nav.commerce"
+    | "nav.administration"
+    | "nav.hr";
   items: NavItem[];
 }
 
@@ -86,6 +100,18 @@ const NAV_GROUPS: NavGroup[] = [
     items: [{ to: "/production", labelKey: "nav.production", icon: Factory }],
   },
   {
+    labelKey: "nav.quality",
+    items: [{ to: "/quality", labelKey: "nav.quality", icon: FlaskConical }],
+  },
+  {
+    labelKey: "nav.analytics",
+    items: [{ to: "/analytics", labelKey: "nav.analytics", icon: LineChart }],
+  },
+  {
+    labelKey: "nav.maintenance",
+    items: [{ to: "/maintenance", labelKey: "nav.maintenance", icon: Wrench }],
+  },
+  {
     labelKey: "nav.productsServices",
     items: [
       { to: "/warehouse", labelKey: "nav.warehouse", icon: Boxes },
@@ -104,7 +130,10 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     labelKey: "nav.administration",
-    items: [{ to: "/admin/users", labelKey: "nav.users", icon: ShieldCheck }],
+    items: [
+      { to: "/admin/users", labelKey: "nav.users", icon: ShieldCheck },
+      { to: "/admin/roles", labelKey: "nav.roles", icon: KeyRound },
+    ],
   },
 ];
 

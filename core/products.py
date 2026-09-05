@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.entities import Product, ProductAttribute, ProductAttributeValue, ProductTag, UnitOfMeasure
+from core.domain.partner import SuggestedVendor
 from core.domain.result import Err
 from core.tenancy import TenantContext, require_permission
 
@@ -20,6 +21,7 @@ class CreateProductRequest(BaseModel):
     name: str
     uom_id: str
     net_weight_grams: float | None = None
+    packets_per_carton: float | None = None
     is_sellable: bool = True
     is_purchasable: bool = True
     lot_serial_tracking: str = "none"
@@ -43,6 +45,7 @@ class UpdateProductRequest(BaseModel):
     name: str | None = None
     uom_id: str | None = None
     net_weight_grams: float | None = None
+    packets_per_carton: float | None = None
     is_sellable: bool | None = None
     is_purchasable: bool | None = None
     lot_serial_tracking: str | None = None
@@ -90,6 +93,7 @@ def _product_response(product: Product) -> dict:
         "name": product.name,
         "uom_id": product.uom_id,
         "net_weight_grams": product.net_weight_grams,
+        "packets_per_carton": product.packets_per_carton,
         "parent_product_id": product.parent_product_id,
         "is_sellable": product.is_sellable,
         "is_purchasable": product.is_purchasable,
@@ -111,7 +115,16 @@ def _product_response(product: Product) -> dict:
 
 
 def _uom_response(uom: UnitOfMeasure) -> dict:
-    return {"id": uom.id, "code": uom.code, "name": uom.name, "category": uom.category, "ratio_to_base": uom.ratio_to_base}
+    return {
+        "id": uom.id,
+        "code": uom.code,
+        "name": uom.name,
+        "category": uom.category,
+        "ratio_to_base": uom.ratio_to_base,
+        # What screens print. Separate from `code`, which stays the key clients match on.
+        "symbol": uom.display,
+        "is_integer_only": uom.is_integer_only,
+    }
 
 
 def _attribute_response(attribute: ProductAttribute) -> dict:
@@ -126,10 +139,24 @@ def _tag_response(tag: ProductTag) -> dict:
     return {"id": tag.id, "name": tag.name}
 
 
+def _suggested_vendor_response(vendor: SuggestedVendor) -> dict:
+    return {
+        "partner_id": vendor.partner_id,
+        "name": vendor.name,
+        "kind": vendor.kind,
+        "industry": vendor.industry,
+        "phone": vendor.phone,
+        "email": vendor.email,
+        "is_preferred": vendor.is_preferred,
+        "lead_time_days": vendor.lead_time_days,
+        "min_order_qty": vendor.min_order_qty,
+    }
+
+
 def _err_status(code: str) -> int:
     if code == "NOT_FOUND":
         return status.HTTP_404_NOT_FOUND
-    if code in ("DUPLICATE_SKU", "DUPLICATE_NAME", "DUPLICATE_VALUE"):
+    if code in ("DUPLICATE_SKU", "DUPLICATE_NAME", "DUPLICATE_VALUE", "PRODUCT_IN_USE"):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
 
@@ -173,6 +200,20 @@ def update_product(
     return _product_response(result.value)
 
 
+@router.delete("/{product_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def delete_product(
+    product_id: str,
+    tenant: TenantContext = Depends(require_permission("core.manage_products")),
+) -> None:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        result = service.delete_product(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, product_id=product_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+        connection.commit()
+
+
 @router.get("/{product_id}/tags")
 def list_product_tags_for_product(
     product_id: str, tenant: TenantContext = Depends(require_permission("core.view_products"))
@@ -199,6 +240,16 @@ def set_product_tags(
             raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
         connection.commit()
     return [_tag_response(tag) for tag in result.value]
+
+
+@router.get("/{product_id}/suggested-vendors")
+def list_suggested_vendors(
+    product_id: str, tenant: TenantContext = Depends(require_permission("core.view_products"))
+) -> list[dict]:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        vendors = service.list_suggested_vendors_for_product(tenant.tenant_id, product_id)
+    return [_suggested_vendor_response(vendor) for vendor in vendors]
 
 
 @router.get("/{product_id}/variants")

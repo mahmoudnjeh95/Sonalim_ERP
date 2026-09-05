@@ -12,6 +12,7 @@ import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead 
 import { Skeleton } from "../../components/ui/skeleton";
 import { Badge, type BadgeProps } from "../../components/ui/badge";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
@@ -41,7 +42,7 @@ export function LotsSerialsTab() {
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: allLots = [], isLoading } = useQuery({ queryKey: LOTS_QUERY_KEY, queryFn: () => listLots(token) });
 
-  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
 
   const transitionMutation = useMutation({
     mutationFn: ({ lotId, newStatus }: { lotId: string; newStatus: LotStatus }) => transitionLot(token, lotId, newStatus),
@@ -76,6 +77,7 @@ export function LotsSerialsTab() {
         onChange: (v) => columnFilters.setTextValue("product", v),
         placeholder: t("products.column.label"),
       },
+      sortValue: (lot) => productName(lot.product_id),
     },
     {
       key: "lot_number",
@@ -88,22 +90,30 @@ export function LotsSerialsTab() {
         onChange: (v) => columnFilters.setTextValue("lot_number", v),
         placeholder: t("products.stocksByLot.column.lotNumber"),
       },
+      sortValue: (lot) => lot.lot_number,
     },
     {
       key: "status",
-      header: t("products.column.status"),
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("products.column.status")}
+          <HelpTooltip text={t("products.lotsSerials.help.status")} />
+        </span>
+      ),
       defaultWidth: 140,
       cell: (lot) => (
         <Badge variant={LOT_STATUS_VARIANT[lot.status]} dot>
           {t(`products.lotStatus.${lot.status}` as Parameters<typeof t>[0])}
         </Badge>
       ),
+      sortValue: (lot) => lot.status,
     },
     {
       key: "expiry_date",
       header: t("products.stocksByLot.column.expiryDate"),
       defaultWidth: 140,
       cell: (lot) => <span className="text-muted-foreground">{lot.expiry_date ?? "—"}</span>,
+      sortValue: (lot) => lot.expiry_date,
     },
     {
       key: "source_type",
@@ -116,6 +126,7 @@ export function LotsSerialsTab() {
         onChange: (v) => columnFilters.setTextValue("source_type", v),
         placeholder: t("products.lotsSerials.column.source"),
       },
+      sortValue: (lot) => lot.source_type,
     },
     {
       key: "action",
@@ -149,10 +160,9 @@ export function LotsSerialsTab() {
         ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "products.lotsSerials",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("products.lotsSerials", columns);
+  const sortedLots = sortRows(lots);
 
   return (
     <Card>
@@ -190,6 +200,8 @@ export function LotsSerialsTab() {
                   width={getWidth(column.key)}
                   onResize={(width) => setWidth(column.key, width)}
                   className={column.headerClassName}
+                  sortDirection={sortDirectionFor(column.key)}
+                  onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                 >
                   {column.header}
                 </ResizableTableHead>
@@ -214,7 +226,7 @@ export function LotsSerialsTab() {
               </TableRow>
             )}
             <AnimatePresence initial={false}>
-              {lots.map((lot: Lot, i) => (
+              {sortedLots.map((lot: Lot, i) => (
                 <motion.tr
                   key={lot.id}
                   layout

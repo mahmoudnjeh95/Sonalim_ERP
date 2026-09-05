@@ -8,36 +8,9 @@ from ulid import ULID
 
 from core.auth import hash_password
 from core.db import get_connection
+from core.permissions_registry import ADMINISTRATOR_ROLE_CODE, ensure_default_roles
 
 DEMO_TENANT_ID = "demo"
-DEMO_PERMISSIONS = [
-    "crm.view_leads",
-    "crm.manage_leads",
-    "crm.view_opportunities",
-    "crm.manage_opportunities",
-    "crm.view_activities",
-    "crm.manage_activities",
-    "crm.view_contacts",
-    "crm.manage_contacts",
-    "crm.view_dashboard",
-    "hr.view_attendance",
-    "hr.manage_attendance",
-    "hr.view_payroll",
-    "hr.manage_payroll",
-    "core.manage_permissions",
-    "core.view_partners",
-    "core.manage_partners",
-    "core.view_exchange_rates",
-    "core.manage_exchange_rates",
-    "core.view_products",
-    "core.view_audit_log",
-    "warehouse.view_moves",
-    "warehouse.manage_stock",
-    "warehouse.adjust_stock",
-    "warehouse.view_material_receipts",
-    "warehouse.manage_material_receipts",
-    "warehouse.admin_material_receipts",
-]
 
 
 def seed() -> None:
@@ -55,20 +28,20 @@ def seed() -> None:
             ("demo@sonalim-erp.local",),
         ).fetchone()[0]
 
-        for permission in DEMO_PERMISSIONS:
-            connection.execute(
-                """
-                INSERT INTO core.user_permissions (user_id, permission)
-                VALUES (%s, %s)
-                ON CONFLICT (user_id, permission) DO NOTHING
-                """,
-                (user_id, permission),
-            )
+        role_ids = ensure_default_roles(connection, DEMO_TENANT_ID)
+        connection.execute(
+            """
+            INSERT INTO core.user_roles (user_id, role_id)
+            VALUES (%s, %s)
+            ON CONFLICT (user_id, role_id) DO NOTHING
+            """,
+            (user_id, role_ids[ADMINISTRATOR_ROLE_CODE]),
+        )
 
         connection.execute(
             """
-            INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base)
-            VALUES (%s, %s, 'ea', 'Pièce', 'unit', 1)
+            INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base, is_integer_only)
+            VALUES (%s, %s, 'ea', 'Pièce', 'unit', 1, TRUE)
             ON CONFLICT (tenant_id, code) DO UPDATE SET name = EXCLUDED.name
             """,
             (str(ULID()), DEMO_TENANT_ID),

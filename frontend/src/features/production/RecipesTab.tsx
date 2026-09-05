@@ -209,6 +209,7 @@ export function RecipesTab() {
         onChange: (v) => columnFilters.setTextValue("target_product_id", v),
         placeholder: t("production.recipes.column.targetProduct"),
       },
+      sortValue: (recipe) => recipe.target_product_id,
     },
     {
       key: "version",
@@ -222,6 +223,7 @@ export function RecipesTab() {
         onMinChange: (v) => columnFilters.setRangeValue("version", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("version", "max", v),
       },
+      sortValue: (recipe) => recipe.version,
     },
     {
       key: "status",
@@ -232,6 +234,7 @@ export function RecipesTab() {
           {STATUS_LABEL[recipe.status]}
         </Badge>
       ),
+      sortValue: (recipe) => recipe.status,
     },
     {
       key: "components",
@@ -249,6 +252,7 @@ export function RecipesTab() {
         onMinChange: (v) => columnFilters.setRangeValue("components", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("components", "max", v),
       },
+      sortValue: (recipe) => recipe.lines.length,
     },
     {
       key: "averageYield",
@@ -262,6 +266,7 @@ export function RecipesTab() {
           </span>
         );
       },
+      sortValue: (recipe) => averageYieldByRecipeId.get(recipe.id) ?? null,
     },
     {
       key: "action",
@@ -324,10 +329,9 @@ export function RecipesTab() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "production.recipes",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("production.recipes", columns);
+  const sortedRecipes = sortRows(filteredRecipes);
 
   return (
     <div className="space-y-6">
@@ -532,6 +536,8 @@ export function RecipesTab() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -560,7 +566,7 @@ export function RecipesTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredRecipes.map((recipe, i) => (
+                {sortedRecipes.map((recipe, i) => (
                   <motion.tr
                     key={recipe.id}
                     layout

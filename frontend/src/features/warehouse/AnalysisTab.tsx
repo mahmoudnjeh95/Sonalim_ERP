@@ -19,6 +19,7 @@ import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listConfirmedReceiptLineDetails, listProducts, listStock, listUoms, type Product } from "./api";
@@ -68,8 +69,13 @@ export function AnalysisTab() {
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
   const { data: stockItems = [] } = useQuery({ queryKey: STOCK_QUERY_KEY, queryFn: () => listStock(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
-  const suppliers = partners.filter((p) => p.kind === "supplier" || p.kind === "both");
-  const uomCode = (uomId: string) => uoms.find((u) => u.id === uomId)?.code ?? uomId;
+  const suppliers = partners.filter((p) => (p.kind === "supplier" || p.kind === "both") && p.status === "active");
+  // The printed form, not the code: "pièce" is what a reader expects beside a
+  // count, and `code` stays the key imports and integrations match on.
+  const uomCode = (uomId: string) => {
+    const uom = uoms.find((u) => u.id === uomId);
+    return uom ? uom.symbol || uom.code : uomId;
+  };
 
   const onHandByProduct = new Map<string, number>();
   for (const item of stockItems) {
@@ -175,13 +181,44 @@ export function AnalysisTab() {
   const avgCostPerTon = totalTons > 0 ? totalSpend / totalTons : 0;
 
   const byDesignationColumns: ColumnDef<DesignationRow>[] = [
-    { key: "name", header: t("warehouse.analysis.column.designation"), defaultWidth: 200, cell: (row) => <span className="font-medium">{row.name}</span> },
-    { key: "totalTons", header: t("warehouse.analysis.column.totalTons"), defaultWidth: 140, cell: (row) => <span className="tabular-nums text-muted-foreground">{row.totalTons}</span> },
-    { key: "totalCost", header: t("warehouse.analysis.column.totalCost"), defaultWidth: 140, cell: (row) => <span className="tabular-nums text-muted-foreground">{formatMoney(row.totalCost)}</span> },
-    { key: "avgCostPerTon", header: t("warehouse.analysis.column.avgCostPerTon"), defaultWidth: 160, cell: (row) => <span className="tabular-nums text-muted-foreground">{formatMoney(row.avgCostPerTon)}</span> },
-    { key: "count", header: t("warehouse.analysis.column.receipts"), defaultWidth: 120, cell: (row) => <span className="tabular-nums text-muted-foreground">{row.count}</span> },
+    {
+      key: "name",
+      header: t("warehouse.analysis.column.designation"),
+      defaultWidth: 200,
+      cell: (row) => <span className="font-medium">{row.name}</span>,
+      sortValue: (row) => row.name,
+    },
+    {
+      key: "totalTons",
+      header: t("warehouse.analysis.column.totalTons"),
+      defaultWidth: 140,
+      cell: (row) => <span className="tabular-nums text-muted-foreground">{row.totalTons}</span>,
+      sortValue: (row) => row.totalTons,
+    },
+    {
+      key: "totalCost",
+      header: t("warehouse.analysis.column.totalCost"),
+      defaultWidth: 140,
+      cell: (row) => <span className="tabular-nums text-muted-foreground">{formatMoney(row.totalCost)}</span>,
+      sortValue: (row) => row.totalCost,
+    },
+    {
+      key: "avgCostPerTon",
+      header: t("warehouse.analysis.column.avgCostPerTon"),
+      defaultWidth: 160,
+      cell: (row) => <span className="tabular-nums text-muted-foreground">{formatMoney(row.avgCostPerTon)}</span>,
+      sortValue: (row) => row.avgCostPerTon,
+    },
+    {
+      key: "count",
+      header: t("warehouse.analysis.column.receipts"),
+      defaultWidth: 120,
+      cell: (row) => <span className="tabular-nums text-muted-foreground">{row.count}</span>,
+      sortValue: (row) => row.count,
+    },
   ];
   const byDesignationTable = useTableColumns("warehouse.analysis.byDesignation", byDesignationColumns);
+  const sortedDesignationRows = byDesignationTable.sortRows(designationRows);
 
   const alertsSection = (
     <>
@@ -189,7 +226,10 @@ export function AnalysisTab() {
         <Card>
           <CardHeader>
             <div>
-              <CardTitle>{t("warehouse.analysis.alerts.title")}</CardTitle>
+              <CardTitle className="flex items-center gap-1.5">
+                {t("warehouse.analysis.alerts.title")}
+                <HelpTooltip text={t("products.help.stockAlert")} />
+              </CardTitle>
               <CardDescription>{t("warehouse.analysis.alerts.description")}</CardDescription>
             </div>
           </CardHeader>
@@ -269,7 +309,10 @@ export function AnalysisTab() {
     <div className="space-y-6">
       {alertsSection}
       <div className="flex flex-wrap items-end gap-3">
-        <span className="text-sm font-medium text-muted-foreground">{t("warehouse.analysis.period.label")}</span>
+        <span className="inline-flex items-center gap-1 text-sm font-medium text-muted-foreground">
+          {t("warehouse.analysis.period.label")}
+          <HelpTooltip text={t("warehouse.analysis.help.weightOnly")} />
+        </span>
         <div className="space-y-1">
           <Label htmlFor="period-from" className="text-xs">
             {t("warehouse.analysis.period.from")}
@@ -387,6 +430,8 @@ export function AnalysisTab() {
                         width={byDesignationTable.getWidth(column.key)}
                         onResize={(width) => byDesignationTable.setWidth(column.key, width)}
                         className={column.headerClassName}
+                        sortDirection={byDesignationTable.sortDirectionFor(column.key)}
+                        onSort={column.sortValue ? () => byDesignationTable.toggleSort(column.key) : undefined}
                       >
                         {column.header}
                       </ResizableTableHead>
@@ -394,7 +439,7 @@ export function AnalysisTab() {
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {designationRows.map((row) => (
+                  {sortedDesignationRows.map((row) => (
                     <TableRow key={row.productId}>
                       {byDesignationTable.visibleColumns.map((column) => (
                         <TableCell key={column.key} className={column.cellClassName}>

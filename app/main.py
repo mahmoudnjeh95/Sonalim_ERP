@@ -12,6 +12,8 @@ from core.exchange_rates import currencies_router as core_currencies_router
 from core.exchange_rates import router as core_exchange_rates_router
 from core.migrations.runner import apply_all_migrations
 from core.partners import router as core_partners_router
+from core.report_options import router as core_report_options_router
+from core.roles import router as core_roles_router
 from core.products import attributes_router as core_product_attributes_router
 from core.products import router as core_products_router
 from core.products import tags_router as core_product_tags_router
@@ -20,11 +22,13 @@ from core.table_preferences import router as core_table_preferences_router
 from core.users import router as core_users_router
 from modules.crm.api.router import router as crm_router
 from modules.finance.api.router import router as finance_router
+from modules.maintenance.api.router import router as maintenance_router
 from modules.production.api.router import router as production_router
 from modules.sales.api.router import router as sales_router
 from modules.warehouse.api.router import router as warehouse_router
 from modules.hr.api.router import router as hr_router
 from modules.procurement.api.router import router as procurement_router
+from modules.qc.api.router import router as qc_router
 
 
 @asynccontextmanager
@@ -49,6 +53,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(core_users_router)
+app.include_router(core_roles_router)
 app.include_router(core_partners_router)
 app.include_router(core_exchange_rates_router)
 app.include_router(core_currencies_router)
@@ -56,6 +61,7 @@ app.include_router(core_products_router)
 app.include_router(core_product_attributes_router)
 app.include_router(core_product_tags_router)
 app.include_router(core_uoms_router)
+app.include_router(core_report_options_router)
 app.include_router(core_table_preferences_router)
 app.include_router(core_audit_router)
 app.include_router(warehouse_router)
@@ -65,6 +71,8 @@ app.include_router(sales_router)
 app.include_router(finance_router)
 app.include_router(hr_router)
 app.include_router(procurement_router)
+app.include_router(qc_router)
+app.include_router(maintenance_router)
 
 
 @app.get("/")

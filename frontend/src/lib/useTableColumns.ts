@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { FilterCell } from "../components/patterns/ColumnFilterRow";
+import type { SortDirection } from "../components/ui/table";
 import { useAuth } from "./auth";
 import {
   getTablePreferences,
@@ -21,6 +22,8 @@ export interface ColumnDef<Row> {
   cellClassName?: string;
   /** For tables with a <ColumnFilterRow> — the per-column filter control, if any. */
   filterCell?: FilterCell;
+  /** Raw value to compare when sorting by this column. Omit to keep the header unclickable. */
+  sortValue?: (row: Row) => string | number | boolean | null | undefined;
 }
 
 const DEFAULT_WIDTH = 160;
@@ -115,6 +118,41 @@ export function useTableColumns<Row>(tableKey: string, columns: ColumnDef<Row>[]
 
   const toggleableColumns = useMemo(() => columns.filter((column) => !column.alwaysVisible), [columns]);
 
+  const [sort, setSort] = useState<{ key: string; direction: SortDirection } | null>(null);
+
+  /** Click a sortable header: unsorted -> asc -> desc -> unsorted. */
+  function toggleSort(key: string) {
+    setSort((prev) => {
+      if (!prev || prev.key !== key) return { key, direction: "asc" };
+      if (prev.direction === "asc") return { key, direction: "desc" };
+      return null;
+    });
+  }
+
+  function sortDirectionFor(key: string): SortDirection | null {
+    return sort?.key === key ? sort.direction : null;
+  }
+
+  /** Apply the current sort (if any) to a row list; rows are otherwise left in place. */
+  function sortRows(rows: Row[]): Row[] {
+    if (!sort) return rows;
+    const column = columns.find((c) => c.key === sort.key);
+    const getValue = column?.sortValue;
+    if (!getValue) return rows;
+    const dir = sort.direction === "asc" ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const av = getValue(a);
+      const bv = getValue(b);
+      if (av == null && bv == null) return 0;
+      if (av == null) return 1;
+      if (bv == null) return -1;
+      if (typeof av === "string" && typeof bv === "string") return av.localeCompare(bv) * dir;
+      if (av < bv) return -1 * dir;
+      if (av > bv) return 1 * dir;
+      return 0;
+    });
+  }
+
   return {
     visibleColumns,
     colWidths,
@@ -124,5 +162,8 @@ export function useTableColumns<Row>(tableKey: string, columns: ColumnDef<Row>[]
     getWidth,
     setWidth,
     resetAll,
+    sortDirectionFor,
+    toggleSort,
+    sortRows,
   };
 }

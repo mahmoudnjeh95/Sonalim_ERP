@@ -43,18 +43,21 @@ export function StockMoveHistoryTable({
       header: t("warehouse.stockHistory.column.when"),
       defaultWidth: 180,
       cell: (move) => <span className="whitespace-nowrap text-muted-foreground">{formatWhen(move.created_at, language)}</span>,
+      sortValue: (move) => move.created_at,
     },
     {
       key: "product",
       header: t("warehouse.stockHistory.column.product"),
       defaultWidth: 200,
       cell: (move) => <span className="font-medium">{productName ? productName(move.product_id) : move.product_id}</span>,
+      sortValue: (move) => (productName ? productName(move.product_id) : move.product_id),
     },
     {
       key: "location",
       header: t("warehouse.stockHistory.column.location"),
       defaultWidth: 160,
       cell: (move) => <span className="text-muted-foreground">{locationName(move.location_id)}</span>,
+      sortValue: (move) => locationName(move.location_id),
     },
     {
       key: "type",
@@ -65,6 +68,7 @@ export function StockMoveHistoryTable({
           {MOVE_TYPE_LABEL[move.move_type]}
         </Badge>
       ),
+      sortValue: (move) => MOVE_TYPE_LABEL[move.move_type],
     },
     {
       key: "quantity",
@@ -76,22 +80,27 @@ export function StockMoveHistoryTable({
           {move.quantity}
         </span>
       ),
+      sortValue: (move) => move.quantity,
     },
     {
       key: "reference",
       header: t("warehouse.stockHistory.column.reference"),
       defaultWidth: 180,
       cell: (move) => <span className="text-muted-foreground">{move.reference}</span>,
+      sortValue: (move) => move.reference,
     },
     {
       key: "reason",
       header: t("warehouse.stockHistory.column.reason"),
       defaultWidth: 200,
       cell: (move) => <span className="text-muted-foreground">{move.reason ?? "—"}</span>,
+      sortValue: (move) => move.reason,
     },
   ];
   const columns = showProductColumn ? allColumns : allColumns.filter((column) => column.key !== "product");
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(tableKey, columns);
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns(tableKey, columns);
+  const sortedMoves = sortRows(moves);
 
   return (
     <div className="space-y-2">
@@ -107,6 +116,8 @@ export function StockMoveHistoryTable({
                 width={getWidth(column.key)}
                 onResize={(width) => setWidth(column.key, width)}
                 className={column.headerClassName}
+                sortDirection={sortDirectionFor(column.key)}
+                onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
               >
                 {column.header}
               </ResizableTableHead>
@@ -133,7 +144,7 @@ export function StockMoveHistoryTable({
               </TableCell>
             </TableRow>
           )}
-          {moves.map((move) => (
+          {sortedMoves.map((move) => (
             <TableRow key={move.id}>
               {visibleColumns.map((column) => (
                 <TableCell key={column.key} className={column.cellClassName}>

@@ -23,3 +23,5 @@ export function listPayrollRuns(token: string) { return apiFetch<PayrollRun[]>("
 export function listPayslips(token: string, runId?: string) { return apiFetch<Payslip[]>(`/hr/payslips${runId ? `?run_id=${runId}` : ""}`, { token }); }
 export function createPayrollRun(token: string, input: { period_month: string; bonuses: number; deductions: number; taxes: number }) { return apiFetch<PayrollRun>("/hr/payroll-runs", { method: "POST", token, body: input }); }
 export function recordAttendance(token: string, input: { employee_id: string; attendance_date: string; status: string; hours_worked: number; note?: string }) { return apiFetch<Attendance>("/hr/attendance", { method: "POST", token, body: input }); }
+export interface UpdatedPayslip { id: string; base_salary: number; bonuses: number; deductions: number; taxes: number; net_salary: number; currency: string; }
+export function updatePayslip(token: string, payslipId: string, input: { bonuses?: number; deductions?: number; taxes?: number }) { return apiFetch<UpdatedPayslip>(`/hr/payslips/${payslipId}`, { method: "PATCH", token, body: input }); }

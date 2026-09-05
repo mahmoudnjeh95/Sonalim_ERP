@@ -10,6 +10,7 @@ export function HelpTooltip({ text, className }: { text: string; className?: str
       <TooltipPrimitive.Trigger asChild>
         <button
           type="button"
+          onClick={(event) => event.stopPropagation()}
           className={cn(
             "inline-flex h-4 w-4 items-center justify-center rounded-full text-muted-foreground outline-none transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring",
             className,

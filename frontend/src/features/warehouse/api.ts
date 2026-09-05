@@ -4,11 +4,18 @@ export interface Location {
   id: string;
   code: string;
   name: string;
+  // Stock in a blocked location exists and stays on the books, but is excluded
+  // from available quantity so no module can promise it. Quarantine is the case
+  // this was built for.
+  is_blocked: boolean;
+  blocked_reason: string | null;
 }
 
 export interface CreateLocationInput {
   code: string;
   name: string;
+  is_blocked?: boolean;
+  blocked_reason?: string;
 }
 
 export interface UpdateLocationInput {
@@ -187,6 +194,11 @@ export interface Product {
   name: string;
   uom_id: string;
   net_weight_grams: number | null;
+  /**
+   * Phase 9, decision 20. Null means the product has no carton line at all —
+   * a 4.54 kg sac is its own selling unit — not that nobody filled it in.
+   */
+  packets_per_carton: number | null;
   parent_product_id: string | null;
   is_sellable: boolean;
   is_purchasable: boolean;
@@ -210,12 +222,32 @@ export function listProducts(token: string) {
   return apiFetch<Product[]>("/core/products", { token });
 }
 
+export interface SuggestedVendor {
+  partner_id: string;
+  name: string;
+  kind: "customer" | "supplier" | "both";
+  industry: string | null;
+  phone: string | null;
+  email: string | null;
+  is_preferred: boolean;
+  lead_time_days: number | null;
+  min_order_qty: number | null;
+}
+
+export function listSuggestedVendors(token: string, productId: string) {
+  return apiFetch<SuggestedVendor[]>(`/core/products/${productId}/suggested-vendors`, { token });
+}
+
 export interface UnitOfMeasure {
   id: string;
   code: string;
   name: string;
   category: string;
   ratio_to_base: number;
+  /** How the unit prints next to a quantity ("pièce", "kg", "t"). `code` stays the key. */
+  symbol: string;
+  /** Whether a quantity in this unit must be a whole number (a carton, a pièce). */
+  is_integer_only: boolean;
 }
 
 export function listUoms(token: string) {

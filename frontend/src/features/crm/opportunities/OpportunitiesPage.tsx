@@ -30,6 +30,7 @@ import { StatusBadge } from "../../../components/patterns/StatusBadge";
 import { FilterTabs } from "../../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
+import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import { listPartners } from "../../partners/api";
@@ -173,6 +174,7 @@ export function OpportunitiesPage() {
         onChange: (v) => columnFilters.setTextValue("name", v),
         placeholder: t("crm.opportunities.column.name"),
       },
+      sortValue: (opportunity) => opportunity.name,
     },
     {
       key: "account",
@@ -185,6 +187,7 @@ export function OpportunitiesPage() {
         onChange: (v) => columnFilters.setTextValue("account", v),
         placeholder: t("crm.opportunities.column.account"),
       },
+      sortValue: (opportunity) => partnerName(opportunity.partner_id),
     },
     {
       key: "amount",
@@ -198,6 +201,7 @@ export function OpportunitiesPage() {
         onMinChange: (v) => columnFilters.setRangeValue("amount", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("amount", "max", v),
       },
+      sortValue: (opportunity) => opportunity.amount,
     },
     {
       key: "closeDate",
@@ -208,8 +212,20 @@ export function OpportunitiesPage() {
           {opportunity.expected_close_date ? new Date(opportunity.expected_close_date).toLocaleDateString() : "—"}
         </span>
       ),
+      sortValue: (opportunity) => opportunity.expected_close_date,
     },
-    { key: "stage", header: t("crm.opportunities.column.stage"), defaultWidth: 140, cell: (opportunity) => <StatusBadge status={opportunity.stage} /> },
+    {
+      key: "stage",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("crm.opportunities.column.stage")}
+          <HelpTooltip text={t("crm.opportunities.help.stage")} />
+        </span>
+      ),
+      defaultWidth: 140,
+      cell: (opportunity) => <StatusBadge status={opportunity.stage} />,
+      sortValue: (opportunity) => opportunity.stage,
+    },
     {
       key: "action",
       header: t("crm.opportunities.column.action"),
@@ -254,10 +270,9 @@ export function OpportunitiesPage() {
       },
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "crm.opportunities",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("crm.opportunities", columns);
+  const sortedOpportunities = sortRows(filteredOpportunities);
 
   return (
     <div className="space-y-6">
@@ -395,6 +410,8 @@ export function OpportunitiesPage() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -430,7 +447,7 @@ export function OpportunitiesPage() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredOpportunities.map((opportunity, i) => (
+                {sortedOpportunities.map((opportunity, i) => (
                   <motion.tr
                     key={opportunity.id}
                     layout

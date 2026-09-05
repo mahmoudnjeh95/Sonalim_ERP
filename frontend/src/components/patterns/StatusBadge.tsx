@@ -18,7 +18,23 @@ type Status =
   | "proposal"
   | "negotiation"
   | "won"
-  | "lost";
+  | "lost"
+  // OF lifecycle (production rebuild)
+  | "planned"
+  | "ongoing"
+  | "suspended"
+  | "closed"
+  | "cancelled"
+  // Report and quality-report lifecycle
+  | "submitted"
+  | "validated"
+  | "rejected"
+  // Quality follow-up
+  | "open"
+  // Non-conformity
+  | "raised"
+  | "quarantined"
+  | "dispositioned";
 
 const STATUS_VARIANT: Record<Status, BadgeProps["variant"]> = {
   draft: "default",
@@ -38,6 +54,24 @@ const STATUS_VARIANT: Record<Status, BadgeProps["variant"]> = {
   negotiation: "warning",
   won: "success",
   lost: "destructive",
+  // An OF is neutral while planned, warm while it runs, and green only once it
+  // is closed — a cancelled order reads as a dead end, not a success.
+  planned: "default",
+  ongoing: "warning",
+  suspended: "accent",
+  closed: "success",
+  cancelled: "destructive",
+  // A report is only official once validated; a rejection needs to be loud
+  // enough that nobody mistakes it for "done".
+  submitted: "primary",
+  validated: "success",
+  rejected: "destructive",
+  open: "warning",
+  // Non-conformity: quarantined is deliberately alarming — that product is
+  // sitting in a blocked location waiting for someone to decide its fate.
+  raised: "warning",
+  quarantined: "destructive",
+  dispositioned: "primary",
 };
 
 export function StatusBadge({ status }: { status: string }) {

@@ -21,7 +21,11 @@ export function DialogContent({
       />
       <DialogPrimitive.Content
         className={cn(
-          "fixed left-1/2 top-1/2 z-50 w-full max-w-md -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-background p-6 shadow-raised",
+          "fixed left-1/2 top-1/2 z-50 flex w-full max-w-md -translate-x-1/2 -translate-y-1/2 flex-col rounded-xl border border-border bg-background p-6 shadow-raised",
+          // Never taller than the screen. Without this a long form runs
+          // off both ends of the viewport and takes its own title and
+          // submit button with it.
+          "max-h-[calc(100dvh-3rem)] overflow-y-auto overscroll-contain",
           "data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=open]:slide-in-from-top-2",
           "data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95",
           "duration-200",

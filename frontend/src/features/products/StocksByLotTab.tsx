@@ -40,8 +40,8 @@ export function StocksByLotTab() {
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: allRows = [], isLoading } = useQuery({ queryKey: LOT_STOCK_QUERY_KEY, queryFn: () => listLotStock(token) });
 
-  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
-  const locationName = (id: string) => locations.find((l) => l.id === id)?.name ?? id;
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
+  const locationName = (id: string) => locations.find((l) => l.id === id)?.name ?? "—";
 
   const statusFilteredRows = statusFilter === "all" ? allRows : allRows.filter((row) => row.status === statusFilter);
 
@@ -66,6 +66,7 @@ export function StocksByLotTab() {
         onChange: (v) => columnFilters.setTextValue("product", v),
         placeholder: t("products.column.label"),
       },
+      sortValue: (row) => productName(row.product_id),
     },
     {
       key: "lot_number",
@@ -78,6 +79,7 @@ export function StocksByLotTab() {
         onChange: (v) => columnFilters.setTextValue("lot_number", v),
         placeholder: t("products.stocksByLot.column.lotNumber"),
       },
+      sortValue: (row) => row.lot_number,
     },
     {
       key: "location",
@@ -90,6 +92,7 @@ export function StocksByLotTab() {
         onChange: (v) => columnFilters.setTextValue("location", v),
         placeholder: t("products.stocksByLot.column.location"),
       },
+      sortValue: (row) => locationName(row.location_id),
     },
     {
       key: "quantity_on_hand",
@@ -103,12 +106,14 @@ export function StocksByLotTab() {
         onMinChange: (v) => columnFilters.setRangeValue("quantity_on_hand", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("quantity_on_hand", "max", v),
       },
+      sortValue: (row) => row.quantity_on_hand,
     },
     {
       key: "expiry_date",
       header: t("products.stocksByLot.column.expiryDate"),
       defaultWidth: 140,
       cell: (row) => <span className="text-muted-foreground">{row.expiry_date ?? "—"}</span>,
+      sortValue: (row) => row.expiry_date,
     },
     {
       key: "status",
@@ -119,12 +124,12 @@ export function StocksByLotTab() {
           {t(`products.lotStatus.${row.status}` as Parameters<typeof t>[0])}
         </Badge>
       ),
+      sortValue: (row) => row.status,
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "products.stocksByLot",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("products.stocksByLot", columns);
+  const sortedRows = sortRows(rows);
 
   return (
     <Card>
@@ -162,6 +167,8 @@ export function StocksByLotTab() {
                   width={getWidth(column.key)}
                   onResize={(width) => setWidth(column.key, width)}
                   className={column.headerClassName}
+                  sortDirection={sortDirectionFor(column.key)}
+                  onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                 >
                   {column.header}
                 </ResizableTableHead>
@@ -186,7 +193,7 @@ export function StocksByLotTab() {
               </TableRow>
             )}
             <AnimatePresence initial={false}>
-              {rows.map((row, i) => (
+              {sortedRows.map((row, i) => (
                 <motion.tr
                   key={`${row.lot_id}-${row.location_id}`}
                   layout

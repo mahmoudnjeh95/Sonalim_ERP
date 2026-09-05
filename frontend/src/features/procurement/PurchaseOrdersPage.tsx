@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm, type UseFormReturn } from "react-hook-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useFieldArray, useForm, useWatch, type UseFormRegisterReturn, type UseFormReturn } from "react-hook-form";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, ClipboardList, History, Package, PackageCheck, Pencil, Plus, ShieldCheck, Ship, Trash2, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardList, History, Package, PackageCheck, Pencil, Plus, ShieldCheck, Ship, Sparkles, Trash2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -20,18 +20,21 @@ import { Badge, type BadgeProps } from "../../components/ui/badge";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listPartners, type Partner } from "../partners/api";
-import { listProducts, listUoms, listLocations, type Location } from "../warehouse/api";
-import { listCurrencies } from "../settings/exchangeRatesApi";
+import { listProducts, listUoms, listLocations, listSuggestedVendors, type Location, type Product, type SuggestedVendor } from "../warehouse/api";
+import { listCurrencies, type Currency } from "../settings/exchangeRatesApi";
+import { createProduct } from "../products/api";
 import {
   approvePurchaseOrder,
   cancelPurchaseOrder,
   createPurchaseOrder,
+  listLastPrices,
   listPurchaseOrderLines,
   listPurchaseOrderReceiptLines,
   listPurchaseOrderReceipts,
@@ -42,6 +45,7 @@ import {
   updatePurchaseOrder,
   validatePurchaseOrder,
   type CreateReceiptLineInput,
+  type LastPrice,
   type PurchaseOrder,
   type PurchaseOrderLine,
   type PurchaseOrderReceipt,
@@ -87,6 +91,8 @@ function PurchaseOrderStatusBadge({ status }: { status: PurchaseOrderStatus }) {
   );
 }
 
+const NEW_PRODUCT_OPTION = "__new__";
+
 const lineSchema = z.object({
   product_id: z.string().min(1, "Required"),
   uom_id: z.string().min(1, "Required"),
@@ -95,7 +101,6 @@ const lineSchema = z.object({
 });
 const newOrderSchema = z.object({
   supplier_id: z.string().optional(),
-  currency_code: z.string().min(1, "Required").default("EUR"),
   order_date: z.string().optional(),
   expected_date: z.string().optional(),
   notes: z.string().optional(),
@@ -105,7 +110,7 @@ type NewOrderForm = z.infer<typeof newOrderSchema>;
 
 const editOrderSchema = z.object({
   supplier_id: z.string().optional(),
-  currency_code: z.string().min(1, "Required"),
+  currency_code: z.string().optional(),
   order_date: z.string().optional(),
   expected_date: z.string().optional(),
   notes: z.string().optional(),
@@ -120,12 +125,22 @@ const receiptLineSchema = z.object({
   quantity: z.coerce.number().min(0).default(0),
   lot_number: z.string().optional(),
 });
+const quickAddProductSchema = z.object({
+  sku: z.string().min(1, "Required"),
+  name: z.string().min(1, "Required"),
+  uom_id: z.string().min(1, "Required"),
+});
+type QuickAddProductForm = z.infer<typeof quickAddProductSchema>;
+
 const receiveSchema = z.object({
   location_id: z.string().min(1, "Required"),
+  currency_code: z.string().min(1, "Required"),
   invoice_number: z.string().optional(),
   invoice_date: z.string().optional(),
   origin_country: z.string().optional(),
   carrier: z.string().optional(),
+  transport_company_name: z.string().optional(),
+  driver_name: z.string().optional(),
   base_cost: z.coerce.number().min(0).default(0),
   license_fee: z.coerce.number().min(0).default(0),
   insurance_fee: z.coerce.number().min(0).default(0),
@@ -135,6 +150,33 @@ const receiveSchema = z.object({
   lines: z.array(receiptLineSchema),
 });
 type ReceiveForm = z.infer<typeof receiveSchema>;
+
+function mostRecentPrice(prices: LastPrice[]): LastPrice | null {
+  return prices.reduce<LastPrice | null>((best, price) => {
+    if (!best) return price;
+    return (price.order_date ?? "") > (best.order_date ?? "") ? price : best;
+  }, null);
+}
+
+function aggregateSuggestedVendors(perProductLists: SuggestedVendor[][]): { vendor: SuggestedVendor; matchCount: number }[] {
+  const byPartner = new Map<string, { vendor: SuggestedVendor; matchCount: number }>();
+  for (const vendors of perProductLists) {
+    for (const vendor of vendors) {
+      const existing = byPartner.get(vendor.partner_id);
+      if (existing) {
+        existing.matchCount += 1;
+        existing.vendor = vendor.is_preferred ? vendor : existing.vendor;
+      } else {
+        byPartner.set(vendor.partner_id, { vendor, matchCount: 1 });
+      }
+    }
+  }
+  return Array.from(byPartner.values()).sort((a, b) => {
+    if (b.matchCount !== a.matchCount) return b.matchCount - a.matchCount;
+    if (a.vendor.is_preferred !== b.vendor.is_preferred) return a.vendor.is_preferred ? -1 : 1;
+    return (a.vendor.lead_time_days ?? Infinity) - (b.vendor.lead_time_days ?? Infinity);
+  });
+}
 
 export function PurchaseOrdersPage() {
   const { session } = useAuth();
@@ -158,14 +200,20 @@ export function PurchaseOrdersPage() {
   const { data: currencies = [] } = useQuery({ queryKey: ["core", "currencies"], queryFn: () => listCurrencies(token) });
 
   const suppliers = partners.filter((p) => p.kind === "supplier" || p.kind === "both");
-  const supplierName = (id: string | null) => (id ? suppliers.find((p) => p.id === id)?.name ?? id : "—");
-  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
-  const uomCode = (id: string) => uoms.find((u) => u.id === id)?.code ?? id;
+  // Archived suppliers still resolve to their name in existing orders (supplierName below), but
+  // shouldn't be offered when picking a supplier for a new/edited order.
+  const activeSuppliers = suppliers.filter((p) => p.status === "active");
+  const supplierName = (id: string | null) => (id ? suppliers.find((p) => p.id === id)?.name ?? "—" : "—");
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
+  const uomCode = (id: string) => {
+    const uom = uoms.find((u) => u.id === id);
+    return uom ? uom.symbol || uom.code : "—";
+  };
 
   const columnFilterFields: FilterField<PurchaseOrder>[] = [
     { key: "supplier", kind: "text", getValue: (o) => supplierName(o.supplier_id) },
     { key: "order_date", kind: "text", getValue: (o) => o.order_date },
-    { key: "currency_code", kind: "text", getValue: (o) => o.currency_code },
+    { key: "currency_code", kind: "text", getValue: (o) => o.currency_code ?? "" },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
   const filteredOrders = columnFilters.apply(orders);
@@ -175,18 +223,34 @@ export function PurchaseOrdersPage() {
     control,
     handleSubmit,
     reset,
+    setValue,
     formState: { errors },
   } = useForm<NewOrderForm>({
     resolver: zodResolver(newOrderSchema),
-    defaultValues: { supplier_id: "", currency_code: "EUR", order_date: "", expected_date: "", notes: "", lines: [] },
+    defaultValues: { supplier_id: "", order_date: "", expected_date: "", notes: "", lines: [] },
   });
   const { fields: lineFields, append: appendLine, remove: removeLine } = useFieldArray({ control, name: "lines" });
+  const watchedLines = useWatch({ control, name: "lines" }) ?? [];
+  const lineProductIds = Array.from(new Set(watchedLines.map((line) => line.product_id).filter(Boolean)));
+  const suggestedVendorQueries = useQueries({
+    queries: lineProductIds.map((productId) => ({
+      queryKey: ["core", "products", productId, "suggested-vendors"],
+      queryFn: () => listSuggestedVendors(token, productId),
+    })),
+  });
+  const suggestedSuppliers = aggregateSuggestedVendors(suggestedVendorQueries.map((q) => q.data ?? []));
+  const lastPriceQueries = useQueries({
+    queries: suggestedSuppliers.map(({ vendor }) => ({
+      queryKey: ["procurement", "last-prices", vendor.partner_id, lineProductIds] as const,
+      queryFn: () => listLastPrices(token, vendor.partner_id, lineProductIds),
+      enabled: lineProductIds.length > 0,
+    })),
+  });
 
   const createMutation = useMutation({
     mutationFn: (input: NewOrderForm) =>
       createPurchaseOrder(token, {
         supplier_id: input.supplier_id || undefined,
-        currency_code: input.currency_code,
         order_date: input.order_date || undefined,
         expected_date: input.expected_date || undefined,
         notes: input.notes || undefined,
@@ -200,11 +264,34 @@ export function PurchaseOrdersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      reset({ supplier_id: "", currency_code: "EUR", order_date: "", expected_date: "", notes: "", lines: [] });
+      reset({ supplier_id: "", order_date: "", expected_date: "", notes: "", lines: [] });
       toast.success(t("procurement.created"));
     },
     onError: (error) => {
       toast.error(t("procurement.createError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const [quickAddLineIndex, setQuickAddLineIndex] = useState<number | null>(null);
+  const quickAddForm = useForm<QuickAddProductForm>({
+    resolver: zodResolver(quickAddProductSchema),
+    defaultValues: { sku: "", name: "", uom_id: "" },
+  });
+
+  const quickAddMutation = useMutation({
+    mutationFn: (input: QuickAddProductForm) => createProduct(token, { ...input, is_sellable: false, is_purchasable: true }),
+    onSuccess: (product) => {
+      queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY });
+      if (quickAddLineIndex !== null) {
+        setValue(`lines.${quickAddLineIndex}.product_id`, product.id);
+        setValue(`lines.${quickAddLineIndex}.uom_id`, product.uom_id);
+      }
+      setQuickAddLineIndex(null);
+      quickAddForm.reset({ sku: "", name: "", uom_id: "" });
+      toast.success(t("procurement.quickAddProduct.created"));
+    },
+    onError: (error) => {
+      toast.error(t("procurement.quickAddProduct.createError"), { description: error instanceof ApiError ? error.message : undefined });
     },
   });
 
@@ -231,7 +318,7 @@ export function PurchaseOrdersPage() {
     setEditingId(order.id);
     editForm.reset({
       supplier_id: order.supplier_id ?? "",
-      currency_code: order.currency_code,
+      currency_code: order.currency_code ?? "",
       order_date: order.order_date ?? "",
       expected_date: order.expected_date ?? "",
       notes: order.notes ?? "",
@@ -243,7 +330,7 @@ export function PurchaseOrdersPage() {
       id: order.id,
       input: {
         supplier_id: input.supplier_id || undefined,
-        currency_code: input.currency_code,
+        currency_code: input.currency_code || undefined,
         order_date: input.order_date || undefined,
         expected_date: input.expected_date || undefined,
         notes: input.notes || undefined,
@@ -273,10 +360,13 @@ export function PurchaseOrdersPage() {
     resolver: zodResolver(receiveSchema),
     defaultValues: {
       location_id: "",
+      currency_code: "",
       invoice_number: "",
       invoice_date: "",
       origin_country: "",
       carrier: "",
+      transport_company_name: "",
+      driver_name: "",
       base_cost: 0,
       license_fee: 0,
       insurance_fee: 0,
@@ -294,10 +384,13 @@ export function PurchaseOrdersPage() {
         .map((line) => ({ purchase_order_line_id: line.purchase_order_line_id, quantity: line.quantity, lot_number: line.lot_number || undefined }));
       return receiveAndConfirm(token, orderId, {
         location_id: input.location_id,
+        currency_code: input.currency_code,
         invoice_number: input.invoice_number || undefined,
         invoice_date: input.invoice_date || undefined,
         origin_country: input.origin_country || undefined,
         carrier: input.carrier || undefined,
+        transport_company_name: input.transport_company_name || undefined,
+        driver_name: input.driver_name || undefined,
         base_cost: input.base_cost,
         license_fee: input.license_fee,
         insurance_fee: input.insurance_fee,
@@ -334,6 +427,7 @@ export function PurchaseOrdersPage() {
         onChange: (v) => columnFilters.setTextValue("supplier", v),
         placeholder: t("procurement.column.supplier"),
       },
+      sortValue: (order) => supplierName(order.supplier_id),
     },
     {
       key: "order_date",
@@ -346,20 +440,33 @@ export function PurchaseOrdersPage() {
         onChange: (v) => columnFilters.setTextValue("order_date", v),
         placeholder: t("procurement.column.orderDate"),
       },
+      sortValue: (order) => order.order_date,
     },
     {
       key: "currency_code",
       header: t("procurement.column.currency"),
       defaultWidth: 120,
-      cell: (order) => <span className="text-muted-foreground">{order.currency_code}</span>,
+      cell: (order) => <span className="text-muted-foreground">{order.currency_code ?? "—"}</span>,
       filterCell: {
         type: "text",
         value: columnFilters.text.currency_code ?? "",
         onChange: (v) => columnFilters.setTextValue("currency_code", v),
         placeholder: t("procurement.column.currency"),
       },
+      sortValue: (order) => order.currency_code,
     },
-    { key: "status", header: t("procurement.column.status"), defaultWidth: 160, cell: (order) => <PurchaseOrderStatusBadge status={order.status} /> },
+    {
+      key: "status",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("procurement.column.status")}
+          <HelpTooltip text={t("procurement.help.status")} />
+        </span>
+      ),
+      defaultWidth: 160,
+      cell: (order) => <PurchaseOrderStatusBadge status={order.status} />,
+      sortValue: (order) => order.status,
+    },
     {
       key: "action",
       header: t("procurement.column.action"),
@@ -370,8 +477,9 @@ export function PurchaseOrdersPage() {
       cell: (order) => (
         <OrderActions
           order={order}
-          suppliers={suppliers}
+          suppliers={activeSuppliers}
           locations={locations}
+          currencies={currencies}
           productName={productName}
           uomCode={uomCode}
           receivingId={receivingId}
@@ -402,10 +510,9 @@ export function PurchaseOrdersPage() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "procurement.purchaseOrders",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("procurement.purchaseOrders", columns);
+  const sortedOrders = sortRows(filteredOrders);
 
   return (
     <div className="space-y-6">
@@ -455,43 +562,6 @@ export function PurchaseOrdersPage() {
                 <DialogDescription>{t("procurement.dialog.description")}</DialogDescription>
               </DialogHeader>
               <form className="space-y-4" onSubmit={handleSubmit((input) => createMutation.mutate(input))}>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="supplier_id">{t("procurement.field.supplier")}</Label>
-                    <Select id="supplier_id" {...register("supplier_id")}>
-                      <option value="">—</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier.id} value={supplier.id}>
-                          {supplier.name}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="currency_code">{t("procurement.field.currency")}</Label>
-                    <Select id="currency_code" {...register("currency_code")}>
-                      {currencies.map((currency) => (
-                        <option key={currency.code} value={currency.code}>
-                          {currency.code} — {currency.name}
-                        </option>
-                      ))}
-                    </Select>
-                    {errors.currency_code && <p className="text-sm text-destructive">{errors.currency_code.message}</p>}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="order_date">{t("procurement.field.orderDate")}</Label>
-                    <Input id="order_date" type="date" {...register("order_date")} />
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="expected_date">{t("procurement.field.expectedDate")}</Label>
-                    <Input id="expected_date" type="date" {...register("expected_date")} />
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="notes">{t("procurement.field.notes")}</Label>
-                  <Input id="notes" {...register("notes")} />
-                </div>
-
                 <div className="space-y-2 rounded-lg border border-border p-3">
                   <div className="flex items-center justify-between">
                     <Label>{t("procurement.field.lines")}</Label>
@@ -506,11 +576,10 @@ export function PurchaseOrdersPage() {
                     </Button>
                   </div>
                   {lineFields.length > 0 && (
-                    <div className="grid grid-cols-[minmax(0,1fr)_7rem_6rem_6rem_2rem] gap-2 px-1 text-xs font-medium text-muted-foreground">
+                    <div className="grid grid-cols-[minmax(0,1fr)_7rem_6rem_2rem] gap-2 px-1 text-xs font-medium text-muted-foreground">
                       <span>{t("procurement.field.product")}</span>
                       <span>{t("procurement.field.uom")}</span>
                       <span>{t("procurement.field.quantity")}</span>
-                      <span>{t("procurement.field.unitPrice")}</span>
                       <span />
                     </div>
                   )}
@@ -522,21 +591,22 @@ export function PurchaseOrdersPage() {
                         animate={{ opacity: 1, height: "auto" }}
                         exit={{ opacity: 0, height: 0 }}
                         transition={{ duration: 0.18 }}
-                        className="grid grid-cols-[minmax(0,1fr)_7rem_6rem_6rem_2rem] items-center gap-2"
+                        className="grid grid-cols-[minmax(0,1fr)_7rem_6rem_2rem] items-center gap-2"
                       >
-                        <Select {...register(`lines.${lineIndex}.product_id` as const)}>
-                          <option value="">—</option>
-                          {products.map((product) => (
-                            <option key={product.id} value={product.id}>
-                              {product.name}
-                            </option>
-                          ))}
-                        </Select>
+                        <ProductLineSelect
+                          registration={register(`lines.${lineIndex}.product_id` as const)}
+                          products={products}
+                          currentValue={watchedLines[lineIndex]?.product_id ?? ""}
+                          onRequestNewProduct={() => {
+                            quickAddForm.reset({ sku: "", name: "", uom_id: "" });
+                            setQuickAddLineIndex(lineIndex);
+                          }}
+                        />
                         <Select className="w-28" {...register(`lines.${lineIndex}.uom_id` as const)}>
                           <option value="">—</option>
                           {uoms.map((uom) => (
                             <option key={uom.id} value={uom.id}>
-                              {uom.code}
+                              {uom.symbol || uom.code}
                             </option>
                           ))}
                         </Select>
@@ -547,13 +617,9 @@ export function PurchaseOrdersPage() {
                           placeholder={t("procurement.field.quantity")}
                           {...register(`lines.${lineIndex}.quantity_ordered` as const)}
                         />
-                        <Input
-                          type="number"
-                          step="any"
-                          className="w-24"
-                          placeholder={t("procurement.field.unitPrice")}
-                          {...register(`lines.${lineIndex}.unit_price` as const)}
-                        />
+                        {/* unit_price is set from the goods receipt's landed cost, not entered here — kept as a hidden
+                            field (default 0) so react-hook-form still submits it per the schema's shape. */}
+                        <input type="hidden" {...register(`lines.${lineIndex}.unit_price` as const)} />
                         <Button type="button" variant="ghost" size="sm" onClick={() => removeLine(lineIndex)} aria-label={t("procurement.removeLine")}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
@@ -564,6 +630,68 @@ export function PurchaseOrdersPage() {
                   {errors.lines && <p className="text-sm text-destructive">{errors.lines.message ?? errors.lines.root?.message}</p>}
                 </div>
 
+                {suggestedSuppliers.length > 0 && (
+                  <div className="space-y-1.5 rounded-lg border border-border p-3">
+                    <Label className="flex items-center gap-1.5">
+                      <Sparkles className="h-3.5 w-3.5" />
+                      {t("procurement.suggestedSuppliers.title")}
+                      <HelpTooltip text={t("procurement.help.suggestedSuppliers")} />
+                    </Label>
+                    <p className="text-xs text-muted-foreground">{t("procurement.suggestedSuppliers.description")}</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {suggestedSuppliers.map(({ vendor }, index) => {
+                        const bestPrice = mostRecentPrice(lastPriceQueries[index]?.data ?? []);
+                        return (
+                          <button key={vendor.partner_id} type="button" onClick={() => setValue("supplier_id", vendor.partner_id)}>
+                            <Badge variant="outline" className="gap-1">
+                              {vendor.name}
+                              {vendor.is_preferred && <span className="text-primary">· {t("procurement.suggestedSuppliers.preferred")}</span>}
+                              {vendor.lead_time_days != null && (
+                                <span className="text-muted-foreground">
+                                  · {vendor.lead_time_days}{t("procurement.suggestedSuppliers.leadTimeSuffix")}
+                                </span>
+                              )}
+                              {bestPrice ? (
+                                <span className="text-success">
+                                  · {bestPrice.unit_price} {bestPrice.unit_price_currency}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground">· {t("procurement.suggestedSuppliers.noQuoteYet")}</span>
+                              )}
+                            </Badge>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="supplier_id">{t("procurement.field.supplier")}</Label>
+                  <Select id="supplier_id" {...register("supplier_id")}>
+                    <option value="">—</option>
+                    {activeSuppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="order_date">{t("procurement.field.orderDate")}</Label>
+                    <Input id="order_date" type="date" {...register("order_date")} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="expected_date">{t("procurement.field.expectedDate")}</Label>
+                    <Input id="expected_date" type="date" {...register("expected_date")} />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="notes">{t("procurement.field.notes")}</Label>
+                  <Input id="notes" {...register("notes")} />
+                </div>
+
                 {createMutation.isError && (
                   <p className="text-sm text-destructive">
                     {createMutation.error instanceof ApiError ? createMutation.error.message : t("procurement.createError")}
@@ -571,6 +699,52 @@ export function PurchaseOrdersPage() {
                 )}
                 <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                   {createMutation.isPending ? t("procurement.creating") : t("procurement.create")}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+          <Dialog open={quickAddLineIndex !== null} onOpenChange={(open) => !open && setQuickAddLineIndex(null)}>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{t("procurement.quickAddProduct.title")}</DialogTitle>
+                <DialogDescription>{t("procurement.quickAddProduct.description")}</DialogDescription>
+              </DialogHeader>
+              <form className="space-y-4" onSubmit={quickAddForm.handleSubmit((input) => quickAddMutation.mutate(input))}>
+                <div className="space-y-1.5">
+                  <Label htmlFor="quickadd_sku">{t("products.field.ref")}</Label>
+                  <Input id="quickadd_sku" {...quickAddForm.register("sku")} />
+                  {quickAddForm.formState.errors.sku && (
+                    <p className="text-sm text-destructive">{quickAddForm.formState.errors.sku.message}</p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="quickadd_name">{t("products.field.label")}</Label>
+                  <Input id="quickadd_name" {...quickAddForm.register("name")} />
+                  {quickAddForm.formState.errors.name && (
+                    <p className="text-sm text-destructive">{quickAddForm.formState.errors.name.message}</p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="quickadd_uom">{t("products.field.uom")}</Label>
+                  <Select id="quickadd_uom" {...quickAddForm.register("uom_id")}>
+                    <option value="">—</option>
+                    {uoms.map((uom) => (
+                      <option key={uom.id} value={uom.id}>
+                        {uom.symbol || uom.code}
+                      </option>
+                    ))}
+                  </Select>
+                  {quickAddForm.formState.errors.uom_id && (
+                    <p className="text-sm text-destructive">{quickAddForm.formState.errors.uom_id.message}</p>
+                  )}
+                </div>
+                {quickAddMutation.isError && (
+                  <p className="text-sm text-destructive">
+                    {quickAddMutation.error instanceof ApiError ? quickAddMutation.error.message : t("procurement.quickAddProduct.createError")}
+                  </p>
+                )}
+                <Button type="submit" className="w-full" disabled={quickAddMutation.isPending}>
+                  {quickAddMutation.isPending ? t("procurement.quickAddProduct.creating") : t("procurement.quickAddProduct.create")}
                 </Button>
               </form>
             </DialogContent>
@@ -586,6 +760,8 @@ export function PurchaseOrdersPage() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -614,7 +790,7 @@ export function PurchaseOrdersPage() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredOrders.map((order, i) => (
+                {sortedOrders.map((order, i) => (
                   <motion.tr
                     key={order.id}
                     layout
@@ -639,10 +815,50 @@ export function PurchaseOrdersPage() {
   );
 }
 
+// The "+ Add new product…" option is a sentinel value, not a real product id. Selecting it must
+// never reach react-hook-form's own onChange (which would store "__new__" as the line's
+// product_id) -- so this component intercepts the change event itself, reverts the <select> to
+// its last real value, and asks the parent to open the quick-add dialog instead.
+function ProductLineSelect({
+  registration,
+  products,
+  currentValue,
+  onRequestNewProduct,
+}: {
+  registration: UseFormRegisterReturn;
+  products: Product[];
+  currentValue: string;
+  onRequestNewProduct: () => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <Select
+      {...registration}
+      onChange={(e) => {
+        if (e.target.value === NEW_PRODUCT_OPTION) {
+          e.target.value = currentValue;
+          onRequestNewProduct();
+          return;
+        }
+        registration.onChange(e);
+      }}
+    >
+      <option value="">—</option>
+      {products.map((product) => (
+        <option key={product.id} value={product.id}>
+          {product.name}
+        </option>
+      ))}
+      <option value={NEW_PRODUCT_OPTION}>{t("procurement.addNewProduct")}</option>
+    </Select>
+  );
+}
+
 function OrderActions({
   order,
   suppliers,
   locations,
+  currencies,
   productName,
   uomCode,
   receivingId,
@@ -667,6 +883,7 @@ function OrderActions({
   order: PurchaseOrder;
   suppliers: Partner[];
   locations: Location[];
+  currencies: Currency[];
   productName: (id: string) => string;
   uomCode: (id: string) => string;
   receivingId: string | null;
@@ -723,6 +940,9 @@ function OrderActions({
         lot_number: "",
       })),
     );
+    // Prefill from the order's currency if an earlier receipt already set one; otherwise
+    // this receipt is the one deciding it (see procurement.help.receiptCurrency).
+    receiveForm.setValue("currency_code", order.currency_code ?? "");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isReceiveDialogOpen, lines]);
 
@@ -861,6 +1081,23 @@ function OrderActions({
                       )}
                     </div>
                     <div className="space-y-1.5">
+                      <Label htmlFor={`receive_currency_${order.id}`} className="flex items-center gap-1.5">
+                        {t("procurement.field.currency")}
+                        <HelpTooltip text={t("procurement.help.receiptCurrency")} />
+                      </Label>
+                      <Select id={`receive_currency_${order.id}`} {...receiveForm.register("currency_code")}>
+                        <option value="">—</option>
+                        {currencies.map((currency) => (
+                          <option key={currency.code} value={currency.code}>
+                            {currency.code} — {currency.name}
+                          </option>
+                        ))}
+                      </Select>
+                      {receiveForm.formState.errors.currency_code && (
+                        <p className="text-sm text-destructive">{receiveForm.formState.errors.currency_code.message}</p>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
                       <Label htmlFor={`receive_invoice_${order.id}`}>{t("procurement.field.invoiceNumber")}</Label>
                       <Input id={`receive_invoice_${order.id}`} {...receiveForm.register("invoice_number")} />
                     </div>
@@ -876,10 +1113,21 @@ function OrderActions({
                       <Label htmlFor={`receive_carrier_${order.id}`}>{t("procurement.field.carrier")}</Label>
                       <Input id={`receive_carrier_${order.id}`} {...receiveForm.register("carrier")} />
                     </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`receive_transport_company_${order.id}`}>{t("procurement.field.transportCompanyName")}</Label>
+                      <Input id={`receive_transport_company_${order.id}`} {...receiveForm.register("transport_company_name")} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`receive_driver_${order.id}`}>{t("procurement.field.driverName")}</Label>
+                      <Input id={`receive_driver_${order.id}`} {...receiveForm.register("driver_name")} />
+                    </div>
                   </div>
 
                   <div className="space-y-1.5 rounded-lg border border-border p-3">
-                    <Label className="text-xs text-muted-foreground">{t("procurement.field.landedCost")}</Label>
+                    <Label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      {t("procurement.field.landedCost")}
+                      <HelpTooltip text={t("procurement.help.landedCost")} />
+                    </Label>
                     <div className="grid grid-cols-3 gap-2">
                       <Input type="number" step="any" placeholder={t("procurement.field.baseCost")} {...receiveForm.register("base_cost")} />
                       <Input type="number" step="any" placeholder={t("procurement.field.licenseFee")} {...receiveForm.register("license_fee")} />
@@ -975,7 +1223,10 @@ function ReceiptHistoryCard({
             <span className="text-sm text-muted-foreground">{receipt.invoice_number ?? "—"}</span>
           </div>
           <span className="text-sm tabular-nums text-muted-foreground">
-            {receipt.invoice_date ?? "—"} · {receipt.carrier ?? "—"} · {receipt.total_cost.toLocaleString()} {t("procurement.receipt.totalCostSuffix")}
+            {receipt.invoice_date ?? "—"} · {receipt.carrier ?? "—"}
+            {(receipt.transport_company_name || receipt.driver_name) &&
+              ` · ${[receipt.transport_company_name, receipt.driver_name].filter(Boolean).join(" / ")}`}{" "}
+            · {receipt.total_cost.toLocaleString()} {t("procurement.receipt.totalCostSuffix")}
           </span>
         </div>
         <ul className="space-y-1 text-sm">

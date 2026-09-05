@@ -1,0 +1,630 @@
+"""Integration tests for the qc module (Phase 4).
+
+Two things matter most here. First, the module boundary: qc carries `of_id` as an
+opaque column and never touches production's tables — the tests below build an OF
+through production's own service and then work with nothing but its id. Second, the
+non-conformity flow, which is the one place quality reaches back into finished
+stock; Phase 5 adds the movements, so these tests pin the state machine and the
+disposition rules that decide them.
+"""
+from __future__ import annotations
+
+import datetime
+
+import pytest
+from ulid import ULID
+
+from core.domain.result import Err, Ok
+from modules.production.api.service import WorkOrderService
+from modules.qc.api.non_conformity_service import NonConformityService
+from modules.qc.api.quality_service import FollowUpPolicyService, FollowUpService, QualityReportService
+from modules.qc.domain.non_conformity import DispositionLine
+from modules.qc.domain.quality import QualityReportDetail
+from modules.warehouse.api.service import StockService
+
+TENANT = "integration-test-qc"
+
+
+@pytest.fixture
+def env(db):
+    actor = str(ULID())
+    uom, product, location, quarantine, work_center = (str(ULID()) for _ in range(5))
+    db.execute(
+        "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
+        (actor, TENANT, f"{actor}@test.local"),
+    )
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category) VALUES (%s, %s, 'kg', 'Kilogram', 'weight')",
+        (uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TEST-QC', 'Test pasta', %s)",
+        (product, TENANT, uom),
+    )
+    db.execute(
+        "INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'FG', 'Finished goods')",
+        (location, TENANT),
+    )
+    db.execute(
+        "INSERT INTO warehouse.locations (id, tenant_id, code, name, is_blocked, blocked_reason) "
+        "VALUES (%s, %s, 'QUAR', 'Quarantine', TRUE, 'awaiting QC disposition')",
+        (quarantine, TENANT),
+    )
+    db.execute(
+        "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'TEST-WC', 'Test line')",
+        (work_center, TENANT),
+    )
+    # Finished product on the shelf for quality to pull from.
+    StockService(db).receive_stock(
+        tenant_id=TENANT,
+        product_id=product,
+        location_id=location,
+        quantity=1_000,
+        correlation_id=str(ULID()),
+        reference="test-seed",
+        actor_id=actor,
+    )
+    return {
+        "actor": actor,
+        "product": product,
+        "location": location,
+        "quarantine": quarantine,
+        "work_center": work_center,
+    }
+
+
+@pytest.fixture
+def of(db, env):
+    """A real OF, built through production's service — qc only ever sees its id."""
+    created = WorkOrderService(db).create_work_order(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        product_id=env["product"],
+        planned_quantity=1000,
+        work_center_id=env["work_center"],
+    )
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    return created.value
+
+
+def _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning", **detail_kwargs):
+    result = QualityReportService(db).create_report(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        report_date=report_date,
+        team="QC",
+        shift=shift,
+        detail=QualityReportDetail(**detail_kwargs),
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+    return result.value["report"]
+
+
+# --- one quality report per shift, many per OF ------------------------------
+
+
+def test_an_of_carries_one_quality_report_per_shift(db, env, of):
+    """Each shift files three reports — daily, conditionnement and quality — so an
+    OF spanning several shifts legitimately has several quality reports."""
+    service = QualityReportService(db)
+    _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning")
+    _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="afternoon")
+    _quality_report(db, env, of, report_date=datetime.date(2026, 9, 2), shift="morning")
+
+    reports = service.list_reports(tenant_id=TENANT, of_id=of.id)
+    assert len(reports) == 3
+
+
+def test_the_same_shift_cannot_file_two_quality_reports(db, env, of):
+    _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning")
+    duplicate = QualityReportService(db).create_report(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        report_date=datetime.date(2026, 9, 1),
+        shift="morning",
+    )
+    assert isinstance(duplicate, Err)
+    assert duplicate.code == "DUPLICATE_REPORT"
+
+
+# --- the report lifecycle ---------------------------------------------------
+
+
+def test_the_quality_report_walks_draft_to_validated(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, conforming_cartons=500)
+
+    assert isinstance(service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id), Ok)
+    validated = service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+    assert isinstance(validated, Ok), getattr(validated, "message", "")
+    assert validated.value["report"].validated_by == env["actor"]
+
+
+def test_a_draft_quality_report_cannot_be_validated(db, env, of):
+    report = _quality_report(db, env, of, conforming_cartons=500)
+    result = QualityReportService(db).validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_TRANSITION"
+
+
+def test_validating_twice_is_refused(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, conforming_cartons=500)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    assert isinstance(
+        service.validate_report(
+            tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+        ),
+        Ok,
+    )
+    second = service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+    assert isinstance(second, Err)
+
+    windows = db.execute(
+        "SELECT count(*) FROM qc.quality_follow_ups WHERE tenant_id = %s AND quality_report_id = %s",
+        (TENANT, report.id),
+    ).fetchone()[0]
+    assert windows == 1, "a refused second validate must not open a second window"
+
+
+def test_quality_validation_posts_no_stock(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, conforming_cartons=500)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+
+    before = db.execute("SELECT count(*) FROM warehouse.stock_moves").fetchone()[0]
+    service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+    assert db.execute("SELECT count(*) FROM warehouse.stock_moves").fetchone()[0] == before
+
+
+def test_validation_publishes_its_event(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, conforming_cartons=500)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+
+    published = db.execute(
+        "SELECT count(*) FROM events.outbox WHERE event_type = 'qc.quality_report.validated'"
+    ).fetchone()[0]
+    assert published >= 1
+
+
+# --- the follow-up window ---------------------------------------------------
+
+
+def test_validation_opens_a_forty_day_window_by_default(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), conforming_cartons=500)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    validated = service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+    assert validated.value["window_ends_on"] == datetime.date(2026, 10, 11)
+
+
+def test_a_per_product_policy_overrides_the_default(db, env, of):
+    policies = FollowUpPolicyService(db)
+    assert isinstance(
+        policies.set_policy(tenant_id=TENANT, actor_id=env["actor"], window_days=10, product_id=env["product"]), Ok
+    )
+
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), conforming_cartons=500)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    validated = service.validate_report(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        report_id=report.id,
+        correlation_id=str(ULID()),
+        product_id=env["product"],
+    )
+    assert validated.value["window_ends_on"] == datetime.date(2026, 9, 11)
+
+
+def test_a_tenant_default_applies_when_the_product_has_no_override(db, env):
+    policies = FollowUpPolicyService(db)
+    policies.set_policy(tenant_id=TENANT, actor_id=env["actor"], window_days=25)
+    assert policies.resolve_window_days(tenant_id=TENANT, product_id=env["product"]) == 25
+
+    policies.set_policy(tenant_id=TENANT, actor_id=env["actor"], window_days=7, product_id=env["product"])
+    assert policies.resolve_window_days(tenant_id=TENANT, product_id=env["product"]) == 7
+    assert policies.resolve_window_days(tenant_id=TENANT, product_id=None) == 25
+
+
+def test_an_observation_outside_the_window_is_refused(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), conforming_cartons=500)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+
+    follow_ups = FollowUpService(db)
+    inside = follow_ups.record_observation(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        quality_report_id=report.id,
+        observed_on=datetime.date(2026, 9, 20),
+        observation="no change",
+    )
+    assert isinstance(inside, Ok), getattr(inside, "message", "")
+
+    outside = follow_ups.record_observation(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        quality_report_id=report.id,
+        observed_on=datetime.date(2026, 12, 1),
+        observation="too late",
+    )
+    assert isinstance(outside, Err)
+    assert outside.code == "OUTSIDE_WINDOW"
+
+
+def test_follow_up_survives_of_closure(db, env, of):
+    """Quality outlives production — that is why it is not keyed to an open OF."""
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), conforming_cartons=500)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+
+    work_orders = WorkOrderService(db)
+    work_orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=of.id)
+    assert isinstance(
+        work_orders.close_work_order(
+            tenant_id=TENANT, actor_id=env["actor"], work_order_id=of.id, correlation_id=str(ULID())
+        ),
+        Ok,
+    )
+
+    recorded = FollowUpService(db).record_observation(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        quality_report_id=report.id,
+        observed_on=datetime.date(2026, 9, 25),
+        observation="checked after closure",
+    )
+    assert isinstance(recorded, Ok), getattr(recorded, "message", "")
+
+
+# --- deleting a quality report ---------------------------------------------
+
+
+def test_deleting_a_report_needs_a_reason(db, env, of):
+    report = _quality_report(db, env, of)
+    result = QualityReportService(db).delete_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="   "
+    )
+    assert isinstance(result, Err)
+    assert result.code == "MISSING_REASON"
+
+
+def test_deleting_a_draft_takes_its_detail_with_it(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, conforming_cartons=120)
+
+    assert isinstance(
+        service.delete_report(
+            tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="filed against the wrong OF"
+        ),
+        Ok,
+    )
+    assert service.get_report(tenant_id=TENANT, report_id=report.id) is None
+    orphans = db.execute(
+        "SELECT COUNT(*) FROM qc.quality_report_details WHERE report_id = %s", (report.id,)
+    ).fetchone()
+    assert orphans[0] == 0
+
+
+def test_deleting_a_validated_report_closes_its_follow_up_window(db, env, of):
+    """Validation is what opens the 40-day window, so removing the report that
+    opened it must take the window away too — otherwise QC keeps chasing an
+    observation for a report that no longer exists."""
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of)
+    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    service.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+    assert FollowUpService(db).count_open_for_of(tenant_id=TENANT, of_id=of.id) == 1
+
+    assert isinstance(
+        service.delete_report(
+            tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="duplicate of the morning report"
+        ),
+        Ok,
+    )
+    assert FollowUpService(db).count_open_for_of(tenant_id=TENANT, of_id=of.id) == 0
+
+
+def test_a_report_with_a_non_conformity_cannot_be_deleted(db, env, of):
+    """The NC has already moved product into quarantine. Deleting the report it
+    came from would leave that stock stranded with nothing explaining it."""
+    report = _quality_report(db, env, of)
+    NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        product_id=env["product"],
+        quantity=10.0,
+        source_location_id=env["location"],
+        quarantine_location_id=env["quarantine"],
+        defect_type="bad film seal",
+        correlation_id=str(ULID()),
+        quality_report_id=report.id,
+    )
+
+    result = QualityReportService(db).delete_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="entered by mistake"
+    )
+    assert isinstance(result, Err)
+    assert result.code == "NON_CONFORMITY_ATTACHED"
+
+
+def test_the_deletion_is_recorded_in_the_audit_trail(db, env, of):
+    report = _quality_report(db, env, of)
+    QualityReportService(db).delete_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="wrong shift"
+    )
+    row = db.execute(
+        "SELECT payload FROM core.audit_log WHERE entity_id = %s AND action = 'quality_report.deleted'",
+        (report.id,),
+    ).fetchone()
+    assert row is not None
+    assert row[0]["reason"] == "wrong shift"
+    assert row[0]["status_when_deleted"] == "draft"
+
+
+# --- non-conformity ---------------------------------------------------------
+
+
+def _raise_nc(db, env, of, quantity=10.0):
+    result = NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        product_id=env["product"],
+        quantity=quantity,
+        source_location_id=env["location"],
+        quarantine_location_id=env["quarantine"],
+        defect_type="bad film seal",
+        severity="major",
+        correlation_id=str(ULID()),
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+    return result.value
+
+
+def _on_hand(db, product_id, location_id) -> float:
+    row = db.execute(
+        "SELECT quantity_on_hand FROM warehouse.stock_items WHERE tenant_id = %s AND product_id = %s AND location_id = %s",
+        (TENANT, product_id, location_id),
+    ).fetchone()
+    return float(row[0]) if row else 0.0
+
+
+def test_raising_a_non_conformity_numbers_it(db, env, of):
+    non_conformity = _raise_nc(db, env, of)
+    assert non_conformity.reference.startswith("NC-")
+    assert non_conformity.status == "quarantined", "segregated the moment it is pulled"
+
+
+def test_a_non_conformity_can_be_raised_against_a_closed_of(db, env, of):
+    """The 40-day follow-up outlives production, so NC must work after closure."""
+    work_orders = WorkOrderService(db)
+    work_orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=of.id)
+    work_orders.close_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], work_order_id=of.id, correlation_id=str(ULID())
+    )
+    non_conformity = _raise_nc(db, env, of)
+    assert non_conformity.status == "quarantined"
+
+
+def test_the_worked_example_ten_packets_fail(db, env, of):
+    """Pasta to rebroyat, film and carton and tape to déchet."""
+    service = NonConformityService(db)
+    non_conformity = _raise_nc(db, env, of)
+    assert non_conformity.quarantine_location_id == env["quarantine"]
+
+    dispositioned = service.disposition(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        correlation_id=str(ULID()),
+        lines=(
+            DispositionLine(component="product", disposition="regrind", quantity=8),
+            DispositionLine(component="film", disposition="dechet", quantity=0.4),
+            DispositionLine(component="carton", disposition="dechet", quantity=1),
+            DispositionLine(component="tape", disposition="dechet", quantity=0.1),
+        ),
+    )
+    assert isinstance(dispositioned, Ok), getattr(dispositioned, "message", "")
+    assert len(dispositioned.value["dispositions"]) == 4
+
+    closed = service.close(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        corrective_action="sealing head recalibrated",
+    )
+    assert isinstance(closed, Ok)
+    assert closed.value.status == "closed"
+    assert closed.value.closed_at is not None
+
+
+def test_raising_moves_the_product_into_quarantine(db, env, of):
+    """The movement that makes segregation real rather than a label."""
+    before_shelf = _on_hand(db, env["product"], env["location"])
+
+    non_conformity = _raise_nc(db, env, of, quantity=10)
+
+    assert _on_hand(db, env["product"], env["location"]) == before_shelf - 10
+    assert _on_hand(db, env["product"], env["quarantine"]) == 10
+    assert non_conformity.status == "quarantined"
+
+
+def test_quarantined_stock_cannot_be_promised(db, env, of):
+    """Excluded from available quantity, so no other module can sell it."""
+    _raise_nc(db, env, of, quantity=10)
+    stock = StockService(db)
+
+    assert _on_hand(db, env["product"], env["quarantine"]) == 10, "it is on the books"
+    assert stock.get_available_quantity(TENANT, env["product"], env["quarantine"]) == 0.0
+
+
+def test_quarantine_must_be_a_blocked_location(db, env, of):
+    open_shelf = str(ULID())
+    db.execute(
+        "INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'OPEN', 'Open shelf')",
+        (open_shelf, TENANT),
+    )
+    result = NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        product_id=env["product"],
+        quantity=10,
+        source_location_id=env["location"],
+        quarantine_location_id=open_shelf,
+        defect_type="bad seal",
+        correlation_id=str(ULID()),
+    )
+    assert isinstance(result, Err)
+    assert result.code == "LOCATION_NOT_BLOCKED"
+
+
+def test_disposition_takes_the_product_back_out_of_quarantine(db, env, of):
+    service = NonConformityService(db)
+    non_conformity = _raise_nc(db, env, of, quantity=10)
+    assert _on_hand(db, env["product"], env["quarantine"]) == 10
+
+    service.disposition(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        correlation_id=str(ULID()),
+        lines=(
+            DispositionLine(component="product", disposition="regrind", quantity=8),
+            DispositionLine(component="film", disposition="dechet", quantity=0.4),
+        ),
+    )
+    assert _on_hand(db, env["product"], env["quarantine"]) == 0, "never a straight write-off"
+
+
+def test_packaging_is_never_deducted_a_second_time(db, env, of):
+    """Locked decision 8. The film and carton in a rejected packet already left
+    stock when the conditionnement report was validated; deducting them again would
+    understate packaging every time quality does its job."""
+    film = str(ULID())
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) "
+        "SELECT %s, %s, 'NC-FILM', 'Film', id FROM core.uoms WHERE tenant_id = %s LIMIT 1",
+        (film, TENANT, TENANT),
+    )
+    StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=film, location_id=env["location"], quantity=500,
+        correlation_id=str(ULID()), reference="test-seed", actor_id=env["actor"],
+    )
+    film_before = _on_hand(db, film, env["location"])
+
+    service = NonConformityService(db)
+    non_conformity = _raise_nc(db, env, of, quantity=10)
+    service.disposition(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        correlation_id=str(ULID()),
+        lines=(
+            DispositionLine(component="product", disposition="regrind", quantity=8),
+            DispositionLine(component="film", disposition="dechet", quantity=0.4),
+            DispositionLine(component="carton", disposition="dechet", quantity=1),
+        ),
+    )
+    assert _on_hand(db, film, env["location"]) == film_before, "déchet is reported, not deducted"
+
+
+def test_the_disposition_publishes_the_event_production_will_consume(db, env, of):
+    service = NonConformityService(db)
+    non_conformity = _raise_nc(db, env, of)
+    service.disposition(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        correlation_id=str(ULID()),
+        lines=(DispositionLine(component="product", disposition="regrind", quantity=8),),
+    )
+
+    published = db.execute(
+        "SELECT count(*) FROM events.outbox WHERE event_type = 'qc.non_conformity.dispositioned'"
+    ).fetchone()[0]
+    assert published >= 1
+
+
+def test_nothing_in_qc_writes_into_productions_schema(db, env, of):
+    """The module boundary, asserted: raising and dispositioning an NC leaves
+    production's scrap ledger untouched. Production writes it in Phase 5, by
+    consuming the event above."""
+    service = NonConformityService(db)
+    before = db.execute(
+        "SELECT count(*) FROM production.scrap_records WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0]
+
+    non_conformity = _raise_nc(db, env, of)
+    service.disposition(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        correlation_id=str(ULID()),
+        lines=(DispositionLine(component="product", disposition="regrind", quantity=8),),
+    )
+
+    after = db.execute(
+        "SELECT count(*) FROM production.scrap_records WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0]
+    assert after == before
+
+
+def test_closing_requires_a_corrective_action(db, env, of):
+    service = NonConformityService(db)
+    non_conformity = _raise_nc(db, env, of)
+    service.disposition(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        correlation_id=str(ULID()),
+        lines=(DispositionLine(component="product", disposition="regrind", quantity=8),),
+    )
+
+    result = service.close(
+        tenant_id=TENANT, actor_id=env["actor"], non_conformity_id=non_conformity.id, corrective_action="  "
+    )
+    assert isinstance(result, Err)
+    assert result.code == "MISSING_CORRECTIVE_ACTION"
+
+
+def test_edit_in_place_is_allowed_at_any_status(db, env, of):
+    service = NonConformityService(db)
+    non_conformity = _raise_nc(db, env, of)
+    updated = service.admin_update_non_conformity(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        non_conformity_id=non_conformity.id,
+        quantity=12,
+        severity="critical",
+    )
+    assert isinstance(updated, Ok), getattr(updated, "message", "")
+    assert updated.value.quantity == 12
+    assert updated.value.severity == "critical"

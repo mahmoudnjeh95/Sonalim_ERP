@@ -25,5 +25,6 @@
     ,"hr.manage_attendance"
     ,"hr.view_payroll"
     ,"hr.manage_payroll"
+    ,"hr.admin_payroll"
   ]
 }

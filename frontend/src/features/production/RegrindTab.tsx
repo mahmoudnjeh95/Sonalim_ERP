@@ -1,14 +1,17 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, Recycle, Plus, Scale, Trash2 } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Recycle, Plus, Scale, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { listReportOptions, optionsFor } from "../../lib/reportOptions";
+import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -28,25 +31,36 @@ import {
 } from "../../components/ui/dialog";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
-import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import {
-  createProduct,
+  assignRegrindBatch,
+  completeRegrindBatch,
   createRegrindBatch,
   listProducts,
   listRegrindBatches,
+  listRegrindDefaults,
   listScrapRecords,
-  listUoms,
   listWorkCenters,
   listWorkOrders,
   recordScrap,
   type RegrindBatchSummary,
+  type RegrindStage,
   type ScrapRecord,
 } from "./api";
+import { listLocations, listUoms } from "../warehouse/api";
+
+const completeBatchSchema = z.object({
+  location_id: z.string().min(1, "Required"),
+  actual_output_quantity: z.coerce.number().positive("Must be > 0").optional(),
+});
+type CompleteBatchForm = z.infer<typeof completeBatchSchema>;
+
+const assignBatchSchema = z.object({ team: z.string().min(1, "Required") });
+type AssignBatchForm = z.infer<typeof assignBatchSchema>;
 
 const scrapSchema = z
   .object({
@@ -64,11 +78,9 @@ const scrapSchema = z
 type ScrapForm = z.infer<typeof scrapSchema>;
 
 const batchSchema = z.object({
-  output_product_id: z.string().optional(),
-  new_sku: z.string().optional(),
-  new_name: z.string().optional(),
   output_quantity: z.coerce.number().positive("Must be > 0"),
-  work_center_id: z.string().optional(),
+  // A regrind run names its line like any other OF.
+  work_center_id: z.string().min(1, "Required"),
 });
 type BatchForm = z.infer<typeof batchSchema>;
 
@@ -76,16 +88,26 @@ const SCRAP_QUERY_KEY = ["production", "scrap-records"] as const;
 const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
-const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const REGRIND_BATCHES_QUERY_KEY = ["production", "regrind-batches"] as const;
+const REGRIND_DEFAULTS_QUERY_KEY = ["production", "regrind-defaults"] as const;
+const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
+const REPORT_OPTIONS_QUERY_KEY = ["core", "report-options"] as const;
 type RegrindFilter = "all" | "available" | "reground";
+
+const REGRIND_STAGE_VARIANT: Record<RegrindStage, "default" | "warning" | "success" | "accent" | "destructive"> = {
+  new: "default",
+  assigned: "warning",
+  finished: "success",
+  suspended: "accent",
+  cancelled: "destructive",
+};
 
 function formatKg(value: number) {
   return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
 }
 
 export function RegrindTab() {
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
@@ -95,17 +117,23 @@ export function RegrindTab() {
   const [regrindFilter, setRegrindFilter] = useState<RegrindFilter>("all");
   const [sourceUncertain, setSourceUncertain] = useState(false);
   const [productManual, setProductManual] = useState(false);
-  const [outputMode, setOutputMode] = useState<"existing" | "new">("existing");
 
   const { data: scrapRecords = [], isLoading } = useQuery({ queryKey: SCRAP_QUERY_KEY, queryFn: () => listScrapRecords(token) });
   const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
   const { data: workOrders = [] } = useQuery({ queryKey: WORK_ORDERS_QUERY_KEY, queryFn: () => listWorkOrders(token) });
-  const inProgressWorkOrders = workOrders.filter((wo) => wo.status === "in_progress");
+  const ongoingWorkOrders = workOrders.filter((wo) => wo.status === "ongoing");
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
-  const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
-  const kgUomId = uoms.find((u) => u.code === "kg")?.id;
   const { data: regrindBatches = [] } = useQuery({ queryKey: REGRIND_BATCHES_QUERY_KEY, queryFn: () => listRegrindBatches(token) });
-  const productName = (productId: string) => products.find((p) => p.id === productId)?.name ?? productId;
+  const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
+  const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
+  // Every regrind batch lands on this one product, always — see the backend
+  // comment on create_regrind_batch. There is nothing left to choose here.
+  const { data: regrindDefaults = [] } = useQuery({ queryKey: REGRIND_DEFAULTS_QUERY_KEY, queryFn: () => listRegrindDefaults(token) });
+  const regrindOutputProductId = regrindDefaults.find((d) => d.input_product_id === null)?.output_product_id ?? null;
+  const { data: reportOptions = [] } = useQuery({ queryKey: REPORT_OPTIONS_QUERY_KEY, queryFn: () => listReportOptions(token) });
+  const teamOptions = optionsFor(reportOptions, "team");
+  const canAssign = hasPermission("production.assign_regrind");
+  const productName = (productId: string | null) => (productId ? products.find((p) => p.id === productId)?.name ?? productId : "—");
   const workOrderRef = (workOrderId: string) => workOrders.find((wo) => wo.id === workOrderId)?.reference ?? workOrderId;
 
   const scrapForm = useForm<ScrapForm>({ resolver: zodResolver(scrapSchema), defaultValues: { scrap_type: "cutting" } });
@@ -133,88 +161,86 @@ export function RegrindTab() {
 
   const batchForm = useForm<BatchForm>({ resolver: zodResolver(batchSchema) });
 
-  const createProductMutation = useMutation({
-    mutationFn: (input: { sku: string; name: string; uom_id: string }) => createProduct(token, input),
+  const [assigningBatchId, setAssigningBatchId] = useState<string | null>(null);
+  const assignBatchForm = useForm<AssignBatchForm>({ resolver: zodResolver(assignBatchSchema), defaultValues: { team: "" } });
+
+  // The one step a responsable performs before a team can touch a regrind
+  // batch: hands it to a team and starts its work order.
+  const assignBatchMutation = useMutation({
+    mutationFn: ({ id, team }: { id: string; team: string }) => assignRegrindBatch(token, id, team),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: REGRIND_BATCHES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: WORK_ORDERS_QUERY_KEY });
+      setAssigningBatchId(null);
+      assignBatchForm.reset({ team: "" });
+      toast.success(t("production.regrind.batches.assignedToast"));
+    },
+    onError: (error) => {
+      toast.error(t("production.regrind.batches.assignError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
+  });
+
+  const [completingBatchId, setCompletingBatchId] = useState<string | null>(null);
+  const completeBatchForm = useForm<CompleteBatchForm>({
+    resolver: zodResolver(completeBatchSchema),
+    defaultValues: { location_id: "", actual_output_quantity: undefined },
+  });
+
+  // Rebroyat is the one production output still received on its own work order:
+  // a regrind batch has no report behind it, only the scrap it was built from.
+  const completeBatchMutation = useMutation({
+    mutationFn: ({ id, input }: { id: string; input: CompleteBatchForm }) =>
+      completeRegrindBatch(token, id, {
+        correlationId: crypto.randomUUID(),
+        locationId: input.location_id,
+        actualOutputQuantity: input.actual_output_quantity,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: REGRIND_BATCHES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: WORK_ORDERS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "stock"] });
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "stock", "moves"] });
+      setCompletingBatchId(null);
+      completeBatchForm.reset({ location_id: "", actual_output_quantity: undefined });
+      toast.success(t("production.regrind.batches.completedToast"));
+    },
+    onError: (error) => {
+      toast.error(t("production.regrind.batches.completeError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
   });
 
   const createBatchMutation = useMutation({
-    mutationFn: (input: { output_product_id: string; output_quantity: number; work_center_id?: string }) =>
+    mutationFn: (input: { output_quantity: number; work_center_id: string }) =>
       createRegrindBatch(token, { ...input, scrap_record_ids: selectedScrapIds }),
     onSuccess: (batch) => {
       queryClient.invalidateQueries({ queryKey: SCRAP_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: REGRIND_BATCHES_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY });
-      queryClient.invalidateQueries({ queryKey: ["production", "product-classifications"] });
       setBatchDialogOpen(false);
       setSelectedScrapIds([]);
-      setOutputMode("existing");
       batchForm.reset();
       toast.success(t("production.regrind.batchCreated"), {
-        description: `${batch.work_order.product_id} · ${t("production.regrind.lossLabel")}: ${formatKg(batch.loss_quantity)} KG`,
+        description: `${productName(batch.work_order.product_id)} · ${t("production.regrind.inputTotal")}: ${formatKg(batch.input_quantity_total)} KG`,
       });
     },
     onError: (error) => toast.error(t("production.regrind.createBatchError"), { description: error instanceof ApiError ? error.message : undefined }),
   });
 
-  async function handleBatchSubmit(input: BatchForm) {
-    let outputProductId = input.output_product_id;
-
-    if (outputMode === "new") {
-      if (!kgUomId) {
-        toast.error(t("production.regrind.noKgUom"));
-        return;
-      }
-      const sku = input.new_sku?.trim();
-      const name = input.new_name?.trim();
-      if (!sku || !name) {
-        toast.error(t("production.regrind.createBatchError"));
-        return;
-      }
-      try {
-        const product = await createProductMutation.mutateAsync({ sku, name, uom_id: kgUomId });
-        outputProductId = product.id;
-        toast.success(t("production.regrind.productCreated"), { description: product.name });
-      } catch (error) {
-        toast.error(t("production.regrind.createBatchError"), { description: error instanceof ApiError ? error.message : undefined });
-        return;
-      }
-    }
-
-    if (!outputProductId) {
-      toast.error(t("production.regrind.createBatchError"));
-      return;
-    }
-
+  function handleBatchSubmit(input: BatchForm) {
     createBatchMutation.mutate({
-      output_product_id: outputProductId,
       output_quantity: input.output_quantity,
-      work_center_id: input.work_center_id || undefined,
+      work_center_id: input.work_center_id,
     });
-  }
-
-  function selectedScrapSuggestion(): { sku: string; name: string } | null {
-    const selected = scrapRecords.filter((s) => selectedScrapIds.includes(s.id));
-    const distinctProductIds = new Set(selected.map((s) => s.product_id));
-    if (distinctProductIds.size !== 1) return null;
-    const baseId = [...distinctProductIds][0];
-    const baseProduct = products.find((p) => p.id === baseId);
-    const baseSku = baseProduct?.sku ?? baseId;
-    const baseName = baseProduct?.name ?? baseId;
-    return { sku: `${baseSku}-rebroye`, name: `${baseName} (Rebroyé)` };
-  }
-
-  function switchToNewProduct() {
-    setOutputMode("new");
-    const suggestion = selectedScrapSuggestion();
-    if (suggestion) {
-      batchForm.setValue("new_sku", suggestion.sku);
-      batchForm.setValue("new_name", suggestion.name);
-    }
   }
 
   const availableCount = scrapRecords.filter((s) => !s.is_reground).length;
   const regroundCount = scrapRecords.filter((s) => s.is_reground).length;
-  const totalLoss = regrindBatches.reduce((sum, b) => sum + b.loss_quantity, 0);
+  // Only a finished batch has a measured écart — a batch still new or assigned
+  // has not been weighed yet, so it contributes nothing to the total.
+  const totalLoss = regrindBatches.reduce((sum, b) => sum + (b.loss_quantity ?? 0), 0);
   const regrindFilteredRecords =
     regrindFilter === "all"
       ? scrapRecords
@@ -275,12 +301,14 @@ export function RegrindTab() {
         onChange: (v) => columnFilters.setTextValue("work_order_id", v),
         placeholder: t("production.regrind.column.workOrder"),
       },
+      sortValue: (scrap) => (scrap.work_order_id ? workOrderRef(scrap.work_order_id) : scrap.source_note ?? null),
     },
     {
       key: "line",
       header: t("production.regrind.field.line"),
       defaultWidth: 140,
       cell: (scrap) => <span className="text-muted-foreground">{workCenterLabel(scrap.work_center_id)}</span>,
+      sortValue: (scrap) => workCenterLabel(scrap.work_center_id),
     },
     {
       key: "scrap_type",
@@ -293,6 +321,7 @@ export function RegrindTab() {
         onChange: (v) => columnFilters.setTextValue("scrap_type", v),
         placeholder: t("production.regrind.column.type"),
       },
+      sortValue: (scrap) => scrapTypeLabel(scrap),
     },
     {
       key: "product_id",
@@ -305,6 +334,7 @@ export function RegrindTab() {
         onChange: (v) => columnFilters.setTextValue("product_id", v),
         placeholder: t("production.regrind.column.product"),
       },
+      sortValue: (scrap) => productName(scrap.product_id),
     },
     {
       key: "quantity",
@@ -318,6 +348,7 @@ export function RegrindTab() {
         onMinChange: (v) => columnFilters.setRangeValue("quantity", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("quantity", "max", v),
       },
+      sortValue: (scrap) => scrap.quantity,
     },
     {
       key: "status",
@@ -333,28 +364,222 @@ export function RegrindTab() {
             {t("production.regrind.available")}
           </Badge>
         ),
+      sortValue: (scrap) => scrap.is_reground,
     },
   ];
   const scrapTable = useTableColumns("production.regrind.scrap", scrapColumns);
+  const sortedScrapRecords = scrapTable.sortRows(filteredScrapRecords);
 
   const batchColumns: ColumnDef<RegrindBatchSummary>[] = [
-    { key: "output", header: t("production.regrind.batches.column.output"), defaultWidth: 200, cell: (batch) => <span className="font-medium">{productName(batch.output_product_id)}</span> },
-    { key: "outputQuantity", header: t("production.regrind.batches.column.outputQuantity"), defaultWidth: 140, cell: (batch) => <span className="tabular-nums text-muted-foreground">{formatKg(batch.output_quantity)}</span> },
-    { key: "inputTotal", header: t("production.regrind.batches.column.inputTotal"), defaultWidth: 140, cell: (batch) => <span className="tabular-nums text-muted-foreground">{formatKg(batch.input_quantity_total)}</span> },
+    {
+      key: "output",
+      header: t("production.regrind.batches.column.output"),
+      defaultWidth: 200,
+      cell: (batch) => <span className="font-medium">{productName(batch.output_product_id)}</span>,
+      sortValue: (batch) => productName(batch.output_product_id),
+    },
+    {
+      key: "outputQuantity",
+      header: t("production.regrind.batches.column.outputQuantity"),
+      defaultWidth: 160,
+      cell: (batch) =>
+        batch.actual_output_quantity !== null ? (
+          <span className="tabular-nums text-muted-foreground">{formatKg(batch.actual_output_quantity)}</span>
+        ) : (
+          <span className="tabular-nums text-muted-foreground">
+            {formatKg(batch.output_quantity)} <span className="text-xs italic">({t("production.regrind.batches.estimated")})</span>
+          </span>
+        ),
+      sortValue: (batch) => batch.actual_output_quantity ?? batch.output_quantity,
+    },
+    {
+      key: "inputTotal",
+      header: t("production.regrind.batches.column.inputTotal"),
+      defaultWidth: 140,
+      cell: (batch) => <span className="tabular-nums text-muted-foreground">{formatKg(batch.input_quantity_total)}</span>,
+      sortValue: (batch) => batch.input_quantity_total,
+    },
     {
       key: "loss",
       header: t("production.regrind.batches.column.loss"),
-      defaultWidth: 140,
-      cell: (batch) => (
-        <span className={`tabular-nums ${batch.loss_quantity > 0 ? "text-destructive" : "text-muted-foreground"}`}>
-          {formatKg(batch.loss_quantity)}
-        </span>
-      ),
+      defaultWidth: 150,
+      // Only known once the batch is finished — before that there is nothing to
+      // highlight yet, only a plan. An écart of any size, once measured, is
+      // called out in red with a warning icon rather than blending into the row.
+      cell: (batch) =>
+        batch.loss_quantity === null ? (
+          <span className="text-muted-foreground" title={t("production.regrind.batches.pending")}>
+            —
+          </span>
+        ) : Math.abs(batch.loss_quantity) > 0.01 ? (
+          <span className="inline-flex items-center gap-1 font-medium text-destructive">
+            <AlertTriangle className="h-3.5 w-3.5" />
+            <span className="tabular-nums">{formatKg(batch.loss_quantity)}</span>
+          </span>
+        ) : (
+          <span className="tabular-nums text-muted-foreground">{formatKg(batch.loss_quantity)}</span>
+        ),
+      sortValue: (batch) => batch.loss_quantity ?? Number.NEGATIVE_INFINITY,
     },
-    { key: "status", header: t("production.regrind.batches.column.status"), defaultWidth: 140, cell: (batch) => <StatusBadge status={batch.status} /> },
-    { key: "date", header: t("production.regrind.batches.column.date"), defaultWidth: 160, cell: (batch) => <span className="whitespace-nowrap text-muted-foreground">{new Date(batch.created_at).toLocaleDateString()}</span> },
+    {
+      key: "status",
+      header: t("production.regrind.batches.column.status"),
+      defaultWidth: 130,
+      cell: (batch) => (
+        <Badge variant={REGRIND_STAGE_VARIANT[batch.stage]} dot>
+          {t(`production.regrind.batches.stage.${batch.stage}`)}
+        </Badge>
+      ),
+      sortValue: (batch) => batch.stage,
+    },
+    {
+      key: "team",
+      header: t("production.regrind.batches.column.team"),
+      defaultWidth: 150,
+      cell: (batch) => <span className="text-muted-foreground">{batch.assigned_team ?? "—"}</span>,
+      sortValue: (batch) => batch.assigned_team,
+    },
+    {
+      key: "date",
+      header: t("production.regrind.batches.column.date"),
+      defaultWidth: 160,
+      cell: (batch) => <span className="whitespace-nowrap text-muted-foreground">{new Date(batch.created_at).toLocaleDateString()}</span>,
+      sortValue: (batch) => batch.created_at,
+    },
+    {
+      key: "action",
+      header: t("production.regrind.batches.column.action"),
+      defaultWidth: 160,
+      alwaysVisible: true,
+      headerClassName: "text-right",
+      cellClassName: "text-right",
+      cell: (batch) => {
+        if (batch.stage === "new") {
+          return canAssign ? (
+            <Dialog
+              open={assigningBatchId === batch.work_order_id}
+              onOpenChange={(open) => {
+                setAssigningBatchId(open ? batch.work_order_id : null);
+                if (open) assignBatchForm.reset({ team: "" });
+              }}
+            >
+              <DialogTrigger asChild>
+                <Button size="sm" variant="outline">
+                  <Users className="h-3.5 w-3.5" />
+                  {t("production.regrind.batches.assign")}
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{t("production.regrind.batches.dialog.assign.title")}</DialogTitle>
+                  <DialogDescription>{t("production.regrind.batches.dialog.assign.description")}</DialogDescription>
+                </DialogHeader>
+                {teamOptions.length === 0 ? (
+                  <div className="rounded-lg border border-warning/20 bg-warning-soft p-3 text-sm text-warning">
+                    {t("production.regrind.batches.noTeamsConfigured")}
+                  </div>
+                ) : (
+                  <form
+                    className="space-y-4"
+                    onSubmit={assignBatchForm.handleSubmit((input) =>
+                      assignBatchMutation.mutate({ id: batch.work_order_id, team: input.team }),
+                    )}
+                  >
+                    <div className="space-y-1.5">
+                      <Label htmlFor={`batch_team_${batch.work_order_id}`}>{t("production.regrind.batches.field.team")}</Label>
+                      <Select id={`batch_team_${batch.work_order_id}`} {...assignBatchForm.register("team")}>
+                        <option value="">—</option>
+                        {teamOptions.map((team) => (
+                          <option key={team} value={team}>
+                            {team}
+                          </option>
+                        ))}
+                      </Select>
+                      {assignBatchForm.formState.errors.team && (
+                        <p className="text-sm text-destructive">{assignBatchForm.formState.errors.team.message}</p>
+                      )}
+                    </div>
+                    <Button type="submit" className="w-full" disabled={assignBatchMutation.isPending}>
+                      {assignBatchMutation.isPending ? t("production.regrind.batches.assigning") : t("production.regrind.batches.assign")}
+                    </Button>
+                  </form>
+                )}
+              </DialogContent>
+            </Dialog>
+          ) : null;
+        }
+
+        if (batch.stage !== "assigned") return null;
+
+        return (
+          <Dialog
+            open={completingBatchId === batch.work_order_id}
+            onOpenChange={(open) => {
+              setCompletingBatchId(open ? batch.work_order_id : null);
+              if (open) completeBatchForm.reset({ location_id: "", actual_output_quantity: batch.output_quantity });
+            }}
+          >
+            <DialogTrigger asChild>
+              <Button size="sm" variant="outline">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                {t("production.regrind.batches.complete")}
+              </Button>
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>{t("production.regrind.batches.dialog.complete.title")}</DialogTitle>
+                <DialogDescription>{t("production.regrind.batches.dialog.complete.description")}</DialogDescription>
+              </DialogHeader>
+              <form
+                className="space-y-4"
+                onSubmit={completeBatchForm.handleSubmit((input) =>
+                  completeBatchMutation.mutate({ id: batch.work_order_id, input }),
+                )}
+              >
+                <div className="space-y-1.5">
+                  <Label htmlFor={`batch_location_${batch.work_order_id}`}>
+                    {t("production.regrind.batches.field.destinationLocation")}
+                  </Label>
+                  <Select id={`batch_location_${batch.work_order_id}`} {...completeBatchForm.register("location_id")}>
+                    <option value="">—</option>
+                    {locations.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name}
+                      </option>
+                    ))}
+                  </Select>
+                  {completeBatchForm.formState.errors.location_id && (
+                    <p className="text-sm text-destructive">{completeBatchForm.formState.errors.location_id.message}</p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor={`batch_output_${batch.work_order_id}`}>
+                    {t("production.regrind.batches.field.actualOutput")}
+                    {productUnit(batch.output_product_id, products, uoms) && (
+                      <span className="text-muted-foreground"> ({productUnit(batch.output_product_id, products, uoms)})</span>
+                    )}
+                  </Label>
+                  <Input
+                    id={`batch_output_${batch.work_order_id}`}
+                    type="number"
+                    step={productRequiresIntegerQuantity(batch.output_product_id, products, uoms) ? "1" : "any"}
+                    {...completeBatchForm.register("actual_output_quantity")}
+                  />
+                </div>
+                <Button type="submit" className="w-full" disabled={completeBatchMutation.isPending}>
+                  {completeBatchMutation.isPending
+                    ? t("production.regrind.batches.completing")
+                    : t("production.regrind.batches.complete")}
+                </Button>
+              </form>
+            </DialogContent>
+          </Dialog>
+        );
+      },
+    },
   ];
   const batchTable = useTableColumns("production.regrind.batches", batchColumns);
+  const sortedRegrindBatches = batchTable.sortRows(regrindBatches);
 
   return (
     <div className="space-y-6">
@@ -362,7 +587,13 @@ export function RegrindTab() {
         <StatCard label={t("production.regrind.stat.total")} value={scrapRecords.length} icon={<Recycle className="h-5 w-5" />} />
         <StatCard label={t("production.regrind.stat.available")} value={availableCount} icon={<Trash2 className="h-5 w-5" />} accent="warning" />
         <StatCard label={t("production.regrind.stat.reground")} value={regroundCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
-        <StatCard label={t("production.regrind.stat.totalLoss")} value={Math.round(totalLoss)} icon={<Scale className="h-5 w-5" />} accent="destructive" />
+        <StatCard
+          label={t("production.regrind.stat.totalLoss")}
+          value={totalLoss}
+          decimals={2}
+          icon={<Scale className="h-5 w-5" />}
+          accent="destructive"
+        />
       </div>
 
       <Card>
@@ -439,9 +670,9 @@ export function RegrindTab() {
                         <Label htmlFor="work_order_id">{t("production.regrind.field.workOrderId")}</Label>
                         <Select id="work_order_id" {...scrapForm.register("work_order_id")}>
                           <option value="">—</option>
-                          {inProgressWorkOrders.map((wo) => (
+                          {ongoingWorkOrders.map((wo) => (
                             <option key={wo.id} value={wo.id}>
-                              {wo.reference} · {productName(wo.product_id)} · {wo.quantity}
+                              {wo.reference} · {productName(wo.product_id)} · {wo.planned_quantity}
                             </option>
                           ))}
                         </Select>
@@ -483,8 +714,18 @@ export function RegrindTab() {
                       </Select>
                     </div>
                     <div className="space-y-1.5">
-                      <Label htmlFor="quantity">{t("production.regrind.field.quantity")}</Label>
-                      <Input id="quantity" type="number" step="any" {...scrapForm.register("quantity")} />
+                      <Label htmlFor="quantity">
+                        {t("production.regrind.field.quantity")}
+                        {productUnit(scrapForm.watch("product_id"), products, uoms) && (
+                          <span className="text-muted-foreground"> ({productUnit(scrapForm.watch("product_id"), products, uoms)})</span>
+                        )}
+                      </Label>
+                      <Input
+                        id="quantity"
+                        type="number"
+                        step={productRequiresIntegerQuantity(scrapForm.watch("product_id"), products, uoms) ? "1" : "any"}
+                        {...scrapForm.register("quantity")}
+                      />
                       {scrapForm.formState.errors.quantity && (
                         <p className="text-sm text-destructive">{scrapForm.formState.errors.quantity.message}</p>
                       )}
@@ -527,13 +768,7 @@ export function RegrindTab() {
               </DialogContent>
             </Dialog>
 
-            <Dialog
-              open={batchDialogOpen}
-              onOpenChange={(open) => {
-                setBatchDialogOpen(open);
-                if (!open) setOutputMode("existing");
-              }}
-            >
+            <Dialog open={batchDialogOpen} onOpenChange={setBatchDialogOpen}>
               <DialogTrigger asChild>
                 <Button disabled={selectedScrapIds.length === 0} title={selectedScrapIds.length === 0 ? t("production.regrind.selectScrapFirst") : undefined}>
                   <Recycle className="h-4 w-4" />
@@ -549,74 +784,69 @@ export function RegrindTab() {
                     {t("production.regrind.dialog.batch.intoWorkOrder")}
                   </DialogDescription>
                 </DialogHeader>
-                <form className="space-y-4" onSubmit={batchForm.handleSubmit(handleBatchSubmit)}>
-                  <div className="flex items-center justify-between">
-                    <Label>{outputMode === "new" ? t("production.regrind.outputMode.new") : t("production.regrind.outputMode.existing")}</Label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => (outputMode === "existing" ? switchToNewProduct() : setOutputMode("existing"))}
-                    >
-                      {outputMode === "existing" ? t("production.regrind.outputMode.new") : t("production.regrind.outputMode.existing")}
-                    </Button>
-                  </div>
 
-                  {outputMode === "existing" ? (
+                {regrindOutputProductId === null ? (
+                  <div className="space-y-3 rounded-lg border border-warning/20 bg-warning-soft p-3 text-sm text-warning">
+                    <p>{t("production.regrind.noDefaultConfigured")}</p>
+                    <Link
+                      to="/production?tab=settings"
+                      className="inline-block font-medium underline underline-offset-2"
+                      onClick={() => setBatchDialogOpen(false)}
+                    >
+                      {t("production.regrind.goToSettings")}
+                    </Link>
+                  </div>
+                ) : (
+                  <form className="space-y-4" onSubmit={batchForm.handleSubmit(handleBatchSubmit)}>
                     <div className="space-y-1.5">
-                      <Label htmlFor="output_product_id">{t("production.regrind.field.outputProductId")}</Label>
-                      <Select id="output_product_id" {...batchForm.register("output_product_id")}>
+                      {/* Not a choice: every regrind batch lands on this one product. */}
+                      <Label>{t("production.regrind.field.output")}</Label>
+                      <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-sm font-medium">
+                        {productName(regrindOutputProductId)}
+                      </p>
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <Label htmlFor="output_quantity">
+                        {t("production.regrind.field.outputQuantity")}
+                        {productUnit(regrindOutputProductId, products, uoms) && (
+                          <span className="text-muted-foreground"> ({productUnit(regrindOutputProductId, products, uoms)})</span>
+                        )}
+                      </Label>
+                      <Input
+                        id="output_quantity"
+                        type="number"
+                        step={productRequiresIntegerQuantity(regrindOutputProductId, products, uoms) ? "1" : "any"}
+                        {...batchForm.register("output_quantity")}
+                      />
+                      {batchForm.formState.errors.output_quantity && (
+                        <p className="text-sm text-destructive">{batchForm.formState.errors.output_quantity.message}</p>
+                      )}
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="work_center_id">{t("production.regrind.field.workCenter")}</Label>
+                      <Select id="work_center_id" {...batchForm.register("work_center_id")}>
                         <option value="">—</option>
-                        {products.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name}
+                        {workCenters.map((wc) => (
+                          <option key={wc.id} value={wc.id}>
+                            {wc.code} — {wc.name}
                           </option>
                         ))}
                       </Select>
+                      {batchForm.formState.errors.work_center_id && (
+                        <p className="text-sm text-destructive">{batchForm.formState.errors.work_center_id.message}</p>
+                      )}
                     </div>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="new_sku">{t("production.regrind.field.newProductSku")}</Label>
-                        <Input id="new_sku" {...batchForm.register("new_sku")} />
-                      </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="new_name">{t("production.regrind.field.newProductName")}</Label>
-                        <Input id="new_name" {...batchForm.register("new_name")} />
-                      </div>
-                      {!kgUomId && <p className="col-span-2 text-sm text-destructive">{t("production.regrind.noKgUom")}</p>}
-                    </div>
-                  )}
-
-                  <div className="space-y-1.5">
-                    <Label htmlFor="output_quantity">{t("production.regrind.field.outputQuantity")}</Label>
-                    <Input id="output_quantity" type="number" step="any" {...batchForm.register("output_quantity")} />
-                    {batchForm.formState.errors.output_quantity && (
-                      <p className="text-sm text-destructive">{batchForm.formState.errors.output_quantity.message}</p>
+                    {createBatchMutation.isError && (
+                      <p className="text-sm text-destructive">
+                        {createBatchMutation.error instanceof ApiError ? createBatchMutation.error.message : t("production.regrind.createBatchError")}
+                      </p>
                     )}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="work_center_id">{t("production.regrind.field.workCenterOptional")}</Label>
-                    <Select id="work_center_id" {...batchForm.register("work_center_id")}>
-                      <option value="">—</option>
-                      {workCenters.map((wc) => (
-                        <option key={wc.id} value={wc.id}>
-                          {wc.code} — {wc.name}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                  {createBatchMutation.isError && (
-                    <p className="text-sm text-destructive">
-                      {createBatchMutation.error instanceof ApiError ? createBatchMutation.error.message : t("production.regrind.createBatchError")}
-                    </p>
-                  )}
-                  <Button type="submit" className="w-full" disabled={createBatchMutation.isPending || createProductMutation.isPending}>
-                    {createBatchMutation.isPending || createProductMutation.isPending
-                      ? t("production.regrind.creatingBatch")
-                      : t("production.regrind.createBatchButton")}
-                  </Button>
-                </form>
+                    <Button type="submit" className="w-full" disabled={createBatchMutation.isPending}>
+                      {createBatchMutation.isPending ? t("production.regrind.creatingBatch") : t("production.regrind.createBatchButton")}
+                    </Button>
+                  </form>
+                )}
               </DialogContent>
             </Dialog>
           </div>
@@ -631,6 +861,8 @@ export function RegrindTab() {
                     width={scrapTable.getWidth(column.key)}
                     onResize={(width) => scrapTable.setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={scrapTable.sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => scrapTable.toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -659,7 +891,7 @@ export function RegrindTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredScrapRecords.map((scrap, i) => (
+                {sortedScrapRecords.map((scrap, i) => (
                   <motion.tr
                     key={scrap.id}
                     layout
@@ -706,6 +938,8 @@ export function RegrindTab() {
                     width={batchTable.getWidth(column.key)}
                     onResize={(width) => batchTable.setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={batchTable.sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => batchTable.toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -720,7 +954,7 @@ export function RegrindTab() {
                   </TableCell>
                 </TableRow>
               )}
-              {regrindBatches.map((batch) => (
+              {sortedRegrindBatches.map((batch) => (
                 <TableRow key={batch.work_order_id}>
                   {batchTable.visibleColumns.map((column) => (
                     <TableCell key={column.key} className={column.cellClassName}>

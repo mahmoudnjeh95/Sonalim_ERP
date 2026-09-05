@@ -1,20 +1,35 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Search } from "lucide-react";
+import { toast } from "sonner";
 import { useAuth } from "../../../lib/auth";
 import { useI18n } from "../../../lib/i18n";
+import { ApiError } from "../../../lib/api";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
+import { Badge } from "../../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../../components/ui/table";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
+import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
-import { grantPermission, listPermissionCatalog, listUsers, revokePermission, type UserSummary } from "./api";
+import {
+  assignRole,
+  grantPermission,
+  listPermissionCatalog,
+  listRoles,
+  listUsers,
+  revokePermission,
+  unassignRole,
+  type Role,
+  type UserSummary,
+} from "./api";
 
 const USERS_QUERY_KEY = ["core", "users"] as const;
 const CATALOG_QUERY_KEY = ["core", "permissions", "catalog"] as const;
+const ROLES_QUERY_KEY = ["core", "roles"] as const;
 
-function GrantControl({ user, available }: { user: UserSummary; available: string[] }) {
+function PermissionGrantControl({ user, available }: { user: UserSummary; available: string[] }) {
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
@@ -24,17 +39,20 @@ function GrantControl({ user, available }: { user: UserSummary; available: strin
   const grantMutation = useMutation({
     mutationFn: (permission: string) => grantPermission(token, user.id, permission),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY }),
+    onError: (error) => toast.error(t("admin.users.grant"), { description: error instanceof ApiError ? error.message : undefined }),
   });
 
   if (available.length === 0) {
     return <span className="text-sm text-muted-foreground">{t("admin.users.allGranted")}</span>;
   }
 
+  const value = available.includes(selected) ? selected : available[0];
+
   return (
     <div className="flex items-center gap-2">
       <select
         className="h-8 rounded-md border border-border bg-background px-2 text-sm"
-        value={available.includes(selected) ? selected : available[0]}
+        value={value}
         onChange={(event) => setSelected(event.target.value)}
       >
         {available.map((permission) => (
@@ -43,14 +61,127 @@ function GrantControl({ user, available }: { user: UserSummary; available: strin
           </option>
         ))}
       </select>
-      <Button
-        size="sm"
-        variant="outline"
-        onClick={() => grantMutation.mutate(available.includes(selected) ? selected : available[0])}
-        disabled={grantMutation.isPending}
-      >
+      <Button size="sm" variant="outline" onClick={() => grantMutation.mutate(value)} disabled={grantMutation.isPending}>
         {t("admin.users.grant")}
       </Button>
+    </div>
+  );
+}
+
+function RoleAssignControl({ user, availableRoles }: { user: UserSummary; availableRoles: Role[] }) {
+  const { session } = useAuth();
+  const { t } = useI18n();
+  const token = session!.token;
+  const queryClient = useQueryClient();
+  const [selected, setSelected] = useState(availableRoles[0]?.id ?? "");
+
+  const assignMutation = useMutation({
+    mutationFn: (roleId: string) => assignRole(token, user.id, roleId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY }),
+    onError: (error) => toast.error(t("admin.users.assignRole"), { description: error instanceof ApiError ? error.message : undefined }),
+  });
+
+  if (availableRoles.length === 0) {
+    return <span className="text-sm text-muted-foreground">{t("admin.users.noRolesAvailable")}</span>;
+  }
+
+  const value = availableRoles.some((role) => role.id === selected) ? selected : availableRoles[0].id;
+
+  return (
+    <div className="flex items-center gap-2">
+      <select
+        className="h-8 rounded-md border border-border bg-background px-2 text-sm"
+        value={value}
+        onChange={(event) => setSelected(event.target.value)}
+      >
+        {availableRoles.map((role) => (
+          <option key={role.id} value={role.id}>
+            {role.name}
+          </option>
+        ))}
+      </select>
+      <Button size="sm" variant="outline" onClick={() => assignMutation.mutate(value)} disabled={assignMutation.isPending}>
+        {t("admin.users.assignRole")}
+      </Button>
+    </div>
+  );
+}
+
+function AccessCell({ user }: { user: UserSummary }) {
+  const { session } = useAuth();
+  const { t } = useI18n();
+  const token = session!.token;
+  const queryClient = useQueryClient();
+
+  const unassignRoleMutation = useMutation({
+    mutationFn: (roleId: string) => unassignRole(token, user.id, roleId),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY }),
+    onError: (error) => toast.error(t("admin.users.unassignRole"), { description: error instanceof ApiError ? error.message : undefined }),
+  });
+
+  const revokeMutation = useMutation({
+    mutationFn: (permission: string) => revokePermission(token, user.id, permission),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY }),
+    onError: (error) => toast.error(t("admin.users.revoke"), { description: error instanceof ApiError ? error.message : undefined }),
+  });
+
+  if (user.roles.length === 0 && user.permissions.length === 0) {
+    return <span className="text-sm text-muted-foreground">{t("admin.users.none")}</span>;
+  }
+
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {user.roles.map((role) => (
+        <Badge key={role.id} variant="primary" className="gap-1.5 pr-1.5">
+          {role.name}
+          <button
+            type="button"
+            aria-label={`${t("admin.users.unassignRole")} ${role.name}`}
+            className="text-primary/70 hover:text-destructive"
+            onClick={() => unassignRoleMutation.mutate(role.id)}
+            disabled={unassignRoleMutation.isPending}
+          >
+            ×
+          </button>
+        </Badge>
+      ))}
+      {user.permissions.map((permission) => (
+        <span key={permission} className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs">
+          {permission}
+          <button
+            type="button"
+            aria-label={`${t("admin.users.revoke")} ${permission}`}
+            className="text-muted-foreground hover:text-destructive"
+            onClick={() => revokeMutation.mutate(permission)}
+            disabled={revokeMutation.isPending}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function GrantCell({ user, allRoles, allPermissions }: { user: UserSummary; allRoles: Role[]; allPermissions: string[] }) {
+  const { t } = useI18n();
+  const [showDirect, setShowDirect] = useState(false);
+
+  const assignedRoleIds = new Set(user.roles.map((role) => role.id));
+  const availableRoles = allRoles.filter((role) => !assignedRoleIds.has(role.id));
+  const availablePermissions = allPermissions.filter((permission) => !user.permissions.includes(permission));
+
+  return (
+    <div className="space-y-1.5">
+      <RoleAssignControl user={user} availableRoles={availableRoles} />
+      <button
+        type="button"
+        className="text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+        onClick={() => setShowDirect((prev) => !prev)}
+      >
+        {t(showDirect ? "admin.users.directGrant.hide" : "admin.users.directGrant.show")}
+      </button>
+      {showDirect && <PermissionGrantControl user={user} available={availablePermissions} />}
     </div>
   );
 }
@@ -59,7 +190,6 @@ export function UsersPage() {
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
-  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
 
   const {
@@ -76,10 +206,9 @@ export function UsersPage() {
     queryFn: () => listPermissionCatalog(token),
   });
 
-  const revokeMutation = useMutation({
-    mutationFn: ({ userId, permission }: { userId: string; permission: string }) =>
-      revokePermission(token, userId, permission),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY }),
+  const { data: roles = [] } = useQuery({
+    queryKey: ROLES_QUERY_KEY,
+    queryFn: () => listRoles(token),
   });
 
   const allPermissions = catalog.map((entry) => entry.permission);
@@ -88,50 +217,32 @@ export function UsersPage() {
     : users;
 
   const columns: ColumnDef<UserSummary>[] = [
-    { key: "email", header: t("admin.users.column.email"), defaultWidth: 220, cell: (user) => user.email },
+    { key: "email", header: t("admin.users.column.email"), defaultWidth: 220, cell: (user) => user.email, sortValue: (user) => user.email },
     {
       key: "permissions",
       header: t("admin.users.column.permissions"),
-      defaultWidth: 320,
-      cell: (user) => (
-        <div className="flex flex-wrap gap-1.5">
-          {user.permissions.length === 0 && <span className="text-sm text-muted-foreground">{t("admin.users.none")}</span>}
-          {user.permissions.map((permission) => (
-            <span key={permission} className="inline-flex items-center gap-1.5 rounded-md bg-muted px-2 py-1 text-xs">
-              {permission}
-              <button
-                type="button"
-                aria-label={`${t("admin.users.revoke")} ${permission}`}
-                className="text-muted-foreground hover:text-destructive"
-                onClick={() => revokeMutation.mutate({ userId: user.id, permission })}
-                disabled={revokeMutation.isPending}
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      ),
+      defaultWidth: 360,
+      cell: (user) => <AccessCell user={user} />,
     },
     {
       key: "grant",
       header: t("admin.users.column.grant"),
-      defaultWidth: 220,
+      defaultWidth: 240,
       alwaysVisible: true,
-      cell: (user) => (
-        <GrantControl user={user} available={allPermissions.filter((permission) => !user.permissions.includes(permission))} />
-      ),
+      cell: (user) => <GrantCell user={user} allRoles={roles} allPermissions={allPermissions} />,
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "admin.users",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("admin.users", columns);
+  const sortedUsers = sortRows(filteredUsers);
 
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-xl font-semibold">{t("admin.users.title")}</h1>
+        <h1 className="flex items-center gap-1.5 text-xl font-semibold">
+          {t("admin.users.title")}
+          <HelpTooltip text={t("admin.users.help.permissions")} />
+        </h1>
         <p className="text-sm text-muted-foreground">{t("admin.users.subtitle")}</p>
       </div>
 
@@ -161,6 +272,8 @@ export function UsersPage() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -191,7 +304,7 @@ export function UsersPage() {
               )}
               {!isLoading &&
                 !isError &&
-                filteredUsers.map((user) => (
+                sortedUsers.map((user) => (
                   <TableRow key={user.id}>
                     {visibleColumns.map((column) => (
                       <TableCell key={column.key} className={column.cellClassName}>

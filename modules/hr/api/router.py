@@ -59,6 +59,11 @@ class PayrollBody(BaseModel):
     deductions: float = 0
     taxes: float = 0
 
+class PayslipUpdateBody(BaseModel):
+    bonuses: float | None = None
+    deductions: float | None = None
+    taxes: float | None = None
+
 def fail(result: Err) -> None:
     code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT if result.code.startswith("DUPLICATE") else status.HTTP_422_UNPROCESSABLE_ENTITY
     raise HTTPException(code, {"code": result.code, "message": result.message})
@@ -155,3 +160,10 @@ def create_payroll_run(body: PayrollBody, tenant: TenantContext = Depends(requir
 @router.get("/payslips")
 def payslips(run_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_payroll"))):
     with get_connection() as connection: return PayrollService(connection).get_payslips(tenant_id=tenant.tenant_id, run_id=run_id)
+
+@router.patch("/payslips/{payslip_id}")
+def update_payslip(payslip_id: str, body: PayslipUpdateBody, tenant: TenantContext = Depends(require_permission("hr.admin_payroll"))):
+    with get_connection() as connection:
+        result = PayrollService(connection).update_payslip(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, payslip_id=payslip_id, **body.model_dump())
+        if isinstance(result, Err): connection.rollback(); fail(result)
+        connection.commit(); return result.value

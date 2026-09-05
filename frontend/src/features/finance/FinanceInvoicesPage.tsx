@@ -30,10 +30,12 @@ import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { createInvoice, issueInvoice, listInvoices, payInvoice, updateInvoice, type Invoice, type InvoiceStatus } from "./api";
 import { listCurrencies } from "../settings/exchangeRatesApi";
+import { listPartners } from "../partners/api";
 
 const newInvoiceSchema = z.object({
   partner_id: z.string().min(1, "Required"),
@@ -44,6 +46,7 @@ type NewInvoiceForm = z.infer<typeof newInvoiceSchema>;
 type EditInvoiceForm = NewInvoiceForm;
 
 const QUERY_KEY = ["finance", "invoices"] as const;
+const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 type StatusFilter = "all" | InvoiceStatus;
 
 function formatCurrency(amount: number, currency: string) {
@@ -66,6 +69,9 @@ export function FinanceInvoicesPage() {
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listInvoices(token) });
   const { data: currencies = [] } = useQuery({ queryKey: ["core", "currencies"], queryFn: () => listCurrencies(token) });
+  const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
+  const activePartners = partners.filter((p) => p.status === "active");
+  const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
 
   const {
     register,
@@ -144,7 +150,7 @@ export function FinanceInvoicesPage() {
   const statusFilteredInvoices = statusFilter === "all" ? invoices : invoices.filter((i) => i.status === statusFilter);
 
   const columnFilterFields: FilterField<Invoice>[] = [
-    { key: "partner_id", kind: "text", getValue: (i) => i.partner_id },
+    { key: "partner_id", kind: "text", getValue: (i) => partnerName(i.partner_id) },
     { key: "amount", kind: "range", getValue: (i) => i.amount },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
@@ -155,13 +161,14 @@ export function FinanceInvoicesPage() {
       key: "partner_id",
       header: t("finance.column.partner"),
       defaultWidth: 180,
-      cell: (invoice) => <span className="font-medium">{invoice.partner_id}</span>,
+      cell: (invoice) => <span className="font-medium">{partnerName(invoice.partner_id)}</span>,
       filterCell: {
         type: "text",
         value: columnFilters.text.partner_id ?? "",
         onChange: (v) => columnFilters.setTextValue("partner_id", v),
         placeholder: t("finance.column.partner"),
       },
+      sortValue: (invoice) => partnerName(invoice.partner_id),
     },
     {
       key: "amount",
@@ -175,8 +182,20 @@ export function FinanceInvoicesPage() {
         onMinChange: (v) => columnFilters.setRangeValue("amount", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("amount", "max", v),
       },
+      sortValue: (invoice) => invoice.amount,
     },
-    { key: "status", header: t("finance.column.status"), defaultWidth: 140, cell: (invoice) => <StatusBadge status={invoice.status} /> },
+    {
+      key: "status",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("finance.column.status")}
+          <HelpTooltip text={t("finance.help.status")} />
+        </span>
+      ),
+      defaultWidth: 140,
+      cell: (invoice) => <StatusBadge status={invoice.status} />,
+      sortValue: (invoice) => invoice.status,
+    },
     {
       key: "action",
       header: t("finance.column.action"),
@@ -214,10 +233,9 @@ export function FinanceInvoicesPage() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "finance.invoices",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("finance.invoices", columns);
+  const sortedInvoices = sortRows(filteredInvoices);
 
   return (
     <div className="space-y-6">
@@ -271,7 +289,14 @@ export function FinanceInvoicesPage() {
               <form className="space-y-4" onSubmit={handleSubmit((input) => createMutation.mutate(input))}>
                 <div className="space-y-1.5">
                   <Label htmlFor="partner_id">{t("finance.field.partnerId")}</Label>
-                  <Input id="partner_id" placeholder="e.g. acme" {...register("partner_id")} />
+                  <Select id="partner_id" {...register("partner_id")}>
+                    <option value="">—</option>
+                    {activePartners.map((partner) => (
+                      <option key={partner.id} value={partner.id}>
+                        {partner.name}
+                      </option>
+                    ))}
+                  </Select>
                   {errors.partner_id && <p className="text-sm text-destructive">{errors.partner_id.message}</p>}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -318,7 +343,14 @@ export function FinanceInvoicesPage() {
               <form className="space-y-4" onSubmit={handleEditSubmit((input) => updateMutation.mutate(input))}>
                 <div className="space-y-1.5">
                   <Label htmlFor="edit_partner_id">{t("finance.field.partnerId")}</Label>
-                  <Input id="edit_partner_id" placeholder="e.g. acme" {...registerEdit("partner_id")} />
+                  <Select id="edit_partner_id" {...registerEdit("partner_id")}>
+                    <option value="">—</option>
+                    {partners.map((partner) => (
+                      <option key={partner.id} value={partner.id}>
+                        {partner.name}
+                      </option>
+                    ))}
+                  </Select>
                   {editErrors.partner_id && <p className="text-sm text-destructive">{editErrors.partner_id.message}</p>}
                 </div>
                 <div className="grid grid-cols-2 gap-3">
@@ -361,6 +393,8 @@ export function FinanceInvoicesPage() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -389,7 +423,7 @@ export function FinanceInvoicesPage() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredInvoices.map((invoice, i) => (
+                {sortedInvoices.map((invoice, i) => (
                   <motion.tr
                     key={invoice.id}
                     layout

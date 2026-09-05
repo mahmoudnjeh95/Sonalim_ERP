@@ -17,11 +17,18 @@ MODULE_MIGRATION_DIRS: dict[str, Path] = {
     "finance": REPO_ROOT / "modules" / "finance" / "migrations",
     "hr": REPO_ROOT / "modules" / "hr" / "migrations",
     "procurement": REPO_ROOT / "modules" / "procurement" / "migrations",
+    "qc": REPO_ROOT / "modules" / "qc" / "migrations",
+    "maintenance": REPO_ROOT / "modules" / "maintenance" / "migrations",
 }
 
 # core runs first (procurement's tables FK into core.products/partners/currencies/uoms);
 # the others own independent schemas so order among them does not matter.
-MODULE_ORDER = ["core", "warehouse", "production", "crm", "sales", "finance", "hr", "procurement"]
+# qc runs after production: it carries of_id as an opaque column with no foreign
+# key, so the order is about readability rather than a hard dependency.
+# maintenance runs last: its init migration copies rows out of production.machines
+# and its second migration drops that table, both of which need production's
+# migrations (which create that table) to have already run.
+MODULE_ORDER = ["core", "warehouse", "production", "crm", "sales", "finance", "hr", "procurement", "qc", "maintenance"]
 
 
 def _ensure_tracking_table(connection: psycopg.Connection) -> None:

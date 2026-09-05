@@ -30,9 +30,12 @@ import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listLocations } from "../warehouse/api";
+import { listPartners } from "../partners/api";
+import { listProducts } from "../production/api";
 import { confirmOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
 
 const lineSchema = z.object({
@@ -50,6 +53,8 @@ type EditOrderForm = NewOrderForm;
 
 const QUERY_KEY = ["sales", "orders"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
+const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
+const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
@@ -68,6 +73,11 @@ export function SalesOrdersPage() {
 
   const { data: orders = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listOrders(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
+  const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
+  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const customers = partners.filter((p) => p.kind === "customer" || p.kind === "both");
+  const activeCustomers = customers.filter((p) => p.status === "active");
+  const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
 
   const {
     register,
@@ -145,7 +155,7 @@ export function SalesOrdersPage() {
   const statusFilteredOrders = statusFilter === "all" ? orders : orders.filter((o) => o.status === statusFilter);
 
   const columnFilterFields: FilterField<SalesOrder>[] = [
-    { key: "partner_id", kind: "text", getValue: (o) => o.partner_id },
+    { key: "partner_id", kind: "text", getValue: (o) => partnerName(o.partner_id) },
     { key: "lines", kind: "range", getValue: (o) => o.lines.length },
     { key: "total_amount", kind: "range", getValue: (o) => o.total_amount },
   ];
@@ -157,13 +167,14 @@ export function SalesOrdersPage() {
       key: "partner_id",
       header: t("sales.column.partner"),
       defaultWidth: 180,
-      cell: (order) => <span className="font-medium">{order.partner_id}</span>,
+      cell: (order) => <span className="font-medium">{partnerName(order.partner_id)}</span>,
       filterCell: {
         type: "text",
         value: columnFilters.text.partner_id ?? "",
         onChange: (v) => columnFilters.setTextValue("partner_id", v),
         placeholder: t("sales.column.partner"),
       },
+      sortValue: (order) => partnerName(order.partner_id),
     },
     {
       key: "lines",
@@ -181,6 +192,7 @@ export function SalesOrdersPage() {
         onMinChange: (v) => columnFilters.setRangeValue("lines", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("lines", "max", v),
       },
+      sortValue: (order) => order.lines.length,
     },
     {
       key: "total_amount",
@@ -194,8 +206,20 @@ export function SalesOrdersPage() {
         onMinChange: (v) => columnFilters.setRangeValue("total_amount", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("total_amount", "max", v),
       },
+      sortValue: (order) => order.total_amount,
     },
-    { key: "status", header: t("sales.column.status"), defaultWidth: 140, cell: (order) => <StatusBadge status={order.status} /> },
+    {
+      key: "status",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("sales.column.status")}
+          <HelpTooltip text={t("sales.help.status")} />
+        </span>
+      ),
+      defaultWidth: 140,
+      cell: (order) => <StatusBadge status={order.status} />,
+      sortValue: (order) => order.status,
+    },
     {
       key: "action",
       header: t("sales.column.action"),
@@ -222,10 +246,9 @@ export function SalesOrdersPage() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "sales.orders",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("sales.orders", columns);
+  const sortedOrders = sortRows(filteredOrders);
 
   return (
     <div className="space-y-6">
@@ -278,7 +301,14 @@ export function SalesOrdersPage() {
               <form className="space-y-4" onSubmit={handleSubmit((input) => createMutation.mutate(input))}>
                 <div className="space-y-1.5">
                   <Label htmlFor="partner_id">{t("sales.field.partnerId")}</Label>
-                  <Input id="partner_id" placeholder="e.g. acme" {...register("partner_id")} />
+                  <Select id="partner_id" {...register("partner_id")}>
+                    <option value="">—</option>
+                    {activeCustomers.map((partner) => (
+                      <option key={partner.id} value={partner.id}>
+                        {partner.name}
+                      </option>
+                    ))}
+                  </Select>
                   {errors.partner_id && <p className="text-sm text-destructive">{errors.partner_id.message}</p>}
                 </div>
 
@@ -318,7 +348,14 @@ export function SalesOrdersPage() {
                         transition={{ duration: 0.18 }}
                         className="flex items-start gap-2"
                       >
-                        <Input placeholder={t("sales.field.productId")} {...register(`lines.${index}.product_id` as const)} />
+                        <Select {...register(`lines.${index}.product_id` as const)}>
+                          <option value="">{t("sales.field.productId")}</option>
+                          {products.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}
+                            </option>
+                          ))}
+                        </Select>
                         <Input
                           type="number"
                           step="any"
@@ -375,7 +412,14 @@ export function SalesOrdersPage() {
               <form className="space-y-4" onSubmit={handleEditSubmit((input) => updateMutation.mutate(input))}>
                 <div className="space-y-1.5">
                   <Label htmlFor="edit_partner_id">{t("sales.field.partnerId")}</Label>
-                  <Input id="edit_partner_id" placeholder="e.g. acme" {...registerEdit("partner_id")} />
+                  <Select id="edit_partner_id" {...registerEdit("partner_id")}>
+                    <option value="">—</option>
+                    {customers.map((partner) => (
+                      <option key={partner.id} value={partner.id}>
+                        {partner.name}
+                      </option>
+                    ))}
+                  </Select>
                   {editErrors.partner_id && <p className="text-sm text-destructive">{editErrors.partner_id.message}</p>}
                 </div>
 
@@ -415,7 +459,14 @@ export function SalesOrdersPage() {
                         transition={{ duration: 0.18 }}
                         className="flex items-start gap-2"
                       >
-                        <Input placeholder={t("sales.field.productId")} {...registerEdit(`lines.${index}.product_id` as const)} />
+                        <Select {...registerEdit(`lines.${index}.product_id` as const)}>
+                          <option value="">{t("sales.field.productId")}</option>
+                          {products.map((product) => (
+                            <option key={product.id} value={product.id}>
+                              {product.name}
+                            </option>
+                          ))}
+                        </Select>
                         <Input
                           type="number"
                           step="any"
@@ -468,6 +519,8 @@ export function SalesOrdersPage() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -496,7 +549,7 @@ export function SalesOrdersPage() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredOrders.map((order, i) => (
+                {sortedOrders.map((order, i) => (
                   <motion.tr
                     key={order.id}
                     layout

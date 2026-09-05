@@ -168,6 +168,7 @@ export function WorkCentersTab() {
         onChange: (v) => columnFilters.setTextValue("code", v),
         placeholder: t("production.workCenters.column.code"),
       },
+      sortValue: (wc) => wc.code,
     },
     {
       key: "name",
@@ -180,6 +181,7 @@ export function WorkCentersTab() {
         onChange: (v) => columnFilters.setTextValue("name", v),
         placeholder: t("production.workCenters.column.name"),
       },
+      sortValue: (wc) => wc.name,
     },
     {
       key: "hourly_rate",
@@ -193,6 +195,7 @@ export function WorkCentersTab() {
         onMinChange: (v) => columnFilters.setRangeValue("hourly_rate", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("hourly_rate", "max", v),
       },
+      sortValue: (wc) => wc.hourly_rate,
     },
     {
       key: "status",
@@ -209,6 +212,7 @@ export function WorkCentersTab() {
             {t("production.workCenters.available")}
           </Badge>
         ),
+      sortValue: (wc) => wc.is_blocked,
     },
     {
       key: "action",
@@ -271,10 +275,9 @@ export function WorkCentersTab() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
-    "production.workCenters",
-    columns,
-  );
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("production.workCenters", columns);
+  const sortedWorkCenters = sortRows(filteredWorkCenters);
 
   return (
     <div className="space-y-6">
@@ -388,6 +391,8 @@ export function WorkCentersTab() {
                     width={getWidth(column.key)}
                     onResize={(width) => setWidth(column.key, width)}
                     className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
                   >
                     {column.header}
                   </ResizableTableHead>
@@ -416,7 +421,7 @@ export function WorkCentersTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {filteredWorkCenters.map((wc, i) => (
+                {sortedWorkCenters.map((wc, i) => (
                   <motion.tr
                     key={wc.id}
                     layout

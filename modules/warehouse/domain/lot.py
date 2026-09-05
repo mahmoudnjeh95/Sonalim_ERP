@@ -24,9 +24,22 @@ class Lot:
     source_id: str | None
 
 
-def validate_new_lot(*, lot_number: str, quantity: float) -> Result[None]:
+def validate_lot_number(*, lot_number: str) -> Result[None]:
+    """A lot's identity, independent of any stock arriving in it.
+
+    Registering a lot and receiving into it are separate acts: production names a
+    lot and its expiry date when a conditionnement report is validated, while the
+    quantity that lands in it is a stock movement of its own.
+    """
     if not lot_number.strip():
         return Err("INVALID_LOT_NUMBER", "lot_number is required")
+    return Ok(None)
+
+
+def validate_new_lot(*, lot_number: str, quantity: float) -> Result[None]:
+    number = validate_lot_number(lot_number=lot_number)
+    if isinstance(number, Err):
+        return number
     if quantity <= 0:
         return Err("INVALID_QUANTITY", "initial lot quantity must be positive")
     return Ok(None)

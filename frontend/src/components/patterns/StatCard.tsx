@@ -2,10 +2,13 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { animate, motion, useMotionValue, useTransform } from "framer-motion";
 import { Card } from "../ui/card";
 import { cn } from "../../lib/utils";
+import { pluralizeUnit } from "../../lib/units";
 
-function AnimatedNumber({ value }: { value: number }) {
+function AnimatedNumber({ value, decimals = 0 }: { value: number; decimals?: number }) {
   const motionValue = useMotionValue(0);
-  const rounded = useTransform(motionValue, (latest) => Math.round(latest).toLocaleString());
+  const rounded = useTransform(motionValue, (latest) =>
+    latest.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }),
+  );
   const previous = useRef(0);
 
   useEffect(() => {
@@ -27,12 +30,18 @@ export function StatCard({
   icon,
   accent = "primary",
   prefix,
+  unit,
+  decimals,
 }: {
   label: string;
   value: number;
   icon: ReactNode;
   accent?: "primary" | "success" | "warning" | "accent" | "destructive";
   prefix?: string;
+  /** Rendered after the figure. Omit when no single unit is true of it. */
+  unit?: string | null;
+  /** Fraction digits to display. Defaults to 0 — a whole-number count or amount. */
+  decimals?: number;
 }) {
   return (
     <Card className="flex items-center gap-4 p-4">
@@ -51,7 +60,12 @@ export function StatCard({
       <div>
         <p className="text-2xl font-semibold tabular-nums tracking-tight">
           {prefix}
-          <AnimatedNumber value={value} />
+          <AnimatedNumber value={value} decimals={decimals} />
+          {unit && (
+            <span className="ml-1 text-base font-medium text-muted-foreground">
+              {pluralizeUnit(unit, value)}
+            </span>
+          )}
         </p>
         <p className="text-xs text-muted-foreground">{label}</p>
       </div>

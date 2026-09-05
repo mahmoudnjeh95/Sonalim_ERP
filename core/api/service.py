@@ -20,11 +20,18 @@ from core.domain.entities import (
     validate_new_product_tag,
 )
 from core.domain.exchange_rate import BASE_CURRENCY, ExchangeRate, convert_to_base, validate_rate
-from core.domain.partner import Partner, transition_partner, validate_partner_name
+from core.domain.partner import (
+    Partner,
+    PartnerTagLink,
+    SuggestedVendor,
+    transition_partner,
+    validate_partner_name,
+    validate_partner_tag_link,
+)
 from core.domain.result import Err, Ok, Result
 
 _PRODUCT_COLUMNS = """
-    id, tenant_id, sku, name, uom_id, net_weight_grams, parent_product_id, is_sellable, is_purchasable,
+    id, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, parent_product_id, is_sellable, is_purchasable,
     lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
     internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
     accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import
@@ -35,6 +42,7 @@ _PRODUCT_EDITABLE_FIELDS = (
     "name",
     "uom_id",
     "net_weight_grams",
+    "packets_per_carton",
     "is_sellable",
     "is_purchasable",
     "lot_serial_tracking",
@@ -56,7 +64,7 @@ _PRODUCT_EDITABLE_FIELDS = (
 
 def _row_to_product(row: tuple) -> Product:
     (
-        pid, tenant_id, sku, name, uom_id, net_weight_grams, parent_product_id, is_sellable, is_purchasable,
+        pid, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, parent_product_id, is_sellable, is_purchasable,
         lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
         internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
         accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import,
@@ -68,6 +76,7 @@ def _row_to_product(row: tuple) -> Product:
         name=name,
         uom_id=uom_id,
         net_weight_grams=float(net_weight_grams) if net_weight_grams is not None else None,
+        packets_per_carton=float(packets_per_carton) if packets_per_carton is not None else None,
         parent_product_id=parent_product_id,
         is_sellable=is_sellable,
         is_purchasable=is_purchasable,
@@ -117,6 +126,7 @@ class CoreService:
         name: str,
         uom_id: str,
         net_weight_grams: float | None = None,
+        packets_per_carton: float | None = None,
         is_sellable: bool = True,
         is_purchasable: bool = True,
         lot_serial_tracking: str = "none",
@@ -139,6 +149,7 @@ class CoreService:
             name=name,
             uom_id=uom_id,
             net_weight_grams=net_weight_grams,
+            packets_per_carton=packets_per_carton,
             lot_serial_tracking=lot_serial_tracking,
             expiry_date_policy=expiry_date_policy,
             selling_price=selling_price,
@@ -159,15 +170,15 @@ class CoreService:
         self._connection.execute(
             """
             INSERT INTO core.products (
-                id, tenant_id, sku, name, uom_id, net_weight_grams, is_sellable, is_purchasable,
+                id, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, is_sellable, is_purchasable,
                 lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
                 internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
                 accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                product_id, tenant_id, sku, name, uom_id, net_weight_grams, is_sellable, is_purchasable,
+                product_id, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, is_sellable, is_purchasable,
                 lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
                 internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
                 accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import,
@@ -199,6 +210,7 @@ class CoreService:
             name=merged["name"],
             uom_id=merged["uom_id"],
             net_weight_grams=merged["net_weight_grams"],
+            packets_per_carton=merged["packets_per_carton"],
             lot_serial_tracking=merged["lot_serial_tracking"],
             expiry_date_policy=merged["expiry_date_policy"],
             selling_price=merged["selling_price"],
@@ -231,6 +243,32 @@ class CoreService:
             payload={"changes": {k: str(v) for k, v in changes.items()}},
         )
         return Ok(self.get_product(tenant_id, product_id))
+
+    def delete_product(self, *, tenant_id: str, actor_id: str, product_id: str) -> Result[str]:
+        current = self.get_product(tenant_id, product_id)
+        if current is None:
+            return Err("NOT_FOUND", f"product {product_id} not found")
+
+        try:
+            self._connection.execute(
+                "DELETE FROM core.products WHERE id = %s AND tenant_id = %s", (product_id, tenant_id)
+            )
+        except psycopg.errors.ForeignKeyViolation:
+            return Err(
+                "PRODUCT_IN_USE",
+                "this product is referenced elsewhere (stock, orders, recipes, ...) and cannot be deleted",
+            )
+
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="product.deleted",
+            entity_type="product",
+            entity_id=product_id,
+            payload={"sku": current.sku, "name": current.name},
+        )
+        return Ok(product_id)
 
     # --- Variant attributes ---------------------------------------------------------------
 
@@ -380,13 +418,51 @@ class CoreService:
 
     def list_uoms(self, tenant_id: str) -> list[UnitOfMeasure]:
         rows = self._connection.execute(
-            "SELECT id, tenant_id, code, name, category, ratio_to_base FROM core.uoms WHERE tenant_id = %s ORDER BY code",
+            """
+            SELECT id, tenant_id, code, name, category, ratio_to_base, symbol, is_integer_only
+            FROM core.uoms WHERE tenant_id = %s ORDER BY code
+            """,
             (tenant_id,),
         ).fetchall()
         return [
-            UnitOfMeasure(id=r[0], tenant_id=r[1], code=r[2], name=r[3], category=r[4], ratio_to_base=float(r[5]))
+            UnitOfMeasure(
+                id=r[0], tenant_id=r[1], code=r[2], name=r[3], category=r[4],
+                ratio_to_base=float(r[5]), symbol=r[6], is_integer_only=r[7],
+            )
             for r in rows
         ]
+
+    def get_uom(self, tenant_id: str, uom_id: str) -> UnitOfMeasure | None:
+        row = self._connection.execute(
+            """
+            SELECT id, tenant_id, code, name, category, ratio_to_base, symbol, is_integer_only
+            FROM core.uoms WHERE id = %s AND tenant_id = %s
+            """,
+            (uom_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return UnitOfMeasure(
+            id=row[0], tenant_id=row[1], code=row[2], name=row[3], category=row[4],
+            ratio_to_base=float(row[5]), symbol=row[6], is_integer_only=row[7],
+        )
+
+    def get_product_uom(self, tenant_id: str, product_id: str) -> UnitOfMeasure | None:
+        """The unit a product is tracked in -- one query, not get_product() + get_uom()."""
+        row = self._connection.execute(
+            """
+            SELECT u.id, u.tenant_id, u.code, u.name, u.category, u.ratio_to_base, u.symbol, u.is_integer_only
+            FROM core.products p JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
+            WHERE p.id = %s AND p.tenant_id = %s
+            """,
+            (product_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return UnitOfMeasure(
+            id=row[0], tenant_id=row[1], code=row[2], name=row[3], category=row[4],
+            ratio_to_base=float(row[5]), symbol=row[6], is_integer_only=row[7],
+        )
 
     def get_partner(self, tenant_id: str, partner_id: str) -> Partner | None:
         row = self._connection.execute(
@@ -545,6 +621,117 @@ class CoreService:
             payload={"name": partner.name},
         )
         return result
+
+    # --- Partner tags (vendor specialties, sharing core.product_tags) --------------------
+
+    def list_tags_for_partner(self, tenant_id: str, partner_id: str) -> list[PartnerTagLink]:
+        rows = self._connection.execute(
+            """
+            SELECT l.partner_id, l.tag_id, t.name, l.is_preferred, l.lead_time_days, l.min_order_qty
+            FROM core.partner_tag_links l
+            JOIN core.product_tags t ON t.id = l.tag_id AND t.tenant_id = %s
+            WHERE l.partner_id = %s
+            ORDER BY t.name
+            """,
+            (tenant_id, partner_id),
+        ).fetchall()
+        return [
+            PartnerTagLink(
+                partner_id=r[0], tag_id=r[1], tag_name=r[2], is_preferred=r[3],
+                lead_time_days=r[4], min_order_qty=float(r[5]) if r[5] is not None else None,
+            )
+            for r in rows
+        ]
+
+    def set_partner_tags(self, *, tenant_id: str, actor_id: str, partner_id: str, tag_ids: list[str]) -> Result[list[PartnerTagLink]]:
+        if self.get_partner(tenant_id, partner_id) is None:
+            return Err("NOT_FOUND", f"partner {partner_id} not found")
+        # Only remove tags being unassigned and only insert newly-assigned ones (ON CONFLICT
+        # DO NOTHING) rather than delete-all-then-reinsert, so is_preferred/lead_time_days/
+        # min_order_qty on tags that stay assigned survive a bulk tag-picker save.
+        self._connection.execute(
+            "DELETE FROM core.partner_tag_links WHERE partner_id = %s AND tag_id != ALL(%s)", (partner_id, tag_ids)
+        )
+        for tag_id in tag_ids:
+            self._connection.execute(
+                """
+                INSERT INTO core.partner_tag_links (partner_id, tag_id) VALUES (%s, %s)
+                ON CONFLICT (partner_id, tag_id) DO NOTHING
+                """,
+                (partner_id, tag_id),
+            )
+        record_audit(
+            self._connection, tenant_id=tenant_id, actor_id=actor_id, action="partner.tags_set",
+            entity_type="partner", entity_id=partner_id, payload={"tag_ids": tag_ids},
+        )
+        return Ok(self.list_tags_for_partner(tenant_id, partner_id))
+
+    def update_partner_tag_link(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        partner_id: str,
+        tag_id: str,
+        is_preferred: bool | None = None,
+        lead_time_days: int | None = None,
+        min_order_qty: float | None = None,
+    ) -> Result[PartnerTagLink]:
+        current = self._connection.execute(
+            "SELECT is_preferred, lead_time_days, min_order_qty FROM core.partner_tag_links WHERE partner_id = %s AND tag_id = %s",
+            (partner_id, tag_id),
+        ).fetchone()
+        if current is None:
+            return Err("NOT_FOUND", f"partner {partner_id} is not tagged with {tag_id}")
+
+        merged_preferred = is_preferred if is_preferred is not None else current[0]
+        merged_lead_time = lead_time_days if lead_time_days is not None else current[1]
+        merged_min_qty = min_order_qty if min_order_qty is not None else (float(current[2]) if current[2] is not None else None)
+
+        validation = validate_partner_tag_link(lead_time_days=merged_lead_time, min_order_qty=merged_min_qty)
+        if isinstance(validation, Err):
+            return validation
+
+        self._connection.execute(
+            """
+            UPDATE core.partner_tag_links SET is_preferred = %s, lead_time_days = %s, min_order_qty = %s
+            WHERE partner_id = %s AND tag_id = %s
+            """,
+            (merged_preferred, merged_lead_time, merged_min_qty, partner_id, tag_id),
+        )
+        record_audit(
+            self._connection, tenant_id=tenant_id, actor_id=actor_id, action="partner.tag_link_updated",
+            entity_type="partner", entity_id=partner_id,
+            payload={"tag_id": tag_id, "is_preferred": merged_preferred, "lead_time_days": merged_lead_time, "min_order_qty": merged_min_qty},
+        )
+        tag_name = self._connection.execute("SELECT name FROM core.product_tags WHERE id = %s", (tag_id,)).fetchone()[0]
+        return Ok(
+            PartnerTagLink(
+                partner_id=partner_id, tag_id=tag_id, tag_name=tag_name,
+                is_preferred=merged_preferred, lead_time_days=merged_lead_time, min_order_qty=merged_min_qty,
+            )
+        )
+
+    def list_suggested_vendors_for_product(self, tenant_id: str, product_id: str) -> list[SuggestedVendor]:
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT p.id, p.name, p.kind, p.industry, p.phone, p.email,
+                   ptl.is_preferred, ptl.lead_time_days, ptl.min_order_qty
+            FROM core.product_tag_links cptl
+            JOIN core.partner_tag_links ptl ON ptl.tag_id = cptl.tag_id
+            JOIN core.partners p ON p.id = ptl.partner_id
+            WHERE cptl.product_id = %s AND p.tenant_id = %s AND p.kind IN ('supplier', 'both') AND p.status = 'active'
+            ORDER BY ptl.is_preferred DESC, ptl.lead_time_days ASC NULLS LAST, p.name
+            """,
+            (product_id, tenant_id),
+        ).fetchall()
+        return [
+            SuggestedVendor(
+                partner_id=r[0], name=r[1], kind=r[2], industry=r[3], phone=r[4], email=r[5],
+                is_preferred=r[6], lead_time_days=r[7], min_order_qty=float(r[8]) if r[8] is not None else None,
+            )
+            for r in rows
+        ]
 
     def list_currencies(self) -> list[Currency]:
         rows = self._connection.execute(

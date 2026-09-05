@@ -1,0 +1,31 @@
+{
+  "name": "qc",
+  "version": "0.1.0",
+  "depends": ["core"],
+  "optional_depends": ["production", "warehouse"],
+  "provides_api": [
+    "QualityReportService",
+    "FollowUpService",
+    "FollowUpPolicyService",
+    "NonConformityService"
+  ],
+  "publishes_events": [
+    "qc.quality_report.validated",
+    "qc.non_conformity.raised",
+    "qc.non_conformity.dispositioned"
+  ],
+  "subscribes_events": [],
+  "migrations_path": "./migrations",
+  "permissions": [
+    "qc.view_quality_reports",
+    "qc.manage_quality_reports",
+    "qc.validate_quality_reports",
+    "qc.admin_quality_reports",
+    "qc.view_follow_ups",
+    "qc.manage_follow_ups",
+    "qc.admin_follow_up_policies",
+    "qc.view_non_conformities",
+    "qc.manage_non_conformities",
+    "qc.admin_non_conformities"
+  ]
+}

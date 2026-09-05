@@ -1,11 +1,20 @@
 from __future__ import annotations
 
+import datetime
+
 import psycopg
 from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
-from modules.warehouse.domain.lot import Lot, LotStock, receive_into_lot, transition_lot, validate_new_lot
+from modules.warehouse.domain.lot import (
+    Lot,
+    LotStock,
+    receive_into_lot,
+    transition_lot,
+    validate_lot_number,
+    validate_new_lot,
+)
 
 _LOT_COLUMNS = "id, tenant_id, product_id, lot_number, status, expiry_date, produced_at, source_type, source_id"
 
@@ -70,6 +79,75 @@ class LotService:
             }
             for lot_id, product_id, lot_number, lot_status, expiry_date, location_id, quantity_on_hand in rows
         ]
+
+    def register_lot(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        lot_number: str,
+        actor_id: str | None = None,
+        expiry_date: datetime.date | None = None,
+        produced_at: datetime.datetime | None = None,
+        source_type: str | None = None,
+        source_id: str | None = None,
+    ) -> Result[Lot]:
+        """Find or create a lot without moving any stock into it.
+
+        Production calls this when a conditionnement report is validated: the DLC
+        on that report is a real lot with a real expiry date, and it must exist
+        whether or not the finished-product quantity has been posted yet. An
+        existing lot is returned as-is rather than overwritten — the first
+        validation that names a lot owns its expiry.
+        """
+        validation = validate_lot_number(lot_number=lot_number)
+        if isinstance(validation, Err):
+            return validation
+
+        row = self._connection.execute(
+            f"SELECT {_LOT_COLUMNS} FROM warehouse.lots WHERE tenant_id = %s AND product_id = %s AND lot_number = %s FOR UPDATE",
+            (tenant_id, product_id, lot_number),
+        ).fetchone()
+        if row is not None:
+            return Ok(_row_to_lot(row))
+
+        lot_id = str(ULID())
+        self._connection.execute(
+            """
+            INSERT INTO warehouse.lots
+                (id, tenant_id, product_id, lot_number, status, expiry_date, produced_at, source_type, source_id)
+            VALUES (%s, %s, %s, %s, 'active', %s, %s, %s, %s)
+            """,
+            (lot_id, tenant_id, product_id, lot_number, expiry_date, produced_at, source_type, source_id),
+        )
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id or "system:event-consumer",
+            action="lot.created",
+            entity_type="lot",
+            entity_id=lot_id,
+            payload={
+                "product_id": product_id,
+                "lot_number": lot_number,
+                "expiry_date": expiry_date.isoformat() if expiry_date is not None else None,
+                "source_type": source_type,
+                "source_id": source_id,
+            },
+        )
+        return Ok(
+            Lot(
+                id=lot_id,
+                tenant_id=tenant_id,
+                product_id=product_id,
+                lot_number=lot_number,
+                status="active",
+                expiry_date=expiry_date.isoformat() if expiry_date is not None else None,
+                produced_at=produced_at.isoformat() if produced_at is not None else None,
+                source_type=source_type,
+                source_id=source_id,
+            )
+        )
 
     def receive_lot(
         self,
