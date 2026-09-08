@@ -2,12 +2,13 @@ import { useEffect, useRef, type ReactNode } from "react";
 import { animate, motion, useMotionValue, useTransform } from "framer-motion";
 import { Card } from "../ui/card";
 import { cn } from "../../lib/utils";
+import { currentLocale } from "../../lib/i18n";
 import { pluralizeUnit } from "../../lib/units";
 
 function AnimatedNumber({ value, decimals = 0 }: { value: number; decimals?: number }) {
   const motionValue = useMotionValue(0);
   const rounded = useTransform(motionValue, (latest) =>
-    latest.toLocaleString(undefined, { minimumFractionDigits: decimals, maximumFractionDigits: decimals }),
+    latest.toLocaleString(currentLocale(), { minimumFractionDigits: decimals, maximumFractionDigits: decimals }),
   );
   const previous = useRef(0);
 

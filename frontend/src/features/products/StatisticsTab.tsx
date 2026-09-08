@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Coins, Package, ShoppingBag, Tag } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
@@ -12,7 +12,7 @@ const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const STOCK_QUERY_KEY = ["warehouse", "stock"] as const;
 
 function formatMoney(amount: number) {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
 }
 
 export function StatisticsTab() {

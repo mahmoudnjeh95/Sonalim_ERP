@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../../lib/auth";
 import { ApiError } from "../../../lib/api";
-import { useI18n } from "../../../lib/i18n";
+import { currentLocale, useI18n } from "../../../lib/i18n";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
@@ -56,7 +56,7 @@ const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 type StageFilter = "all" | "open" | "won" | "lost";
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(amount);
 }
 
 export function OpportunitiesPage() {

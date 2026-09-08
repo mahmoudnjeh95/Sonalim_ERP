@@ -39,6 +39,12 @@ import {
   toSemolinaLineForms,
   type SemolinaLineForm,
 } from "./SemolinaLinesField";
+import {
+  DowntimeLinesField,
+  fromDowntimeLineForms,
+  toDowntimeLineForms,
+  type DowntimeLineForm,
+} from "./DowntimeLinesField";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
@@ -66,7 +72,7 @@ import {
   type ReportStatus,
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
-import { UTILITY_UNITS, productUnit } from "../../lib/units";
+import { UTILITY_UNITS, productUnit, productRequiresIntegerQuantity } from "../../lib/units";
 
 // A shift's daily report. Semolina is the one figure here that leaves stock when
 // a supervisor validates it, which is why the form insists on naming the product
@@ -94,7 +100,7 @@ const detailSchema = z.object({
   waste_lines: z
     .array(
       z.object({
-        category: z.enum(["raw_material", "press", "pouring", "cutting"]),
+        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
         product_id: z.string(),
         quantity: z.coerce.number().min(0),
         note: z.string(),
@@ -105,12 +111,23 @@ const detailSchema = z.object({
   // poured. water_quantity is derived from it — see DailyDetailFields.
   water_percentage: z.coerce.number().min(0).max(100),
   fuel_quantity: z.coerce.number().min(0),
+  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul).
+  gasoil_quantity: z.coerce.number().min(0),
   electricity_quantity: z.coerce.number().min(0),
   // Débit de semoule, tonnes/hour — recorded for future recipe statistics.
   semolina_flow_rate: z.coerce.number().min(0),
+  // HH:MM from a native time input, or "" when not entered.
+  start_time: z.string().optional(),
   production_minutes: z.coerce.number().int().min(0),
-  downtime_minutes: z.coerce.number().int().min(0),
-  downtime_reason: z.string().optional(),
+  // Arrêts. A list, so a shift can record more than one stoppage and more
+  // than one reason -- see DowntimeLinesField.
+  downtime_lines: z.array(
+    z.object({
+      motif: z.string(),
+      minutes: z.coerce.number().int().min(0),
+      note: z.string(),
+    }),
+  ),
 });
 
 const createSchema = detailSchema.extend({
@@ -140,15 +157,16 @@ const EMPTY_DETAIL = {
   regrind_quantity: 0,
   regrind_product_id: "",
   mold_id: "",
-  waste_lines: [] as WasteLineForm<"raw_material" | "press" | "pouring" | "cutting">[],
+  waste_lines: [] as WasteLineForm<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">[],
   water_quantity: 0,
   water_percentage: 0,
   fuel_quantity: 0,
+  gasoil_quantity: 0,
   electricity_quantity: 0,
   semolina_flow_rate: 0,
+  start_time: "",
   production_minutes: 0,
-  downtime_minutes: 0,
-  downtime_reason: "",
+  downtime_lines: [] as DowntimeLineForm[],
 };
 
 function todayIso() {
@@ -557,7 +575,7 @@ function DailyReportDialog({
   products: { id: string; name: string; uom_id: string }[];
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
-  workOrders: { id: string; product_type: string | null }[];
+  workOrders: { id: string; product_id: string | null; product_type: string | null }[];
   molds: Mold[];
   onClose: () => void;
 }) {
@@ -587,8 +605,9 @@ function DailyReportDialog({
       regrind_input_product_id: detail?.regrind_input_product_id ?? "",
       regrind_product_id: detail?.regrind_product_id ?? "",
       mold_id: detail?.mold_id ?? "",
-      waste_lines: toWasteLineForms<"raw_material" | "press" | "pouring" | "cutting">(detail?.waste_lines),
-      downtime_reason: detail?.downtime_reason ?? "",
+      waste_lines: toWasteLineForms<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">(detail?.waste_lines),
+      start_time: detail?.start_time ?? "",
+      downtime_lines: toDowntimeLineForms(detail?.downtime_lines),
     } as CreateForm,
   });
 
@@ -630,6 +649,8 @@ function DailyReportDialog({
   const semolinaUnit = productUnit(detail?.semolina_lines?.[0]?.product_id, products, uoms);
   const rebroyatUnit = productUnit(detail?.regrind_input_product_id, products, uoms);
   const regrindUnit = productUnit(detail?.regrind_product_id, products, uoms);
+  // The finished good is the OF's own product, not restated per report.
+  const finishedProductUnit = productUnit(workOrders.find((o) => o.id === report.of_id)?.product_id, products, uoms);
   const productName = (id: string | null) =>
     (id && products.find((p) => p.id === id)?.name) || t("production.waste.unknownItem");
 
@@ -646,21 +667,23 @@ function DailyReportDialog({
     { label: t("production.dailyReports.field.regrindInput"), value: detail?.regrind_input_quantity, unit: rebroyatUnit },
     { label: t("production.dailyReports.field.dough"), value: detail?.dough_quantity, unit: semolinaUnit },
     {
-      label: t("production.reports.field.finishedTonnage"),
+      label: t("production.reports.field.finishedProduct"),
       value: detail?.finished_product_quantity,
-      unit: "t",
+      unit: finishedProductUnit,
     },
-    // One row per déchet, each labelled with its own item and therefore its
-    // own unit. A single "waste" figure could only ever carry one of them.
+    // One row per déchet, each labelled with its own item. The daily report's
+    // déchets are always weighed in kg (see WasteLinesField's fixedUnit), so
+    // the unit here is fixed too rather than resolved per product.
     ...(detail?.waste_lines ?? []).map((line) => ({
       label: `${t(`production.waste.category.${line.category}` as Parameters<typeof t>[0])} — ${productName(line.product_id)}`,
       value: line.quantity,
-      unit: productUnit(line.product_id, products, uoms),
+      unit: "kg",
     })),
     { label: t("production.dailyReports.field.regrind"), value: detail?.regrind_quantity, unit: regrindUnit },
     { label: t("production.dailyReports.field.waterPercentage"), value: detail?.water_percentage, unit: "%" },
     { label: t("production.dailyReports.field.water"), value: detail?.water_quantity, unit: UTILITY_UNITS.water },
     { label: t("production.dailyReports.field.fuel"), value: detail?.fuel_quantity, unit: UTILITY_UNITS.fuel },
+    { label: t("production.dailyReports.field.gasoil"), value: detail?.gasoil_quantity, unit: UTILITY_UNITS.gasoil },
     {
       label: t("production.dailyReports.field.electricity"),
       value: detail?.electricity_quantity,
@@ -671,9 +694,23 @@ function DailyReportDialog({
       value: detail?.semolina_flow_rate,
       unit: "t/h",
     },
+    { label: t("production.dailyReports.field.startTime"), value: detail?.start_time ?? "—" },
     { label: t("production.ofDetails.time.production"), value: detail?.production_minutes, duration: true },
-    { label: t("production.ofDetails.time.downtime"), value: detail?.downtime_minutes, duration: true },
-    { label: t("production.reports.field.downtimeReason"), value: detail?.downtime_reason ?? "—" },
+    // One row per arrêt, each with its own motif, plus the total lost.
+    ...(detail?.downtime_lines ?? []).map((line) => ({
+      label: `${t("production.ofDetails.time.downtime")} — ${line.motif ?? t("production.waste.unknownItem")}`,
+      value: line.minutes,
+      duration: true,
+    })),
+    ...(detail && detail.downtime_lines.length > 1
+      ? [
+          {
+            label: t("production.downtime.total"),
+            value: detail.downtime_lines.reduce((sum, line) => sum + line.minutes, 0),
+            duration: true,
+          },
+        ]
+      : []),
   ];
 
   const needsReason = report.status !== "draft";
@@ -686,6 +723,7 @@ function DailyReportDialog({
       subtitle={[report.shift, report.team].filter(Boolean).join(" · ") || t("common.none")}
       status={report.status}
       revision={report.revision}
+      reportId={report.id}
       figures={figures}
       onDelete={async (deleteReason) => {
         await deleteReport(token, report.id, deleteReason);
@@ -738,11 +776,12 @@ function toDetail(input: CreateForm): Partial<DailyReportDetail> {
     water_quantity: input.water_quantity,
     water_percentage: input.water_percentage,
     fuel_quantity: input.fuel_quantity,
+    gasoil_quantity: input.gasoil_quantity,
     electricity_quantity: input.electricity_quantity,
     semolina_flow_rate: input.semolina_flow_rate,
+    start_time: input.start_time || undefined,
     production_minutes: input.production_minutes,
-    downtime_minutes: input.downtime_minutes,
-    downtime_reason: input.downtime_reason || undefined,
+    downtime_lines: fromDowntimeLineForms(input.downtime_lines),
   } as Partial<DailyReportDetail>;
 }
 
@@ -759,7 +798,7 @@ function DailyDetailFields({
   products: { id: string; name: string; uom_id: string }[];
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
-  workOrders: { id: string; product_type: string | null }[];
+  workOrders: { id: string; product_id: string | null; product_type: string | null }[];
   molds: Mold[];
 }) {
   const { t } = useI18n();
@@ -772,29 +811,37 @@ function DailyDetailFields({
   // What the shift *produced* as rebroyat, which is a different item again --
   // ground pasta weighed in kilos, not semoule and not wrapped packets.
   const regrindUnit = productUnit(form.watch("regrind_product_id"), products, uoms);
+  // The finished good is the OF's own product -- not a choice made per report.
+  const finishedProductUnit = productUnit(
+    workOrders.find((o) => o.id === form.watch("of_id"))?.product_id,
+    products,
+    uoms,
+  );
   const withUnit = (label: string, unit: string | null) => (unit ? `${label} (${unit})` : label);
   // The mold list narrows to the order's own PC/PL once it's known; before
   // that (or if the order predates the field) every mold stays offered.
   const orderProductType = workOrders.find((o) => o.id === form.watch("of_id"))?.product_type;
   const moldsForOrder = molds.filter((m) => !orderProductType || m.type === orderProductType);
 
-  // The plant doses water as a percentage of the semoule poured, set on the
-  // mixer -- not read off a meter in litres. So the percentage is the real
-  // input, and water_quantity (still what consolidation and the cockpit read)
-  // is kept in sync from it here rather than typed twice. Summed across every
-  // quality poured: unlike a waste line's item, every semoule line is the
-  // same commodity by weight, so adding them is meaningful.
+  // The plant doses water as a percentage of what actually goes into the mix:
+  // the semoule poured plus any rebroyat poured back in alongside it. So the
+  // percentage is the real input, and water_quantity (still what consolidation
+  // and the cockpit read) is kept in sync from it here rather than typed
+  // twice -- and is read-only below, since it is entirely derived. Summed
+  // across every quality poured: unlike a waste line's item, every semoule
+  // line is the same commodity by weight, so adding them is meaningful.
   const watchedSemolinaLines = form.watch("semolina_lines");
   const totalSemoule = (watchedSemolinaLines ?? []).reduce((sum, line) => sum + (Number(line.quantity) || 0), 0);
+  const watchedRegrindInput = form.watch("regrind_input_quantity");
   const watchedWaterPercentage = form.watch("water_percentage");
   useEffect(() => {
-    if (!watchedWaterPercentage) return;
-    const computed = Math.round(((watchedWaterPercentage / 100) * totalSemoule + Number.EPSILON) * 100) / 100;
+    const mixedInput = totalSemoule + (Number(watchedRegrindInput) || 0);
+    const computed = Math.round(((watchedWaterPercentage / 100) * mixedInput + Number.EPSILON) * 100) / 100;
     form.setValue("water_quantity", computed);
     // form.setValue is stable across renders; watching it would refire on
     // every keystroke elsewhere in the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchedWaterPercentage, totalSemoule]);
+  }, [watchedWaterPercentage, totalSemoule, watchedRegrindInput]);
   return (
     <div className="space-y-3">
       <section className="space-y-2">
@@ -885,15 +932,20 @@ function DailyDetailFields({
       <section className="space-y-2">
         <div className="max-w-xs space-y-1.5">
           <Label htmlFor="finished_product_quantity" className="flex items-center gap-1">
-            {/* A tonnage, and now labelled as one (decision 17). It showed no
-                unit at all before, while its own help text called it a tonnage. */}
-            {t("production.reports.field.finishedTonnage")}
+            {/* Decision 17: labelled with a unit. Resolved from the OF's own
+                product rather than hardcoded to tonnes, which was wrong for
+                any finished good not counted in tons. */}
+            {withUnit(t("production.reports.field.finishedProduct"), finishedProductUnit)}
             <HelpTooltip text={t("production.dailyReports.help.finishedProduct")} />
           </Label>
           <Input
             id="finished_product_quantity"
             type="number"
-            step="any"
+            step={
+              productRequiresIntegerQuantity(workOrders.find((o) => o.id === form.watch("of_id"))?.product_id, products, uoms)
+                ? "1"
+                : "any"
+            }
             {...form.register("finished_product_quantity")}
           />
         </div>
@@ -906,14 +958,19 @@ function DailyDetailFields({
         <WasteLinesField
           form={form}
           name="waste_lines"
-          categories={["raw_material", "press", "pouring", "cutting"]}
+          categories={["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]}
           products={products}
           uoms={uoms}
+          // The daily report's déchets are always weighed in kg -- every stage
+          // here is loss of a weight-type material, and a fixed unit avoids
+          // silently mislabelling a line if the chosen product happens to be
+          // configured in a different unit.
+          fixedUnit="kg"
           defaultProductFor={(category) =>
             // Déchet matière is semoule by definition, so the report's first
-            // semoule line is the right first guess. Déchet presse, versement
-            // and découpe name no other field -- better an empty box the
-            // shift fills in than a product nobody chose.
+            // semoule line is the right first guess. The other stages name no
+            // other field -- better an empty box the shift fills in than a
+            // product nobody chose.
             category === "raw_material" ? form.getValues("semolina_lines.0.product_id") || undefined : undefined
           }
         />
@@ -972,16 +1029,23 @@ function DailyDetailFields({
             />
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="water_quantity">
+            <Label htmlFor="water_quantity" className="flex items-center gap-1">
               {t("production.dailyReports.field.water")} ({UTILITY_UNITS.water})
+              <HelpTooltip text={t("production.dailyReports.help.waterQuantity")} />
             </Label>
-            <Input id="water_quantity" type="number" step="any" {...form.register("water_quantity")} />
+            <Input id="water_quantity" type="number" step="any" readOnly disabled {...form.register("water_quantity")} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="fuel_quantity">
               {t("production.dailyReports.field.fuel")} ({UTILITY_UNITS.fuel})
             </Label>
             <Input id="fuel_quantity" type="number" step="any" {...form.register("fuel_quantity")} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="gasoil_quantity">
+              {t("production.dailyReports.field.gasoil")} ({UTILITY_UNITS.gasoil})
+            </Label>
+            <Input id="gasoil_quantity" type="number" step="any" {...form.register("gasoil_quantity")} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="electricity_quantity">
@@ -998,19 +1062,75 @@ function DailyDetailFields({
         </p>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div className="space-y-1.5">
-            <Label htmlFor="production_minutes">{t("production.reports.field.productionMinutes")}</Label>
-            <Input id="production_minutes" type="number" {...form.register("production_minutes")} />
+            <Label htmlFor="start_time">{t("production.dailyReports.field.startTime")}</Label>
+            <Input id="start_time" type="time" {...form.register("start_time")} />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="downtime_minutes">{t("production.reports.field.downtimeMinutes")}</Label>
-            <Input id="downtime_minutes" type="number" {...form.register("downtime_minutes")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="downtime_reason">{t("production.reports.field.downtimeReason")}</Label>
-            <Input id="downtime_reason" {...form.register("downtime_reason")} />
-          </div>
+          <ProductionDurationField form={form} />
+        </div>
+        <div className="space-y-1.5">
+          <Label className="flex items-center gap-1">
+            {t("production.reports.field.downtimeLines")}
+            <HelpTooltip text={t("production.downtime.help")} />
+          </Label>
+          <DowntimeLinesField form={form} name="downtime_lines" />
         </div>
       </section>
+    </div>
+  );
+}
+
+/**
+ * Production time as hours + minutes, the way a shift actually reads a clock,
+ * composed into the single `production_minutes` the backend stores. Local
+ * state rather than two more zod fields: only the composed total is ever
+ * submitted, so the split only needs to exist here.
+ */
+function ProductionDurationField({ form }: { form: ReturnType<typeof useForm<CreateForm>> }) {
+  const { t } = useI18n();
+  const totalMinutes = form.watch("production_minutes") ?? 0;
+  const [hours, setHours] = useState(Math.floor(totalMinutes / 60));
+  const [minutes, setMinutes] = useState(totalMinutes % 60);
+
+  // The form's own value can change out from under this component -- a report
+  // switching under the same dialog, or a draft loading in -- so it stays the
+  // source of truth and the boxes resync to it rather than the other way round.
+  useEffect(() => {
+    setHours(Math.floor(totalMinutes / 60));
+    setMinutes(totalMinutes % 60);
+    // Only resync when the form's own value changes, not on every local edit
+    // -- see the effect below, which is what pushes local edits back into it.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [totalMinutes]);
+
+  useEffect(() => {
+    form.setValue("production_minutes", Math.max(0, hours) * 60 + Math.max(0, minutes));
+    // form.setValue is stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hours, minutes]);
+
+  return (
+    <div className="grid grid-cols-2 gap-2">
+      <div className="space-y-1.5">
+        <Label htmlFor="production_hours">{t("production.dailyReports.field.productionHours")}</Label>
+        <Input
+          id="production_hours"
+          type="number"
+          min={0}
+          value={hours}
+          onChange={(event) => setHours(Number(event.target.value) || 0)}
+        />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="production_minutes_only">{t("production.dailyReports.field.productionMinutesOnly")}</Label>
+        <Input
+          id="production_minutes_only"
+          type="number"
+          min={0}
+          max={59}
+          value={minutes}
+          onChange={(event) => setMinutes(Number(event.target.value) || 0)}
+        />
+      </div>
     </div>
   );
 }
@@ -1036,7 +1156,7 @@ function ReportRowActions({
   products: { id: string; name: string; uom_id: string }[];
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
-  workOrders: { id: string; product_type: string | null }[];
+  workOrders: { id: string; product_id: string | null; product_type: string | null }[];
   molds: Mold[];
   isEditing: boolean;
   onOpenEdit: (open: boolean) => void;
@@ -1069,8 +1189,9 @@ function ReportRowActions({
       regrind_input_product_id: detail?.regrind_input_product_id ?? "",
       regrind_product_id: detail?.regrind_product_id ?? "",
       mold_id: detail?.mold_id ?? "",
-      waste_lines: toWasteLineForms<"raw_material" | "press" | "pouring" | "cutting">(detail?.waste_lines),
-      downtime_reason: detail?.downtime_reason ?? "",
+      waste_lines: toWasteLineForms<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">(detail?.waste_lines),
+      start_time: detail?.start_time ?? "",
+      downtime_lines: toDowntimeLineForms(detail?.downtime_lines),
     } as CreateForm,
   });
 

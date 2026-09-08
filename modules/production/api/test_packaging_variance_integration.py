@@ -21,7 +21,7 @@ from modules.production.api.packaging_variance_service import (
 )
 from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import ConditionnementReportDetail
+from modules.production.domain.production_report import ConditionnementReportDetail, DailyReportDetail
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.domain.non_conformity import DispositionLine
 from modules.warehouse.api.service import StockService
@@ -113,7 +113,30 @@ def of(db, env):
     return created.value
 
 
+def _validated_daily_report(db, env, of, *, tonnage, date, shift):
+    """Decision 25: tonnage now comes from the daily report, not the packing
+    report -- so every packing report a test validates needs a matching daily
+    report behind it, exactly as the real workflow would produce one."""
+    reports = ProductionReportService(db)
+    created = reports.create_daily_report(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        report_date=date,
+        shift=shift,
+        detail=DailyReportDetail(finished_product_quantity=tonnage),
+    )
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    report = created.value["report"]
+    submitted = reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    assert isinstance(submitted, Ok), getattr(submitted, "message", "")
+    validated = reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    assert isinstance(validated, Ok), getattr(validated, "message", "")
+
+
 def _validated_report(db, env, of, *, tonnage, packets, cartons, date, shift="morning"):
+    _validated_daily_report(db, env, of, tonnage=tonnage, date=date, shift=shift)
+
     created = ConditionnementReportService(db).create_report(
         tenant_id=TENANT,
         actor_id=env["actor"],
@@ -121,7 +144,6 @@ def _validated_report(db, env, of, *, tonnage, packets, cartons, date, shift="mo
         report_date=date,
         shift=shift,
         detail=ConditionnementReportDetail(
-            finished_product_quantity=tonnage,
             packets_counted=packets,
             carton_quantity=cartons,
             carton_product_id=env["carton"],
@@ -146,34 +168,42 @@ def _validated_report(db, env, of, *, tonnage, packets, cartons, date, shift="mo
 # ---- the report-level ecart ---------------------------------------------
 
 
-def test_a_report_that_packed_exactly_what_it_weighed_has_no_ecart(db, env, of):
-    # 12.5 t of 500 g packets is 25 000 packets, 1250 cartons.
+def test_a_report_has_no_tonnage_based_ecart_any_more(db, env, of):
+    """Decision 25: a single packing report has no tonnage to compare itself
+    against — that only exists at OF scope now, from the daily reports. What
+    survives at report scope is machine_carton_variance, which needs none."""
+    # 25 000 packets at 20 to a carton is exactly 1250 cartons: machine and
+    # floor agree.
     report = _validated_report(
         db, env, of, tonnage=12.5, packets=25_000, cartons=1250, date=datetime.date(2026, 9, 1)
     )
     result = PackagingVarianceService(db).for_report(tenant_id=TENANT, report_id=report.id)
     assert isinstance(result, Ok), getattr(result, "message", "")
     variance = result.value
-    assert variance["expected_packets"] == 25_000
-    assert variance["expected_cartons"] == 1250
-    assert variance["packet_variance"] == 0
-    assert variance["within_tolerance"] is True
+    assert variance["tonnage"] is None
+    assert variance["expected_packets"] is None
+    assert variance["expected_cartons"] is None
+    assert variance["packet_variance"] is None
+    assert variance["within_tolerance"] is None
+    assert variance["machine_carton_variance"] == 0
 
 
-def test_a_report_short_of_its_weight_shows_a_negative_ecart(db, env, of):
+def test_a_report_shows_a_machine_carton_mismatch_independent_of_tonnage(db, env, of):
+    # The machine tallied 24 000 packets, but only 1150 cartons were counted --
+    # 23 000 packets' worth. 1000 packets are unaccounted for on the floor,
+    # regardless of what any scale said.
     report = _validated_report(
-        db, env, of, tonnage=12.5, packets=24_000, cartons=1200, date=datetime.date(2026, 9, 1)
+        db, env, of, tonnage=12.5, packets=24_000, cartons=1150, date=datetime.date(2026, 9, 1)
     )
     result = PackagingVarianceService(db).for_report(tenant_id=TENANT, report_id=report.id)
     variance = result.value
-    assert variance["packet_variance"] == -1000
-    assert variance["packet_variance_ratio"] == -0.04
-    assert variance["within_tolerance"] is False
+    assert variance["machine_carton_variance"] == 1000
 
 
 def test_the_report_ecart_ignores_quality_entirely(db, env, of):
     """Decision 22: at the validation desk there usually is no NC yet, so the
-    ecart shown there is deliberately the gross one."""
+    ecart shown there is deliberately the gross one. Still true for the
+    machine/carton figure, which never took a quality subtraction to begin with."""
     report = _validated_report(
         db, env, of, tonnage=12.5, packets=25_000, cartons=1250, date=datetime.date(2026, 9, 1)
     )
@@ -181,7 +211,7 @@ def test_the_report_ecart_ignores_quality_entirely(db, env, of):
 
     variance = PackagingVarianceService(db).for_report(tenant_id=TENANT, report_id=report.id).value
     assert variance["rejected_packets"] == 0
-    assert variance["packet_variance"] == 0
+    assert variance["machine_carton_variance"] == 0
 
 
 def test_a_draft_report_can_still_be_checked(db, env, of):
@@ -193,14 +223,18 @@ def test_a_draft_report_can_still_be_checked(db, env, of):
         of_id=of.id,
         report_date=datetime.date(2026, 9, 4),
         detail=ConditionnementReportDetail(
-            finished_product_quantity=1, packets_counted=1500, finished_goods_location_id=env["location"]
+            packets_counted=1500,
+            carton_quantity=70,
+            carton_product_id=env["carton"],
+            packaging_location_id=env["packaging_location"],
+            finished_goods_location_id=env["location"],
         ),
     )
     report = created.value["report"]
     variance = PackagingVarianceService(db).for_report(tenant_id=TENANT, report_id=report.id).value
     assert variance["report_status"] == "draft"
-    assert variance["expected_packets"] == 2000
-    assert variance["packet_variance"] == -500
+    # 70 cartons of 20 is 1400 packets' worth against a machine tally of 1500.
+    assert variance["machine_carton_variance"] == 100
     # Nothing was frozen, so this number moves if the product is edited.
     assert variance["parameters_frozen"] is False
 
@@ -231,21 +265,23 @@ def test_validating_freezes_the_packaging_it_was_judged_against(db, env, of):
 
 def test_editing_the_product_afterwards_does_not_rewrite_a_validated_ecart(db, env, of):
     """Decision 20, and the whole reason the snapshot exists: an ecart that
-    changes after it was signed off is evidence of nothing."""
+    changes after it was signed off is evidence of nothing. Net weight no longer
+    drives anything at report scope (decision 25), but packets-per-carton still
+    feeds machine_carton_variance, so editing it is still the meaningful probe."""
     report = _validated_report(
         db, env, of, tonnage=12.5, packets=25_000, cartons=1250, date=datetime.date(2026, 9, 1)
     )
     before = PackagingVarianceService(db).for_report(tenant_id=TENANT, report_id=report.id).value
-    assert before["packet_variance"] == 0
+    assert before["machine_carton_variance"] == 0
 
     db.execute(
-        "UPDATE core.products SET net_weight_grams = 250 WHERE id = %s AND tenant_id = %s",
+        "UPDATE core.products SET packets_per_carton = 10 WHERE id = %s AND tenant_id = %s",
         (env["product"], TENANT),
     )
 
     after = PackagingVarianceService(db).for_report(tenant_id=TENANT, report_id=report.id).value
-    assert after["net_weight_grams"] == 500
-    assert after["packet_variance"] == 0
+    assert after["packets_per_carton"] == 20
+    assert after["machine_carton_variance"] == 0
     assert after["parameters_frozen"] is True
 
 
@@ -383,7 +419,8 @@ def test_nothing_here_reads_qcs_tables_directly(db):
 
 
 def test_the_ecart_never_refuses_a_validation(db, env, of):
-    """Decision 22. A wildly wrong ecart still validates — it is a figure, not a gate."""
+    """Decision 22. A wildly wrong ecart still validates — it is a figure, not a
+    gate. The tonnage-based figure now only exists at OF scope (decision 25)."""
     report = _validated_report(
         db, env, of, tonnage=12.5, packets=1, cartons=1, date=datetime.date(2026, 9, 1)
     )
@@ -391,7 +428,7 @@ def test_the_ecart_never_refuses_a_validation(db, env, of):
         "SELECT status FROM production.production_reports WHERE id = %s", (report.id,)
     ).fetchone()[0]
     assert status == "validated"
-    variance = PackagingVarianceService(db).for_report(tenant_id=TENANT, report_id=report.id).value
+    variance = PackagingVarianceService(db).for_of(tenant_id=TENANT, of_id=of.id).value
     assert variance["packet_variance"] == -24_999
     assert variance["within_tolerance"] is False
 
@@ -417,18 +454,18 @@ def test_a_product_override_beats_the_tenant_default(db, env):
 
 
 def test_the_tolerance_changes_the_colour_not_the_figures(db, env, of):
-    report = _validated_report(
-        db, env, of, tonnage=12.5, packets=24_750, cartons=1240, date=datetime.date(2026, 9, 1)
-    )
+    """Tolerance is judged against the packet variance, which now only exists at
+    OF scope (decision 25)."""
+    _validated_report(db, env, of, tonnage=12.5, packets=24_750, cartons=1240, date=datetime.date(2026, 9, 1))
     service = PackagingVarianceService(db)
-    strict = service.for_report(tenant_id=TENANT, report_id=report.id).value
+    strict = service.for_of(tenant_id=TENANT, of_id=of.id).value
     assert strict["packet_variance"] == -250
     assert strict["within_tolerance"] is True  # -1% against the 2% default
 
     PackagingTolerancePolicyService(db).set_policy(
         tenant_id=TENANT, actor_id=env["actor"], tolerance_percent=0.5, product_id=env["product"]
     )
-    tightened = service.for_report(tenant_id=TENANT, report_id=report.id).value
+    tightened = service.for_of(tenant_id=TENANT, of_id=of.id).value
     assert tightened["packet_variance"] == -250
     assert tightened["within_tolerance"] is False
 

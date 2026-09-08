@@ -57,8 +57,8 @@ const detailSchema = z.object({
   cooling_index: z.coerce.number().min(0).optional(),
   pf_index: z.coerce.number().min(0).optional(),
   sumo_index: z.coerce.number().min(0).optional(),
-  conforming_cartons: z.coerce.number().min(0),
-  non_conforming_cartons: z.coerce.number().min(0),
+  conforming_cartons: z.coerce.number().min(0).int("Must be a whole number"),
+  non_conforming_cartons: z.coerce.number().min(0).int("Must be a whole number"),
   defect_details: z.string().optional(),
   comments: z.string().optional(),
   corrective_action: z.string().optional(),
@@ -628,13 +628,13 @@ function QualityDetailFields({ form }: { form: ReturnType<typeof useForm<CreateF
             <Label htmlFor="conforming_cartons">
               {t("qc.quality.field.conforming")} ({t("qc.quality.unit.cartons")})
             </Label>
-            <Input id="conforming_cartons" type="number" step="any" {...form.register("conforming_cartons")} />
+            <Input id="conforming_cartons" type="number" step="1" {...form.register("conforming_cartons")} />
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="non_conforming_cartons">
               {t("qc.quality.field.nonConforming")} ({t("qc.quality.unit.cartons")})
             </Label>
-            <Input id="non_conforming_cartons" type="number" step="any" {...form.register("non_conforming_cartons")} />
+            <Input id="non_conforming_cartons" type="number" step="1" {...form.register("non_conforming_cartons")} />
           </div>
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="defect_details">{t("qc.quality.field.defectDetails")}</Label>

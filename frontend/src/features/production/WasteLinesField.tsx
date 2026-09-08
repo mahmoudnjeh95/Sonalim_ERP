@@ -46,6 +46,7 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
   products,
   uoms,
   defaultProductFor,
+  fixedUnit,
 }: {
   form: UseFormReturn<TFieldValues>;
   name: Path<TFieldValues>;
@@ -58,6 +59,14 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
    * shift can override beats an empty dropdown they must resolve every time.
    */
   defaultProductFor?: (category: WasteCategory) => string | undefined;
+  /**
+   * Overrides the per-row unit derived from the chosen product. The daily
+   * report's déchets are always weighed in kg regardless of how the item
+   * itself is stocked (a product configured in pieces has no honest kg
+   * conversion), so the quantity label states the fixed unit instead of
+   * resolving one per row.
+   */
+  fixedUnit?: string;
 }) {
   const { t } = useI18n();
   const { fields, append, remove } = useFieldArray({
@@ -90,7 +99,7 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
             const productId = form.watch(`${name}.${index}.product_id` as Path<TFieldValues>) as
               | string
               | undefined;
-            const unit = productUnit(productId, products, uoms);
+            const unit = fixedUnit ?? productUnit(productId, products, uoms);
             return (
               <div
                 key={field.id}

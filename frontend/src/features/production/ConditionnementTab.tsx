@@ -59,15 +59,15 @@ import {
   type ReportStatus,
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
-import { productUnit } from "../../lib/units";
+import { productUnit, formatQuantity } from "../../lib/units";
 import { PackagingVariancePanel } from "./PackagingVariancePanel";
 
 // The packing report. This is the one that puts finished product into stock and
 // takes packaging out — the only place packaging is ever deducted.
 const detailSchema = z.object({
-  // Phase 9, decision 17: a tonnage, and the tally beside it. The tally is what
-  // enters stock (decision 18); the tonnage feeds yield and moves nothing.
-  finished_product_quantity: z.coerce.number().min(0),
+  // Decision 24/25: cartons decide the finished-goods quantity for a product
+  // with a carton tier; the machine's own tally sits beside it. Tonnage is no
+  // longer typed here at all -- it comes from the daily report (decision 25).
   packets_counted: z.coerce.number().min(0),
   finished_goods_location_id: z.string().optional(),
   film_quantity: z.coerce.number().min(0),
@@ -115,7 +115,6 @@ const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 type StatusFilter = "all" | ReportStatus;
 
 const EMPTY_DETAIL = {
-  finished_product_quantity: 0,
   packets_counted: 0,
   finished_goods_location_id: "",
   film_quantity: 0,
@@ -140,7 +139,6 @@ function todayIso() {
 
 function toDetail(input: CreateForm): Partial<ConditionnementReportDetail> {
   return {
-    finished_product_quantity: input.finished_product_quantity,
     packets_counted: input.packets_counted,
     finished_goods_location_id: input.finished_goods_location_id || undefined,
     film_quantity: input.film_quantity,
@@ -648,18 +646,16 @@ function PackingReportDialog({
   const tapeUnit = productUnit(detail?.tape_product_id, products, uoms);
 
   const figures: FigureRow[] = [
-    {
-      label: t("production.reports.field.finishedTonnage"),
-      value: detail?.finished_product_quantity,
-      unit: "t",
-    },
+    // Decision 24/25: cartons lead -- for a product with a carton tier, this is
+    // what decides the finished-goods quantity, not the machine's own tally
+    // beside it.
+    { label: t("production.conditionnement.field.carton"), value: detail?.carton_quantity, unit: cartonUnit },
     {
       label: t("production.conditionnement.field.packetsCounted"),
       value: detail?.packets_counted,
       unit: goodsUnit,
     },
     { label: t("production.conditionnement.field.film"), value: detail?.film_quantity, unit: filmUnit },
-    { label: t("production.conditionnement.field.carton"), value: detail?.carton_quantity, unit: cartonUnit },
     { label: t("production.conditionnement.field.tape"), value: detail?.tape_quantity, unit: tapeUnit },
     // One row per déchet, each labelled with its own item and unit. Scotch
     // shows up here on its own now instead of having nowhere to go.
@@ -689,6 +685,7 @@ function PackingReportDialog({
       subtitle={[report.shift, report.team].filter(Boolean).join(" · ") || t("common.none")}
       status={report.status}
       revision={report.revision}
+      reportId={report.id}
       banner={<ReportVarianceBanner reportId={report.id} />}
       figures={figures}
       onDelete={async (deleteReason) => {
@@ -741,7 +738,7 @@ function PackingDetailFields({
   finishedProductId,
 }: {
   form: ReturnType<typeof useForm<CreateForm>>;
-  products: { id: string; name: string; uom_id: string }[];
+  products: { id: string; name: string; uom_id: string; packets_per_carton?: number | null }[];
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
   finishedProductId: string | undefined;
@@ -754,6 +751,14 @@ function PackingDetailFields({
   const cartonUnit = productUnit(form.watch("carton_product_id"), products, uoms);
   const tapeUnit = productUnit(form.watch("tape_product_id"), products, uoms);
   const withUnit = (label: string, unit: string | null) => (unit ? `${label} (${unit})` : label);
+
+  // Decision 24: the live cross-check between what the floor boxed and what the
+  // machine tallied, shown while typing rather than only after saving.
+  const packetsPerCarton = products.find((p) => p.id === finishedProductId)?.packets_per_carton ?? null;
+  const cartonsEntered = Number(form.watch("carton_quantity")) || 0;
+  const packetsEntered = Number(form.watch("packets_counted")) || 0;
+  const realPacketsFromCartons = packetsPerCarton ? cartonsEntered * packetsPerCarton : null;
+  const estimatedCartonsFromMachine = packetsPerCarton ? packetsEntered / packetsPerCarton : null;
   const productOptions = (
     <>
       <option value="">—</option>
@@ -777,16 +782,17 @@ function PackingDetailFields({
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           <div className="space-y-1.5">
-            <Label htmlFor="finished_product_quantity" className="flex items-center gap-1">
-              {t("production.reports.field.finishedTonnage")}
-              <HelpTooltip text={t("production.conditionnement.help.output")} />
+            <Label htmlFor="carton_quantity" className="flex items-center gap-1">
+              {withUnit(t("production.conditionnement.field.carton"), cartonUnit)}
+              <HelpTooltip text={t("production.conditionnement.help.cartonQuantity")} />
             </Label>
-            <Input
-              id="finished_product_quantity"
-              type="number"
-              step="any"
-              {...form.register("finished_product_quantity")}
-            />
+            <Input id="carton_quantity" type="number" step="any" {...form.register("carton_quantity")} />
+            {realPacketsFromCartons !== null && (
+              <p className="text-xs text-muted-foreground">
+                {t("production.conditionnement.hint.realPacketsFromCartons")}{" "}
+                {formatQuantity(realPacketsFromCartons)}
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="packets_counted" className="flex items-center gap-1">
@@ -794,6 +800,18 @@ function PackingDetailFields({
               <HelpTooltip text={t("production.conditionnement.help.packetsCounted")} />
             </Label>
             <Input id="packets_counted" type="number" step="any" {...form.register("packets_counted")} />
+            {estimatedCartonsFromMachine !== null && (
+              <p className="text-xs text-muted-foreground">
+                {t("production.conditionnement.hint.estimatedCartonsFromMachine")}{" "}
+                {formatQuantity(estimatedCartonsFromMachine)}
+              </p>
+            )}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="carton_product_id">{t("production.conditionnement.field.cartonProduct")}</Label>
+            <Select id="carton_product_id" {...form.register("carton_product_id")}>
+              {productOptions}
+            </Select>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="finished_goods_location_id">{t("production.conditionnement.field.finishedGoodsStore")}</Label>
@@ -824,16 +842,6 @@ function PackingDetailFields({
           <div className="space-y-1.5">
             <Label htmlFor="film_product_id">{t("production.conditionnement.field.filmProduct")}</Label>
             <Select id="film_product_id" {...form.register("film_product_id")}>
-              {productOptions}
-            </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="carton_quantity">{withUnit(t("production.conditionnement.field.carton"), cartonUnit)}</Label>
-            <Input id="carton_quantity" type="number" step="any" {...form.register("carton_quantity")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="carton_product_id">{t("production.conditionnement.field.cartonProduct")}</Label>
-            <Select id="carton_product_id" {...form.register("carton_product_id")}>
               {productOptions}
             </Select>
           </div>

@@ -16,7 +16,7 @@ import {
   YAxis,
 } from "recharts";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
@@ -63,7 +63,7 @@ const ADJUSTMENT_MOVE_TYPES = new Set(["adjustment", "admin_correction"]);
 type PackagingUnit = "packet" | "carton" | "other";
 
 function formatQty(amount: number) {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 2 }).format(amount);
 }
 
 export function FinishedGoodsAnalysisTab() {

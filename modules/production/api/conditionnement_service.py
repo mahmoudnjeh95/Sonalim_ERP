@@ -90,6 +90,27 @@ def load_conditionnement_detail(
     return _row_to_detail(row, load_waste_lines(connection, tenant_id=tenant_id, report_id=report_id))
 
 
+def load_snapshot_packets_per_carton(
+    connection: psycopg.Connection, *, tenant_id: str, report_id: str
+) -> float | None:
+    """The packets-per-carton a validated report was frozen against.
+
+    Read separately from `load_conditionnement_detail`, which deliberately never
+    touches the two snapshot columns (decision 20) — reversing or correcting a
+    validated report must post the same quantity it originally did, even if the
+    product's packaging has since changed, so it reads the snapshot directly
+    rather than the product's current value.
+    """
+    row = connection.execute(
+        "SELECT snapshot_packets_per_carton FROM production.conditionnement_reports "
+        "WHERE report_id = %s AND tenant_id = %s",
+        (report_id, tenant_id),
+    ).fetchone()
+    if row is None or row[0] is None:
+        return None
+    return float(row[0])
+
+
 def register_dlc_lot(
     connection: psycopg.Connection, *, tenant_id: str, actor_id: str, header: ProductionReport
 ) -> Result[str | None]:

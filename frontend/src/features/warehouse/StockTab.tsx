@@ -147,6 +147,13 @@ export function StockTab() {
     const product = products.find((p) => p.id === productId);
     return product ? uomCode(product.uom_id) : "?";
   };
+  // The unit, plus a "whole number" cue for a carton/pièce-counted product --
+  // the input's `step="1"` enforces it, this makes the reason visible.
+  const quantityLabelSuffix = (productId: string | undefined) => {
+    if (!productId) return null;
+    const unit = productUomCode(productId);
+    return productRequiresIntegerQuantity(productId, products, uoms) ? `${unit} · ${t("common.wholeNumberOnly")}` : unit;
+  };
 
   const { data: historyMoves = [], isLoading: historyLoading } = useQuery({
     queryKey: [...STOCK_MOVES_QUERY_KEY, "product", historyProductId],
@@ -678,7 +685,7 @@ export function StockTab() {
                 <div className="space-y-1.5">
                   <Label htmlFor="quantity">
                     {t("warehouse.stock.field.quantity")}
-                    {reserveProductId && <span className="text-muted-foreground"> ({productUomCode(reserveProductId)})</span>}
+                    {reserveProductId && <span className="text-muted-foreground"> ({quantityLabelSuffix(reserveProductId)})</span>}
                   </Label>
                   <Input
                     id="quantity"
@@ -794,7 +801,7 @@ export function StockTab() {
             <div className="space-y-1.5">
               <Label htmlFor="row_adjust_delta">
                 {t("warehouse.stockHistory.field.delta")}
-                {rowAction && <span className="text-muted-foreground"> ({productUomCode(rowAction.item.product_id)})</span>}
+                {rowAction && <span className="text-muted-foreground"> ({quantityLabelSuffix(rowAction.item.product_id)})</span>}
               </Label>
               <Input
                 id="row_adjust_delta"
@@ -839,7 +846,7 @@ export function StockTab() {
               <div className="space-y-1.5">
                 <Label htmlFor="admin_on_hand">
                   {t("warehouse.stock.column.onHand")}
-                  {rowAction && <span className="text-muted-foreground"> ({productUomCode(rowAction.item.product_id)})</span>}
+                  {rowAction && <span className="text-muted-foreground"> ({quantityLabelSuffix(rowAction.item.product_id)})</span>}
                 </Label>
                 <Input
                   id="admin_on_hand"
@@ -914,7 +921,7 @@ export function StockTab() {
               <div className="flex items-center justify-between gap-3">
                 <Label htmlFor="transfer_quantity">
                   {t("warehouse.stock.field.quantity")}
-                  {rowAction && <span className="text-muted-foreground"> ({productUomCode(rowAction.item.product_id)})</span>}
+                  {rowAction && <span className="text-muted-foreground"> ({quantityLabelSuffix(rowAction.item.product_id)})</span>}
                 </Label>
                 <label className="flex items-center gap-2 text-xs text-muted-foreground">
                   <Checkbox

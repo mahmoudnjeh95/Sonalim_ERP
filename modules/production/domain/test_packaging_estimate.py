@@ -1,3 +1,5 @@
+import pytest
+
 from modules.production.domain.packaging_estimate import (
     DEFAULT_TOLERANCE_PERCENT,
     compute_variance,
@@ -159,3 +161,47 @@ def test_a_shift_that_packed_nothing_has_no_ratio_to_report():
     # Dividing by a zero expectation would be a percentage of nothing.
     assert variance.packet_variance_ratio is None
     assert variance.within_tolerance is None
+
+
+# ---- decision 23: machine vs. carton --------------------------------------
+
+
+def test_a_perfectly_boxed_shift_has_no_machine_carton_variance():
+    variance = compute_variance(
+        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=2000, counted_cartons=100
+    )
+    assert variance.machine_carton_variance == 0
+    assert variance.machine_carton_variance_ratio == 0
+
+
+def test_the_machine_overcounts_against_what_was_actually_boxed():
+    # The HMI tallied 2000, but only 95 cartons of 20 were actually closed --
+    # 1900 packets' worth. 100 packets are unaccounted for on the floor even
+    # though the weight-based ecart never sees it here.
+    variance = compute_variance(
+        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=2000, counted_cartons=95
+    )
+    assert variance.machine_carton_variance == 100
+    assert variance.machine_carton_variance_ratio == pytest.approx(100 / 1900)
+
+
+def test_a_sac_with_no_carton_tier_has_no_machine_carton_variance():
+    variance = compute_variance(
+        tonnage=4.54, net_weight_grams=4540, packets_per_carton=None, counted_packets=1000, counted_cartons=0
+    )
+    assert variance.machine_carton_variance is None
+    assert variance.machine_carton_variance_ratio is None
+
+
+def test_machine_carton_variance_is_not_quality_adjusted():
+    # Same reasoning as the carton side: it compares the machine against the
+    # floor's own carton count, not against the estimate quality later corrects.
+    variance = compute_variance(
+        tonnage=1,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=2000,
+        counted_cartons=100,
+        rejected_packets=500,
+    )
+    assert variance.machine_carton_variance == 0

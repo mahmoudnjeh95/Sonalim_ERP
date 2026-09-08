@@ -255,6 +255,49 @@ def test_validating_brings_the_finished_product_in_and_packaging_out(db, env, of
     assert _on_hand(db, TENANT, env["tape"], env["packaging_location"]) == 10_000 - 5
 
 
+def test_a_cartoned_product_posts_the_carton_count_not_the_machine_tally(db, env, of):
+    """Phase 9, decision 24. For a product with a carton tier, the floor's own
+    carton count decides what enters stock -- not the packaging machine's HMI
+    tally, which can drift from what was actually boxed."""
+    db.execute(
+        "UPDATE core.products SET net_weight_grams = 500, packets_per_carton = 20 WHERE id = %s AND tenant_id = %s",
+        (env["product"], TENANT),
+    )
+    reports = ProductionReportService(db)
+    report = _report(
+        db, env, of,
+        finished_product_quantity=1,
+        packets_counted=2000,  # the machine's tally
+        carton_quantity=95,  # the floor's count: 95 * 20 = 1900, not 2000
+    )
+    reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+
+    before = _on_hand(db, TENANT, env["product"], env["location"])
+    validated = reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    assert isinstance(validated, Ok), getattr(validated, "message", "")
+
+    assert _on_hand(db, TENANT, env["product"], env["location"]) == before + 1900
+
+
+def test_a_cartoned_product_with_no_cartons_yet_falls_back_to_the_machine_tally(db, env, of):
+    """A cartoned product that has not been boxed yet still gets its finished
+    product recorded -- a loose packet is not nothing, it is just not what the
+    carton count can speak to."""
+    db.execute(
+        "UPDATE core.products SET net_weight_grams = 500, packets_per_carton = 20 WHERE id = %s AND tenant_id = %s",
+        (env["product"], TENANT),
+    )
+    reports = ProductionReportService(db)
+    report = _report(db, env, of, finished_product_quantity=1, packets_counted=2000, carton_quantity=0)
+    reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+
+    before = _on_hand(db, TENANT, env["product"], env["location"])
+    validated = reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    assert isinstance(validated, Ok), getattr(validated, "message", "")
+
+    assert _on_hand(db, TENANT, env["product"], env["location"]) == before + 2000
+
+
 def test_the_tonnage_moves_nothing_on_its_own(db, env, of):
     """Phase 9, decision 18. A report that weighed product but counted no packets
     posts no finished product at all.

@@ -55,7 +55,7 @@ class TeamPerformanceService:
                 COALESCE(SUM(d.regrind_input_quantity), 0) AS regrind_input_quantity,
                 COALESCE(SUM(c.finished_product_quantity), 0) AS produced_quantity,
                 COALESCE(SUM(d.production_minutes), 0) + COALESCE(SUM(c.production_minutes), 0) AS production_minutes,
-                COALESCE(SUM(d.downtime_minutes), 0) + COALESCE(SUM(c.downtime_minutes), 0) AS downtime_minutes
+                COALESCE(SUM(dl.total_minutes), 0) + COALESCE(SUM(c.downtime_minutes), 0) AS downtime_minutes
             FROM production.production_reports r
             LEFT JOIN production.daily_reports d
                    ON d.report_id = r.id AND d.tenant_id = r.tenant_id
@@ -70,6 +70,13 @@ class TeamPerformanceService:
                 FROM production.report_semolina_lines
                 GROUP BY report_id, tenant_id
             ) sl ON sl.report_id = r.id AND sl.tenant_id = r.tenant_id
+            -- Same pre-aggregation, now that a daily report's downtime is a
+            -- list rather than one column: a report can carry several arrêts.
+            LEFT JOIN (
+                SELECT report_id, tenant_id, SUM(minutes) AS total_minutes
+                FROM production.report_downtime_lines
+                GROUP BY report_id, tenant_id
+            ) dl ON dl.report_id = r.id AND dl.tenant_id = r.tenant_id
             WHERE {where}
             GROUP BY r.team, period
             """,
@@ -118,10 +125,14 @@ class TeamPerformanceService:
     ) -> list[dict]:
         """Minutes lost per stated reason, from validated reports.
 
-        A daily and a conditionnement report each carry their own free-text
-        `downtime_reason` column, so the two are coalesced here the same way
-        their minutes are summed elsewhere in this class — a report is one
-        type or the other, never both, so this never double-counts.
+        A daily report can now carry several arrêts (report_downtime_lines,
+        one motif each) while a conditionnement report still carries exactly
+        one downtime_reason column, so the two are read differently and
+        combined with a UNION ALL rather than a single COALESCE the way this
+        used to work when both were one column each. `report_count` now counts
+        arrêt occurrences rather than distinct reports for the daily side of
+        the union -- the whole point of this change is that one report can
+        contribute more than one.
         """
         clauses = ["r.tenant_id = %s", "r.status = 'validated'"]
         params: list[object] = [tenant_id]
@@ -135,22 +146,23 @@ class TeamPerformanceService:
 
         rows = self._connection.execute(
             f"""
-            SELECT
-                COALESCE(d.downtime_reason, c.downtime_reason) AS reason,
-                COALESCE(SUM(d.downtime_minutes), 0) + COALESCE(SUM(c.downtime_minutes), 0) AS minutes,
-                count(*) AS report_count
-            FROM production.production_reports r
-            LEFT JOIN production.daily_reports d
-                   ON d.report_id = r.id AND d.tenant_id = r.tenant_id
-            LEFT JOIN production.conditionnement_reports c
-                   ON c.report_id = r.id AND c.tenant_id = r.tenant_id
-            WHERE {where}
-              AND (d.downtime_minutes > 0 OR c.downtime_minutes > 0)
-              AND COALESCE(d.downtime_reason, c.downtime_reason) IS NOT NULL
-            GROUP BY COALESCE(d.downtime_reason, c.downtime_reason)
+            WITH combined AS (
+                SELECT dl.motif AS reason, dl.minutes AS minutes
+                FROM production.report_downtime_lines dl
+                JOIN production.production_reports r ON r.id = dl.report_id AND r.tenant_id = dl.tenant_id
+                WHERE {where} AND dl.minutes > 0 AND dl.motif IS NOT NULL
+                UNION ALL
+                SELECT c.downtime_reason AS reason, c.downtime_minutes AS minutes
+                FROM production.conditionnement_reports c
+                JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
+                WHERE {where} AND c.downtime_minutes > 0 AND c.downtime_reason IS NOT NULL
+            )
+            SELECT reason, SUM(minutes) AS minutes, count(*) AS report_count
+            FROM combined
+            GROUP BY reason
             ORDER BY minutes DESC
             """,
-            params,
+            params + params,
         ).fetchall()
         return [
             {"reason": reason, "minutes": int(minutes), "report_count": int(report_count)}

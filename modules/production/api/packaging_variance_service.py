@@ -20,6 +20,13 @@ of the net weight and packets-per-carton it was judged against (decision 20), so
 editing a product's packaging next month cannot silently rewrite an ecart someone
 already signed off. Only an unvalidated report falls back to the product's
 current values, because it has no snapshot yet.
+
+**Where the tonnage comes from (decision 25).** Not from the packing report --
+it no longer carries one. The plant weighs a batch once, on the daily report the
+line files before packaging, so `for_of` and `by_product` sum tonnage from the
+OF's own validated daily reports instead. `for_report` never has one to show: a
+single packing report has no natural share of an OF's daily tonnage to compare
+itself against, so at that scope only `machine_carton_variance` stands.
 """
 
 from __future__ import annotations
@@ -125,6 +132,48 @@ class PackagingVarianceService:
             return None, None
         return product.net_weight_grams, product.packets_per_carton
 
+    def _daily_tonnage(
+        self,
+        *,
+        tenant_id: str,
+        of_id: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> float | None:
+        """The OF's declared tonnage, from its own validated daily reports (decision 25).
+
+        No longer the packing report's own figure: the plant weighs a batch once,
+        on the daily report the line files before packaging, and re-typing that
+        number on the packing report was a second chance to mistype it, not a
+        second measurement. `None` when the OF has no validated daily report to
+        attribute a tonnage from yet, not a bare zero.
+
+        `date_from`/`date_to` matter to `by_product`: a period-filtered view has
+        to filter the tonnage side by the same window as the packets it is being
+        compared against, or a report from outside the period would inflate a
+        figure the period never claimed to include. `for_of` leaves them unset --
+        it has no period, only the whole OF.
+        """
+        clauses = ["r.tenant_id = %s", "r.of_id = %s", "r.report_type = 'daily'", _VALIDATED]
+        params: list[object] = [tenant_id, of_id]
+        if date_from:
+            clauses.append("r.report_date >= %s")
+            params.append(date_from)
+        if date_to:
+            clauses.append("r.report_date <= %s")
+            params.append(date_to)
+
+        row = self._connection.execute(
+            f"""
+            SELECT count(*), COALESCE(SUM(d.finished_product_quantity), 0)
+            FROM production.production_reports r
+            JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            WHERE {" AND ".join(clauses)}
+            """,
+            tuple(params),
+        ).fetchone()
+        return float(row[1]) if row[0] > 0 else None
+
     # ---- ecart de conditionnement ---------------------------------------
 
     def for_report(self, *, tenant_id: str, report_id: str) -> Result[dict]:
@@ -133,11 +182,18 @@ class PackagingVarianceService:
         Deliberately available on a draft as well as a validated report: a team
         that can see the ecart while they are still typing can fix a transposed
         digit before it ever reaches the validation desk.
+
+        Decision 25: tonnage is `None` here, always. A single packing report has
+        no natural share of an OF's daily-reported tonnage to compare itself
+        against -- that comparison only makes sense at OF scope, where cumulative
+        tonnage meets cumulative packets on equal terms (`for_of`, below). At
+        report scope, `machine_carton_variance` is the ecart that is actually
+        scoped correctly to what this one report recorded.
         """
         row = self._connection.execute(
             """
             SELECT r.of_id, w.product_id, w.reference, r.report_date, r.status,
-                   c.finished_product_quantity, c.packets_counted, c.carton_quantity,
+                   c.packets_counted, c.carton_quantity,
                    c.snapshot_net_weight_grams, c.snapshot_packets_per_carton
             FROM production.production_reports r
             JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
@@ -155,7 +211,6 @@ class PackagingVarianceService:
             reference,
             report_date,
             report_status,
-            tonnage,
             packets_counted,
             carton_quantity,
             snapshot_weight,
@@ -171,7 +226,7 @@ class PackagingVarianceService:
             )
 
         variance = compute_variance(
-            tonnage=float(tonnage),
+            tonnage=None,
             net_weight_grams=net_weight_grams,
             packets_per_carton=packets_per_carton,
             counted_packets=float(packets_counted),
@@ -206,6 +261,9 @@ class PackagingVarianceService:
         Only validated reports count, for the same reason consolidation excludes
         the rest -- a draft is a team's working notes, and from Phase 5 a validated
         report is also what moved the stock this ecart is checking.
+
+        Tonnage (decision 25) comes from the OF's own validated daily reports, not
+        from summing the packing reports' figures -- they no longer carry one.
         """
         work_order = self._connection.execute(
             "SELECT product_id, reference FROM production.work_orders WHERE id = %s AND tenant_id = %s",
@@ -219,7 +277,6 @@ class PackagingVarianceService:
             f"""
             SELECT
                 count(*),
-                COALESCE(SUM(c.finished_product_quantity), 0),
                 COALESCE(SUM(c.packets_counted), 0),
                 COALESCE(SUM(c.carton_quantity), 0),
                 CASE WHEN COUNT(DISTINCT c.snapshot_net_weight_grams) = 1
@@ -235,8 +292,9 @@ class PackagingVarianceService:
         ).fetchone()
 
         report_count = int(totals[0])
-        tonnage, packets_counted, cartons = float(totals[1]), float(totals[2]), float(totals[3])
-        agreed_weight, agreed_per_carton, distinct_weights = totals[4], totals[5], int(totals[6])
+        packets_counted, cartons = float(totals[1]), float(totals[2])
+        agreed_weight, agreed_per_carton, distinct_weights = totals[3], totals[4], int(totals[5])
+        tonnage = self._daily_tonnage(tenant_id=tenant_id, of_id=of_id)
 
         # When every validated report was frozen against the same parameters, use
         # them. When they disagree -- a net weight corrected mid-run -- fall back
@@ -321,7 +379,7 @@ class PackagingVarianceService:
         rows = self._connection.execute(
             f"""
             SELECT w.product_id, r.of_id, w.reference, r.id, r.report_date,
-                   c.finished_product_quantity, c.packets_counted, c.carton_quantity,
+                   c.packets_counted, c.carton_quantity,
                    c.snapshot_net_weight_grams, c.snapshot_packets_per_carton
             FROM production.production_reports r
             JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
@@ -339,7 +397,6 @@ class PackagingVarianceService:
             reference,
             report_id,
             report_date,
-            tonnage,
             packets,
             cartons,
             snapshot_weight,
@@ -349,7 +406,6 @@ class PackagingVarianceService:
                 product_id,
                 {
                     "product_id": product_id,
-                    "tonnage": 0.0,
                     "packets": 0.0,
                     "cartons": 0.0,
                     "of_ids": set(),
@@ -357,7 +413,6 @@ class PackagingVarianceService:
                     "weights": set(),
                 },
             )
-            bucket["tonnage"] += float(tonnage)
             bucket["packets"] += float(packets)
             bucket["cartons"] += float(cartons)
             bucket["of_ids"].add(of_id)
@@ -367,6 +422,7 @@ class PackagingVarianceService:
             per_carton = float(snapshot_per_carton) if snapshot_per_carton is not None else None
             if weight is None:
                 weight, per_carton = self._product_parameters(tenant_id=tenant_id, product_id=product_id)
+            # Decision 25: no per-report tonnage any more -- see for_report's docstring.
             bucket["reports"].append(
                 {
                     "report_id": report_id,
@@ -375,7 +431,7 @@ class PackagingVarianceService:
                     "report_date": report_date.isoformat(),
                     **variance_to_json(
                         compute_variance(
-                            tonnage=float(tonnage),
+                            tonnage=None,
                             net_weight_grams=weight,
                             packets_per_carton=per_carton,
                             counted_packets=float(packets),
@@ -399,14 +455,27 @@ class PackagingVarianceService:
             subtractable = 0.0
             undecided = 0.0
             quality_available = True
+            # Decision 25: tonnage summed from each contributing OF's own daily
+            # reports, not from the packing reports -- they no longer carry one.
+            # An OF with no validated daily report yet simply contributes nothing,
+            # rather than forcing the whole product's tonnage to be treated as unknown.
+            tonnage_known = False
+            tonnage_total = 0.0
             for of_id in bucket["of_ids"]:
                 rejected = self._rejected(tenant_id=tenant_id, of_id=of_id, product_id=product_id)
                 subtractable += rejected["subtractable"]
                 undecided += rejected["undecided"]
                 quality_available = quality_available and rejected["available"]
 
+                of_tonnage = self._daily_tonnage(
+                    tenant_id=tenant_id, of_id=of_id, date_from=date_from, date_to=date_to
+                )
+                if of_tonnage is not None:
+                    tonnage_known = True
+                    tonnage_total += of_tonnage
+
             variance = compute_variance(
-                tonnage=bucket["tonnage"],
+                tonnage=tonnage_total if tonnage_known else None,
                 net_weight_grams=net_weight_grams,
                 packets_per_carton=packets_per_carton,
                 counted_packets=bucket["packets"],
@@ -429,5 +498,7 @@ class PackagingVarianceService:
                 }
             )
 
-        results.sort(key=lambda row: row["tonnage"], reverse=True)
+        # Ordered by packets rather than tonnage: tonnage is now often absent
+        # (decision 25), and packets is the one total every row always has.
+        results.sort(key=lambda row: row["counted_packets"], reverse=True)
         return results

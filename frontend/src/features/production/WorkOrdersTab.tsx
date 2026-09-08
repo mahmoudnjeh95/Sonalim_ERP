@@ -8,7 +8,7 @@ import { CheckCircle2, ClipboardList, Eye, PauseCircle, PlayCircle, Plus, Pencil
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
 import { listUoms } from "../warehouse/api";
@@ -649,6 +649,7 @@ function OrderActions({
   const { session } = useAuth();
   const token = session!.token;
   const { t } = useI18n();
+  const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const productName = (productId: string | null) => {
     if (!productId) return "—";
     return products.find((p) => p.id === productId)?.name ?? "—";
@@ -792,7 +793,7 @@ function OrderActions({
                   {order.closed_at && (
                     <div>
                       <span className="text-muted-foreground">{t("production.workOrders.field.closedAt")}: </span>
-                      <span className="font-medium">{new Date(order.closed_at).toLocaleString()}</span>
+                      <span className="font-medium">{new Date(order.closed_at).toLocaleString(currentLocale())}</span>
                     </div>
                   )}
                 </div>
@@ -835,8 +836,18 @@ function OrderActions({
               </DialogHeader>
               <form className="space-y-4" onSubmit={editForm.handleSubmit(onSubmitEdit)}>
                 <div className="space-y-1.5">
-                  <Label htmlFor={`edit_quantity_${order.id}`}>{t("production.workOrders.field.quantity")}</Label>
-                  <Input id={`edit_quantity_${order.id}`} type="number" step="any" {...editForm.register("planned_quantity")} />
+                  <Label htmlFor={`edit_quantity_${order.id}`}>
+                    {t("production.workOrders.field.quantity")}
+                    {productUnit(order.product_id, products, uoms) && (
+                      <span className="text-muted-foreground"> ({productUnit(order.product_id, products, uoms)})</span>
+                    )}
+                  </Label>
+                  <Input
+                    id={`edit_quantity_${order.id}`}
+                    type="number"
+                    step={productRequiresIntegerQuantity(order.product_id, products, uoms) ? "1" : "any"}
+                    {...editForm.register("planned_quantity")}
+                  />
                   {editForm.formState.errors.planned_quantity && (
                     <p className="text-sm text-destructive">{editForm.formState.errors.planned_quantity.message}</p>
                   )}

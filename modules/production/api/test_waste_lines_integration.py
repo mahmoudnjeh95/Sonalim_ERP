@@ -219,6 +219,36 @@ def test_a_zero_line_carrying_a_note_is_kept(db, env, of):
 # --- what the list is allowed to say ---------------------------------------
 
 
+def test_the_renamed_and_added_daily_categories_are_accepted(db, env, of):
+    """découpe became "cross", and pétrin / finished_product_conditioning
+    joined it as daily-report stages."""
+    report = _draft(
+        db, env, of,
+        waste_lines=(
+            WasteLine(category="cross", product_id=env["rebut"], quantity=1),
+            WasteLine(category="kneading", product_id=env["rebut"], quantity=2),
+            WasteLine(category="finished_product_conditioning", product_id=env["product"], quantity=3),
+        ),
+    )
+    detail = _read(db, report.id)["detail"]
+    assert {line.category for line in detail.waste_lines} == {"cross", "kneading", "finished_product_conditioning"}
+
+
+def test_cutting_is_no_longer_a_valid_category(db, env, of):
+    """The old name is refused end-to-end, not just in the domain layer --
+    the database's own check constraint was renamed alongside it."""
+    result = ProductionReportService(db).create_daily_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
+        report_date=datetime.date(2026, 9, 2), shift="night",
+        detail=DailyReportDetail(
+            raw_material_location_id=env["location"],
+            waste_lines=(WasteLine(category="cutting", product_id=env["rebut"], quantity=1),),
+        ),
+    )
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_WASTE_CATEGORY"
+
+
 def test_a_daily_report_is_refused_a_packing_stage(db, env, of):
     result = ProductionReportService(db).create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,

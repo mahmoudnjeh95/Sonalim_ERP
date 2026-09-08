@@ -268,6 +268,60 @@ def test_a_validated_report_cannot_be_corrected(db, env):
     assert result.code == "NOT_CORRECTABLE"
 
 
+# --- gasoil, start time, and the audit trail behind History -----------------
+
+
+def test_gasoil_and_start_time_round_trip(db, env):
+    """Gasoil is a separate fuel from fuel_quantity (fioul), and start_time is
+    a plain clock reading — neither had anywhere to be exercised before."""
+    service = ProductionReportService(db)
+    order = _open_of(db, env)
+    report = _draft_report(
+        db, env, order.id, semolina_quantity=1000,
+        fuel_quantity=12.5, gasoil_quantity=7.0, start_time=datetime.time(6, 30),
+    )
+    detail = service.get_report(tenant_id=TENANT, report_id=report.id)["detail"]
+    assert detail.fuel_quantity == 12.5
+    assert detail.gasoil_quantity == 7.0
+    assert detail.start_time == datetime.time(6, 30)
+
+
+def test_gasoil_cannot_be_negative(db, env):
+    order = _open_of(db, env)
+    result = ProductionReportService(db).create_daily_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=order.id,
+        report_date=datetime.date(2026, 9, 5),
+        detail=DailyReportDetail(gasoil_quantity=-1),
+    )
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_QUANTITY"
+
+
+def test_every_draft_save_is_recorded_in_the_audit_log(db, env):
+    """The mechanism the report's History panel reads: every draft edit writes
+    a full snapshot to core.audit_log, not only submit/correct/validate."""
+    service = ProductionReportService(db)
+    order = _open_of(db, env)
+    report = _draft_report(db, env, order.id, semolina_quantity=1000)
+
+    service.update_daily_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        detail=_detail(env, semolina_quantity=1200),
+    )
+
+    entries = db.execute(
+        """
+        SELECT action, actor_id, payload FROM core.audit_log
+        WHERE entity_id = %s ORDER BY occurred_at
+        """,
+        (report.id,),
+    ).fetchall()
+    actions = [row[0] for row in entries]
+    assert actions == ["production_report.created", "production_report.draft_updated"]
+    assert entries[1][1] == env["actor"]
+    assert entries[1][2]["semolina_lines"][0]["quantity"] == 1200
+
+
 # --- validation -------------------------------------------------------------
 
 

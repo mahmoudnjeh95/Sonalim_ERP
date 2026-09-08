@@ -7,7 +7,7 @@ import { CheckCircle2, ClipboardList, History, Package, PackageCheck, Pencil, Pl
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -28,6 +28,7 @@ import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listPartners, type Partner } from "../partners/api";
 import { listProducts, listUoms, listLocations, listSuggestedVendors, type Location, type Product, type SuggestedVendor } from "../warehouse/api";
+import { productRequiresIntegerQuantity } from "../../lib/units";
 import { listCurrencies, type Currency } from "../settings/exchangeRatesApi";
 import { createProduct } from "../products/api";
 import {
@@ -122,6 +123,11 @@ const receiptLineSchema = z.object({
   productLabel: z.string(),
   outstanding: z.coerce.number(),
   uomLabel: z.string(),
+  // Whether this line's own uom_id is a different category than its product's
+  // own unit -- only possible on a line created before the create-side filter,
+  // surfaced here rather than silently trusted.
+  uomMismatch: z.boolean().default(false),
+  requiresInteger: z.boolean().default(false),
   quantity: z.coerce.number().min(0).default(0),
   lot_number: z.string().optional(),
 });
@@ -209,6 +215,28 @@ export function PurchaseOrdersPage() {
     const uom = uoms.find((u) => u.id === id);
     return uom ? uom.symbol || uom.code : "—";
   };
+  // A line may legitimately order in a different unit than the product's own
+  // (tons for a kg-tracked product) -- the backend converts between them. What
+  // it must never do is cross into a different *category* of measurement (a
+  // kg-tracked film ordered in pièces), which silently posted a wrong quantity
+  // to stock before the category check landed. Restricting the picker to the
+  // product's own category stops a new line from ever reaching that state;
+  // this flags it for a line that already exists (from before the fix, or an
+  // import) so it's visible rather than silently wrong.
+  const productUomCategory = (productId: string | undefined) => {
+    const product = productId ? products.find((p) => p.id === productId) : undefined;
+    return product ? uoms.find((u) => u.id === product.uom_id)?.category : undefined;
+  };
+  const uomsForProduct = (productId: string | undefined) => {
+    const category = productUomCategory(productId);
+    return category ? uoms.filter((u) => u.category === category) : uoms;
+  };
+  const uomMismatch = (line: PurchaseOrderLine) => {
+    const category = productUomCategory(line.product_id);
+    const lineCategory = uoms.find((u) => u.id === line.uom_id)?.category;
+    return !!category && !!lineCategory && category !== lineCategory;
+  };
+  const lineRequiresInteger = (line: PurchaseOrderLine) => productRequiresIntegerQuantity(line.product_id, products, uoms);
 
   const columnFilterFields: FilterField<PurchaseOrder>[] = [
     { key: "supplier", kind: "text", getValue: (o) => supplierName(o.supplier_id) },
@@ -482,6 +510,8 @@ export function PurchaseOrdersPage() {
           currencies={currencies}
           productName={productName}
           uomCode={uomCode}
+          uomMismatch={uomMismatch}
+          lineRequiresInteger={lineRequiresInteger}
           receivingId={receivingId}
           onOpenReceive={(open) => setReceivingId(open ? order.id : null)}
           receiveForm={receiveForm}
@@ -601,10 +631,14 @@ export function PurchaseOrdersPage() {
                             quickAddForm.reset({ sku: "", name: "", uom_id: "" });
                             setQuickAddLineIndex(lineIndex);
                           }}
+                          onSelectProduct={(productId) => {
+                            const product = products.find((p) => p.id === productId);
+                            setValue(`lines.${lineIndex}.uom_id`, product?.uom_id ?? "");
+                          }}
                         />
                         <Select className="w-28" {...register(`lines.${lineIndex}.uom_id` as const)}>
                           <option value="">—</option>
-                          {uoms.map((uom) => (
+                          {uomsForProduct(watchedLines[lineIndex]?.product_id).map((uom) => (
                             <option key={uom.id} value={uom.id}>
                               {uom.symbol || uom.code}
                             </option>
@@ -612,7 +646,7 @@ export function PurchaseOrdersPage() {
                         </Select>
                         <Input
                           type="number"
-                          step="any"
+                          step={uoms.find((u) => u.id === watchedLines[lineIndex]?.uom_id)?.is_integer_only ? "1" : "any"}
                           className="w-24"
                           placeholder={t("procurement.field.quantity")}
                           {...register(`lines.${lineIndex}.quantity_ordered` as const)}
@@ -824,11 +858,13 @@ function ProductLineSelect({
   products,
   currentValue,
   onRequestNewProduct,
+  onSelectProduct,
 }: {
   registration: UseFormRegisterReturn;
   products: Product[];
   currentValue: string;
   onRequestNewProduct: () => void;
+  onSelectProduct: (productId: string) => void;
 }) {
   const { t } = useI18n();
   return (
@@ -841,6 +877,7 @@ function ProductLineSelect({
           return;
         }
         registration.onChange(e);
+        onSelectProduct(e.target.value);
       }}
     >
       <option value="">—</option>
@@ -861,6 +898,8 @@ function OrderActions({
   currencies,
   productName,
   uomCode,
+  uomMismatch,
+  lineRequiresInteger,
   receivingId,
   onOpenReceive,
   receiveForm,
@@ -886,6 +925,8 @@ function OrderActions({
   currencies: Currency[];
   productName: (id: string) => string;
   uomCode: (id: string) => string;
+  uomMismatch: (line: PurchaseOrderLine) => boolean;
+  lineRequiresInteger: (line: PurchaseOrderLine) => boolean;
   receivingId: string | null;
   onOpenReceive: (open: boolean) => void;
   receiveForm: UseFormReturn<ReceiveForm>;
@@ -936,6 +977,8 @@ function OrderActions({
         productLabel: productName(line.product_id),
         outstanding: line.quantity_ordered - line.quantity_received,
         uomLabel: uomCode(line.uom_id),
+        uomMismatch: uomMismatch(line),
+        requiresInteger: lineRequiresInteger(line),
         quantity: 0,
         lot_number: "",
       })),
@@ -1147,9 +1190,14 @@ function OrderActions({
                         <span className="w-24 text-xs text-muted-foreground">
                           {t("procurement.receipt.outstanding")}: {field.outstanding} {field.uomLabel}
                         </span>
+                        {field.uomMismatch && (
+                          <Badge variant="destructive" title={t("procurement.receipt.uomMismatch")}>
+                            {t("procurement.receipt.uomMismatch")}
+                          </Badge>
+                        )}
                         <Input
                           type="number"
-                          step="any"
+                          step={field.requiresInteger ? "1" : "any"}
                           className="w-24"
                           placeholder={t("procurement.field.quantity")}
                           {...receiveForm.register(`lines.${lineIndex}.quantity` as const)}
@@ -1226,7 +1274,7 @@ function ReceiptHistoryCard({
             {receipt.invoice_date ?? "—"} · {receipt.carrier ?? "—"}
             {(receipt.transport_company_name || receipt.driver_name) &&
               ` · ${[receipt.transport_company_name, receipt.driver_name].filter(Boolean).join(" / ")}`}{" "}
-            · {receipt.total_cost.toLocaleString()} {t("procurement.receipt.totalCostSuffix")}
+            · {receipt.total_cost.toLocaleString(currentLocale())} {t("procurement.receipt.totalCostSuffix")}
           </span>
         </div>
         <ul className="space-y-1 text-sm">

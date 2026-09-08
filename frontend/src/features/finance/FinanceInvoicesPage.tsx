@@ -7,7 +7,7 @@ import { BadgeDollarSign, CircleDollarSign, Pencil, Plus, Receipt, Send } from "
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -51,7 +51,7 @@ type StatusFilter = "all" | InvoiceStatus;
 
 function formatCurrency(amount: number, currency: string) {
   try {
-    return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount);
+    return new Intl.NumberFormat(currentLocale(), { style: "currency", currency }).format(amount);
   } catch {
     return `${amount.toFixed(2)} ${currency}`;
   }

@@ -448,7 +448,9 @@ function ReviewDialog({
       (line.product_id && products.find((p) => p.id === line.product_id)?.name) ||
       t("production.waste.unknownItem"),
     value: line.quantity,
-    unit: productUnit(line.product_id, products, uoms),
+    // The daily report's déchets are always weighed in kg -- see
+    // WasteLinesField's fixedUnit. Conditionnement's stay per-product.
+    unit: item.source === "daily" ? "kg" : productUnit(line.product_id, products, uoms),
   }));
 
   const figures = isQuality
@@ -621,27 +623,34 @@ function productionFigures(
       ...semolinaLines,
       { label: "production.dailyReports.field.regrindInput", value: d.regrind_input_quantity, unit: units.regrind },
       { label: "production.dailyReports.field.dough", value: d.dough_quantity, unit: units.semolina },
-      { label: "production.reports.field.finishedTonnage", value: d.finished_product_quantity, unit: "t" },
+      { label: "production.reports.field.finishedProduct", value: d.finished_product_quantity, unit: units.of },
       // Rebroyat is weighed as its own item, not as semoule: what goes back
       // through the mill is ground pasta, not the flour it was made from.
       { label: "production.dailyReports.field.regrind", value: d.regrind_quantity, unit: units.regrindOutput },
       { label: "production.dailyReports.field.waterPercentage", value: d.water_percentage, unit: "%" },
       { label: "production.dailyReports.field.water", value: d.water_quantity, unit: UTILITY_UNITS.water },
       { label: "production.dailyReports.field.fuel", value: d.fuel_quantity, unit: UTILITY_UNITS.fuel },
+      { label: "production.dailyReports.field.gasoil", value: d.gasoil_quantity, unit: UTILITY_UNITS.gasoil },
       { label: "production.dailyReports.field.electricity", value: d.electricity_quantity, unit: UTILITY_UNITS.electricity },
       { label: "production.dailyReports.field.semolinaFlowRate", value: d.semolina_flow_rate, unit: "t/h" },
       { label: "production.reports.field.productionMinutes", value: d.production_minutes, duration: true },
-      { label: "production.reports.field.downtimeMinutes", value: d.downtime_minutes, duration: true },
+      // One row per arrêt -- a shift may have stopped more than once, for more
+      // than one reason, since downtime became a list.
+      ...d.downtime_lines.map((line) => ({
+        label: "production.reports.field.downtimeMinutes",
+        suffix: line.motif ?? undefined,
+        value: line.minutes,
+        duration: true,
+      })),
     ];
   }
   const c = detail as ConditionnementReportDetail;
   return [
-    { label: "production.reports.field.finishedTonnage", value: c.finished_product_quantity, unit: "t" },
-    // The tally, in the product's own unit -- this is the figure that will move
-    // stock when the validator approves the report.
+    // Decision 24: cartons lead -- for a product with a carton tier, this is
+    // what decides the finished-goods quantity, not the machine's tally beside it.
+    { label: "production.conditionnement.field.carton", value: c.carton_quantity, unit: units.carton },
     { label: "production.conditionnement.field.packetsCounted", value: c.packets_counted, unit: units.of },
     { label: "production.conditionnement.field.film", value: c.film_quantity, unit: units.film },
-    { label: "production.conditionnement.field.carton", value: c.carton_quantity, unit: units.carton },
     { label: "production.conditionnement.field.tape", value: c.tape_quantity, unit: units.tape },
     { label: "production.conditionnement.field.lotNumber", value: c.lot_number ?? "—" },
     { label: "production.conditionnement.field.dlc", value: c.dlc_date ?? "—" },

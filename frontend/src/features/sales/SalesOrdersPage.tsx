@@ -7,8 +7,9 @@ import { CheckCircle2, Pencil, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -33,7 +34,7 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { listLocations } from "../warehouse/api";
+import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners } from "../partners/api";
 import { listProducts } from "../production/api";
 import { confirmOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
@@ -58,7 +59,7 @@ const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(undefined, { style: "currency", currency: "USD" }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(amount);
 }
 
 export function SalesOrdersPage() {
@@ -75,6 +76,7 @@ export function SalesOrdersPage() {
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const customers = partners.filter((p) => p.kind === "customer" || p.kind === "both");
   const activeCustomers = customers.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
@@ -84,6 +86,7 @@ export function SalesOrdersPage() {
     control,
     handleSubmit,
     reset,
+    watch,
     formState: { errors },
   } = useForm<NewOrderForm>({
     resolver: zodResolver(newOrderSchema),
@@ -120,6 +123,7 @@ export function SalesOrdersPage() {
     control: editControl,
     handleSubmit: handleEditSubmit,
     reset: resetEdit,
+    watch: watchEdit,
     formState: { errors: editErrors },
   } = useForm<EditOrderForm>({
     resolver: zodResolver(newOrderSchema),
@@ -358,9 +362,13 @@ export function SalesOrdersPage() {
                         </Select>
                         <Input
                           type="number"
-                          step="any"
+                          step={productRequiresIntegerQuantity(watch(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
                           className="w-20"
-                          placeholder={t("sales.field.qty")}
+                          placeholder={
+                            productUnit(watch(`lines.${index}.product_id`), products, uoms)
+                              ? `${t("sales.field.qty")} (${productUnit(watch(`lines.${index}.product_id`), products, uoms)})`
+                              : t("sales.field.qty")
+                          }
                           {...register(`lines.${index}.quantity` as const)}
                         />
                         <Input
@@ -469,9 +477,13 @@ export function SalesOrdersPage() {
                         </Select>
                         <Input
                           type="number"
-                          step="any"
+                          step={productRequiresIntegerQuantity(watchEdit(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
                           className="w-20"
-                          placeholder={t("sales.field.qty")}
+                          placeholder={
+                            productUnit(watchEdit(`lines.${index}.product_id`), products, uoms)
+                              ? `${t("sales.field.qty")} (${productUnit(watchEdit(`lines.${index}.product_id`), products, uoms)})`
+                              : t("sales.field.qty")
+                          }
                           {...registerEdit(`lines.${index}.quantity` as const)}
                         />
                         <Input

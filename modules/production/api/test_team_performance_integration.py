@@ -16,7 +16,7 @@ from modules.production.api.production_report_service import ProductionReportSer
 from modules.production.api.service import WorkOrderService
 from modules.production.api.team_performance_service import TeamPerformanceService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
-from modules.production.domain.production_report import DailyReportDetail, SemolinaLine
+from modules.production.domain.production_report import DailyReportDetail, DowntimeLine, SemolinaLine
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-team-performance"
@@ -55,7 +55,7 @@ def env(db):
 
 def _validated_report(
     db, env, *, team, report_date, semolina_quantity, production_minutes, downtime_minutes,
-    downtime_reason=None, water_percentage=0, semolina_flow_rate=0,
+    downtime_reason=None, water_percentage=0, semolina_flow_rate=0, downtime_lines=None,
 ):
     orders = WorkOrderService(db)
     created = orders.create_work_order(
@@ -71,8 +71,18 @@ def _validated_report(
         semolina_lines=(SemolinaLine(product_id=env["product"], quantity=semolina_quantity, location_id=env["location"]),),
         raw_material_location_id=env["location"],
         production_minutes=production_minutes,
-        downtime_minutes=downtime_minutes,
-        downtime_reason=downtime_reason or ("test downtime" if downtime_minutes else None),
+        downtime_lines=downtime_lines
+        if downtime_lines is not None
+        else (
+            (
+                DowntimeLine(
+                    motif=downtime_reason or ("test downtime" if downtime_minutes else None),
+                    minutes=downtime_minutes,
+                ),
+            )
+            if downtime_minutes
+            else ()
+        ),
         water_percentage=water_percentage,
         semolina_flow_rate=semolina_flow_rate,
     )
@@ -171,6 +181,27 @@ def test_downtime_reasons_are_summed_across_reports(db, env):
     # Worst offender first.
     ordered = TeamPerformanceService(db).list_downtime_reasons(tenant_id=TENANT)
     assert ordered[0]["reason"] == "mixer jam"
+
+
+def test_one_report_can_contribute_more_than_one_reason(db, env):
+    """The capability the single downtime_minutes/downtime_reason column never
+    had: one shift, two stoppages, two motifs, both counted."""
+    _validated_report(
+        db, env, team="A", report_date=datetime.date(2026, 9, 5),
+        semolina_quantity=100, production_minutes=400, downtime_minutes=0,
+        downtime_lines=(
+            DowntimeLine(motif="mixer jam", minutes=12),
+            DowntimeLine(motif="power cut", minutes=8),
+        ),
+    )
+
+    rows = {r["reason"]: r for r in TeamPerformanceService(db).list_downtime_reasons(tenant_id=TENANT)}
+    assert rows["mixer jam"]["minutes"] == 12
+    assert rows["power cut"]["minutes"] == 8
+
+    performance = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="day")
+    row = next(r for r in performance if r["team"] == "A" and r["period"] == "2026-09-05")
+    assert row["downtime_minutes"] == 20, "both stoppages count toward the team's total"
 
 
 def test_recipe_correlation_pairs_shift_inputs_with_the_ofs_yield(db, env):

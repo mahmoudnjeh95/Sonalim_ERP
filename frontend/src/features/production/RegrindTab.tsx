@@ -8,7 +8,7 @@ import { AlertTriangle, CheckCircle2, Recycle, Plus, Scale, Trash2, Users } from
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { listReportOptions, optionsFor } from "../../lib/reportOptions";
 import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
@@ -103,7 +103,7 @@ const REGRIND_STAGE_VARIANT: Record<RegrindStage, "default" | "warning" | "succe
 };
 
 function formatKg(value: number) {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value);
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 2 }).format(value);
 }
 
 export function RegrindTab() {

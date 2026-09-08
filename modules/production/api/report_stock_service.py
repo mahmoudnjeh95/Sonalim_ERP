@@ -25,10 +25,20 @@ class ReportStockService:
     * **The conditionnement report brings the finished product in** and takes
       film, cartons and tape out. This is the only place packaging is deducted —
       when quality later strips a rejected packet back down, those components are
-      recorded as déchet and never deducted a second time. What comes in is the
-      **packets the line counted**, never the packet count derived from the
-      tonnage (Phase 9, decision 18): if validation posted the estimate, stock
-      would always *be* the estimate and the écart could never appear in it.
+      recorded as déchet and never deducted a second time. What comes in is never
+      the packet count derived from the tonnage (Phase 9, decision 18): if
+      validation posted the estimate, stock would always *be* the estimate and
+      the écart could never appear in it.
+    * **For a product with a carton tier, the carton count decides the quantity**
+      (decision 24): `carton_quantity * packets_per_carton`, using the same
+      packets-per-carton just frozen onto the report by `freeze_packaging_parameters`.
+      The floor counts cartons by hand; the packet figure is an electronic tally
+      off the packaging machine's HMI that can drift from what was actually boxed.
+      Only a full carton is finished goods ready to move — a loose, unboxed packet
+      is not, so `packets_counted` is the fallback only when there is no carton
+      tier at all (a sac, counted directly) or the report was left with zero
+      cartons. The disagreement between the two, when there is one, is exactly
+      `machine_carton_variance` in the packaging ecart.
     * **The quality report moves nothing.** Quality only touches inventory through
       a non-conformity.
     * **A shortfall posts anyway.** A validated report says what the line actually
@@ -181,27 +191,38 @@ class ReportStockService:
         detail: ConditionnementReportDetail,
         finished_product_id: str,
         correlation_id: str,
+        packets_per_carton: float | None,
         reverse: bool = False,
     ) -> Result[list[dict]]:
         """Finished product in, packaging out.
 
         `finished_product_id` is the OF's product, resolved by the caller — the
         report deliberately does not restate it, so it cannot contradict the order
-        it belongs to.
+        it belongs to. `packets_per_carton` is the report's *frozen* snapshot
+        (decision 20), not the product's current value, so correcting or reversing
+        an old report always posts the same quantity it originally did.
 
-        The quantity received is `packets_counted`, in the product's own unit.
         `finished_product_quantity` is a tonnage from Phase 9 and moves nothing;
         it feeds yield and consolidation, exactly as the daily report's own
         finished-product figure does.
         """
         movements: list[dict] = []
 
-        if detail.packets_counted > 0:
+        # Decision 24. A carton tier makes the carton count the source of truth —
+        # only a closed carton is finished goods ready to move. `packets_counted`
+        # is the fallback for a sac (no carton tier) or a report nobody has
+        # boxed yet.
+        if packets_per_carton and packets_per_carton > 0 and detail.carton_quantity > 0:
+            finished_quantity = detail.carton_quantity * packets_per_carton
+        else:
+            finished_quantity = detail.packets_counted
+
+        if finished_quantity > 0:
             received = self._stock.post_production_movement(
                 tenant_id=tenant_id,
                 product_id=finished_product_id,
                 location_id=detail.finished_goods_location_id,  # type: ignore[arg-type]
-                quantity=detail.packets_counted,
+                quantity=finished_quantity,
                 direction=self._direction("in", reverse),
                 correlation_id=correlation_id,
                 reference=f"production_report:{header.id}",
@@ -218,7 +239,7 @@ class ReportStockService:
                     "direction": self._direction("in", reverse),
                     "product_id": finished_product_id,
                     "location_id": detail.finished_goods_location_id,
-                    "quantity": detail.packets_counted,
+                    "quantity": finished_quantity,
                 }
             )
 

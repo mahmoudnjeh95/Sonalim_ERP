@@ -11,10 +11,13 @@
  *   matches how the plant meters it.
  */
 
+import { currentLocale } from "./i18n";
+
 /** Utilities have no product behind them, so their units are fixed. */
 export const UTILITY_UNITS = {
   water: "L",
   fuel: "L",
+  gasoil: "L",
   electricity: "kWh",
 } as const;
 
@@ -107,7 +110,7 @@ export function pluralizeUnit(unit: string, value: number): string {
 export function formatQuantity(value: number | null | undefined, unit?: string | null): string {
   if (value === null || value === undefined) return "—";
   const rounded = Math.round(value * 1000) / 1000;
-  const formatted = new Intl.NumberFormat(undefined, { maximumFractionDigits: 3 }).format(rounded);
+  const formatted = new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 3 }).format(rounded);
   return unit ? `${formatted} ${pluralizeUnit(unit, rounded)}` : formatted;
 }
 

@@ -29,21 +29,33 @@ export function PackagingVariancePanel({
 }) {
   const { t } = useI18n();
 
-  // Without a net weight there is nothing to compare against. Saying so beats
-  // rendering dashes that read as a broken screen.
-  if (variance.expected_packets === null) {
+  // Decision 25: tonnage is often absent now (always at report scope, and at OF
+  // scope until a daily report is validated), so the weight-based figures and
+  // machine_carton_variance are shown independently rather than one gating the
+  // other. Only when neither exists is there truly nothing to compare.
+  const hasWeightEcart = variance.expected_packets !== null;
+  const hasMachineEcart = variance.machine_carton_variance !== null;
+
+  if (!hasWeightEcart && !hasMachineEcart) {
     return (
       <div className={cn("rounded-lg border border-border p-3", className)}>
         <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
           <HelpCircle className="h-4 w-4" />
-          {t("production.packagingVariance.noNetWeight")}
+          {variance.missing.includes("net_weight_grams")
+            ? t("production.packagingVariance.noNetWeight")
+            : t("production.packagingVariance.noEcartAvailable")}
         </p>
       </div>
     );
   }
 
-  const short = (variance.packet_variance ?? 0) < 0;
-  const ok = variance.within_tolerance === true;
+  const machineOk = variance.machine_carton_variance === 0;
+  const machineShort = (variance.machine_carton_variance ?? 0) < 0;
+
+  // The header colour follows the weight-based ecart when it exists; otherwise
+  // it falls back to the machine/carton figure, the one that's actually there.
+  const short = hasWeightEcart ? (variance.packet_variance ?? 0) < 0 : machineShort;
+  const ok = hasWeightEcart ? variance.within_tolerance === true : machineOk;
 
   const ratioLabel =
     variance.packet_variance_ratio === null
@@ -86,39 +98,68 @@ export function PackagingVariancePanel({
       </div>
 
       <div className="grid grid-cols-2 gap-x-4 gap-y-2 p-3 sm:grid-cols-4">
-        <Figure
-          label={t("production.packagingVariance.field.tonnage")}
-          value={formatQuantity(variance.tonnage, "t")}
-        />
-        <Figure
-          label={t("production.packagingVariance.field.expectedPackets")}
-          value={formatQuantity(variance.expected_packets)}
-        />
-        <Figure
-          label={t("production.packagingVariance.field.countedPackets")}
-          value={formatQuantity(variance.counted_packets)}
-        />
-        <Figure
-          label={t("production.packagingVariance.field.packetVariance")}
-          value={`${formatQuantity(variance.packet_variance)}${ratioLabel ? ` (${ratioLabel})` : ""}`}
-          emphasis={ok ? "success" : short ? "destructive" : "warning"}
-        />
-
-        {variance.expected_cartons !== null && (
+        {hasWeightEcart ? (
           <>
             <Figure
-              label={t("production.packagingVariance.field.expectedCartons")}
-              value={formatQuantity(variance.expected_cartons)}
+              label={t("production.packagingVariance.field.tonnage")}
+              value={formatQuantity(variance.tonnage, "t")}
+            />
+            <Figure
+              label={t("production.packagingVariance.field.expectedPackets")}
+              value={formatQuantity(variance.expected_packets)}
+            />
+            <Figure
+              label={t("production.packagingVariance.field.countedPackets")}
+              value={formatQuantity(variance.counted_packets)}
+            />
+            <Figure
+              label={t("production.packagingVariance.field.packetVariance")}
+              value={`${formatQuantity(variance.packet_variance)}${ratioLabel ? ` (${ratioLabel})` : ""}`}
+              emphasis={ok ? "success" : short ? "destructive" : "warning"}
+            />
+            {variance.expected_cartons !== null && (
+              <>
+                <Figure
+                  label={t("production.packagingVariance.field.expectedCartons")}
+                  value={formatQuantity(variance.expected_cartons)}
+                />
+                <Figure
+                  label={t("production.packagingVariance.field.countedCartons")}
+                  value={formatQuantity(variance.counted_cartons)}
+                />
+                <Figure
+                  label={t("production.packagingVariance.field.cartonVariance")}
+                  value={formatQuantity(variance.carton_variance)}
+                />
+              </>
+            )}
+          </>
+        ) : (
+          <p className="col-span-2 flex items-center gap-1.5 text-xs text-muted-foreground sm:col-span-4">
+            <HelpCircle className="h-3.5 w-3.5 shrink-0" />
+            {t("production.packagingVariance.tonnageNotTracked")}
+          </p>
+        )}
+
+        {!hasWeightEcart && (
+          <>
+            <Figure
+              label={t("production.packagingVariance.field.countedPackets")}
+              value={formatQuantity(variance.counted_packets)}
             />
             <Figure
               label={t("production.packagingVariance.field.countedCartons")}
               value={formatQuantity(variance.counted_cartons)}
             />
-            <Figure
-              label={t("production.packagingVariance.field.cartonVariance")}
-              value={formatQuantity(variance.carton_variance)}
-            />
           </>
+        )}
+        {hasMachineEcart && (
+          <Figure
+            label={t("production.packagingVariance.field.machineCartonVariance")}
+            value={formatQuantity(variance.machine_carton_variance)}
+            emphasis={machineOk ? "success" : machineShort ? "destructive" : "warning"}
+            hint={t("production.packagingVariance.field.machineCartonVarianceHint")}
+          />
         )}
 
         {net && (

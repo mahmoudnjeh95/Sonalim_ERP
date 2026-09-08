@@ -22,6 +22,7 @@ from modules.production.api.work_order_yield_service import WorkOrderYieldServic
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     DailyReportDetail,
+    DowntimeLine,
     SemolinaLine,
     WasteLine,
 )
@@ -147,8 +148,14 @@ def _consolidate(db, of) -> dict:
 
 
 def test_consolidation_sums_every_validated_shift(db, env, of):
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, water_quantity=50, fuel_quantity=20)
-    _daily(db, env, of, date=datetime.date(2026, 9, 2), semolina_quantity=800, water_quantity=40, fuel_quantity=15)
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, water_quantity=50, fuel_quantity=20, gasoil_quantity=8,
+    )
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 2),
+        semolina_quantity=800, water_quantity=40, fuel_quantity=15, gasoil_quantity=6,
+    )
     _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=900, film_quantity=30)
     _packing(db, env, of, date=datetime.date(2026, 9, 2), finished_product_quantity=700, film_quantity=25)
 
@@ -156,9 +163,26 @@ def test_consolidation_sums_every_validated_shift(db, env, of):
     assert result["raw_material"]["semolina_quantity"] == 1800
     assert result["utilities"]["water_quantity"] == 90
     assert result["utilities"]["fuel_quantity"] == 35
+    assert result["utilities"]["gasoil_quantity"] == 14
     assert result["produced_quantity"] == 1600
     assert result["packaging"]["film_quantity"] == 55
     assert result["report_counts"] == {"daily": 2, "conditionnement": 2, "quality": 0}
+
+
+def test_downtime_across_several_daily_reports_and_several_arrets_each(db, env, of):
+    """Two reports, each with two of its own arrêts: the OF-level total sums
+    every line, not just one figure per report."""
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=500,
+        downtime_lines=(DowntimeLine(motif="mixer jam", minutes=10), DowntimeLine(motif="power cut", minutes=5)),
+    )
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 2), semolina_quantity=500,
+        downtime_lines=(DowntimeLine(motif="die change", minutes=20),),
+    )
+
+    result = _consolidate(db, of)
+    assert result["time"]["downtime_minutes"] == 35
 
 
 def test_a_draft_report_is_not_consolidated(db, env, of):
@@ -322,7 +346,8 @@ def test_waste_recorded_before_it_named_an_item_is_reported_apart(db, env, of):
 def test_time_is_summed_across_both_report_types(db, env, of):
     _daily(
         db, env, of, date=datetime.date(2026, 9, 1),
-        semolina_quantity=1000, production_minutes=400, downtime_minutes=20, downtime_reason="die change",
+        semolina_quantity=1000, production_minutes=400,
+        downtime_lines=(DowntimeLine(motif="die change", minutes=20),),
     )
     _packing(
         db, env, of, date=datetime.date(2026, 9, 1),

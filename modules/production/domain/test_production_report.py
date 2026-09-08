@@ -3,10 +3,13 @@ import datetime
 from core.domain.result import Err, Ok
 from modules.production.domain.production_report import (
     DailyReportDetail,
+    DowntimeLine,
     ProductionReport,
     SemolinaLine,
+    downtime_total_minutes,
     transition_report,
     validate_daily_detail,
+    validate_downtime_lines,
     validate_report_header,
 )
 
@@ -89,12 +92,51 @@ def test_end_time_before_start_time_is_rejected():
 
 
 def test_downtime_requires_a_reason():
-    result = validate_daily_detail(DailyReportDetail(downtime_minutes=45))
+    result = validate_daily_detail(DailyReportDetail(downtime_lines=(DowntimeLine(minutes=45),)))
     assert isinstance(result, Err)
     assert result.code == "MISSING_DOWNTIME_REASON"
 
-    with_reason = validate_daily_detail(DailyReportDetail(downtime_minutes=45, downtime_reason="press jam"))
+    with_reason = validate_daily_detail(
+        DailyReportDetail(downtime_lines=(DowntimeLine(minutes=45, motif="press jam"),))
+    )
     assert isinstance(with_reason, Ok)
+
+
+def test_gasoil_quantity_cannot_be_negative():
+    result = validate_daily_detail(DailyReportDetail(gasoil_quantity=-1))
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_QUANTITY"
+
+
+def test_multiple_downtime_lines_with_different_motifs_are_all_valid():
+    """The whole point of the list: a shift that stopped for two different
+    reasons records both, rather than folding one into the other."""
+    lines = (
+        DowntimeLine(motif="mixer jam", minutes=20),
+        DowntimeLine(motif="power cut", minutes=15),
+    )
+    assert isinstance(validate_downtime_lines(lines), Ok)
+    assert isinstance(validate_daily_detail(DailyReportDetail(downtime_lines=lines)), Ok)
+
+
+def test_a_negative_downtime_line_is_rejected():
+    result = validate_downtime_lines((DowntimeLine(motif="x", minutes=-5),))
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_DURATION"
+
+
+def test_a_downtime_line_at_zero_needs_no_motif():
+    """An untouched row in a form recorded no stoppage, so there is nothing to name."""
+    assert isinstance(validate_downtime_lines((DowntimeLine(minutes=0),)), Ok)
+
+
+def test_downtime_total_minutes_sums_every_line():
+    lines = (DowntimeLine(motif="a", minutes=20), DowntimeLine(motif="b", minutes=15))
+    assert downtime_total_minutes(lines) == 35
+
+
+def test_downtime_total_minutes_of_no_lines_is_zero():
+    assert downtime_total_minutes(()) == 0
 
 
 def test_a_shortfall_never_invalidates_a_report():

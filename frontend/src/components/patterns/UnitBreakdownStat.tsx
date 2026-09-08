@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Card } from "../ui/card";
 import { cn } from "../../lib/utils";
+import { currentLocale } from "../../lib/i18n";
 import { pluralizeUnit } from "../../lib/units";
 
 export interface UnitBreakdownEntry {
@@ -45,7 +46,7 @@ export function UnitBreakdownStat({
             ? "—"
             : breakdown.map((entry) => (
                 <span key={entry.unit}>
-                  {entry.value.toLocaleString()} <span className="text-xs font-normal text-muted-foreground">{pluralizeUnit(entry.unit, entry.value)}</span>
+                  {entry.value.toLocaleString(currentLocale())} <span className="text-xs font-normal text-muted-foreground">{pluralizeUnit(entry.unit, entry.value)}</span>
                 </span>
               ))}
         </p>

@@ -10,6 +10,11 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
+from modules.production.api.downtime_line_store import (
+    delete_downtime_lines,
+    load_downtime_lines,
+    replace_downtime_lines,
+)
 from modules.production.api.report_stock_service import ReportStockService
 from modules.production.api.semolina_line_store import (
     delete_semolina_lines,
@@ -23,6 +28,7 @@ from modules.production.api.waste_line_store import (
 )
 from modules.production.domain.production_report import (
     DailyReportDetail,
+    DowntimeLine,
     ProductionReport,
     SemolinaLine,
     WasteLine,
@@ -38,13 +44,14 @@ _HEADER_COLUMNS = """
     created_by, submitted_at, validated_by, validated_at, rejection_reason
 """
 
-# Déchets and semoule are deliberately absent: they live in
-# production.report_waste_lines and production.report_semolina_lines, one row
-# per item, and are attached to the detail on load.
+# Déchets, semoule and arrêts are deliberately absent: they live in
+# production.report_waste_lines, production.report_semolina_lines and
+# production.report_downtime_lines, one row per item, and are attached to the
+# detail on load.
 _DAILY_COLUMNS = """
     dough_quantity, finished_product_quantity,
-    regrind_quantity, water_quantity, fuel_quantity, electricity_quantity,
-    start_time, end_time, production_minutes, downtime_minutes, downtime_reason,
+    regrind_quantity, water_quantity, fuel_quantity, gasoil_quantity, electricity_quantity,
+    start_time, end_time, production_minutes,
     raw_material_location_id, regrind_input_quantity, regrind_input_product_id,
     regrind_product_id, mold_id, water_percentage, semolina_flow_rate
 """
@@ -94,6 +101,7 @@ def _row_to_daily_detail(
     row: tuple,
     waste_lines: tuple[WasteLine, ...] = (),
     semolina_lines: tuple[SemolinaLine, ...] = (),
+    downtime_lines: tuple[DowntimeLine, ...] = (),
 ) -> DailyReportDetail:
     return DailyReportDetail(
         dough_quantity=float(row[0]),
@@ -101,21 +109,21 @@ def _row_to_daily_detail(
         regrind_quantity=float(row[2]),
         water_quantity=float(row[3]),
         fuel_quantity=float(row[4]),
-        electricity_quantity=float(row[5]),
-        start_time=row[6],
-        end_time=row[7],
-        production_minutes=int(row[8]),
-        downtime_minutes=int(row[9]),
-        downtime_reason=row[10],
-        raw_material_location_id=row[11],
-        regrind_input_quantity=float(row[12]),
-        regrind_input_product_id=row[13],
-        regrind_product_id=row[14],
-        mold_id=row[15],
-        water_percentage=float(row[16]),
-        semolina_flow_rate=float(row[17]),
+        gasoil_quantity=float(row[5]),
+        electricity_quantity=float(row[6]),
+        start_time=row[7],
+        end_time=row[8],
+        production_minutes=int(row[9]),
+        raw_material_location_id=row[10],
+        regrind_input_quantity=float(row[11]),
+        regrind_input_product_id=row[12],
+        regrind_product_id=row[13],
+        mold_id=row[14],
+        water_percentage=float(row[15]),
+        semolina_flow_rate=float(row[16]),
         waste_lines=waste_lines,
         semolina_lines=semolina_lines,
+        downtime_lines=downtime_lines,
     )
 
 
@@ -170,6 +178,7 @@ class ProductionReportService:
             row,
             load_waste_lines(self._connection, tenant_id=tenant_id, report_id=report_id),
             load_semolina_lines(self._connection, tenant_id=tenant_id, report_id=report_id),
+            load_downtime_lines(self._connection, tenant_id=tenant_id, report_id=report_id),
         )
 
     def _load_detail(self, *, tenant_id: str, report_id: str, report_type: str):
@@ -605,6 +614,7 @@ class ProductionReportService:
                 detail=detail,
                 finished_product_id=work_order[0],
                 correlation_id=correlation_id,
+                packets_per_carton=effects["packaging_parameters"]["packets_per_carton"],  # type: ignore[index]
             )
             if isinstance(posted, Err):
                 return posted
@@ -679,9 +689,16 @@ class ProductionReportService:
             ).fetchone()
             if work_order is None:
                 return Err("NOT_FOUND", f"work order {header.of_id} not found")
+
+            from modules.production.api.conditionnement_service import load_snapshot_packets_per_carton
+
+            snapshot_packets_per_carton = load_snapshot_packets_per_carton(
+                self._connection, tenant_id=tenant_id, report_id=header.id
+            )
             undone = stock.post_conditionnement_report(
                 tenant_id=tenant_id, actor_id=actor_id, header=header, detail=detail,
                 finished_product_id=work_order[0], correlation_id=correlation_id, reverse=True,
+                packets_per_carton=snapshot_packets_per_carton,
             )
         if isinstance(undone, Err):
             return undone
@@ -770,6 +787,7 @@ class ProductionReportService:
         table = "daily_reports" if header.report_type == "daily" else "conditionnement_reports"
         delete_waste_lines(self._connection, tenant_id=tenant_id, report_id=report_id)
         delete_semolina_lines(self._connection, tenant_id=tenant_id, report_id=report_id)
+        delete_downtime_lines(self._connection, tenant_id=tenant_id, report_id=report_id)
 
         self._connection.execute(f"DELETE FROM production.{table} WHERE report_id = %s", (report_id,))
         self._connection.execute("DELETE FROM production.report_revisions WHERE report_id = %s", (report_id,))
@@ -851,9 +869,15 @@ class ProductionReportService:
                 "SELECT product_id FROM production.work_orders WHERE id = %s AND tenant_id = %s",
                 (header.of_id, tenant_id),
             ).fetchone()
+            from modules.production.api.conditionnement_service import load_snapshot_packets_per_carton
+
+            snapshot_packets_per_carton = load_snapshot_packets_per_carton(
+                self._connection, tenant_id=tenant_id, report_id=report_id
+            )
             posted = stock.post_conditionnement_report(
                 tenant_id=tenant_id, actor_id=actor_id, header=header, detail=detail,
                 finished_product_id=work_order[0], correlation_id=correlation_id,
+                packets_per_carton=snapshot_packets_per_carton,
             )
         if isinstance(posted, Err):
             return posted
@@ -1126,6 +1150,9 @@ class ProductionReportService:
         replace_semolina_lines(
             self._connection, tenant_id=tenant_id, report_id=report_id, lines=detail.semolina_lines
         )
+        replace_downtime_lines(
+            self._connection, tenant_id=tenant_id, report_id=report_id, lines=detail.downtime_lines
+        )
 
     def _update_daily_detail(self, *, tenant_id: str, report_id: str, detail: DailyReportDetail) -> None:
         assignments = ", ".join(f"{column.strip()} = %s" for column in _DAILY_COLUMNS.split(","))
@@ -1139,6 +1166,9 @@ class ProductionReportService:
         replace_semolina_lines(
             self._connection, tenant_id=tenant_id, report_id=report_id, lines=detail.semolina_lines
         )
+        replace_downtime_lines(
+            self._connection, tenant_id=tenant_id, report_id=report_id, lines=detail.downtime_lines
+        )
 
     @staticmethod
     def _daily_values(detail: DailyReportDetail) -> tuple:
@@ -1148,12 +1178,11 @@ class ProductionReportService:
             detail.regrind_quantity,
             detail.water_quantity,
             detail.fuel_quantity,
+            detail.gasoil_quantity,
             detail.electricity_quantity,
             detail.start_time,
             detail.end_time,
             detail.production_minutes,
-            detail.downtime_minutes,
-            detail.downtime_reason,
             detail.raw_material_location_id,
             detail.regrind_input_quantity,
             detail.regrind_input_product_id,

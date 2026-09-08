@@ -32,6 +32,26 @@ def test_a_daily_report_may_lose_material_before_and_at_the_press():
     assert isinstance(validate_waste_lines(lines, report_type="daily"), Ok)
 
 
+def test_a_daily_report_may_also_lose_material_at_cross_kneading_and_conditioning():
+    """découpe was renamed to "Cross", and pétrin / finished-product-at-
+    conditioning joined it as daily-report stages."""
+    lines = (
+        WasteLine(category="cross", product_id="semoule", quantity=1),
+        WasteLine(category="kneading", product_id="pate", quantity=2),
+        WasteLine(category="finished_product_conditioning", product_id="spaghetti", quantity=3),
+    )
+    assert isinstance(validate_waste_lines(lines, report_type="daily"), Ok)
+
+
+def test_cutting_is_no_longer_a_valid_daily_category():
+    """The old name the plant used before the rename is refused, exactly like
+    any other category a daily report never had."""
+    lines = (WasteLine(category="cutting", product_id="semoule", quantity=1),)
+    result = validate_waste_lines(lines, report_type="daily")
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_WASTE_CATEGORY"
+
+
 def test_a_packing_report_may_lose_product_and_packaging():
     lines = (
         WasteLine(category="product", product_id="spaghetti", quantity=2),

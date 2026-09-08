@@ -33,6 +33,7 @@ from modules.production.api.conditionnement_service import ConditionnementReport
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     DailyReportDetail,
+    DowntimeLine,
     ProductionReport,
     SemolinaLine,
     WasteLine,
@@ -230,6 +231,40 @@ def _serialize_waste_line(line: WasteLine) -> dict:
     }
 
 
+class DowntimeLineRequest(BaseModel):
+    """One arrêt on a report: the motif, how long, an optional note.
+
+    `motif` is optional here and required at submit-time only if the line
+    records minutes -- see validate_downtime_lines. A team typing a draft may
+    not have settled on wording yet.
+    """
+
+    motif: str | None = None
+    minutes: int = 0
+    note: str | None = None
+
+    def to_line(self, order: int) -> DowntimeLine:
+        return DowntimeLine(
+            motif=self.motif,
+            minutes=self.minutes,
+            note=self.note,
+            line_order=order,
+        )
+
+
+def _downtime_lines(lines: list[DowntimeLineRequest]) -> tuple[DowntimeLine, ...]:
+    """Order comes from the request order -- the shift's own, not a sort."""
+    return tuple(line.to_line(order) for order, line in enumerate(lines))
+
+
+def _serialize_downtime_line(line: DowntimeLine) -> dict:
+    return {
+        "motif": line.motif,
+        "minutes": line.minutes,
+        "note": line.note,
+    }
+
+
 class SemolinaLineRequest(BaseModel):
     """One quality of semoule poured into one report.
 
@@ -276,6 +311,8 @@ class DailyReportDetailRequest(BaseModel):
     # input; the frontend derives water_quantity from it.
     water_percentage: float = 0
     fuel_quantity: float = 0
+    # Gasoil (diesel) -- a separate fuel from fuel_quantity (fioul).
+    gasoil_quantity: float = 0
     electricity_quantity: float = 0
     # Débit de semoule: feed rate in tonnes/hour. Recorded only, for future
     # recipe statistics -- see PRODUCTION_RECIPE_STATISTICS_PLAN.md.
@@ -283,8 +320,9 @@ class DailyReportDetailRequest(BaseModel):
     start_time: datetime.time | None = None
     end_time: datetime.time | None = None
     production_minutes: int = 0
-    downtime_minutes: int = 0
-    downtime_reason: str | None = None
+    # Arrêts, one line per stoppage -- a shift may stop more than once, for
+    # more than one reason.
+    downtime_lines: list[DowntimeLineRequest] = []
     # Semoule poured this shift, one line per quality, each with its own store.
     semolina_lines: list[SemolinaLineRequest] = []
     # Rebroyat's own store — kept separate from the semoule lines' locations.
@@ -298,14 +336,15 @@ class DailyReportDetailRequest(BaseModel):
     regrind_product_id: str | None = None
     # Which mold this shift ran — named per report, not on the OF.
     mold_id: str | None = None
-    # Déchets: raw_material, press, pouring and cutting stages only, one line
-    # per item lost.
+    # Déchets: raw_material, press, pouring, cross, kneading and
+    # finished_product_conditioning stages only, one line per item lost.
     waste_lines: list[WasteLineRequest] = []
 
     def to_detail(self) -> DailyReportDetail:
         payload = self.model_dump()
         payload["waste_lines"] = _waste_lines(self.waste_lines)
         payload["semolina_lines"] = _semolina_lines(self.semolina_lines)
+        payload["downtime_lines"] = _downtime_lines(self.downtime_lines)
         return DailyReportDetail(**payload)
 
 
@@ -1918,13 +1957,13 @@ def _serialize_daily_detail(detail: DailyReportDetail) -> dict:
         "water_quantity": detail.water_quantity,
         "water_percentage": detail.water_percentage,
         "fuel_quantity": detail.fuel_quantity,
+        "gasoil_quantity": detail.gasoil_quantity,
         "electricity_quantity": detail.electricity_quantity,
         "semolina_flow_rate": detail.semolina_flow_rate,
         "start_time": detail.start_time.isoformat() if detail.start_time is not None else None,
         "end_time": detail.end_time.isoformat() if detail.end_time is not None else None,
         "production_minutes": detail.production_minutes,
-        "downtime_minutes": detail.downtime_minutes,
-        "downtime_reason": detail.downtime_reason,
+        "downtime_lines": [_serialize_downtime_line(line) for line in detail.downtime_lines],
         # Without these a form reopening the report could not show which
         # qualities, products and stores it named, and saving would silently
         # blank them.

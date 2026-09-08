@@ -42,14 +42,24 @@ class ProductionReport:
 # stages the plant's own form names and the OF consolidation groups by; free text
 # would let one typo split a category in two without anyone noticing.
 #
-# `raw_material`, `press`, `pouring` and `cutting` are daily-report stages,
-# `product` and `packaging` packing-report stages, and
-# `WASTE_CATEGORIES_BY_REPORT_TYPE` is what enforces that -- a packing report
-# cannot claim semoule was spilt before the press.
-WASTE_CATEGORIES = ("raw_material", "press", "pouring", "cutting", "product", "packaging")
+# `raw_material`, `press`, `pouring`, `cross` (the plant's own name for what was
+# briefly called "cutting"/découpe), `kneading` (pétrin) and
+# `finished_product_conditioning` (PF cdt) are daily-report stages, `product` and
+# `packaging` packing-report stages, and `WASTE_CATEGORIES_BY_REPORT_TYPE` is what
+# enforces that -- a packing report cannot claim semoule was spilt before the press.
+WASTE_CATEGORIES = (
+    "raw_material",
+    "press",
+    "pouring",
+    "cross",
+    "kneading",
+    "finished_product_conditioning",
+    "product",
+    "packaging",
+)
 
 WASTE_CATEGORIES_BY_REPORT_TYPE = {
-    "daily": ("raw_material", "press", "pouring", "cutting"),
+    "daily": ("raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"),
     "conditionnement": ("product", "packaging"),
 }
 
@@ -69,6 +79,22 @@ class WasteLine:
     category: str
     product_id: str | None = None
     quantity: float = 0
+    note: str | None = None
+    # Only ever the order the shift typed them in. Nothing is derived from it.
+    line_order: int = 0
+
+
+@dataclass(frozen=True)
+class DowntimeLine:
+    """One stoppage on one report.
+
+    A shift can stop more than once for more than one reason, so this is a list
+    rather than a `downtime_minutes`/`downtime_reason` pair -- the same move
+    `report_waste_lines` already made for déchets.
+    """
+
+    motif: str | None = None
+    minutes: int = 0
     note: str | None = None
     # Only ever the order the shift typed them in. Nothing is derived from it.
     line_order: int = 0
@@ -111,6 +137,9 @@ class DailyReportDetail:
     # statistics too -- see PRODUCTION_RECIPE_STATISTICS_PLAN.md.
     water_percentage: float = 0
     fuel_quantity: float = 0
+    # Gasoil (diesel) -- a separate fuel from fuel_quantity (fioul), tracked
+    # alongside it rather than folded into it.
+    gasoil_quantity: float = 0
     electricity_quantity: float = 0
     # Débit de semoule: how fast semoule was fed into the line, tonnes/hour.
     # Recorded only, for the same future statistics.
@@ -118,8 +147,9 @@ class DailyReportDetail:
     start_time: datetime.time | None = None
     end_time: datetime.time | None = None
     production_minutes: int = 0
-    downtime_minutes: int = 0
-    downtime_reason: str | None = None
+    # Arrêts. A list rather than a minutes/reason pair, so a shift can record
+    # more than one stoppage and more than one reason -- see DowntimeLine.
+    downtime_lines: tuple[DowntimeLine, ...] = ()
     # Semoule poured into this shift, one line per quality. Each line leaves
     # stock on validation, from its own location.
     semolina_lines: tuple[SemolinaLine, ...] = ()
@@ -182,6 +212,7 @@ DAILY_QUANTITY_FIELDS = (
     "water_quantity",
     "water_percentage",
     "fuel_quantity",
+    "gasoil_quantity",
     "electricity_quantity",
     "semolina_flow_rate",
 )
@@ -236,6 +267,26 @@ def validate_waste_lines(lines: tuple[WasteLine, ...], *, report_type: str) -> R
     return Ok(None)
 
 
+def validate_downtime_lines(lines: tuple[DowntimeLine, ...]) -> Result[None]:
+    """Check a report's arrêt list.
+
+    Each line keeps the same strictness the single field used to have: a
+    stoppage of zero minutes is not a stoppage, and one with minutes but no
+    motif cannot be judged by whoever reads the report later.
+    """
+    for line in lines:
+        if line.minutes < 0:
+            return Err("INVALID_DURATION", "a downtime line cannot have negative minutes")
+        if line.minutes > 0 and not (line.motif or "").strip():
+            return Err("MISSING_DOWNTIME_REASON", "a downtime line needs a motif when it records minutes")
+    return Ok(None)
+
+
+def downtime_total_minutes(lines: tuple[DowntimeLine, ...]) -> int:
+    """Total minutes lost across every arrêt on the report."""
+    return sum(line.minutes for line in lines)
+
+
 def waste_total_by_category(lines: tuple[WasteLine, ...]) -> dict[str, float]:
     """Waste per stage, for the categories this set of lines actually used.
 
@@ -269,14 +320,13 @@ def validate_daily_detail(detail: DailyReportDetail) -> Result[None]:
         return Err("INVALID_QUANTITY", "water_percentage cannot exceed 100")
     if detail.production_minutes < 0:
         return Err("INVALID_DURATION", "production_minutes cannot be negative")
-    if detail.downtime_minutes < 0:
-        return Err("INVALID_DURATION", "downtime_minutes cannot be negative")
     if detail.start_time is not None and detail.end_time is not None and detail.end_time < detail.start_time:
         # A shift crossing midnight is real, but it is entered as two reports —
         # one per report_date — so within one report the end never precedes the start.
         return Err("INVALID_TIME_RANGE", "end_time cannot be before start_time")
-    if detail.downtime_minutes > 0 and not (detail.downtime_reason or "").strip():
-        return Err("MISSING_DOWNTIME_REASON", "a downtime reason is required when downtime minutes are recorded")
+    downtime_check = validate_downtime_lines(detail.downtime_lines)
+    if isinstance(downtime_check, Err):
+        return downtime_check
     semolina_check = validate_semolina_lines(detail.semolina_lines)
     if isinstance(semolina_check, Err):
         return semolina_check

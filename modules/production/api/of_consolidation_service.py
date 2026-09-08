@@ -104,6 +104,7 @@ class OfConsolidationService:
                 "utilities": {
                     "water_quantity": daily["water_quantity"],
                     "fuel_quantity": daily["fuel_quantity"],
+                    "gasoil_quantity": daily["gasoil_quantity"],
                     "electricity_quantity": daily["electricity_quantity"],
                 },
                 # Déchets, from the validated reports' waste lines. There is
@@ -152,9 +153,9 @@ class OfConsolidationService:
                 COALESCE(SUM(d.regrind_quantity), 0),
                 COALESCE(SUM(d.water_quantity), 0),
                 COALESCE(SUM(d.fuel_quantity), 0),
+                COALESCE(SUM(d.gasoil_quantity), 0),
                 COALESCE(SUM(d.electricity_quantity), 0),
                 COALESCE(SUM(d.production_minutes), 0),
-                COALESCE(SUM(d.downtime_minutes), 0),
                 COALESCE(SUM(d.finished_product_quantity), 0),
                 CASE WHEN COUNT(DISTINCT d.regrind_input_product_id) = 1 THEN MIN(d.regrind_input_product_id) END,
                 CASE WHEN COUNT(DISTINCT d.regrind_product_id) = 1 THEN MIN(d.regrind_product_id) END
@@ -174,9 +175,12 @@ class OfConsolidationService:
             "regrind_quantity": float(row[3]),
             "water_quantity": float(row[4]),
             "fuel_quantity": float(row[5]),
-            "electricity_quantity": float(row[6]),
-            "production_minutes": int(row[7]),
-            "downtime_minutes": int(row[8]),
+            "gasoil_quantity": float(row[6]),
+            "electricity_quantity": float(row[7]),
+            "production_minutes": int(row[8]),
+            # Now a list (report_downtime_lines) rather than one column, same
+            # reason semoule and waste are their own query below.
+            "downtime_minutes": self._downtime_totals(tenant_id=tenant_id, of_id=of_id),
             # Reported for yield, never added to produced_quantity.
             "reported_finished_product_quantity": float(row[9]),
             # Null when the lines disagree: a single unit would be a lie.
@@ -184,6 +188,25 @@ class OfConsolidationService:
             "regrind_input_product_id": row[10],
             "regrind_product_id": row[11],
         }
+
+    def _downtime_totals(self, *, tenant_id: str, of_id: str) -> int:
+        """Minutes lost across every arrêt on the OF's validated daily reports.
+
+        A separate query, same reasoning as `_semolina_totals`: a report can
+        carry several arrêts, and joining that many-rows table straight into
+        `_daily_totals` would multiply every other summed column by the line
+        count.
+        """
+        row = self._connection.execute(
+            f"""
+            SELECT COALESCE(SUM(dl.minutes), 0)
+            FROM production.report_downtime_lines dl
+            JOIN production.production_reports r ON r.id = dl.report_id AND r.tenant_id = dl.tenant_id
+            WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'daily' AND r.{_VALIDATED}
+            """,
+            (tenant_id, of_id),
+        ).fetchone()
+        return int(row[0])
 
     def _semolina_totals(self, *, tenant_id: str, of_id: str) -> dict:
         """Semoule poured in, across the OF's validated reports, grouped by quality.

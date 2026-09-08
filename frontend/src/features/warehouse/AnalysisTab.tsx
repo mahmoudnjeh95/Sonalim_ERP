@@ -7,7 +7,7 @@ import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Too
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -55,7 +55,7 @@ const orderSchema = z.object({
 type OrderForm = z.infer<typeof orderSchema>;
 
 function formatMoney(amount: number) {
-  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 0 }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
 }
 
 export function AnalysisTab() {

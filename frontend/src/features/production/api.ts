@@ -805,12 +805,20 @@ export interface ProductionReport {
 }
 
 /**
- * Where in the process material was lost. `raw_material`, `press`, `pouring`
- * and `cutting` belong to the daily report, `product` and `packaging` to the
- * packing report — the backend refuses a line filed under the other one's
- * stage.
+ * Where in the process material was lost. `raw_material`, `press`, `pouring`,
+ * `cross`, `kneading` and `finished_product_conditioning` belong to the daily
+ * report, `product` and `packaging` to the packing report — the backend
+ * refuses a line filed under the other one's stage.
  */
-export type WasteCategory = "raw_material" | "press" | "pouring" | "cutting" | "product" | "packaging";
+export type WasteCategory =
+  | "raw_material"
+  | "press"
+  | "pouring"
+  | "cross"
+  | "kneading"
+  | "finished_product_conditioning"
+  | "product"
+  | "packaging";
 
 export interface WasteLine {
   category: WasteCategory;
@@ -831,6 +839,13 @@ export interface SemolinaLine {
   location_id: string | null;
 }
 
+export interface DowntimeLine {
+  /** The stated cause. Optional while a draft is being typed, required to submit if minutes > 0. */
+  motif: string | null;
+  minutes: number;
+  note: string | null;
+}
+
 export interface DailyReportDetail {
   dough_quantity: number;
   // Recorded for yield and consolidation; it posts no stock.
@@ -841,14 +856,17 @@ export interface DailyReportDetail {
   // input; water_quantity is derived from it and kept in sync by the form.
   water_percentage: number;
   fuel_quantity: number;
+  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul).
+  gasoil_quantity: number;
   electricity_quantity: number;
   // Débit de semoule, tonnes/hour. Recorded for future recipe statistics only.
   semolina_flow_rate: number;
   start_time: string | null;
   end_time: string | null;
   production_minutes: number;
-  downtime_minutes: number;
-  downtime_reason: string | null;
+  // Arrêts, one line per stoppage — a shift may stop more than once, for more
+  // than one reason.
+  downtime_lines: DowntimeLine[];
   // Semoule poured this shift, one line per quality. Required before the report
   // can be submitted if a line's quantity is above zero.
   semolina_lines: SemolinaLine[];
@@ -1119,7 +1137,12 @@ export function reviseReport(token: string, reportId: string) {
  * way to turn a weight into a count, and `missing` says which parameter is absent.
  */
 export interface PackagingVariance {
-  tonnage: number;
+  /**
+   * Decision 25: no longer entered on the packing report. Comes from the OF's
+   * own daily reports at OF/product scope, and is always `null` for a single
+   * report — it has no natural share of an OF's tonnage to compare against.
+   */
+  tonnage: number | null;
   net_weight_grams: number | null;
   packets_per_carton: number | null;
   expected_packets: number | null;
@@ -1136,6 +1159,15 @@ export interface PackagingVariance {
   packet_variance_ratio: number | null;
   carton_variance: number | null;
   carton_variance_ratio: number | null;
+  /**
+   * The machine's own tally against what the floor physically boxed:
+   * `counted_packets - (counted_cartons * packets_per_carton)`. Independent of
+   * the weight-based figures above — this catches an HMI miscount or a carton
+   * closed short even when the scale is right. `null` for a product with no
+   * carton tier (a sac counted directly).
+   */
+  machine_carton_variance: number | null;
+  machine_carton_variance_ratio: number | null;
   tolerance_percent: number;
   within_tolerance: boolean | null;
   missing: string[];
