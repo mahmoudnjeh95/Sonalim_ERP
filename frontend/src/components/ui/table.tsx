@@ -112,7 +112,10 @@ export function TableHead({ className, ...props }: React.ThHTMLAttributes<HTMLTa
 }
 
 export function TableCell({ className, ...props }: React.TdHTMLAttributes<HTMLTableCellElement>) {
-  return <td className={cn("px-4 py-3", className)} {...props} />;
+  // overflow-hidden matters once a table has resizable (fixed-width) columns:
+  // without it, a cell whose content is wider than its column -- a long badge,
+  // an unbroken id -- paints over the next column instead of clipping.
+  return <td className={cn("overflow-hidden px-4 py-3", className)} {...props} />;
 }
 
 /**

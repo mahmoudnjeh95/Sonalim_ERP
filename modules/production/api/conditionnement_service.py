@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import datetime
 
 import psycopg
@@ -9,6 +10,7 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.production.api.production_report_service import ProductionReportService, _detail_to_json
 from modules.production.api.waste_line_store import load_waste_lines, replace_waste_lines
+from modules.production.domain.packaging_estimate import tonnage_from_count
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     ProductionReport,
@@ -28,7 +30,8 @@ _COLUMNS = """
     machine_speed,
     production_minutes, downtime_minutes, downtime_reason, lot_number, dlc_date,
     film_product_id, carton_product_id, tape_product_id, packaging_location_id,
-    finished_goods_location_id
+    finished_goods_location_id, daily_report_id,
+    film_supplier_id, carton_supplier_id, tape_supplier_id
 """
 
 _OF_STATUSES_ACCEPTING_REPORTS = {"planned", "ongoing", "suspended"}
@@ -52,6 +55,10 @@ def _row_to_detail(row: tuple, waste_lines: tuple[WasteLine, ...] = ()) -> Condi
         tape_product_id=row[13],
         packaging_location_id=row[14],
         finished_goods_location_id=row[15],
+        daily_report_id=row[16],
+        film_supplier_id=row[17],
+        carton_supplier_id=row[18],
+        tape_supplier_id=row[19],
         waste_lines=waste_lines,
     )
 
@@ -74,6 +81,10 @@ def _values(detail: ConditionnementReportDetail) -> tuple:
         detail.tape_product_id,
         detail.packaging_location_id,
         detail.finished_goods_location_id,
+        detail.daily_report_id,
+        detail.film_supplier_id,
+        detail.carton_supplier_id,
+        detail.tape_supplier_id,
     )
 
 
@@ -152,7 +163,7 @@ def register_dlc_lot(
 
 
 def freeze_packaging_parameters(
-    connection: psycopg.Connection, *, tenant_id: str, report_id: str, product_id: str
+    connection: psycopg.Connection, *, tenant_id: str, report_id: str, product_id: str, detail: ConditionnementReportDetail
 ) -> dict:
     """Stamp the product's packaging onto the report as it is validated.
 
@@ -165,20 +176,34 @@ def freeze_packaging_parameters(
 
     Read through CoreService rather than a join: core is a declared dependency
     with a service, and production has no business in its tables.
+
+    The same frozen net weight also settles `finished_product_quantity` here,
+    in the same statement: the tonnage a carton/sac count represents (decision
+    24's count turned into weight via the product's own net weight), which is
+    what OF consolidation sums into `produced_quantity` and yield. Computing it
+    now rather than whenever the report was last saved as a draft means it can
+    never disagree with the snapshot it is validated against, even if the
+    product's packaging was edited in between.
     """
     from core.api.service import CoreService
 
     product = CoreService(connection).get_product(tenant_id, product_id)
     net_weight_grams = product.net_weight_grams if product is not None else None
     packets_per_carton = product.packets_per_carton if product is not None else None
+    finished_product_quantity = tonnage_from_count(
+        net_weight_grams=net_weight_grams,
+        packets_per_carton=packets_per_carton,
+        carton_quantity=detail.carton_quantity,
+        packets_counted=detail.packets_counted,
+    )
 
     connection.execute(
         """
         UPDATE production.conditionnement_reports
-        SET snapshot_net_weight_grams = %s, snapshot_packets_per_carton = %s
+        SET snapshot_net_weight_grams = %s, snapshot_packets_per_carton = %s, finished_product_quantity = %s
         WHERE report_id = %s AND tenant_id = %s
         """,
-        (net_weight_grams, packets_per_carton, report_id, tenant_id),
+        (net_weight_grams, packets_per_carton, finished_product_quantity, report_id, tenant_id),
     )
     return {"net_weight_grams": net_weight_grams, "packets_per_carton": packets_per_carton}
 
@@ -186,7 +211,31 @@ def freeze_packaging_parameters(
 def write_conditionnement_detail(
     connection: psycopg.Connection, *, tenant_id: str, report_id: str, detail: ConditionnementReportDetail
 ) -> None:
-    """Overwrite a packing report's figures. Used by the post-validation correction path."""
+    """Overwrite a packing report's figures. Used by the post-validation correction path.
+
+    A validated report already has its packaging frozen (decision 20) — this
+    path never calls `freeze_packaging_parameters` again, so `finished_product_
+    quantity` is recomputed here instead, off that same snapshot rather than the
+    product's possibly-since-edited current values, so a correction stays judged
+    against what the report was originally validated with.
+    """
+    snapshot = connection.execute(
+        "SELECT snapshot_net_weight_grams, snapshot_packets_per_carton FROM production.conditionnement_reports "
+        "WHERE report_id = %s AND tenant_id = %s",
+        (report_id, tenant_id),
+    ).fetchone()
+    snapshot_weight = float(snapshot[0]) if snapshot is not None and snapshot[0] is not None else None
+    snapshot_per_carton = float(snapshot[1]) if snapshot is not None and snapshot[1] is not None else None
+    detail = dataclasses.replace(
+        detail,
+        finished_product_quantity=tonnage_from_count(
+            net_weight_grams=snapshot_weight,
+            packets_per_carton=snapshot_per_carton,
+            carton_quantity=detail.carton_quantity,
+            packets_counted=detail.packets_counted,
+        ),
+    )
+
     assignments = ", ".join(f"{column.strip()} = %s" for column in _COLUMNS.split(","))
     connection.execute(
         f"UPDATE production.conditionnement_reports SET {assignments} WHERE report_id = %s AND tenant_id = %s",
@@ -218,6 +267,7 @@ class ConditionnementReportService:
         detail: ConditionnementReportDetail | None = None,
         team: str | None = None,
         work_center_id: str | None = None,
+        equipment_id: str | None = None,
         shift: str | None = None,
         # Only consulted when the order has no product yet — its first
         # packaging report is what names one. Ignored once it's set: an OF
@@ -261,12 +311,26 @@ class ConditionnementReportService:
                 "DUPLICATE_REPORT", "a conditionnement report already exists for this work order, date and shift"
             )
 
+        if detail.daily_report_id is not None:
+            daily = self._connection.execute(
+                "SELECT of_id, report_type FROM production.production_reports WHERE id = %s AND tenant_id = %s",
+                (detail.daily_report_id, tenant_id),
+            ).fetchone()
+            if daily is None:
+                return Err("NOT_FOUND", f"daily report {detail.daily_report_id} not found")
+            daily_of_id, daily_report_type = daily
+            if daily_report_type != "daily":
+                return Err("WRONG_REPORT_TYPE", f"report {detail.daily_report_id} is not a daily report")
+            if daily_of_id != of_id:
+                return Err("MISMATCHED_OF", "the daily report must belong to the same work order")
+
         report_id = str(ULID())
         self._connection.execute(
             """
             INSERT INTO production.production_reports
-                (id, tenant_id, of_id, report_type, report_date, status, revision, team, work_center_id, shift, created_by)
-            VALUES (%s, %s, %s, 'conditionnement', %s, 'draft', 1, %s, %s, %s, %s)
+                (id, tenant_id, of_id, report_type, report_date, status, revision, team, work_center_id,
+                 equipment_id, shift, created_by)
+            VALUES (%s, %s, %s, 'conditionnement', %s, 'draft', 1, %s, %s, %s, %s, %s)
             """,
             (
                 report_id,
@@ -275,6 +339,7 @@ class ConditionnementReportService:
                 report_date,
                 team,
                 work_center_id if work_center_id is not None else of_work_center_id,
+                equipment_id,
                 shift,
                 actor_id,
             ),

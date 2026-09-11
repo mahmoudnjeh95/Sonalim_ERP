@@ -28,6 +28,25 @@ class RecipeService:
         if isinstance(validation, Err):
             return validation
 
+        # Both target_product_id and each component_product_id reach here as
+        # caller-supplied strings (the recipe dialog used to allow free text on
+        # both) with no format guarantee. Without this check a typo or made-up
+        # SKU trips recipes_target_product_id_fkey / recipe_lines_component_product_id_fkey
+        # as a raw psycopg IntegrityError -- an unhandled 500 that also drops the
+        # response's CORS headers, which the browser then misreports as a CORS
+        # failure instead of the real "no such product" problem.
+        wanted_product_ids = {target_product_id, *(line.component_product_id for line in lines)}
+        found_product_ids = {
+            row[0]
+            for row in self._connection.execute(
+                "SELECT id FROM core.products WHERE tenant_id = %s AND id = ANY(%s)",
+                (tenant_id, list(wanted_product_ids)),
+            ).fetchall()
+        }
+        missing_product_ids = wanted_product_ids - found_product_ids
+        if missing_product_ids:
+            return Err("PRODUCT_NOT_FOUND", f"product(s) not found: {', '.join(sorted(missing_product_ids))}")
+
         # Same FOR-UPDATE-without-aggregate pattern as PackagingBomService.create_bom:
         # lock every existing row for this target product, compute the next version in
         # Python, so a concurrent create_recipe() for the same product serializes here.

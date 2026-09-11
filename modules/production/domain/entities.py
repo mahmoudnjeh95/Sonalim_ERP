@@ -29,6 +29,10 @@ class WorkOrder:
     status: str
     reference: str = ""
     work_center_id: str | None = None
+    # Opaque reference to the user (core.users) responsible for this OF. Optional:
+    # unlike work_center_id, plenty of real OFs will never have one on file, and
+    # creation must not be blocked on it.
+    supervisor_id: str | None = None
     recipe_id: str | None = None
     packaging_bom_id: str | None = None
     start_date: datetime.date | None = None

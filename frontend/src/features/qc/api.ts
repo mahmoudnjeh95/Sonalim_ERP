@@ -14,6 +14,10 @@ export type QualityReportStatus = "draft" | "submitted" | "validated" | "rejecte
 export interface QualityReport {
   id: string;
   of_id: string;
+  // The conditionnement (packaging) run this report inspects. `team`, `shift`
+  // and `report_date` are all derived from it server-side -- never entered
+  // independently -- so this is a real production team, never a QC-only label.
+  conditionnement_report_id: string | null;
   report_date: string;
   status: QualityReportStatus;
   revision: number;
@@ -49,11 +53,31 @@ export interface ValidatedQualityReport extends QualityReportWithDetail {
 }
 
 export interface CreateQualityReportInput {
+  conditionnement_report_id: string;
+  detail?: Partial<QualityReportDetail>;
+}
+
+// A conditionnement report not yet inspected, enriched with the figures the
+// create-report form shows as a hint before the inspector types anything --
+// see QualityReportService.list_inspectable_conditionnement_reports.
+export interface InspectableConditionnementReport {
+  conditionnement_report_id: string;
   of_id: string;
   report_date: string;
-  team?: string;
-  shift?: string;
-  detail?: Partial<QualityReportDetail>;
+  shift: string | null;
+  team: string | null;
+  status: string;
+  packets_counted: number;
+  carton_quantity: number;
+  finished_product_quantity: number;
+  regrind_quantity: number | null;
+}
+
+export function listInspectableConditionnementReports(token: string, params: { of_id?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.of_id) query.set("of_id", params.of_id);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<InspectableConditionnementReport[]>(`/qc/conditionnement-reports${suffix}`, { token });
 }
 
 // --- Team conformity ---------------------------------------------------------
@@ -116,9 +140,9 @@ export function adminUpdateQualityReport(
   reportId: string,
   input: {
     detail?: Partial<QualityReportDetail>;
-    team?: string;
-    shift?: string;
-    report_date?: string;
+    // Re-linking re-derives team, shift and report_date together -- there is
+    // no way to set those independently, even here.
+    conditionnement_report_id?: string;
     reason?: string;
   },
 ) {

@@ -14,6 +14,7 @@ import { NonConformityDetailDialog } from "./NonConformityDetailDialog";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
@@ -34,9 +35,11 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { BulkActionBar } from "../../components/patterns/BulkActionBar";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { useSelection } from "../../lib/useSelection";
 import { listProducts, listWorkOrders } from "../production/api";
 import { listLocations } from "../warehouse/api";
 import {
@@ -164,7 +167,52 @@ export function NonConformitiesTab() {
     statusFilter === "all" ? items : items.filter((n) => n.status === statusFilter),
   );
 
+  // Only a dispositioned case is ready to close -- one still quarantined has
+  // no corrective action to record yet.
+  const selection = useSelection(items.filter((n) => n.status === "dispositioned").map((n) => n.id));
+  const selectedNonConformities = items.filter((n) => selection.isSelected(n.id));
+  const [bulkCloseOpen, setBulkCloseOpen] = useState(false);
+  const [bulkCorrectiveAction, setBulkCorrectiveAction] = useState("");
+
+  const bulkCloseMutation = useMutation({
+    mutationFn: async (correctiveAction: string) => {
+      const settled = await Promise.allSettled(
+        selectedNonConformities.map((n) => closeNonConformity(token, n.id, correctiveAction)),
+      );
+      return { succeeded: settled.filter((r) => r.status === "fulfilled").length, total: settled.length };
+    },
+    onSuccess: ({ succeeded, total }) => {
+      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "stock"] });
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "stock", "moves"] });
+      queryClient.invalidateQueries({ queryKey: ["production", "scrap-records"] });
+      const failed = total - succeeded;
+      if (succeeded > 0) toast.success(`${succeeded} ${t("qc.nc.bulkCloseSucceeded")}`);
+      if (failed > 0) toast.error(`${failed} ${t("qc.nc.bulkCloseFailed")}`);
+      setBulkCloseOpen(false);
+      setBulkCorrectiveAction("");
+      selection.clear();
+    },
+  });
+
   const columns: ColumnDef<NonConformity>[] = [
+    {
+      key: "select",
+      header: (
+        <Checkbox checked={selection.allSelected} onCheckedChange={() => selection.toggleAll()} aria-label={t("common.selectAll")} />
+      ),
+      defaultWidth: 40,
+      alwaysVisible: true,
+      filterCell: { type: "blank" },
+      cell: (n) =>
+        n.status === "dispositioned" && (
+          <Checkbox
+            checked={selection.isSelected(n.id)}
+            onCheckedChange={() => selection.toggle(n.id)}
+            aria-label={t("qc.nc.close")}
+          />
+        ),
+    },
     {
       key: "reference",
       header: t("qc.nc.column.reference"),
@@ -452,6 +500,53 @@ export function NonConformitiesTab() {
               </Dialog>
             </div>
           </div>
+          <BulkActionBar count={selection.count} onClear={selection.clear}>
+            <Dialog
+              open={bulkCloseOpen}
+              onOpenChange={(open) => {
+                setBulkCloseOpen(open);
+                if (open) setBulkCorrectiveAction("");
+              }}
+            >
+              <DialogTrigger asChild>
+                <Button size="sm">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {t("qc.nc.bulkClose")}
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{t("qc.nc.dialog.bulkClose.title")}</DialogTitle>
+                  <DialogDescription>{t("qc.nc.dialog.bulkClose.description")}</DialogDescription>
+                </DialogHeader>
+                <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                  {selectedNonConformities.map((n) => (
+                    <div key={n.id} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="font-medium">{n.reference}</span>
+                      <span className="text-muted-foreground">
+                        {productName(n.product_id)} · {n.quantity}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="bulk_corrective">{t("qc.nc.field.correctiveAction")}</Label>
+                  <Input
+                    id="bulk_corrective"
+                    value={bulkCorrectiveAction}
+                    onChange={(e) => setBulkCorrectiveAction(e.target.value)}
+                  />
+                </div>
+                <Button
+                  className="w-full"
+                  onClick={() => bulkCloseMutation.mutate(bulkCorrectiveAction)}
+                  disabled={bulkCloseMutation.isPending || !bulkCorrectiveAction.trim()}
+                >
+                  {bulkCloseMutation.isPending ? t("qc.nc.bulkClosing") : t("qc.nc.bulkClose")}
+                </Button>
+              </DialogContent>
+            </Dialog>
+          </BulkActionBar>
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
@@ -500,11 +595,13 @@ export function NonConformitiesTab() {
                         <TableCell
                           key={column.key}
                           className={column.cellClassName}
-                          // The action cell decides about the case; the rest of
-                          // the row reads it. Clicking "disposition" must not
-                          // also open the panel behind the dialog.
+                          // The action and select cells decide about the case;
+                          // the rest of the row reads it. Clicking "disposition"
+                          // or the checkbox must not also open the panel.
                           onClick={
-                            column.key === "action" ? (event) => event.stopPropagation() : undefined
+                            column.key === "action" || column.key === "select"
+                              ? (event) => event.stopPropagation()
+                              : undefined
                           }
                         >
                           {column.cell(item)}

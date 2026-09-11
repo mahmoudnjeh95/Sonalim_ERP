@@ -142,6 +142,9 @@ export interface WorkOrder {
   planned_quantity: number | null;
   status: WorkOrderStatus;
   work_center_id: string | null;
+  // Who is responsible for this OF. Optional — unlike work_center_id, never
+  // required to create or run one.
+  supervisor_id: string | null;
   recipe_id: string | null;
   packaging_bom_id: string | null;
   start_date: string | null;
@@ -161,6 +164,7 @@ export interface CreateWorkOrderInput {
   work_center_id: string;
   product_id?: string;
   planned_quantity?: number;
+  supervisor_id?: string;
   recipe_id?: string;
   start_date?: string;
   product_type?: string;
@@ -173,6 +177,7 @@ export interface UpdateWorkOrderInput {
   product_id?: string;
   planned_quantity?: number;
   work_center_id?: string;
+  supervisor_id?: string;
   recipe_id?: string;
   packaging_bom_id?: string;
   start_date?: string;
@@ -184,6 +189,23 @@ export function listWorkOrders(token: string) {
   return apiFetch<WorkOrder[]>("/production/work-orders", { token });
 }
 
+// A user with the Production role — who can be named an OF's supervisor.
+// Never a raw id in the UI: full_name is what's shown when a user has one on
+// file (set via Admin > Users), falling back to email otherwise.
+export interface SupervisorOption {
+  id: string;
+  email: string;
+  full_name: string | null;
+}
+
+export function supervisorLabel(supervisor: SupervisorOption): string {
+  return supervisor.full_name || supervisor.email;
+}
+
+export function listSupervisorOptions(token: string) {
+  return apiFetch<SupervisorOption[]>("/production/work-orders/supervisors", { token });
+}
+
 export function createWorkOrder(token: string, input: CreateWorkOrderInput) {
   return apiFetch<WorkOrder>("/production/work-orders", {
     method: "POST",
@@ -192,6 +214,7 @@ export function createWorkOrder(token: string, input: CreateWorkOrderInput) {
       product_id: input.product_id,
       planned_quantity: input.planned_quantity,
       work_center_id: input.work_center_id,
+      supervisor_id: input.supervisor_id,
       recipe_id: input.recipe_id,
       start_date: input.start_date,
       product_type: input.product_type,
@@ -336,6 +359,22 @@ export function unblockWorkCenter(token: string, workCenterId: string) {
   return apiFetch<WorkCenter>(`/production/work-centers/${workCenterId}/unblock`, { method: "POST", token });
 }
 
+// A line like Line_1_PL can carry more than one machine running at once (see
+// the Maintenance module's Equipment tab, where they're added). This is a
+// thin pass-through so a report's machine field, or resolving a report's
+// equipment_id to a name, never needs maintenance.view_equipment.
+export interface Machine {
+  id: string;
+  code: string;
+  name: string;
+  status: "operational" | "down" | "maintenance";
+}
+
+export function listMachines(token: string, workCenterId?: string) {
+  const query = workCenterId ? `?work_center_id=${encodeURIComponent(workCenterId)}` : "";
+  return apiFetch<Machine[]>(`/production/machines${query}`, { token });
+}
+
 // --- Molds ----------------------------------------------------------------
 
 export type MoldType = "PC" | "PL";
@@ -427,7 +466,12 @@ export function archiveRecipe(token: string, recipeId: string) {
 
 // --- Scrap & regrind -------------------------------------------------------
 
-export type ScrapType = "filling_dosing" | "cutting";
+// "cutting" and "filling_dosing" are the two a person picks in the "Enregistrer
+// un rebut" dialog. "daily_report" and "non_conformity" never come from that
+// dialog -- they're written by the backend itself (a validated daily report's
+// own rebroyat figure, or a QC disposition sending a rejected packet back to
+// regrind) and only ever appear when reading scrap records back.
+export type ScrapType = "filling_dosing" | "cutting" | "daily_report" | "non_conformity";
 
 export interface ScrapRecord {
   id: string;
@@ -457,9 +501,22 @@ export interface RecordScrapInput {
 // the backend.
 export type RegrindStage = "new" | "assigned" | "finished" | "suspended" | "cancelled";
 
+// One scrap input a regrind batch was built from -- work_order_id is the
+// *production* OF the scrap came off of (cutting/filling waste), not the
+// regrind batch itself. This is what lets a raw-material stock line trace a
+// receipt back to "ground from OF-X's cutting scrap".
+export interface RegrindScrapInput {
+  id: string;
+  work_order_id: string | null;
+  product_id: string;
+  scrap_type: ScrapType;
+  quantity: number;
+}
+
 export interface RegrindBatch {
   work_order: WorkOrder;
   scrap_record_ids: string[];
+  scrap_inputs: RegrindScrapInput[];
   input_quantity_total: number;
   actual_output_quantity: number | null;
   loss_quantity: number | null;
@@ -543,6 +600,10 @@ export function listRegrindBatches(token: string) {
   return apiFetch<RegrindBatchSummary[]>("/production/regrind-batches", { token });
 }
 
+export function getRegrindBatch(token: string, workOrderId: string) {
+  return apiFetch<RegrindBatch>(`/production/regrind-batches/${workOrderId}`, { token });
+}
+
 // --- Metered resource types ------------------------------------------------
 //
 // The per-date and per-OF consumption ledgers these used to key are gone:
@@ -622,6 +683,12 @@ export interface TeamPerformanceRow {
   production_minutes: number;
   downtime_minutes: number;
   waste_by_product: { product_id: string; quantity: number }[];
+  /** Semoule-side déchet only (daily report categories), by stage — where it came from. */
+  daily_waste_by_category: Partial<Record<WasteCategory, number>>;
+  /** What the team declared as rebroyat over the same reports — recovered, not lost. */
+  regrind_quantity: number;
+  /** daily_waste_by_category summed, minus regrind_quantity: semoule genuinely lost. */
+  net_semoule_waste: number;
 }
 
 export function listTeamPerformance(
@@ -632,6 +699,34 @@ export function listTeamPerformance(
   if (params.date_from) query.set("date_from", params.date_from);
   if (params.date_to) query.set("date_to", params.date_to);
   return apiFetch<TeamPerformanceRow[]>(`/production/reports/team-performance?${query.toString()}`, { token });
+}
+
+// --- Machine performance ------------------------------------------------
+//
+// Same shape as team performance, grouped by machine instead of by team — a
+// line like Line_1_PL can run more than one machine at once, so productivity
+// has to be checkable per machine, not just per line. Rows are keyed by
+// equipment_id, an opaque reference into the Maintenance module: resolve it
+// to a code/name via listMachines or the Equipment tab's own list.
+
+export interface MachinePerformanceRow {
+  equipment_id: string;
+  period: string;
+  report_count: number;
+  material_input_quantity: number;
+  produced_quantity: number;
+  production_minutes: number;
+  downtime_minutes: number;
+}
+
+export function listMachinePerformance(
+  token: string,
+  params: { grain: PerformanceGrain; date_from?: string; date_to?: string },
+) {
+  const query = new URLSearchParams({ grain: params.grain });
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  return apiFetch<MachinePerformanceRow[]>(`/production/reports/machine-performance?${query.toString()}`, { token });
 }
 
 export interface DowntimeReasonRow {
@@ -658,17 +753,86 @@ export interface RecipeCorrelationRow {
   report_id: string;
   of_id: string;
   product_id: string;
+  report_date: string;
+  team: string | null;
   water_percentage: number | null;
   semolina_flow_rate: number | null;
   yield_ratio: number;
+  /** The OF's recipe's own water line, when it has one classified is_water. Null means no target to check against, not that the dosage is fine. */
+  water_target_min: number | null;
+  water_target_max: number | null;
+  water_target_default: number | null;
 }
 
 export function listRecipeCorrelation(token: string) {
   return apiFetch<RecipeCorrelationRow[]>("/production/work-orders/recipe-correlation", { token });
 }
 
+export interface RecipeCorrelationInsight {
+  available: boolean;
+  text: string | null;
+}
+
+/** Generated on demand (never on page load) -- each call is a real Gemini request against the free tier's quota. */
+export function getRecipeCorrelationInsight(token: string, locale: string) {
+  return apiFetch<RecipeCorrelationInsight>(
+    `/production/work-orders/recipe-correlation/insight?locale=${encodeURIComponent(locale)}`,
+    { token },
+  );
+}
+
 export function getWorkOrderYield(token: string, workOrderId: string) {
   return apiFetch<WorkOrderYield>(`/production/work-orders/${workOrderId}/yield`, { token });
+}
+
+// --- IA assistant ------------------------------------------------------------
+//
+// A per-user chat grounded in this tenant's own production stats via
+// server-side Gemini function-calling -- the assistant only ever states a
+// number after fetching it through a whitelisted, already-aggregated tool, and
+// only once at least 10 shifts/reports back it (see MIN_ROWS_FOR_TOOL_RESULT in
+// ia_assistant_service.py). Conversations are private: nobody else, including
+// an admin, can list or read another user's.
+
+export interface IaAssistantConversation {
+  id: string;
+  title: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface IaAssistantMessage {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export function listIaAssistantConversations(token: string) {
+  return apiFetch<IaAssistantConversation[]>("/production/ia-assistant/conversations", { token });
+}
+
+export function createIaAssistantConversation(token: string) {
+  return apiFetch<IaAssistantConversation>("/production/ia-assistant/conversations", { method: "POST", token });
+}
+
+export function deleteIaAssistantConversation(token: string, conversationId: string) {
+  return apiFetch<void>(`/production/ia-assistant/conversations/${conversationId}`, { method: "DELETE", token });
+}
+
+export function listIaAssistantMessages(token: string, conversationId: string) {
+  return apiFetch<IaAssistantMessage[]>(`/production/ia-assistant/conversations/${conversationId}/messages`, { token });
+}
+
+/** The assistant's one reply -- the user's own message is echoed back into the
+ * message list by a refetch, not returned here, since the backend only persists
+ * the pair once it actually has an answer (see send_message's docstring). */
+export function sendIaAssistantMessage(token: string, conversationId: string, content: string, locale: string) {
+  return apiFetch<IaAssistantMessage>(`/production/ia-assistant/conversations/${conversationId}/messages`, {
+    method: "POST",
+    token,
+    body: { content, locale },
+  });
 }
 
 // --- OF consolidation -------------------------------------------------------
@@ -728,6 +892,13 @@ export interface OfConsolidation {
     unattributed_quantity: number;
     /** Not waste: recovered material that opens its own regrind OF. */
     regrind: { quantity: number; product_id: string | null };
+    /**
+     * The semoule genuinely lost: daily-report déchet (raw_material through
+     * finished_product_conditioning — never conditionnement's product/packaging,
+     * which isn't semoule any more) net of the rebroyat declared over the same
+     * reports. The figure the plant tracks to minimise.
+     */
+    net_semoule_waste: number;
   };
   time: { production_minutes: number; downtime_minutes: number };
   quality: {
@@ -796,6 +967,9 @@ export interface ProductionReport {
   revision: number;
   team: string | null;
   work_center_id: string | null;
+  // Which machine within work_center_id ran this shift — a line can carry
+  // more than one at once. Optional while a draft, required to submit.
+  equipment_id: string | null;
   shift: string | null;
   created_by: string | null;
   submitted_at: string | null;
@@ -856,8 +1030,12 @@ export interface DailyReportDetail {
   // input; water_quantity is derived from it and kept in sync by the form.
   water_percentage: number;
   fuel_quantity: number;
+  // Which fournisseur this shift's fioul came from — informational only, since
+  // fuel is never posted to stock and more than one supplier can deliver it.
+  fuel_supplier_id: string | null;
   // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul).
   gasoil_quantity: number;
+  gasoil_supplier_id: string | null;
   electricity_quantity: number;
   // Débit de semoule, tonnes/hour. Recorded for future recipe statistics only.
   semolina_flow_rate: number;
@@ -910,9 +1088,19 @@ export interface ConditionnementReportDetail {
   film_product_id: string | null;
   carton_product_id: string | null;
   tape_product_id: string | null;
+  // Which fournisseur each packaging item came from — informational only, since
+  // more than one supplier can deliver film, carton or ruban.
+  film_supplier_id: string | null;
+  carton_supplier_id: string | null;
+  tape_supplier_id: string | null;
   packaging_location_id: string | null;
   // The finished product itself is the OF's product and is not restated here.
   finished_goods_location_id: string | null;
+  // The daily report whose output this run packaged. Optional -- a team may
+  // file conditionnement before that day's daily report exists, or package
+  // previously stored product with no same-shift daily report at all. Powers
+  // qc's inspection hint (packets/cartons/regrind) rather than gating stock.
+  daily_report_id: string | null;
   waste_lines: WasteLine[];
 }
 
@@ -933,6 +1121,7 @@ export interface CreateDailyReportInput {
   report_date: string;
   team?: string;
   work_center_id?: string;
+  equipment_id?: string;
   shift?: string;
   detail?: Partial<DailyReportDetail>;
 }
@@ -974,6 +1163,7 @@ export interface CreateConditionnementReportInput {
   report_date: string;
   team?: string;
   work_center_id?: string;
+  equipment_id?: string;
   shift?: string;
   // Only required when the order has no product yet — its first packaging
   // report is what names one.
@@ -1086,11 +1276,13 @@ export function rejectReport(token: string, reportId: string, reason: string) {
 
 // A validated report has moved stock, so deleting it reverses those movements
 // first. Needs production.admin_reports, and a reason that lands in the audit log.
-export function deleteReport(token: string, reportId: string, reason: string) {
+// `force` pushes past a REGRIND_ALREADY_COMPLETED refusal: it also reverses the
+// regrind order's stock receipt and removes the order along with the report.
+export function deleteReport(token: string, reportId: string, reason: string, force = false) {
   return apiFetch<{ deleted: string }>(`/production/reports/${reportId}`, {
     method: "DELETE",
     token,
-    body: { reason },
+    body: { reason, force },
   });
 }
 
@@ -1101,11 +1293,12 @@ export function correctValidatedDailyReport(
   reportId: string,
   detail: Partial<DailyReportDetail>,
   reason: string,
+  force = false,
 ) {
   return apiFetch<ProductionReportWithDetail>(`/production/reports/daily/${reportId}/correct-validated`, {
     method: "PATCH",
     token,
-    body: { detail, reason },
+    body: { detail, reason, force },
   });
 }
 

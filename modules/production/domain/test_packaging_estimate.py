@@ -4,6 +4,8 @@ from modules.production.domain.packaging_estimate import (
     DEFAULT_TOLERANCE_PERCENT,
     compute_variance,
     estimate_packaging,
+    finished_quantity_from_count,
+    tonnage_from_count,
 )
 
 
@@ -205,3 +207,47 @@ def test_machine_carton_variance_is_not_quality_adjusted():
         rejected_packets=500,
     )
     assert variance.machine_carton_variance == 0
+
+
+# ---- turning a count back into a tonnage ----------------------------------
+
+
+def test_a_carton_of_500g_packets_weighs_ten_kilos():
+    # 20 packets to a carton, 500g each: one carton is 10kg, i.e. 0.01 tonnes.
+    assert finished_quantity_from_count(packets_per_carton=20, carton_quantity=1, packets_counted=0) == 20
+    assert tonnage_from_count(
+        net_weight_grams=500, packets_per_carton=20, carton_quantity=1, packets_counted=0
+    ) == pytest.approx(0.01)
+
+
+def test_a_carton_of_200g_packets_weighs_eight_kilos():
+    # 40 packets to a carton, 200g each: one carton is 8kg, i.e. 0.008 tonnes.
+    assert tonnage_from_count(
+        net_weight_grams=200, packets_per_carton=40, carton_quantity=1, packets_counted=0
+    ) == pytest.approx(0.008)
+
+
+def test_a_sac_has_no_carton_tier_so_the_tally_leads():
+    # doman-pc-4540g-sac: no carton line at all, so packets_counted (the sac
+    # tally) is what both the stock quantity and the tonnage are read from.
+    assert finished_quantity_from_count(packets_per_carton=None, carton_quantity=0, packets_counted=1000) == 1000
+    assert tonnage_from_count(
+        net_weight_grams=4540, packets_per_carton=None, carton_quantity=0, packets_counted=1000
+    ) == pytest.approx(4.54)
+
+
+def test_an_uncounted_carton_falls_back_to_the_machine_tally():
+    # Same decision-24 fallback as a sac: zero cartons counted means there is no
+    # carton figure to lead with, so the packet tally is used instead.
+    assert finished_quantity_from_count(packets_per_carton=20, carton_quantity=0, packets_counted=150) == 150
+
+
+def test_tonnage_from_count_is_zero_without_a_net_weight():
+    # Matches finished_product_quantity's own default -- there is nothing to
+    # compute from, and unlike the estimate this field cannot carry a "missing".
+    assert tonnage_from_count(
+        net_weight_grams=None, packets_per_carton=20, carton_quantity=10, packets_counted=0
+    ) == 0.0
+    assert tonnage_from_count(
+        net_weight_grams=0, packets_per_carton=20, carton_quantity=10, packets_counted=0
+    ) == 0.0

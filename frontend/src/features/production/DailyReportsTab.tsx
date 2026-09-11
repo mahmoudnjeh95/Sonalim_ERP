@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, ClipboardList, Droplets, Flame, Pencil, Plus, Send, Wheat } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardList, Droplets, Flame, History, Pencil, Plus, Send, Trash2, Wheat } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
@@ -60,8 +60,10 @@ import {
   createDailyReport,
   deleteReport,
   getReport,
+  listMachines,
   listMolds,
   listProducts,
+  listRegrindDefaults,
   listReports,
   listWorkOrders,
   submitReport,
@@ -72,7 +74,8 @@ import {
   type ReportStatus,
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
-import { UTILITY_UNITS, productUnit, productRequiresIntegerQuantity } from "../../lib/units";
+import { listPartners, type Partner } from "../partners/api";
+import { UTILITY_UNITS, productUnit } from "../../lib/units";
 
 // A shift's daily report. Semolina is the one figure here that leaves stock when
 // a supervisor validates it, which is why the form insists on naming the product
@@ -111,8 +114,10 @@ const detailSchema = z.object({
   // poured. water_quantity is derived from it — see DailyDetailFields.
   water_percentage: z.coerce.number().min(0).max(100),
   fuel_quantity: z.coerce.number().min(0),
+  fuel_supplier_id: z.string().optional(),
   // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul).
   gasoil_quantity: z.coerce.number().min(0),
+  gasoil_supplier_id: z.string().optional(),
   electricity_quantity: z.coerce.number().min(0),
   // Débit de semoule, tonnes/hour — recorded for future recipe statistics.
   semolina_flow_rate: z.coerce.number().min(0),
@@ -135,6 +140,9 @@ const createSchema = detailSchema.extend({
   report_date: z.string().min(1, "Required"),
   team: z.string().optional(),
   shift: z.string().optional(),
+  // Which machine within the OF's line ran this shift. Optional here (a
+  // draft may be saved before the team knows) but required to submit.
+  equipment_id: z.string().optional(),
 });
 type CreateForm = z.infer<typeof createSchema>;
 
@@ -144,6 +152,9 @@ const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const MOLDS_QUERY_KEY = ["production", "molds"] as const;
+const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
+const MACHINES_QUERY_KEY = ["production", "machines", "all"] as const;
+const REGRIND_DEFAULTS_QUERY_KEY = ["production", "regrind-defaults"] as const;
 
 type StatusFilter = "all" | ReportStatus;
 
@@ -161,7 +172,9 @@ const EMPTY_DETAIL = {
   water_quantity: 0,
   water_percentage: 0,
   fuel_quantity: 0,
+  fuel_supplier_id: "",
   gasoil_quantity: 0,
+  gasoil_supplier_id: "",
   electricity_quantity: 0,
   semolina_flow_rate: 0,
   start_time: "",
@@ -180,12 +193,16 @@ export function DailyReportsTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
+  const [openMode, setOpenMode] = useState<"view" | "edit" | "history" | "delete">("view");
   // Which report is open lives in the URL as well as in state, so the OF
   // details page can link straight to one instead of landing on the list.
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedId = searchParams.get("report");
+  function openReportAt(report: ProductionReport, mode: "view" | "edit" | "history" | "delete") {
+    setOpenReport(report);
+    setOpenMode(mode);
+  }
 
   const { data: reports = [], isLoading } = useQuery({
     queryKey: QUERY_KEY,
@@ -202,6 +219,21 @@ export function DailyReportsTab() {
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
   const { data: molds = [] } = useQuery({ queryKey: MOLDS_QUERY_KEY, queryFn: () => listMolds(token) });
+  const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
+  const suppliers = partners.filter((p) => p.kind === "supplier" || p.kind === "both");
+  // Tenant-wide: there is only ever one rebroyat product (see regrind_service.py),
+  // so this is what regrind_product_id resolves to for every report — never a
+  // per-shift choice among unrelated raw materials.
+  const { data: regrindDefaults = [] } = useQuery({ queryKey: REGRIND_DEFAULTS_QUERY_KEY, queryFn: () => listRegrindDefaults(token) });
+  const regrindOutputProductId = regrindDefaults.find((d) => d.input_product_id === null)?.output_product_id ?? null;
+  // Tenant-wide, for resolving a report's equipment_id to a name in the table —
+  // distinct from the create form's own line-scoped machines query below.
+  const { data: allMachines = [] } = useQuery({ queryKey: MACHINES_QUERY_KEY, queryFn: () => listMachines(token) });
+  const machineLabel = (machineId: string | null) => {
+    if (!machineId) return "—";
+    const machine = allMachines.find((m) => m.id === machineId);
+    return machine ? `${machine.code} — ${machine.name}` : "—";
+  };
 
   // Only orders that still accept reports — a closed or cancelled OF does not.
   const openWorkOrders = workOrders.filter((o) => ["planned", "ongoing", "suspended"].includes(o.status));
@@ -209,7 +241,16 @@ export function DailyReportsTab() {
 
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
-    defaultValues: { of_id: "", report_date: todayIso(), team: "", shift: "", ...EMPTY_DETAIL },
+    defaultValues: { of_id: "", report_date: todayIso(), team: "", shift: "", equipment_id: "", ...EMPTY_DETAIL },
+  });
+
+  // Machines the chosen OF's line can be attributed to — a line like Line_1_PL
+  // can carry more than one at once, so the report must say which one it ran on.
+  const selectedWorkCenterId = workOrders.find((o) => o.id === form.watch("of_id"))?.work_center_id;
+  const { data: machines = [] } = useQuery({
+    queryKey: ["production", "machines", selectedWorkCenterId],
+    queryFn: () => listMachines(token, selectedWorkCenterId!),
+    enabled: !!selectedWorkCenterId,
   });
 
   const createMutation = useMutation({
@@ -219,12 +260,13 @@ export function DailyReportsTab() {
         report_date: input.report_date,
         team: input.team || undefined,
         shift: input.shift || undefined,
+        equipment_id: input.equipment_id || undefined,
         detail: toDetail(input),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      form.reset({ of_id: "", report_date: todayIso(), team: "", shift: "", ...EMPTY_DETAIL });
+      form.reset({ of_id: "", report_date: todayIso(), team: "", shift: "", equipment_id: "", ...EMPTY_DETAIL });
       toast.success(t("production.dailyReports.created"));
     },
     onError: (error) => {
@@ -256,6 +298,7 @@ export function DailyReportsTab() {
     { key: "date", kind: "text", getValue: (r) => r.report_date },
     { key: "team", kind: "text", getValue: (r) => r.team },
     { key: "shift", kind: "text", getValue: (r) => r.shift },
+    { key: "machine", kind: "text", getValue: (r) => machineLabel(r.equipment_id) },
     { key: "revision", kind: "range", getValue: (r) => r.revision },
   ];
   const columnFilters = useColumnFilters<ProductionReport>(filterFields);
@@ -318,6 +361,19 @@ export function DailyReportsTab() {
       sortValue: (r) => r.shift,
     },
     {
+      key: "machine",
+      header: t("production.reports.column.machine"),
+      defaultWidth: 160,
+      cell: (r) => <span className="text-muted-foreground">{machineLabel(r.equipment_id)}</span>,
+      filterCell: {
+        type: "text",
+        placeholder: t("common.filter"),
+        value: columnFilters.text.machine ?? "",
+        onChange: (v) => columnFilters.setTextValue("machine", v),
+      },
+      sortValue: (r) => machineLabel(r.equipment_id),
+    },
+    {
       key: "status",
       header: t("production.reports.column.status"),
       defaultWidth: 130,
@@ -351,13 +407,7 @@ export function DailyReportsTab() {
       cell: (r) => (
         <ReportRowActions
           report={r}
-          products={products}
-          locations={locations}
-          uoms={uoms}
-          workOrders={workOrders}
-          molds={molds}
-          isEditing={editingId === r.id}
-          onOpenEdit={(open) => setEditingId(open ? r.id : null)}
+          onOpenReport={(mode) => openReportAt(r, mode)}
           onSubmitReport={() => submitMutation.mutate(r.id)}
           isSubmitting={submitMutation.isPending && submitMutation.variables === r.id}
         />
@@ -455,9 +505,32 @@ export function DailyReportsTab() {
                         teamField={form.register("team")}
                         shiftField={form.register("shift")}
                       />
+                      <div className="space-y-1.5">
+                        <Label htmlFor="equipment_id" className="flex items-center gap-1">
+                          {t("production.reports.field.machine")}
+                          <HelpTooltip text={t("production.reports.help.machine")} />
+                        </Label>
+                        <Select id="equipment_id" {...form.register("equipment_id")} disabled={!selectedWorkCenterId}>
+                          <option value="">—</option>
+                          {machines.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.code} — {m.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                     </div>
 
-                    <DailyDetailFields form={form} products={products} locations={locations} uoms={uoms} workOrders={workOrders} molds={molds} />
+                    <DailyDetailFields
+                      form={form}
+                      products={products}
+                      locations={locations}
+                      uoms={uoms}
+                      workOrders={workOrders}
+                      molds={molds}
+                      regrindOutputProductId={regrindOutputProductId}
+                      suppliers={suppliers}
+                    />
 
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                       {createMutation.isPending ? t("common.saving") : t("production.dailyReports.create")}
@@ -509,7 +582,7 @@ export function DailyReportsTab() {
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                      onClick={() => setOpenReport(report)}
+                      onClick={() => openReportAt(report, "view")}
                     >
                       {table.visibleColumns.map((column) => (
                         <TableCell
@@ -533,6 +606,10 @@ export function DailyReportsTab() {
 
       {focusedReport && (
         <DailyReportDialog
+          // Remount per report so a row's Edit/History/Delete action always
+          // lands the dialog on the right tab instead of reusing whatever
+          // tab a previous report was left on.
+          key={focusedReport.id}
           report={focusedReport}
           reference={referenceOf(focusedReport.of_id)}
           products={products}
@@ -540,8 +617,12 @@ export function DailyReportsTab() {
           uoms={uoms}
           workOrders={workOrders}
           molds={molds}
+          regrindOutputProductId={regrindOutputProductId}
+          suppliers={suppliers}
+          initialMode={openMode}
           onClose={() => {
             setOpenReport(null);
+            setOpenMode("view");
             // Drop the deep link too, or closing reopens it next render.
             if (linkedId) {
               const next = new URLSearchParams(searchParams);
@@ -568,6 +649,9 @@ function DailyReportDialog({
   uoms,
   workOrders,
   molds,
+  regrindOutputProductId,
+  suppliers,
+  initialMode,
   onClose,
 }: {
   report: ProductionReport;
@@ -577,6 +661,9 @@ function DailyReportDialog({
   uoms: { id: string; code: string }[];
   workOrders: { id: string; product_id: string | null; product_type: string | null }[];
   molds: Mold[];
+  regrindOutputProductId: string | null;
+  suppliers: Partner[];
+  initialMode?: "view" | "edit" | "history" | "delete";
   onClose: () => void;
 }) {
   const { session } = useAuth();
@@ -625,9 +712,9 @@ function DailyReportDialog({
   }
 
   const saveMutation = useMutation({
-    mutationFn: (input: CreateForm) => {
+    mutationFn: ({ input, force }: { input: CreateForm; force?: boolean }) => {
       if (report.status === "validated") {
-        return correctValidatedDailyReport(token, report.id, toDetail(input), reason);
+        return correctValidatedDailyReport(token, report.id, toDetail(input), reason, force);
       }
       if (report.status === "submitted") {
         return correctDailyReport(token, report.id, toDetail(input), reason);
@@ -645,16 +732,22 @@ function DailyReportDialog({
       });
     },
   });
+  const regrindDeltaConfirmRequired =
+    saveMutation.error instanceof ApiError && saveMutation.error.code === "REGRIND_DELTA_REQUIRES_NEW_ORDER";
 
   const semolinaUnit = productUnit(detail?.semolina_lines?.[0]?.product_id, products, uoms);
   const rebroyatUnit = productUnit(detail?.regrind_input_product_id, products, uoms);
   const regrindUnit = productUnit(detail?.regrind_product_id, products, uoms);
-  // The finished good is the OF's own product, not restated per report.
-  const finishedProductUnit = productUnit(workOrders.find((o) => o.id === report.of_id)?.product_id, products, uoms);
   const productName = (id: string | null) =>
     (id && products.find((p) => p.id === id)?.name) || t("production.waste.unknownItem");
+  const supplierName = (id: string | null) => (id && suppliers.find((s) => s.id === id)?.name) || null;
+  const withSupplier = (label: string, supplierId: string | null) => {
+    const name = supplierName(supplierId);
+    return name ? `${label} — ${name}` : label;
+  };
 
   const figures: FigureRow[] = [
+    // What the shift poured in this shift.
     // One row per quality poured, each in its own unit.
     ...(detail?.semolina_lines ?? []).map((line) => ({
       label:
@@ -663,13 +756,53 @@ function DailyReportDialog({
           : t("production.dailyReports.field.semolina"),
       value: line.quantity,
       unit: productUnit(line.product_id, products, uoms),
+      group: "in" as const,
     })),
-    { label: t("production.dailyReports.field.regrindInput"), value: detail?.regrind_input_quantity, unit: rebroyatUnit },
-    { label: t("production.dailyReports.field.dough"), value: detail?.dough_quantity, unit: semolinaUnit },
     {
+      label: t("production.dailyReports.field.regrindInput"),
+      value: detail?.regrind_input_quantity,
+      unit: rebroyatUnit,
+      group: "in" as const,
+    },
+    {
+      label: t("production.dailyReports.field.waterPercentage"),
+      value: detail?.water_percentage,
+      unit: "%",
+      group: "in" as const,
+    },
+    {
+      label: t("production.dailyReports.field.water"),
+      value: detail?.water_quantity,
+      unit: UTILITY_UNITS.water,
+      group: "in" as const,
+    },
+    {
+      label: withSupplier(t("production.dailyReports.field.fuel"), detail?.fuel_supplier_id ?? null),
+      value: detail?.fuel_quantity,
+      unit: UTILITY_UNITS.fuel,
+      group: "in" as const,
+    },
+    {
+      label: withSupplier(t("production.dailyReports.field.gasoil"), detail?.gasoil_supplier_id ?? null),
+      value: detail?.gasoil_quantity,
+      unit: UTILITY_UNITS.gasoil,
+      group: "in" as const,
+    },
+    {
+      label: t("production.dailyReports.field.electricity"),
+      value: detail?.electricity_quantity,
+      unit: UTILITY_UNITS.electricity,
+      group: "in" as const,
+    },
+
+    // What came out of it.
+    {
+      // The tonnage off the scale, not the finished good's own stocking unit
+      // (which may be pieces) -- see the daily_reports migration comment.
       label: t("production.reports.field.finishedProduct"),
       value: detail?.finished_product_quantity,
-      unit: finishedProductUnit,
+      unit: semolinaUnit,
+      group: "out" as const,
     },
     // One row per déchet, each labelled with its own item. The daily report's
     // déchets are always weighed in kg (see WasteLinesField's fixedUnit), so
@@ -678,29 +811,35 @@ function DailyReportDialog({
       label: `${t(`production.waste.category.${line.category}` as Parameters<typeof t>[0])} — ${productName(line.product_id)}`,
       value: line.quantity,
       unit: "kg",
+      group: "out" as const,
     })),
-    { label: t("production.dailyReports.field.regrind"), value: detail?.regrind_quantity, unit: regrindUnit },
-    { label: t("production.dailyReports.field.waterPercentage"), value: detail?.water_percentage, unit: "%" },
-    { label: t("production.dailyReports.field.water"), value: detail?.water_quantity, unit: UTILITY_UNITS.water },
-    { label: t("production.dailyReports.field.fuel"), value: detail?.fuel_quantity, unit: UTILITY_UNITS.fuel },
-    { label: t("production.dailyReports.field.gasoil"), value: detail?.gasoil_quantity, unit: UTILITY_UNITS.gasoil },
     {
-      label: t("production.dailyReports.field.electricity"),
-      value: detail?.electricity_quantity,
-      unit: UTILITY_UNITS.electricity,
+      label: t("production.dailyReports.field.regrind"),
+      value: detail?.regrind_quantity,
+      unit: regrindUnit,
+      group: "out" as const,
     },
+
+    // How long it took, not a material flow either way.
     {
       label: t("production.dailyReports.field.semolinaFlowRate"),
       value: detail?.semolina_flow_rate,
       unit: "t/h",
+      group: "time" as const,
     },
-    { label: t("production.dailyReports.field.startTime"), value: detail?.start_time ?? "—" },
-    { label: t("production.ofDetails.time.production"), value: detail?.production_minutes, duration: true },
+    { label: t("production.dailyReports.field.startTime"), value: detail?.start_time ?? "—", group: "time" as const },
+    {
+      label: t("production.ofDetails.time.production"),
+      value: detail?.production_minutes,
+      duration: true,
+      group: "time" as const,
+    },
     // One row per arrêt, each with its own motif, plus the total lost.
     ...(detail?.downtime_lines ?? []).map((line) => ({
       label: `${t("production.ofDetails.time.downtime")} — ${line.motif ?? t("production.waste.unknownItem")}`,
       value: line.minutes,
       duration: true,
+      group: "time" as const,
     })),
     ...(detail && detail.downtime_lines.length > 1
       ? [
@@ -708,6 +847,7 @@ function DailyReportDialog({
             label: t("production.downtime.total"),
             value: detail.downtime_lines.reduce((sum, line) => sum + line.minutes, 0),
             duration: true,
+            group: "time" as const,
           },
         ]
       : []),
@@ -725,13 +865,26 @@ function DailyReportDialog({
       revision={report.revision}
       reportId={report.id}
       figures={figures}
-      onDelete={async (deleteReason) => {
-        await deleteReport(token, report.id, deleteReason);
+      initialMode={initialMode}
+      onDelete={async (deleteReason, force) => {
+        await deleteReport(token, report.id, deleteReason, force);
         invalidate();
       }}
       editForm={
-        <form className="space-y-4" onSubmit={form.handleSubmit((input) => saveMutation.mutate(input))}>
-          <DailyDetailFields form={form} products={products} locations={locations} uoms={uoms} workOrders={workOrders} molds={molds} />
+        <form
+          className="space-y-4"
+          onSubmit={form.handleSubmit((input) => saveMutation.mutate({ input }))}
+        >
+          <DailyDetailFields
+            form={form}
+            products={products}
+            locations={locations}
+            uoms={uoms}
+            workOrders={workOrders}
+            molds={molds}
+            regrindOutputProductId={regrindOutputProductId}
+            suppliers={suppliers}
+          />
           {needsReason && (
             <div className="space-y-1.5">
               <Label htmlFor="correction_reason">{t("production.reports.correctionReason")}</Label>
@@ -748,6 +901,21 @@ function DailyReportDialog({
               </p>
             </div>
           )}
+
+          {regrindDeltaConfirmRequired && (
+            <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
+              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+              <div>
+                <p className="text-sm font-medium text-destructive">
+                  {t("production.reports.correction.regrindDeltaWarning")}
+                </p>
+                <p className="text-sm text-muted-foreground">
+                  {saveMutation.error instanceof ApiError ? saveMutation.error.message : undefined}
+                </p>
+              </div>
+            </div>
+          )}
+
           <Button
             type="submit"
             className="w-full"
@@ -755,6 +923,20 @@ function DailyReportDialog({
           >
             {saveMutation.isPending ? t("common.saving") : t("common.save")}
           </Button>
+
+          {regrindDeltaConfirmRequired && (
+            <Button
+              type="button"
+              variant="destructive"
+              className="w-full"
+              disabled={saveMutation.isPending}
+              onClick={() => saveMutation.mutate({ input: form.getValues(), force: true })}
+            >
+              {saveMutation.isPending
+                ? t("common.saving")
+                : t("production.reports.correction.regrindDeltaConfirmButton")}
+            </Button>
+          )}
         </form>
       }
     />
@@ -776,7 +958,9 @@ function toDetail(input: CreateForm): Partial<DailyReportDetail> {
     water_quantity: input.water_quantity,
     water_percentage: input.water_percentage,
     fuel_quantity: input.fuel_quantity,
+    fuel_supplier_id: input.fuel_supplier_id || undefined,
     gasoil_quantity: input.gasoil_quantity,
+    gasoil_supplier_id: input.gasoil_supplier_id || undefined,
     electricity_quantity: input.electricity_quantity,
     semolina_flow_rate: input.semolina_flow_rate,
     start_time: input.start_time || undefined,
@@ -793,6 +977,8 @@ function DailyDetailFields({
   uoms,
   workOrders,
   molds,
+  regrindOutputProductId,
+  suppliers,
 }: {
   form: ReturnType<typeof useForm<CreateForm>>;
   products: { id: string; name: string; uom_id: string }[];
@@ -800,6 +986,9 @@ function DailyDetailFields({
   uoms: { id: string; code: string }[];
   workOrders: { id: string; product_id: string | null; product_type: string | null }[];
   molds: Mold[];
+  /** The tenant's one rebroyat product (production.regrind_defaults, input_product_id IS NULL). */
+  regrindOutputProductId: string | null;
+  suppliers: Partner[];
 }) {
   const { t } = useI18n();
   // Every figure is entered in its product's own stock unit — the same unit the
@@ -808,15 +997,20 @@ function DailyDetailFields({
   // needs a single unit to show — dough is the mix of whatever was poured.
   const semolinaUnit = productUnit(form.watch("semolina_lines.0.product_id"), products, uoms);
   const rebroyatUnit = productUnit(form.watch("regrind_input_product_id"), products, uoms);
-  // What the shift *produced* as rebroyat, which is a different item again --
-  // ground pasta weighed in kilos, not semoule and not wrapped packets.
-  const regrindUnit = productUnit(form.watch("regrind_product_id"), products, uoms);
-  // The finished good is the OF's own product -- not a choice made per report.
-  const finishedProductUnit = productUnit(
-    workOrders.find((o) => o.id === form.watch("of_id"))?.product_id,
-    products,
-    uoms,
-  );
+  // What the shift *produced* as rebroyat is always the tenant's one rebroyat
+  // product -- never a choice per report. It used to be: an operator could
+  // name any product here (to give the figure *some* weight unit), and would
+  // routinely pick the raw semolina actually in use that shift. That mixed a
+  // purchased raw material's identity into what is supposed to become
+  // rebroyat stock, and mismatched units (semolina in tonnes vs. rebroyat in
+  // kg) the same way the regrind-batch scale bug did. Forcing it here removes
+  // both problems at the source instead of relying on the operator picking
+  // right.
+  useEffect(() => {
+    if (regrindOutputProductId) form.setValue("regrind_product_id", regrindOutputProductId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regrindOutputProductId]);
+  const regrindUnit = productUnit(regrindOutputProductId, products, uoms);
   const withUnit = (label: string, unit: string | null) => (unit ? `${label} (${unit})` : label);
   // The mold list narrows to the order's own PC/PL once it's known; before
   // that (or if the order predates the field) every mold stays offered.
@@ -867,9 +1061,9 @@ function DailyDetailFields({
           </Select>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="raw_material_location_id" className="flex min-h-[2rem] items-start">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-2.5">
+            <Label htmlFor="raw_material_location_id" className="flex min-h-[2.5rem] items-start">
               {t("production.dailyReports.field.rawMaterialLocation")}
             </Label>
             <Select id="raw_material_location_id" {...form.register("raw_material_location_id")}>
@@ -881,15 +1075,15 @@ function DailyDetailFields({
               ))}
             </Select>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="regrind_input_quantity" className="flex min-h-[2rem] items-start gap-1">
+          <div className="space-y-2.5">
+            <Label htmlFor="regrind_input_quantity" className="flex min-h-[2.5rem] items-start gap-1">
               {withUnit(t("production.dailyReports.field.regrindInput"), rebroyatUnit)}
               <HelpTooltip text={t("production.dailyReports.help.regrindInput")} />
             </Label>
             <Input id="regrind_input_quantity" type="number" step="any" {...form.register("regrind_input_quantity")} />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="regrind_input_product_id" className="flex min-h-[2rem] items-start">
+          <div className="space-y-2.5">
+            <Label htmlFor="regrind_input_product_id" className="flex min-h-[2.5rem] items-start">
               {t("production.dailyReports.field.regrindInputProduct")}
             </Label>
             <Select id="regrind_input_product_id" {...form.register("regrind_input_product_id")}>
@@ -900,13 +1094,6 @@ function DailyDetailFields({
                 </option>
               ))}
             </Select>
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="dough_quantity" className="flex min-h-[2rem] items-start gap-1">
-              {withUnit(t("production.dailyReports.field.dough"), semolinaUnit)}
-              <HelpTooltip text={t("production.dailyReports.help.dough")} />
-            </Label>
-            <Input id="dough_quantity" type="number" step="any" {...form.register("dough_quantity")} />
           </div>
         </div>
 
@@ -932,22 +1119,13 @@ function DailyDetailFields({
       <section className="space-y-2">
         <div className="max-w-xs space-y-1.5">
           <Label htmlFor="finished_product_quantity" className="flex items-center gap-1">
-            {/* Decision 17: labelled with a unit. Resolved from the OF's own
-                product rather than hardcoded to tonnes, which was wrong for
-                any finished good not counted in tons. */}
-            {withUnit(t("production.reports.field.finishedProduct"), finishedProductUnit)}
+            {/* The tonnage off the scale, not the finished good's own stocking
+                unit (which may be pieces) -- see the daily_reports migration
+                comment. Same unit as the semoule it was made from. */}
+            {withUnit(t("production.reports.field.finishedProduct"), semolinaUnit)}
             <HelpTooltip text={t("production.dailyReports.help.finishedProduct")} />
           </Label>
-          <Input
-            id="finished_product_quantity"
-            type="number"
-            step={
-              productRequiresIntegerQuantity(workOrders.find((o) => o.id === form.watch("of_id"))?.product_id, products, uoms)
-                ? "1"
-                : "any"
-            }
-            {...form.register("finished_product_quantity")}
-          />
+          <Input id="finished_product_quantity" type="number" step="any" {...form.register("finished_product_quantity")} />
         </div>
       </section>
 
@@ -985,18 +1163,15 @@ function DailyDetailFields({
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1.5">
-            <Label htmlFor="regrind_product_id" className="flex items-center gap-1">
+            <Label className="flex items-center gap-1">
               {t("production.dailyReports.field.regrindProduct")}
               <HelpTooltip text={t("production.dailyReports.help.regrindProduct")} />
             </Label>
-            <Select id="regrind_product_id" {...form.register("regrind_product_id")}>
-              <option value="">—</option>
-              {products.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </Select>
+            <p className="flex h-9 items-center text-sm text-muted-foreground">
+              {regrindOutputProductId
+                ? (products.find((p) => p.id === regrindOutputProductId)?.name ?? regrindOutputProductId)
+                : t("production.dailyReports.help.regrindProductMissing")}
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="regrind_quantity">{withUnit(t("production.dailyReports.field.regrind"), regrindUnit)}</Label>
@@ -1042,10 +1217,32 @@ function DailyDetailFields({
             <Input id="fuel_quantity" type="number" step="any" {...form.register("fuel_quantity")} />
           </div>
           <div className="space-y-1.5">
+            <Label htmlFor="fuel_supplier_id">{t("production.dailyReports.field.fuelSupplier")}</Label>
+            <Select id="fuel_supplier_id" {...form.register("fuel_supplier_id")}>
+              <option value="">—</option>
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor="gasoil_quantity">
               {t("production.dailyReports.field.gasoil")} ({UTILITY_UNITS.gasoil})
             </Label>
             <Input id="gasoil_quantity" type="number" step="any" {...form.register("gasoil_quantity")} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="gasoil_supplier_id">{t("production.dailyReports.field.gasoilSupplier")}</Label>
+            <Select id="gasoil_supplier_id" {...form.register("gasoil_supplier_id")}>
+              <option value="">—</option>
+              {suppliers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </Select>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="electricity_quantity">
@@ -1136,112 +1333,51 @@ function ProductionDurationField({ form }: { form: ReturnType<typeof useForm<Cre
 }
 
 /**
- * Per-row actions. A real subcomponent rather than a function called inside
- * `.map()`, because it owns its own form state — calling hooks from a plain
- * helper would break the Rules of Hooks as the row count changes.
+ * Per-row actions. Edit/History/Delete all jump into the same detail dialog
+ * used when a row itself is clicked (see `DailyReportDialog` above) — that
+ * dialog already knows how each status behaves (a draft edits freely, a
+ * submitted or validated report needs a correction reason, deleting a
+ * validated one reverses its stock) — so the row buttons only need to say
+ * which tab to land on, not re-implement any of that.
  */
 function ReportRowActions({
   report,
-  products,
-  locations,
-  uoms,
-  workOrders,
-  molds,
-  isEditing,
-  onOpenEdit,
+  onOpenReport,
   onSubmitReport,
   isSubmitting,
 }: {
   report: ProductionReport;
-  products: { id: string; name: string; uom_id: string }[];
-  locations: { id: string; name: string }[];
-  uoms: { id: string; code: string }[];
-  workOrders: { id: string; product_id: string | null; product_type: string | null }[];
-  molds: Mold[];
-  isEditing: boolean;
-  onOpenEdit: (open: boolean) => void;
+  onOpenReport: (mode: "edit" | "history" | "delete") => void;
   onSubmitReport: () => void;
   isSubmitting: boolean;
 }) {
-  const { session } = useAuth();
   const { t } = useI18n();
-  const token = session!.token;
-  const queryClient = useQueryClient();
-
-  // Fetched only once the dialog is actually open — the row renders this
-  // component for every visible report, and most of them never get edited.
-  const { data: full } = useQuery({
-    queryKey: ["production", "reports", report.id],
-    queryFn: () => getReport(token, report.id),
-    enabled: isEditing,
-  });
-  const detail = full?.detail as DailyReportDetail | undefined;
-
-  const form = useForm<CreateForm>({
-    resolver: zodResolver(createSchema),
-    values: {
-      of_id: report.of_id,
-      report_date: report.report_date,
-      ...EMPTY_DETAIL,
-      ...(detail ?? {}),
-      semolina_lines: toSemolinaLineForms(detail?.semolina_lines),
-      raw_material_location_id: detail?.raw_material_location_id ?? "",
-      regrind_input_product_id: detail?.regrind_input_product_id ?? "",
-      regrind_product_id: detail?.regrind_product_id ?? "",
-      mold_id: detail?.mold_id ?? "",
-      waste_lines: toWasteLineForms<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">(detail?.waste_lines),
-      start_time: detail?.start_time ?? "",
-      downtime_lines: toDowntimeLineForms(detail?.downtime_lines),
-    } as CreateForm,
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (input: CreateForm) => updateDailyReport(token, report.id, toDetail(input)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      onOpenEdit(false);
-      toast.success(t("production.reports.updated"));
-    },
-    onError: (error) => {
-      toast.error(t("production.reports.updateError"), {
-        description: error instanceof ApiError ? error.message : undefined,
-      });
-    },
-  });
 
   return (
-    <div className="flex justify-end gap-2">
+    <div className="flex justify-end items-center gap-1">
+      {report.status === "rejected" && report.rejection_reason && (
+        <span className="mr-1 text-xs text-destructive">{report.rejection_reason}</span>
+      )}
+      <Button size="sm" variant="ghost" aria-label={t("common.edit")} onClick={() => onOpenReport("edit")}>
+        <Pencil className="h-3.5 w-3.5" />
+      </Button>
       {report.status === "draft" && (
-        <>
-          <Dialog open={isEditing} onOpenChange={onOpenEdit}>
-            <DialogTrigger asChild>
-              <Button size="sm" variant="ghost">
-                <Pencil className="h-3.5 w-3.5" />
-                {t("common.edit")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-4xl">
-              <DialogHeader>
-                <DialogTitle>{t("production.dailyReports.dialog.edit.title")}</DialogTitle>
-                <DialogDescription>{t("production.dailyReports.dialog.edit.description")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={form.handleSubmit((input) => updateMutation.mutate(input))}>
-                <DailyDetailFields form={form} products={products} locations={locations} uoms={uoms} workOrders={workOrders} molds={molds} />
-                <Button type="submit" className="w-full" disabled={updateMutation.isPending}>
-                  {updateMutation.isPending ? t("common.saving") : t("common.save")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-          <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
-            <Send className="h-3.5 w-3.5" />
-            {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
-          </Button>
-        </>
+        <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
+          <Send className="h-3.5 w-3.5" />
+          {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
+        </Button>
       )}
-      {report.status === "rejected" && (
-        <span className="text-xs text-destructive">{report.rejection_reason ?? t("status.rejected")}</span>
-      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t("production.reports.history.title")}
+        onClick={() => onOpenReport("history")}
+      >
+        <History className="h-3.5 w-3.5" />
+      </Button>
+      <Button size="sm" variant="ghost" aria-label={t("common.delete")} onClick={() => onOpenReport("delete")}>
+        <Trash2 className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }

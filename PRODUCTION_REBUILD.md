@@ -108,6 +108,47 @@ Four further decisions settled the same day:
     report cannot be duplicated either. Without it a double entry double-counts
     tonnage and rebroyat — and from Phase 5, double-posts stock.
 
+Five further decisions, settled with the user on 2026-09-10 — outside the original
+specification, requested directly:
+
+17. **Decision 3 is superseded.** "Machine" no longer means the work center. A
+    work center like `Line_1_PL` can carry more than one machine running at
+    once — `maintenance.equipment` already modeled this (migration 0004, moved
+    to its own module in `maintenance` 0001/0002) but nothing in production
+    referenced it. `production.production_reports.equipment_id` (migration
+    0033) is the new opaque, nullable reference into it.
+18. **An OF may name a supervisor, but is never required to.** Unlike
+    `work_center_id`, `work_orders.supervisor_id` (migration 0033) is nullable
+    with no create-time enforcement — settable at creation or later via
+    `admin_update_work_order`. The picker is scoped to users holding the
+    `Production` role (`core.roles.code = 'production'`), via
+    `WorkOrderService.list_supervisor_options`.
+19. **A report must name its machine before it can leave draft.** Optional to
+    save as a draft, but `submit_report` refuses with `MISSING_MACHINE` if
+    `equipment_id` is unset — the same point stock-target completeness is
+    enforced, and for the same reason: a report at the validation desk that
+    still doesn't say which machine ran it never will.
+20. **Machine productivity is a first-class aggregate**, mirroring team
+    performance: `MachinePerformanceService.list_machine_performance` groups
+    validated reports by `equipment_id` (produced quantity, minutes run,
+    downtime) — `GET /production/reports/machine-performance`.
+21. **Production never holds a live reference into `maintenance`'s schema.**
+    `GET /production/machines` (optional `work_center_id` filter) is a thin
+    in-process pass-through into `EquipmentService.list_equipment`, gated by
+    `production.view_reports` rather than `maintenance.view_equipment` — a
+    floor user filing a report must never need a Maintenance permission just
+    to pick which machine they ran. `production/module.json` now lists
+    `maintenance` under `optional_depends`.
+22. **Machine performance got its UI**, closing the loop decision 20 only
+    wired server-side: a "Machine performance" card on the Production
+    dashboard (`ProductionDashboardTab.tsx`), folded across the selected date
+    range the same way the team-semoule-waste table is — one row per
+    `equipment_id`, most produced first, resolved to a code/name via
+    `GET /production/machines`. `Line_1_PL` was given its second machine
+    (`PL-02`, same "Pate long machine" activity as `PL-01`) via
+    `EquipmentService.create_equipment` so the multi-machine line the plant
+    described has real data to show.
+
 ---
 
 ## Status vocabularies

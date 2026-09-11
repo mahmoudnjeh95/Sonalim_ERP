@@ -1,9 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
   AlertTriangle,
   CalendarClock,
+  ClipboardCheck,
+  Coins,
   MessageSquare,
+  Percent,
   Phone,
   PieChart as PieChartIcon,
   Target,
@@ -24,7 +28,8 @@ import {
   YAxis,
 } from "recharts";
 import { useAuth } from "../../../lib/auth";
-import { useI18n, type Language } from "../../../lib/i18n";
+import { currentLocale, useI18n, type Language } from "../../../lib/i18n";
+import { cn } from "../../../lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import { Skeleton } from "../../../components/ui/skeleton";
 import { StatCard } from "../../../components/patterns/StatCard";
@@ -82,6 +87,10 @@ function relativeTime(iso: string, language: Language) {
 
 const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
 
+function formatMoney(amount: number) {
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
+}
+
 export function CrmDashboardPage() {
   const { session } = useAuth();
   const { t, language } = useI18n();
@@ -113,6 +122,41 @@ export function CrmDashboardPage() {
 
   const leadsTotal = data ? Object.values(data.leads_by_status).reduce((sum, n) => sum + n, 0) : 0;
   const partnersTotal = data ? Object.values(data.partners_by_status).reduce((sum, n) => sum + n, 0) : 0;
+
+  // Win rate and average deal size come from the same pipeline_by_stage bucket
+  // the funnel chart already fetches — no extra request, just numbers the funnel
+  // was discarding (it filters won/lost out to draw the open-stage funnel).
+  const wonBucket = data?.pipeline_by_stage.won;
+  const lostBucket = data?.pipeline_by_stage.lost;
+  const decidedCount = (wonBucket?.count ?? 0) + (lostBucket?.count ?? 0);
+  const winRate = decidedCount > 0 ? (100 * (wonBucket?.count ?? 0)) / decidedCount : null;
+  const avgDealSize = wonBucket && wonBucket.count > 0 ? wonBucket.amount / wonBucket.count : null;
+
+  // Snapshot totals (forecast, won) tell you where things stand; these tell you
+  // what to do next. Keeping them apart means a scan of the page answers "am I
+  // okay?" before it answers "how did I get here?".
+  const attentionRows = [
+    ...(data && data.overdue.count > 0
+      ? [
+          {
+            code: "overdue",
+            tone: "destructive" as const,
+            title: t("crm.dashboard.attention.overdue"),
+            detail: `${data.overdue.count} · $${formatMoney(data.overdue.amount)}`,
+          },
+        ]
+      : []),
+    ...(data && data.due_this_week.count > 0
+      ? [
+          {
+            code: "due-this-week",
+            tone: "warning" as const,
+            title: t("crm.dashboard.attention.dueThisWeek"),
+            detail: `${data.due_this_week.count} · $${formatMoney(data.due_this_week.amount)}`,
+          },
+        ]
+      : []),
+  ];
 
   return (
     <div className="space-y-6">
@@ -157,18 +201,60 @@ export function CrmDashboardPage() {
               prefix="$"
             />
             <StatCard
-              label={t("crm.dashboard.stat.dueThisWeek")}
-              value={data.due_this_week.count}
-              icon={<CalendarClock className="h-5 w-5" />}
-              accent="warning"
+              label={t("crm.dashboard.stat.winRate")}
+              value={winRate ?? 0}
+              unit="%"
+              decimals={1}
+              icon={<Percent className="h-5 w-5" />}
+              accent="accent"
             />
             <StatCard
-              label={t("crm.dashboard.stat.overdue")}
-              value={data.overdue.count}
-              icon={<AlertTriangle className="h-5 w-5" />}
-              accent="destructive"
+              label={t("crm.dashboard.stat.avgDealSize")}
+              value={Math.round(avgDealSize ?? 0)}
+              icon={<Coins className="h-5 w-5" />}
+              accent="accent"
+              prefix="$"
             />
           </div>
+
+          <Card>
+            <CardHeader>
+              <CardTitle>{t("crm.dashboard.attention.title")}</CardTitle>
+            </CardHeader>
+            <CardContent className={attentionRows.length === 0 ? "p-0" : "space-y-2"}>
+              {attentionRows.length === 0 ? (
+                <EmptyState
+                  icon={<ClipboardCheck className="h-5 w-5" />}
+                  title={t("crm.dashboard.attention.empty.title")}
+                  description={t("crm.dashboard.attention.empty.description")}
+                />
+              ) : (
+                attentionRows.map((row) => (
+                  <Link
+                    key={row.code}
+                    to="/crm/opportunities"
+                    className={cn(
+                      "flex items-start gap-3 rounded-lg border p-3 transition-colors",
+                      row.tone === "destructive"
+                        ? "border-destructive/20 bg-destructive-soft hover:bg-destructive-soft/70"
+                        : "border-warning/20 bg-warning-soft hover:bg-warning-soft/70",
+                    )}
+                  >
+                    {row.code === "overdue" ? (
+                      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    ) : (
+                      <CalendarClock className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                    )}
+                    <div className="min-w-0">
+                      <p className={cn("text-sm font-medium", row.tone === "destructive" ? "text-destructive" : "text-warning")}>{row.title}</p>
+                      <p className="text-sm text-muted-foreground">{row.detail}</p>
+                    </div>
+                    <span className="ml-auto self-center text-xs text-muted-foreground">{t("crm.dashboard.attention.open")}</span>
+                  </Link>
+                ))
+              )}
+            </CardContent>
+          </Card>
 
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
             <Card className="lg:col-span-2">

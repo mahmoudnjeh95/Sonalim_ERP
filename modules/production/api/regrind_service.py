@@ -50,6 +50,19 @@ class ScrapService:
         if isinstance(validation, Err):
             return validation
 
+        # product_id reaches here as a caller-supplied string (the scrap dialog
+        # used to allow free text) with no format guarantee. Without this check
+        # a typo or made-up SKU trips the FK constraint on scrap_records as a
+        # raw psycopg IntegrityError -- an unhandled 500 that also drops the
+        # response's CORS headers (Starlette's ServerErrorMiddleware sits
+        # outside CORSMiddleware), which the browser then misreports as a CORS
+        # failure instead of the real "no such product" problem.
+        product_row = self._connection.execute(
+            "SELECT 1 FROM core.products WHERE tenant_id = %s AND id = %s", (tenant_id, product_id)
+        ).fetchone()
+        if product_row is None:
+            return Err("PRODUCT_NOT_FOUND", f"product {product_id} not found")
+
         scrap_id = str(ULID())
         self._connection.execute(
             """
@@ -191,7 +204,11 @@ class RegrindService:
         tenant_id: str,
         actor_id: str,
         scrap_record_ids: list[str],
-        output_quantity: float,
+        # The manual "create batch" screen always sends its own estimate, already
+        # typed in the output product's unit. Left unset, it defaults to the
+        # converted input_quantity_total below -- the automatic path's best
+        # estimate, and the only one it has.
+        output_quantity: float | None = None,
         # A regrind run names its line like any other OF. Phase 5's automatic
         # creation passes the validating report's work center.
         work_center_id: str,
@@ -224,29 +241,69 @@ class RegrindService:
         # consume the same scrap twice.
         rows = self._connection.execute(
             """
-            SELECT id, is_reground, quantity FROM production.scrap_records
+            SELECT id, is_reground, quantity, product_id FROM production.scrap_records
             WHERE tenant_id = %s AND id = ANY(%s)
             FOR UPDATE
             """,
             (tenant_id, scrap_record_ids),
         ).fetchall()
-        found_by_id = {r[0]: (r[1], float(r[2])) for r in rows}
+        found_by_id = {r[0]: (r[1], float(r[2]), r[3]) for r in rows}
         for scrap_id in scrap_record_ids:
             if scrap_id not in found_by_id:
                 return Err("NOT_FOUND", f"scrap record {scrap_id} not found")
             if found_by_id[scrap_id][0]:
                 return Err("ALREADY_REGROUND", f"scrap record {scrap_id} was already reground")
-        input_quantity_total = sum(found_by_id[scrap_id][1] for scrap_id in scrap_record_ids)
+
+        # Scrap is weighed in whatever unit its own product is stocked in — a
+        # dough scrap tallied against a raw semolina bought by the tonne isn't
+        # the same number of units as the rebroyat it becomes. Summing the raw
+        # `quantity` values regardless of unit produced exactly the thousandfold
+        # error the dashboard's waste ratio already guards against (see
+        # ProductionDashboardTab.tsx): 0.043 t of scrap became "0.043" of
+        # input_quantity_total instead of the 43 kg it actually is. Every input
+        # is restated in the output product's own unit before summing.
+        uom_by_product = {
+            r[0]: (r[1], float(r[2]))
+            for r in self._connection.execute(
+                """
+                SELECT p.id, u.category, u.ratio_to_base
+                FROM core.products p JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
+                WHERE p.tenant_id = %s AND p.id = ANY(%s)
+                """,
+                (tenant_id, list({output_product_id, *(found_by_id[sid][2] for sid in scrap_record_ids)})),
+            ).fetchall()
+        }
+        # A scrap product outside the output's own category (a carton count
+        # feeding a kg rebroyat product, say) has no honest conversion — same
+        # as convertQuantity() on the frontend, that quantity is taken as-is
+        # rather than guessed at. This is the one pre-existing fallback path
+        # (an old report with no regrind_product_id lands on the OF's own,
+        # often piece-counted, finished good -- see _open_regrind_order) that
+        # this leaves exactly as it already behaved.
+        output_category, output_ratio = uom_by_product[output_product_id]
+        input_quantity_total = 0.0
+        for scrap_id in scrap_record_ids:
+            quantity, scrap_product_id = found_by_id[scrap_id][1], found_by_id[scrap_id][2]
+            scrap_category, scrap_ratio = uom_by_product[scrap_product_id]
+            input_quantity_total += quantity * (scrap_ratio / output_ratio if scrap_category == output_category else 1)
+
+        if output_quantity is None:
+            output_quantity = input_quantity_total
 
         # A regrind run is just a distinct, simple work order — reuse WorkOrderService
         # directly rather than duplicating order-creation logic. It pours no inputs,
         # so the only way creation fails is a non-positive output quantity.
+        # Its own "OFR-" series, counted separately from "production.work_orders",
+        # keeps a rebroyat run from being numbered indistinguishably from the
+        # production OF that fed it (both used to read "OF-000045").
         work_order_result = WorkOrderService(self._connection).create_work_order(
             tenant_id=tenant_id,
             actor_id=actor_id,
             product_id=output_product_id,
             planned_quantity=output_quantity,
             work_center_id=work_center_id,
+            reference_sequence="production.regrind_orders",
+            reference_prefix="OFR-",
         )
         if isinstance(work_order_result, Err):
             return work_order_result
@@ -490,16 +547,34 @@ class RegrindService:
             packaging_bom_id=order_row[7],
         )
 
+        # Joined through to the scrap records themselves (not just their ids) so
+        # a caller can trace this batch's output back to the production OF each
+        # input scrap came from -- the ids alone were never enough to answer
+        # "where did this rebroyat come from" without a second round trip per id.
         input_rows = self._connection.execute(
             """
-            SELECT scrap_record_id FROM production.regrind_batch_inputs
-            WHERE regrind_batch_work_order_id = %s
+            SELECT s.id, s.work_order_id, s.product_id, s.scrap_type, s.quantity
+            FROM production.regrind_batch_inputs rbi
+            JOIN production.scrap_records s ON s.id = rbi.scrap_record_id
+            WHERE rbi.regrind_batch_work_order_id = %s
+            ORDER BY s.created_at
             """,
             (work_order_id,),
         ).fetchall()
+        scrap_inputs = [
+            {
+                "id": r[0],
+                "work_order_id": r[1],
+                "product_id": r[2],
+                "scrap_type": r[3],
+                "quantity": float(r[4]),
+            }
+            for r in input_rows
+        ]
         return {
             "work_order": work_order,
-            "scrap_record_ids": [r[0] for r in input_rows],
+            "scrap_record_ids": [r["id"] for r in scrap_inputs],
+            "scrap_inputs": scrap_inputs,
             "input_quantity_total": input_quantity_total,
             "actual_output_quantity": actual_output_quantity,
             # The écart is only real once the team has weighed the output — before

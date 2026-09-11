@@ -10,8 +10,6 @@ import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
-import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
-import { listUoms } from "../warehouse/api";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -38,7 +36,9 @@ import {
   listProducts,
   listRecipes,
   listWorkCenters,
+  listSupervisorOptions,
   listWorkOrderInputs,
+  supervisorLabel,
   listWorkOrderYields,
   listWorkOrders,
   listRegrindBatches,
@@ -49,6 +49,7 @@ import {
   type PackagingBom,
   type Product,
   type Recipe,
+  type SupervisorOption,
   type UpdateWorkOrderInput,
   type WorkCenter,
   type WorkOrder,
@@ -85,12 +86,18 @@ const newOrderSchema = z.object({
   work_center_id: z.string().min(1, "Required"),
   product_type: z.enum(["PC", "PL"]),
   start_date: z.string().min(1, "Required"),
+  supervisor_id: z.string().optional(),
 });
 type NewOrderForm = z.infer<typeof newOrderSchema>;
 
 const editOrderSchema = z.object({
-  planned_quantity: z.coerce.number().positive("Must be > 0"),
+  // Not editable here any more: the quantity that matters is computed from
+  // validated reports (see the OF's consolidation), not typed in by hand. The
+  // field is kept (rather than dropped) so an existing value is preserved
+  // untouched on save instead of being wiped by an edit that never showed it.
+  planned_quantity: z.coerce.number().positive("Must be > 0").optional(),
   work_center_id: z.string().optional(),
+  supervisor_id: z.string().optional(),
   recipe_id: z.string().optional(),
   packaging_bom_id: z.string().optional(),
   product_type: z.string().optional(),
@@ -116,6 +123,7 @@ const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const PACKAGING_BOMS_QUERY_KEY = ["production", "packaging-boms"] as const;
 const YIELDS_QUERY_KEY = ["production", "work-order-yields"] as const;
 const REGRIND_BATCHES_QUERY_KEY = ["production", "regrind-batches"] as const;
+const SUPERVISORS_QUERY_KEY = ["production", "work-order-supervisors"] as const;
 type StatusFilter = "all" | WorkOrderStatus;
 
 export function WorkOrdersTab() {
@@ -140,6 +148,7 @@ export function WorkOrdersTab() {
   const { data: packagingBoms = [] } = useQuery({ queryKey: PACKAGING_BOMS_QUERY_KEY, queryFn: () => listPackagingBoms(token) });
   const { data: workOrderYields = [] } = useQuery({ queryKey: YIELDS_QUERY_KEY, queryFn: () => listWorkOrderYields(token) });
   const { data: regrindBatches = [] } = useQuery({ queryKey: REGRIND_BATCHES_QUERY_KEY, queryFn: () => listRegrindBatches(token) });
+  const { data: supervisorOptions = [] } = useQuery({ queryKey: SUPERVISORS_QUERY_KEY, queryFn: () => listSupervisorOptions(token) });
   const regrindWorkOrderIds = new Set(regrindBatches.map((b) => b.work_order_id));
   const yieldByWorkOrderId = new Map(workOrderYields.map((y) => [y.work_order_id, y.yield_ratio]));
 
@@ -150,7 +159,7 @@ export function WorkOrdersTab() {
     formState: { errors },
   } = useForm<NewOrderForm>({
     resolver: zodResolver(newOrderSchema),
-    defaultValues: { work_center_id: "", product_type: "PC", start_date: todayIso },
+    defaultValues: { work_center_id: "", product_type: "PC", start_date: todayIso, supervisor_id: "" },
   });
 
   const createMutation = useMutation({
@@ -159,11 +168,12 @@ export function WorkOrdersTab() {
         work_center_id: input.work_center_id,
         product_type: input.product_type,
         start_date: input.start_date,
+        supervisor_id: input.supervisor_id || undefined,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      reset({ work_center_id: "", product_type: "PC", start_date: todayDateInputValue() });
+      reset({ work_center_id: "", product_type: "PC", start_date: todayDateInputValue(), supervisor_id: "" });
       toast.success(t("production.workOrders.created"));
     },
     onError: (error) => {
@@ -208,6 +218,7 @@ export function WorkOrdersTab() {
     editForm.reset({
       planned_quantity: order.planned_quantity ?? undefined,
       work_center_id: order.work_center_id ?? "",
+      supervisor_id: order.supervisor_id ?? "",
       recipe_id: order.recipe_id ?? "",
       packaging_bom_id: order.packaging_bom_id ?? "",
       product_type: order.product_type ?? "",
@@ -220,6 +231,7 @@ export function WorkOrdersTab() {
       input: {
         planned_quantity: input.planned_quantity,
         work_center_id: input.work_center_id || undefined,
+        supervisor_id: input.supervisor_id || undefined,
         recipe_id: input.recipe_id || undefined,
         packaging_bom_id: input.packaging_bom_id || undefined,
         product_type: input.product_type || undefined,
@@ -288,6 +300,11 @@ export function WorkOrdersTab() {
     },
   });
 
+  const supervisorNameFor = (supervisorId: string | null) => {
+    const supervisor = supervisorOptions.find((s) => s.id === supervisorId);
+    return supervisor ? supervisorLabel(supervisor) : "";
+  };
+
   const nonRegrindOrders = orders.filter((o) => !regrindWorkOrderIds.has(o.id));
   const ongoingCount = nonRegrindOrders.filter((o) => o.status === "ongoing").length;
   const closedCount = nonRegrindOrders.filter((o) => o.status === "closed").length;
@@ -296,6 +313,7 @@ export function WorkOrdersTab() {
   const columnFilterFields: FilterField<WorkOrder>[] = [
     { key: "reference", kind: "text", getValue: (o) => o.reference },
     { key: "work_center", kind: "text", getValue: (o) => workCenters.find((wc) => wc.id === o.work_center_id)?.code ?? o.work_center_id },
+    { key: "supervisor", kind: "text", getValue: (o) => supervisorNameFor(o.supervisor_id) },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
   const filteredOrders = columnFilters.apply(statusFilteredOrders);
@@ -358,6 +376,21 @@ export function WorkOrdersTab() {
       sortValue: (order) => workCenters.find((wc) => wc.id === order.work_center_id)?.code ?? "",
     },
     {
+      key: "supervisor",
+      header: t("production.workOrders.column.supervisor"),
+      defaultWidth: 180,
+      cell: (order) => (
+        <span className="text-muted-foreground">{supervisorNameFor(order.supervisor_id) || "—"}</span>
+      ),
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.supervisor ?? "",
+        onChange: (v) => columnFilters.setTextValue("supervisor", v),
+        placeholder: t("production.workOrders.column.supervisor"),
+      },
+      sortValue: (order) => supervisorNameFor(order.supervisor_id),
+    },
+    {
       key: "progress",
       header: t("production.workOrders.column.progress"),
       defaultWidth: 160,
@@ -412,6 +445,7 @@ export function WorkOrdersTab() {
           order={order}
           products={products}
           workCenters={workCenters}
+          supervisorOptions={supervisorOptions}
           recipes={recipes}
           packagingBoms={packagingBoms}
           detailsId={detailsId}
@@ -516,6 +550,18 @@ export function WorkOrdersTab() {
                   {errors.work_center_id && <p className="text-sm text-destructive">{errors.work_center_id.message}</p>}
                 </div>
 
+                <div className="space-y-1.5">
+                  <Label htmlFor="supervisor_id">{t("production.workOrders.field.supervisor")}</Label>
+                  <Select id="supervisor_id" {...register("supervisor_id")}>
+                    <option value="">—</option>
+                    {supervisorOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {supervisorLabel(s)}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
                 <p className="text-xs text-muted-foreground">{t("production.workOrders.productHint")}</p>
 
                 {createMutation.isError && (
@@ -599,6 +645,7 @@ function OrderActions({
   order,
   products,
   workCenters,
+  supervisorOptions,
   recipes,
   packagingBoms,
   detailsId,
@@ -624,6 +671,7 @@ function OrderActions({
   order: WorkOrder;
   products: Product[];
   workCenters: WorkCenter[];
+  supervisorOptions: SupervisorOption[];
   recipes: Recipe[];
   packagingBoms: PackagingBom[];
   detailsId: string | null;
@@ -649,10 +697,13 @@ function OrderActions({
   const { session } = useAuth();
   const token = session!.token;
   const { t } = useI18n();
-  const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const productName = (productId: string | null) => {
     if (!productId) return "—";
     return products.find((p) => p.id === productId)?.name ?? "—";
+  };
+  const supervisorName = (supervisorId: string | null) => {
+    const supervisor = supervisorOptions.find((s) => s.id === supervisorId);
+    return supervisor ? supervisorLabel(supervisor) : "—";
   };
   const isDetailsDialogOpen = detailsId === order.id;
   const isCloseDialogOpen = closingId === order.id;
@@ -771,6 +822,12 @@ function OrderActions({
                     <span className="font-medium">{workCenters.find((wc) => wc.id === order.work_center_id)?.name ?? "—"}</span>
                   </div>
                   <div>
+                    <span className="text-muted-foreground">{t("production.workOrders.column.supervisor")}: </span>
+                    <span className="font-medium">
+                      {supervisorName(order.supervisor_id)}
+                    </span>
+                  </div>
+                  <div>
                     <span className="text-muted-foreground">{t("production.workOrders.details.produced")}: </span>
                     <span className="font-medium">{consolidation ? consolidation.produced_quantity : "—"}</span>
                   </div>
@@ -836,29 +893,23 @@ function OrderActions({
               </DialogHeader>
               <form className="space-y-4" onSubmit={editForm.handleSubmit(onSubmitEdit)}>
                 <div className="space-y-1.5">
-                  <Label htmlFor={`edit_quantity_${order.id}`}>
-                    {t("production.workOrders.field.quantity")}
-                    {productUnit(order.product_id, products, uoms) && (
-                      <span className="text-muted-foreground"> ({productUnit(order.product_id, products, uoms)})</span>
-                    )}
-                  </Label>
-                  <Input
-                    id={`edit_quantity_${order.id}`}
-                    type="number"
-                    step={productRequiresIntegerQuantity(order.product_id, products, uoms) ? "1" : "any"}
-                    {...editForm.register("planned_quantity")}
-                  />
-                  {editForm.formState.errors.planned_quantity && (
-                    <p className="text-sm text-destructive">{editForm.formState.errors.planned_quantity.message}</p>
-                  )}
-                </div>
-                <div className="space-y-1.5">
                   <Label htmlFor={`edit_work_center_${order.id}`}>{t("production.workOrders.field.workCenter")}</Label>
                   <Select id={`edit_work_center_${order.id}`} {...editForm.register("work_center_id")}>
                     <option value="">—</option>
                     {workCenters.map((wc) => (
                       <option key={wc.id} value={wc.id}>
                         {wc.code} — {wc.name}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor={`edit_supervisor_${order.id}`}>{t("production.workOrders.field.supervisor")}</Label>
+                  <Select id={`edit_supervisor_${order.id}`} {...editForm.register("supervisor_id")}>
+                    <option value="">—</option>
+                    {supervisorOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {supervisorLabel(s)}
                       </option>
                     ))}
                   </Select>

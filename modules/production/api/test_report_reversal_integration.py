@@ -25,7 +25,7 @@ TENANT = "integration-test-reversal"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, semolina, rebroyat, location, work_center = (str(ULID()) for _ in range(5))
+    uom, semolina, rebroyat, location, work_center, equipment = (str(ULID()) for _ in range(6))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -47,6 +47,10 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'REV-WC', 'Line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'REV-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
     stock = StockService(db)
     for product_id in (semolina, rebroyat):
         stock.receive_stock(
@@ -60,6 +64,7 @@ def env(db):
         "rebroyat": rebroyat,
         "location": location,
         "work_center": work_center,
+        "equipment": equipment,
     }
 
 
@@ -101,7 +106,8 @@ def _validated_report(db, env, of, **detail_kwargs):
     service = ProductionReportService(db)
     created = service.create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
-        report_date=datetime.date(2026, 9, 1), detail=_detail(env, **detail_kwargs),
+        report_date=datetime.date(2026, 9, 1), equipment_id=env["equipment"],
+        detail=_detail(env, **detail_kwargs),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
     report = created.value["report"]
@@ -130,6 +136,7 @@ def test_rebroyat_poured_in_must_name_its_product(db, env, of):
     service = ProductionReportService(db)
     created = service.create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 2),
+        equipment_id=env["equipment"],
         detail=_detail(env, semolina_quantity=100, regrind_input_quantity=50),
     )
     submitted = service.submit_report(
@@ -243,6 +250,43 @@ def test_a_completed_rebroyat_order_blocks_the_delete(db, env, of):
     assert result.code == "REGRIND_ALREADY_COMPLETED"
 
 
+def test_force_deleting_reverses_the_completed_rebroyat_receipt_and_removes_it(db, env, of):
+    """`force` pushes past the refusal: the receipt is reversed, not left to disagree with a deleted report."""
+    rebroyat_before = _on_hand(db, env["rebroyat"], env["location"])
+    report = _validated_report(db, env, of, semolina_quantity=800, regrind_quantity=40)
+    batch_of_id = db.execute(
+        "SELECT work_order_id FROM production.regrind_batches WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0]
+    assigned = RegrindService(db).assign_batch(
+        tenant_id=TENANT, actor_id=env["actor"], work_order_id=batch_of_id, team="Équipe A",
+    )
+    assert isinstance(assigned, Ok), getattr(assigned, "message", "")
+    completed = RegrindService(db).complete_batch(
+        tenant_id=TENANT, actor_id=env["actor"], work_order_id=batch_of_id,
+        correlation_id=str(ULID()), location_id=env["location"], actual_output_quantity=38,
+    )
+    assert isinstance(completed, Ok), getattr(completed, "message", "")
+    assert _on_hand(db, env["rebroyat"], env["location"]) == rebroyat_before + 38
+
+    result = ProductionReportService(db).delete_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="too late", force=True
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+
+    # The 38 kg the batch received is handed back, undoing exactly what completing it posted.
+    assert _on_hand(db, env["rebroyat"], env["location"]) == rebroyat_before
+    assert db.execute(
+        "SELECT count(*) FROM production.work_orders WHERE id = %s", (batch_of_id,)
+    ).fetchone()[0] == 0
+    assert db.execute(
+        "SELECT count(*) FROM production.regrind_batches WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0] == 0
+    assert db.execute(
+        "SELECT count(*) FROM production.scrap_records WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0] == 0
+    assert result.value["reversed_regrind_stock"][0]["work_order_id"] == batch_of_id
+
+
 # --- correcting a validated report -------------------------------------------
 
 
@@ -296,3 +340,110 @@ def test_the_reversal_leaves_both_movements_on_the_ledger(db, env, of):
         "SELECT quantity FROM warehouse.stock_moves WHERE source_id = %s ORDER BY created_at", (report.id,)
     ).fetchall()
     assert [float(m[0]) for m in moves] == [800, 800, 650], "posted, reversed, re-posted"
+
+
+# --- correcting a report whose rebroyat batch is already closed -------------
+
+
+def _close_regrind_batch(db, env, actual_output_quantity=38) -> str:
+    """Assign and complete the one regrind batch this tenant's reports have opened so far."""
+    batch_of_id = db.execute(
+        "SELECT work_order_id FROM production.regrind_batches WHERE tenant_id = %s"
+        " AND actual_output_quantity IS NULL",
+        (TENANT,),
+    ).fetchone()[0]
+    assigned = RegrindService(db).assign_batch(
+        tenant_id=TENANT, actor_id=env["actor"], work_order_id=batch_of_id, team="Équipe A",
+    )
+    assert isinstance(assigned, Ok), getattr(assigned, "message", "")
+    completed = RegrindService(db).complete_batch(
+        tenant_id=TENANT, actor_id=env["actor"], work_order_id=batch_of_id,
+        correlation_id=str(ULID()), location_id=env["location"], actual_output_quantity=actual_output_quantity,
+    )
+    assert isinstance(completed, Ok), getattr(completed, "message", "")
+    return batch_of_id
+
+
+def test_correcting_an_unchanged_rebroyat_figure_leaves_a_closed_batch_alone(db, env, of):
+    report = _validated_report(db, env, of, semolina_quantity=800, regrind_quantity=40)
+    batch_of_id = _close_regrind_batch(db, env)
+
+    result = ProductionReportService(db).correct_validated_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        detail=_detail(env, semolina_quantity=650, regrind_quantity=40), reason="semolina meter over-read",
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+    assert db.execute(
+        "SELECT count(*) FROM production.regrind_batches WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0] == 1
+    assert db.execute(
+        "SELECT input_quantity_total FROM production.regrind_batches WHERE work_order_id = %s", (batch_of_id,)
+    ).fetchone()[0] == 40
+
+
+def test_increasing_a_closed_batchs_rebroyat_figure_requires_confirmation(db, env, of):
+    report = _validated_report(db, env, of, semolina_quantity=800, regrind_quantity=40)
+    _close_regrind_batch(db, env)
+
+    result = ProductionReportService(db).correct_validated_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        detail=_detail(env, semolina_quantity=800, regrind_quantity=55), reason="more scrap than first logged",
+    )
+    assert isinstance(result, Err)
+    assert result.code == "REGRIND_DELTA_REQUIRES_NEW_ORDER"
+    assert db.execute(
+        "SELECT count(*) FROM production.regrind_batches WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0] == 1, "nothing is created before the user confirms"
+
+
+def test_confirming_the_increase_opens_a_new_rebroyat_order_for_the_difference(db, env, of):
+    report = _validated_report(db, env, of, semolina_quantity=800, regrind_quantity=40)
+    original_batch_id = _close_regrind_batch(db, env)
+
+    result = ProductionReportService(db).correct_validated_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        detail=_detail(env, semolina_quantity=800, regrind_quantity=55), reason="more scrap than first logged",
+        force=True,
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+
+    batches = db.execute(
+        "SELECT work_order_id, input_quantity_total FROM production.regrind_batches WHERE tenant_id = %s"
+        " ORDER BY input_quantity_total",
+        (TENANT,),
+    ).fetchall()
+    assert len(batches) == 2, "the original stays closed, a new one covers just the difference"
+    assert float(batches[0][1]) == 15
+    assert batches[1][0] == original_batch_id
+    assert float(batches[1][1]) == 40, "the original, already-ground batch is untouched"
+
+
+def test_decreasing_a_closed_batchs_rebroyat_figure_adjusts_stock_instead_of_blocking(db, env, of):
+    rebroyat_before = _on_hand(db, env["rebroyat"], env["location"])
+    report = _validated_report(db, env, of, semolina_quantity=800, regrind_quantity=40)
+    original_batch_id = _close_regrind_batch(db, env, actual_output_quantity=38)
+    assert _on_hand(db, env["rebroyat"], env["location"]) == rebroyat_before + 38
+
+    result = ProductionReportService(db).correct_validated_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        detail=_detail(env, semolina_quantity=800, regrind_quantity=25), reason="over-counted the scrap bin",
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+
+    # 40 -> 25 is a 15 kg reduction, taken straight off on-hand -- no confirmation needed.
+    assert _on_hand(db, env["rebroyat"], env["location"]) == rebroyat_before + 38 - 15
+
+    assert db.execute(
+        "SELECT count(*) FROM production.regrind_batches WHERE tenant_id = %s", (TENANT,)
+    ).fetchone()[0] == 1, "the original, already-ground batch is left exactly as it was"
+    assert db.execute(
+        "SELECT input_quantity_total FROM production.regrind_batches WHERE work_order_id = %s", (original_batch_id,)
+    ).fetchone()[0] == 40
+
+    adjustment = db.execute(
+        "SELECT quantity, reason FROM warehouse.stock_moves WHERE tenant_id = %s AND move_type = 'adjustment'"
+        " ORDER BY created_at DESC LIMIT 1",
+        (TENANT,),
+    ).fetchone()
+    assert float(adjustment[0]) == -15
+    assert adjustment[1] == "over-counted the scrap bin"

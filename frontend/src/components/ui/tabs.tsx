@@ -9,7 +9,11 @@ export function TabsList({ className, ...props }: React.ComponentPropsWithoutRef
   return (
     <TabsPrimitive.List
       className={cn(
-        "relative inline-flex items-center gap-1 rounded-lg border border-border bg-muted/60 p-1",
+        // max-w-full + flex-wrap rather than switching off inline-flex: a short
+        // tab list still just hugs its own content on one row, but a long one
+        // (Production's 12 tabs) gets capped at the available width and wraps
+        // onto another row instead of being clipped or requiring a scroll.
+        "relative inline-flex max-w-full flex-wrap items-center gap-1 rounded-lg border border-border bg-muted/60 p-1",
         className,
       )}
       {...props}

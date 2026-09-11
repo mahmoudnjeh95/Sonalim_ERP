@@ -7,9 +7,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const location = useLocation();
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="flex-1 overflow-x-hidden px-8 py-8">
+      <main className="flex-1 overflow-y-auto overflow-x-hidden px-8 py-8">
         <AnimatePresence mode="wait">
           <motion.div
             key={location.pathname}

@@ -2,12 +2,13 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, ClipboardCheck, Inbox, XCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardCheck, Inbox, Pencil, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
@@ -16,6 +17,7 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
 import {
   Dialog,
+  DialogTrigger,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -24,6 +26,8 @@ import {
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
+import { BulkActionBar } from "../../components/patterns/BulkActionBar";
+import { useSelection } from "../../lib/useSelection";
 import { cn } from "../../lib/utils";
 import { RecipeCheckPanel } from "./RecipeCheckPanel";
 import { PackagingVariancePanel } from "./PackagingVariancePanel";
@@ -42,11 +46,13 @@ import {
   type WasteLine,
 } from "./api";
 import {
+  adminUpdateQualityReport,
   listQualityReports,
   rejectQualityReport,
   getQualityReport,
   validateQualityReport,
   type QualityReport,
+  type QualityReportDetail,
 } from "../qc/api";
 
 import { UTILITY_UNITS, formatDuration, formatQuantity, productUnit } from "../../lib/units";
@@ -72,6 +78,13 @@ interface PendingItem {
   team: string | null;
   shift: string | null;
   submittedAt: string | null;
+}
+
+// id alone can collide across the two services this queue merges (a daily
+// report and a quality report minted from the same OF/date can share an id),
+// so selection is keyed on source+id rather than id alone.
+function itemKey(item: PendingItem): string {
+  return `${item.source}:${item.id}`;
 }
 
 export function ValidationCenterTab() {
@@ -159,6 +172,57 @@ export function ValidationCenterTab() {
     }
   }
 
+  const selection = useSelection(visible.map(itemKey));
+  const [bulkValidateOpen, setBulkValidateOpen] = useState(false);
+  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
+  const [bulkRejectReason, setBulkRejectReason] = useState("");
+  const selectedItems = visible.filter((item) => selection.isSelected(itemKey(item)));
+
+  // Straight validate/reject only -- no shortfall comment, no regrind work
+  // center override, no quality corrections. An item that needs any of that
+  // simply fails here and stays pending, to be handled in the individual
+  // review dialog above.
+  const bulkValidateMutation = useMutation({
+    mutationFn: async () => {
+      const settled = await Promise.allSettled(
+        selectedItems.map((item) =>
+          item.source === "quality"
+            ? validateQualityReport(token, item.id, crypto.randomUUID())
+            : validateReport(token, item.id, { correlationId: crypto.randomUUID() }),
+        ),
+      );
+      return { succeeded: settled.filter((r) => r.status === "fulfilled").length, total: settled.length };
+    },
+    onSuccess: ({ succeeded, total }) => {
+      invalidateEverything();
+      const failed = total - succeeded;
+      if (succeeded > 0) toast.success(`${succeeded} ${t("production.validation.bulkValidateSucceeded")}`);
+      if (failed > 0) toast.error(`${failed} ${t("production.validation.bulkValidateFailed")}`);
+      setBulkValidateOpen(false);
+      selection.clear();
+    },
+  });
+
+  const bulkRejectMutation = useMutation({
+    mutationFn: async (reason: string) => {
+      const settled = await Promise.allSettled(
+        selectedItems.map((item) =>
+          item.source === "quality" ? rejectQualityReport(token, item.id, reason) : rejectReport(token, item.id, reason),
+        ),
+      );
+      return { succeeded: settled.filter((r) => r.status === "fulfilled").length, total: settled.length };
+    },
+    onSuccess: ({ succeeded, total }) => {
+      invalidateEverything();
+      const failed = total - succeeded;
+      if (succeeded > 0) toast.success(`${succeeded} ${t("production.validation.bulkRejectSucceeded")}`);
+      if (failed > 0) toast.error(`${failed} ${t("production.validation.bulkRejectFailed")}`);
+      setBulkRejectOpen(false);
+      setBulkRejectReason("");
+      selection.clear();
+    },
+  });
+
   const isLoading = loadingProduction || loadingQuality;
 
   return (
@@ -204,6 +268,85 @@ export function ValidationCenterTab() {
           </div>
         </CardHeader>
         <CardContent className={grouped.length === 0 ? "p-0" : "space-y-3"}>
+          {!isLoading && visible.length > 0 && (
+            <BulkActionBar count={selection.count} onClear={selection.clear}>
+              <Dialog open={bulkValidateOpen} onOpenChange={setBulkValidateOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm">
+                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    {t("production.validation.bulkValidate")}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("production.validation.dialog.bulkValidate.title")}</DialogTitle>
+                    <DialogDescription>{t("production.validation.dialog.bulkValidate.description")}</DialogDescription>
+                  </DialogHeader>
+                  <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                    {selectedItems.map((item) => (
+                      <div key={itemKey(item)} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="font-medium">{referenceOf(item.ofId)}</span>
+                        <span className="text-muted-foreground">
+                          {t(sourceLabelKey(item.source))} · {item.reportDate}
+                          {item.team ? ` · ${item.team}` : ""}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <Button className="w-full" onClick={() => bulkValidateMutation.mutate()} disabled={bulkValidateMutation.isPending}>
+                    {bulkValidateMutation.isPending ? t("production.validation.bulkValidating") : t("production.validation.bulkValidate")}
+                  </Button>
+                </DialogContent>
+              </Dialog>
+              <Dialog
+                open={bulkRejectOpen}
+                onOpenChange={(open) => {
+                  setBulkRejectOpen(open);
+                  if (open) setBulkRejectReason("");
+                }}
+              >
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline">
+                    <XCircle className="h-3.5 w-3.5" />
+                    {t("production.validation.bulkReject")}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("production.validation.dialog.bulkReject.title")}</DialogTitle>
+                    <DialogDescription>{t("production.validation.dialog.bulkReject.description")}</DialogDescription>
+                  </DialogHeader>
+                  <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                    {selectedItems.map((item) => (
+                      <div key={itemKey(item)} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="font-medium">{referenceOf(item.ofId)}</span>
+                        <span className="text-muted-foreground">
+                          {t(sourceLabelKey(item.source))} · {item.reportDate}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="bulk_rejection_reason">{t("production.validation.field.rejectionReason")}</Label>
+                    <Input
+                      id="bulk_rejection_reason"
+                      value={bulkRejectReason}
+                      onChange={(e) => setBulkRejectReason(e.target.value)}
+                      placeholder={t("production.validation.field.rejectionPlaceholder")}
+                    />
+                  </div>
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={() => bulkRejectMutation.mutate(bulkRejectReason)}
+                    disabled={bulkRejectMutation.isPending || !bulkRejectReason.trim()}
+                  >
+                    {bulkRejectMutation.isPending ? t("production.validation.bulkRejecting") : t("production.validation.bulkReject")}
+                  </Button>
+                </DialogContent>
+              </Dialog>
+            </BulkActionBar>
+          )}
           {isLoading ? (
             <div className="space-y-2 p-6">
               <Skeleton className="h-16 w-full" />
@@ -242,12 +385,28 @@ export function ValidationCenterTab() {
                   </div>
                   <div className="divide-y divide-border">
                     {group.items.map((item) => (
-                      <button
-                        key={`${item.source}:${item.id}`}
-                        type="button"
+                      <div
+                        key={itemKey(item)}
+                        role="button"
+                        tabIndex={0}
                         onClick={() => setReviewing(item)}
-                        className="flex w-full items-center gap-4 p-3 text-left transition-colors hover:bg-muted/40"
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" || e.key === " ") {
+                            e.preventDefault();
+                            setReviewing(item);
+                          }
+                        }}
+                        className="flex w-full cursor-pointer items-center gap-4 p-3 text-left transition-colors hover:bg-muted/40"
                       >
+                        {/* Stops the row's own onClick -- picking a report for
+                            bulk action must not also open its review dialog. */}
+                        <div onClick={(e) => e.stopPropagation()}>
+                          <Checkbox
+                            checked={selection.isSelected(itemKey(item))}
+                            onCheckedChange={() => selection.toggle(itemKey(item))}
+                            aria-label={t("production.validation.review")}
+                          />
+                        </div>
                         <div
                           className={cn(
                             "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg",
@@ -269,7 +428,7 @@ export function ValidationCenterTab() {
                           </div>
                         </div>
                         <span className="text-sm text-muted-foreground">{t("production.validation.review")}</span>
-                      </button>
+                      </div>
                     ))}
                   </div>
                 </motion.div>
@@ -326,10 +485,19 @@ function ReviewDialog({
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
+  const queryClient = useQueryClient();
   const [rejectionReason, setRejectionReason] = useState("");
   const [shortfallComment, setShortfallComment] = useState("");
   const [shortfallRequired, setShortfallRequired] = useState(false);
   const [regrindWorkCenterId, setRegrindWorkCenterId] = useState("");
+  const [editingQuality, setEditingQuality] = useState(false);
+  const [qualityEdit, setQualityEdit] = useState({
+    conforming_cartons: "",
+    non_conforming_cartons: "",
+    humidity_percentage: "",
+    defect_details: "",
+  });
+  const [qualityEditReason, setQualityEditReason] = useState("");
 
   const isQuality = item.source === "quality";
 
@@ -408,6 +576,49 @@ function ReviewDialog({
     },
   });
 
+  // A correction here goes through the same admin edit-in-place endpoint as the
+  // Quality Reports list, just surfaced where a validator is already looking:
+  // at the declared figures, mid-examination, before deciding to validate.
+  function openQualityEdit() {
+    const detail = qualityDetail?.detail;
+    setQualityEdit({
+      conforming_cartons: String(detail?.conforming_cartons ?? 0),
+      non_conforming_cartons: String(detail?.non_conforming_cartons ?? 0),
+      humidity_percentage: detail?.humidity_percentage != null ? String(detail.humidity_percentage) : "",
+      defect_details: detail?.defect_details ?? "",
+    });
+    setQualityEditReason("");
+    setEditingQuality(true);
+  }
+
+  const updateQualityMutation = useMutation({
+    // Sent as a full detail object, not just the edited fields: the admin
+    // endpoint replaces the whole record, so the indices this dialog doesn't
+    // show (pre-dryer, cooling, PF, sumo...) must ride along unchanged.
+    mutationFn: () =>
+      adminUpdateQualityReport(token, item.id, {
+        detail: {
+          ...(qualityDetail?.detail ?? ({} as QualityReportDetail)),
+          conforming_cartons: Number(qualityEdit.conforming_cartons) || 0,
+          non_conforming_cartons: Number(qualityEdit.non_conforming_cartons) || 0,
+          humidity_percentage: qualityEdit.humidity_percentage === "" ? null : Number(qualityEdit.humidity_percentage),
+          defect_details: qualityEdit.defect_details || null,
+        },
+        reason: qualityEditReason,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["qc", "quality-reports", item.id] });
+      queryClient.invalidateQueries({ queryKey: QUALITY_QUERY_KEY });
+      toast.success(t("production.reports.updated"));
+      setEditingQuality(false);
+    },
+    onError: (error) => {
+      toast.error(t("production.reports.updateError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
+  });
+
   const { data: products = [] } = useQuery({
     queryKey: ["core", "products"],
     queryFn: () => listProducts(token),
@@ -480,12 +691,93 @@ function ReviewDialog({
           )}
 
           <div className="rounded-lg border border-border">
-            <div className="border-b border-border px-4 py-2">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t("production.validation.figures")}
               </p>
+              {isQuality && !editingQuality && (
+                <Button size="sm" variant="ghost" onClick={openQualityEdit} disabled={!qualityDetail}>
+                  <Pencil className="h-3.5 w-3.5" />
+                  {t("common.edit")}
+                </Button>
+              )}
             </div>
-            {figures.length === 0 ? (
+            {editingQuality ? (
+              <div className="space-y-3 px-4 py-3">
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="q_edit_conforming">
+                      {t("qc.quality.field.conforming")} ({t("qc.quality.unit.cartons")})
+                    </Label>
+                    <Input
+                      id="q_edit_conforming"
+                      type="number"
+                      step="1"
+                      value={qualityEdit.conforming_cartons}
+                      onChange={(e) => setQualityEdit((s) => ({ ...s, conforming_cartons: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="q_edit_non_conforming">
+                      {t("qc.quality.field.nonConforming")} ({t("qc.quality.unit.cartons")})
+                    </Label>
+                    <Input
+                      id="q_edit_non_conforming"
+                      type="number"
+                      step="1"
+                      value={qualityEdit.non_conforming_cartons}
+                      onChange={(e) => setQualityEdit((s) => ({ ...s, non_conforming_cartons: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="q_edit_humidity">{t("qc.quality.field.humidity")}</Label>
+                    <Input
+                      id="q_edit_humidity"
+                      type="number"
+                      step="any"
+                      value={qualityEdit.humidity_percentage}
+                      onChange={(e) => setQualityEdit((s) => ({ ...s, humidity_percentage: e.target.value }))}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="q_edit_defects">{t("qc.quality.field.defectDetails")}</Label>
+                    <Input
+                      id="q_edit_defects"
+                      value={qualityEdit.defect_details}
+                      onChange={(e) => setQualityEdit((s) => ({ ...s, defect_details: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="q_edit_reason">{t("production.reports.correctionReason")}</Label>
+                  <Input
+                    id="q_edit_reason"
+                    value={qualityEditReason}
+                    onChange={(e) => setQualityEditReason(e.target.value)}
+                    placeholder={t("production.reports.correctionReasonPlaceholder")}
+                  />
+                  <p className="text-xs text-muted-foreground">{t("production.reports.correctionHelp")}</p>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    className="flex-1"
+                    onClick={() => updateQualityMutation.mutate()}
+                    disabled={updateQualityMutation.isPending || !qualityEditReason.trim()}
+                  >
+                    {updateQualityMutation.isPending ? t("common.saving") : t("common.save")}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="flex-1"
+                    onClick={() => setEditingQuality(false)}
+                  >
+                    {t("common.cancel")}
+                  </Button>
+                </div>
+              </div>
+            ) : figures.length === 0 ? (
               <p className="px-4 py-6 text-center text-sm text-muted-foreground">{t("common.none")}</p>
             ) : (
               <dl className="grid grid-cols-1 gap-x-6 gap-y-2 px-4 py-3 sm:grid-cols-2">
@@ -622,7 +914,6 @@ function productionFigures(
     return [
       ...semolinaLines,
       { label: "production.dailyReports.field.regrindInput", value: d.regrind_input_quantity, unit: units.regrind },
-      { label: "production.dailyReports.field.dough", value: d.dough_quantity, unit: units.semolina },
       { label: "production.reports.field.finishedProduct", value: d.finished_product_quantity, unit: units.of },
       // Rebroyat is weighed as its own item, not as semoule: what goes back
       // through the mill is ground pasta, not the flour it was made from.

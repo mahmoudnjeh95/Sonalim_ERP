@@ -13,7 +13,7 @@ import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { listAuditLog, type AuditLogEntry } from "./api";
+import { listAuditLog, type AuditLogEntry } from "../admin/activityLog/api";
 import { listPurchaseOrders, type PurchaseOrder } from "../procurement/api";
 import { listPartners } from "../partners/api";
 

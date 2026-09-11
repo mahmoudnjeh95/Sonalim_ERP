@@ -9,6 +9,7 @@ export interface RoleRef {
 export interface UserSummary {
   id: string;
   email: string;
+  full_name: string | null;
   permissions: string[];
   roles: RoleRef[];
 }
@@ -35,6 +36,14 @@ export interface RoleInput {
 
 export function listUsers(token: string) {
   return apiFetch<UserSummary[]>("/core/users", { token });
+}
+
+export function updateUserName(token: string, userId: string, fullName: string) {
+  return apiFetch<{ user_id: string; full_name: string | null }>(`/core/users/${userId}`, {
+    method: "PATCH",
+    token,
+    body: { full_name: fullName || null },
+  });
 }
 
 export function listPermissionCatalog(token: string) {

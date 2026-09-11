@@ -15,7 +15,10 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
+from modules.production.api.conditionnement_service import ConditionnementReportService
+from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
+from modules.production.domain.production_report import ConditionnementReportDetail
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.api.quality_service import FollowUpPolicyService, FollowUpService, QualityReportService
 from modules.qc.domain.non_conformity import DispositionLine
@@ -28,7 +31,7 @@ TENANT = "integration-test-qc"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, location, quarantine, work_center = (str(ULID()) for _ in range(5))
+    uom, product, location, quarantine, work_center, equipment = (str(ULID()) for _ in range(6))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -54,6 +57,10 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'TEST-WC', 'Test line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'TEST-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
     # Finished product on the shelf for quality to pull from.
     StockService(db).receive_stock(
         tenant_id=TENANT,
@@ -70,6 +77,7 @@ def env(db):
         "location": location,
         "quarantine": quarantine,
         "work_center": work_center,
+        "equipment": equipment,
     }
 
 
@@ -87,14 +95,25 @@ def of(db, env):
     return created.value
 
 
+def _packing(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning") -> str:
+    """A bare conditionnement report to hang a quality report off of. Left as a
+    draft -- QC may inspect a run before it's submitted -- with no packaging
+    figures, since these tests only care about the quality side."""
+    created = ConditionnementReportService(db).create_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date, shift=shift,
+        equipment_id=env["equipment"],
+        detail=ConditionnementReportDetail(),
+    )
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    return created.value["report"].id
+
+
 def _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning", **detail_kwargs):
+    conditionnement_report_id = _packing(db, env, of, report_date=report_date, shift=shift)
     result = QualityReportService(db).create_report(
         tenant_id=TENANT,
         actor_id=env["actor"],
-        of_id=of.id,
-        report_date=report_date,
-        team="QC",
-        shift=shift,
+        conditionnement_report_id=conditionnement_report_id,
         detail=QualityReportDetail(**detail_kwargs),
     )
     assert isinstance(result, Ok), getattr(result, "message", "")
@@ -116,14 +135,12 @@ def test_an_of_carries_one_quality_report_per_shift(db, env, of):
     assert len(reports) == 3
 
 
-def test_the_same_shift_cannot_file_two_quality_reports(db, env, of):
-    _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning")
+def test_the_same_conditionnement_report_cannot_be_inspected_twice(db, env, of):
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning")
     duplicate = QualityReportService(db).create_report(
         tenant_id=TENANT,
         actor_id=env["actor"],
-        of_id=of.id,
-        report_date=datetime.date(2026, 9, 1),
-        shift="morning",
+        conditionnement_report_id=report.conditionnement_report_id,
     )
     assert isinstance(duplicate, Err)
     assert duplicate.code == "DUPLICATE_REPORT"
@@ -279,6 +296,23 @@ def test_follow_up_survives_of_closure(db, env, of):
     service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
     service.validate_report(
         tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+
+    # The OF must have nothing else outstanding before it can close -- submit and
+    # validate the packing report the quality report was filed against. This test
+    # is about the follow-up surviving closure, not about the packing report.
+    reports = ProductionReportService(db)
+    assert isinstance(
+        reports.submit_report(
+            tenant_id=TENANT, actor_id=env["actor"], report_id=report.conditionnement_report_id
+        ),
+        Ok,
+    )
+    assert isinstance(
+        reports.validate_report(
+            tenant_id=TENANT, actor_id=env["actor"], report_id=report.conditionnement_report_id
+        ),
+        Ok,
     )
 
     work_orders = WorkOrderService(db)

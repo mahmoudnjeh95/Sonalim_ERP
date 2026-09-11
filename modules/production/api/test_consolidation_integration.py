@@ -36,7 +36,7 @@ TENANT = "integration-test-consolidation"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, film, carton, location, packaging_location, work_center = (str(ULID()) for _ in range(7))
+    uom, product, film, carton, location, packaging_location, work_center, equipment = (str(ULID()) for _ in range(8))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -45,7 +45,16 @@ def env(db):
         "INSERT INTO core.uoms (id, tenant_id, code, name, category) VALUES (%s, %s, 'kg', 'Kilogram', 'weight')",
         (uom, TENANT),
     )
-    for product_id, sku in ((product, "CONSO-PASTA"), (film, "CONSO-FILM"), (carton, "CONSO-CARTON")):
+    # net_weight_grams=1_000_000 makes the finished good's own "packet" a tonne,
+    # so passing packets_counted=N to _packing below reads as N tonnes with no
+    # carton tier involved — the simplest fixture that exercises the same
+    # decision-24 tonnage_from_count path production actually uses (Phase 9),
+    # without every test having to pick a carton size to get a round number.
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id, net_weight_grams) VALUES (%s, %s, %s, %s, %s, %s)",
+        (product, TENANT, "CONSO-PASTA", "CONSO-PASTA", uom, 1_000_000),
+    )
+    for product_id, sku in ((film, "CONSO-FILM"), (carton, "CONSO-CARTON")):
         db.execute(
             "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, %s, %s, %s)",
             (product_id, TENANT, sku, sku, uom),
@@ -58,6 +67,10 @@ def env(db):
     db.execute(
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'CONSO-WC', 'Line')",
         (work_center, TENANT),
+    )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'CONSO-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
     )
 
     stock = StockService(db)
@@ -78,6 +91,7 @@ def env(db):
         "location": location,
         "packaging_location": packaging_location,
         "work_center": work_center,
+        "equipment": equipment,
     }
 
 
@@ -109,6 +123,7 @@ def _daily(db, env, of, *, date, shift="morning", validate=True, **detail):
     service = ProductionReportService(db)
     created = service.create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=date, shift=shift,
+        equipment_id=env["equipment"],
         detail=DailyReportDetail(**detail),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
@@ -126,6 +141,7 @@ def _packing(db, env, of, *, date, shift="afternoon", validate=True, **detail):
     detail.setdefault("finished_goods_location_id", env["location"])
     created = ConditionnementReportService(db).create_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=date, shift=shift,
+        equipment_id=env["equipment"],
         detail=ConditionnementReportDetail(**detail),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
@@ -156,8 +172,8 @@ def test_consolidation_sums_every_validated_shift(db, env, of):
         db, env, of, date=datetime.date(2026, 9, 2),
         semolina_quantity=800, water_quantity=40, fuel_quantity=15, gasoil_quantity=6,
     )
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=900, film_quantity=30)
-    _packing(db, env, of, date=datetime.date(2026, 9, 2), finished_product_quantity=700, film_quantity=25)
+    _packing(db, env, of, date=datetime.date(2026, 9, 1), packets_counted=900, film_quantity=30)
+    _packing(db, env, of, date=datetime.date(2026, 9, 2), packets_counted=700, film_quantity=25)
 
     result = _consolidate(db, of)
     assert result["raw_material"]["semolina_quantity"] == 1800
@@ -211,7 +227,7 @@ def test_a_rejected_report_is_not_consolidated(db, env, of):
 def test_the_daily_finished_product_figure_is_not_added_to_produced(db, env, of):
     """Locked decision 7 — the same pasta must not be counted twice."""
     _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, finished_product_quantity=900)
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=900)
+    _packing(db, env, of, date=datetime.date(2026, 9, 1), packets_counted=900)
 
     assert _consolidate(db, of)["produced_quantity"] == 900
 
@@ -221,7 +237,7 @@ def test_the_consolidated_figures_name_their_product(db, env, of):
     Where every report named the same one, the consolidation says which."""
     _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
     _daily(db, env, of, date=datetime.date(2026, 9, 2), semolina_quantity=800)
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=900, film_quantity=5)
+    _packing(db, env, of, date=datetime.date(2026, 9, 1), packets_counted=900, film_quantity=5)
 
     result = _consolidate(db, of)
     assert result["raw_material"]["semolina_product_id"] == env["product"]
@@ -267,7 +283,7 @@ def test_waste_is_grouped_by_stage_and_by_item(db, env, of):
     )
     _packing(
         db, env, of, date=datetime.date(2026, 9, 1),
-        finished_product_quantity=900,
+        packets_counted=900,
         waste_lines=(
             WasteLine(category="product", product_id=env["product"], quantity=2),
             WasteLine(category="packaging", product_id=env["film"], quantity=1),
@@ -289,12 +305,17 @@ def test_waste_is_grouped_by_stage_and_by_item(db, env, of):
     assert waste["regrind"]["quantity"] == 10
     assert "total" not in waste, "a total across items in different units means nothing"
 
+    # The écart: daily-report déchet only (raw_material + press, never the
+    # packing report's product/packaging, which isn't semoule any more), net
+    # of the rebroyat declared over the same reports.
+    assert waste["net_semoule_waste"] == 5 + 3 - 10
+
 
 def test_waste_lines_for_the_same_item_are_summed(db, env, of):
     """Two spills of the same film in one shift are two events and one total."""
     _packing(
         db, env, of, date=datetime.date(2026, 9, 1),
-        finished_product_quantity=900,
+        packets_counted=900,
         waste_lines=(
             WasteLine(category="packaging", product_id=env["film"], quantity=1.5, note="reel change"),
             WasteLine(category="packaging", product_id=env["film"], quantity=2.5, note="seal fault"),
@@ -343,6 +364,47 @@ def test_waste_recorded_before_it_named_an_item_is_reported_apart(db, env, of):
     assert waste["unattributed_quantity"] == 3
 
 
+def test_daily_waste_in_kg_is_restated_against_a_tonne_product(db, env, of):
+    """The daily report's déchet is always weighed in kg (WasteLinesField's
+    fixedUnit), even for an item stocked by the tonne. A 200 kg spill on a
+    semoule declared in tonnes must read as 0.2 t, not 200 t -- and the écart
+    the plant tracks (net_semoule_waste) must still net against the form's
+    own kilos, not the converted figure.
+    """
+    tonne_uom, tonne_product = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (tonne_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'CONSO-TONNE', 'Semoule en tonnes', %s)",
+        (tonne_product, TENANT, tonne_uom),
+    )
+    StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=tonne_product, location_id=env["location"], quantity=100,
+        correlation_id=str(ULID()), reference="seed", actor_id=env["actor"],
+    )
+
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        semolina_quantity=12, semolina_product_id=tonne_product,
+        regrind_quantity=10,
+        waste_lines=(WasteLine(category="raw_material", product_id=tonne_product, quantity=200),),
+    )
+
+    result = _consolidate(db, of)
+    waste = result["waste"]
+    # 200 kg restated against the tonne product's own unit.
+    assert waste["by_category"]["raw_material"] == pytest.approx(0.2)
+    by_product = {entry["product_id"]: entry["quantity"] for entry in waste["by_product"]}
+    assert by_product[tonne_product] == pytest.approx(0.2)
+
+    # Netted against the form's own kilos, not the converted 0.2 t figure --
+    # summing the converted by_category here would have read this as -9.8.
+    assert waste["net_semoule_waste"] == 200 - 10
+
+
 def test_time_is_summed_across_both_report_types(db, env, of):
     _daily(
         db, env, of, date=datetime.date(2026, 9, 1),
@@ -351,7 +413,7 @@ def test_time_is_summed_across_both_report_types(db, env, of):
     )
     _packing(
         db, env, of, date=datetime.date(2026, 9, 1),
-        finished_product_quantity=900, production_minutes=380, downtime_minutes=15, downtime_reason="film jam",
+        packets_counted=900, production_minutes=380, downtime_minutes=15, downtime_reason="film jam",
     )
 
     time = _consolidate(db, of)["time"]
@@ -360,7 +422,7 @@ def test_time_is_summed_across_both_report_types(db, env, of):
 
 
 def test_completion_is_measured_against_the_plan(db, env, of):
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=750)
+    _packing(db, env, of, date=datetime.date(2026, 9, 1), packets_counted=750)
     result = _consolidate(db, of)
     assert result["planned_quantity"] == 1000
     assert result["completion_ratio"] == 0.75
@@ -409,9 +471,10 @@ def test_consolidation_works_while_the_of_is_still_running(db, env, of):
 
 
 def test_quality_conformity_comes_from_the_qc_module(db, env, of):
+    packing = _packing(db, env, of, date=datetime.date(2026, 9, 1))
     quality = QualityReportService(db)
     created = quality.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 1),
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.id,
         detail=QualityReportDetail(conforming_cartons=90, non_conforming_cartons=10, defect_details="bad seal"),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
@@ -429,9 +492,10 @@ def test_quality_conformity_comes_from_the_qc_module(db, env, of):
 
 
 def test_an_unvalidated_quality_report_does_not_count(db, env, of):
+    packing = _packing(db, env, of, date=datetime.date(2026, 9, 1))
     quality = QualityReportService(db)
     created = quality.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 1),
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.id,
         detail=QualityReportDetail(conforming_cartons=90),
     )
     quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=created.value["report"].id)
@@ -445,9 +509,18 @@ def test_an_unvalidated_quality_report_does_not_count(db, env, of):
 
 
 def test_yield_is_computed_from_validated_reports(db, env, of):
-    """finished product / semoule poured in, with every term from the reports."""
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, regrind_quantity=50)
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=900)
+    """finished product / semoule poured in, with every term from the daily reports.
+
+    finished_product_quantity comes off the daily report's own Produit fini —
+    the tonnage weighed at the press — not the conditionnement report, which can
+    validate days later. A conditionnement report is added here with a different
+    figure specifically to prove it is ignored.
+    """
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, regrind_quantity=50, finished_product_quantity=900,
+    )
+    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=750)
 
     computed = WorkOrderYieldService(db).get_work_order_yield(tenant_id=TENANT, work_order_id=of.id)
     assert computed is not None
@@ -458,15 +531,17 @@ def test_yield_is_computed_from_validated_reports(db, env, of):
 
 
 def test_yield_is_available_before_closure(db, env, of):
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=900)
+    """Available off the daily report alone -- no conditionnement report needed,
+    since packaging can lag the press by days and a supervisor wants the figure
+    while the shift can still act on it."""
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, finished_product_quantity=900)
 
     assert WorkOrderYieldService(db).get_work_order_yield(tenant_id=TENANT, work_order_id=of.id) is not None
 
 
 def test_yield_is_undefined_without_validated_semoule(db, env, of):
     """No denominator means no answer — not a zero."""
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=900)
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=0, finished_product_quantity=900)
     assert WorkOrderYieldService(db).get_work_order_yield(tenant_id=TENANT, work_order_id=of.id) is None
 
 

@@ -11,6 +11,7 @@ import {
   Contact,
   Factory,
   FileText,
+  History,
   KeyRound,
   LayoutDashboard,
   LineChart,
@@ -20,6 +21,7 @@ import {
   Settings as SettingsIcon,
   ShieldCheck,
   ShoppingCart,
+  Sparkles,
   Target,
   Truck,
   UserCircle,
@@ -48,6 +50,7 @@ interface NavItem {
     | "nav.activities"
       | "nav.pipeline"
     | "nav.production"
+    | "nav.iaAssistant"
     | "nav.quality"
     | "nav.analytics"
     | "nav.maintenance"
@@ -60,9 +63,12 @@ interface NavItem {
     | "nav.finance"
     | "nav.users"
     | "nav.roles"
+    | "nav.activityLog"
     | "nav.hr";
   icon: typeof Contact;
   exact?: boolean;
+  /** Hide this item unless the signed-in user holds this permission. Omit to show it to everyone. */
+  permission?: string;
 }
 
 interface NavGroup {
@@ -97,7 +103,10 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     labelKey: "nav.operations",
-    items: [{ to: "/production", labelKey: "nav.production", icon: Factory }],
+    items: [
+      { to: "/production", labelKey: "nav.production", icon: Factory },
+      { to: "/production/ia-assistant", labelKey: "nav.iaAssistant", icon: Sparkles, permission: "production.use_ia_assistant" },
+    ],
   },
   {
     labelKey: "nav.quality",
@@ -133,12 +142,13 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/admin/users", labelKey: "nav.users", icon: ShieldCheck },
       { to: "/admin/roles", labelKey: "nav.roles", icon: KeyRound },
+      { to: "/admin/activity-log", labelKey: "nav.activityLog", icon: History, permission: "core.view_audit_log" },
     ],
   },
 ];
 
 export function Sidebar() {
-  const { session, logout } = useAuth();
+  const { session, logout, hasPermission } = useAuth();
   const { t, language, setLanguage } = useI18n();
   const location = useLocation();
   const [collapsed, setCollapsed] = useState(() => readStoredCollapsed());
@@ -154,7 +164,7 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "flex h-screen shrink-0 flex-col border-r border-border bg-background transition-[width] duration-200",
+        "flex h-full shrink-0 flex-col border-r border-border bg-background transition-[width] duration-200",
         collapsed ? "w-16" : "w-64",
       )}
     >
@@ -171,8 +181,18 @@ export function Sidebar() {
         {!collapsed && <LanguageToggle language={language} onChange={setLanguage} />}
       </div>
 
-      <nav className="scrollbar-thin flex-1 space-y-5 overflow-y-auto overflow-x-hidden px-3 pb-4">
-        {NAV_GROUPS.map((group) => (
+      <nav className="scrollbar-none flex-1 space-y-5 overflow-y-auto overflow-x-hidden px-3 pb-4">
+        {NAV_GROUPS.map((group) => {
+          const visibleItems = group.items.filter((item) => !item.permission || hasPermission(item.permission));
+          if (visibleItems.length === 0) return null;
+          // Longest matching path wins, not "first matching, unconditionally" --
+          // two items sharing a base path (e.g. /production and
+          // /production/ia-assistant) would otherwise both light up on the more
+          // specific one's page, since it also starts with the shorter path.
+          const activeItem = [...visibleItems]
+            .sort((a, b) => b.to.length - a.to.length)
+            .find((it) => (it.exact ? location.pathname === it.to : location.pathname.startsWith(it.to)));
+          return (
           <div key={group.labelKey}>
             {!collapsed && (
               <p className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
@@ -180,8 +200,8 @@ export function Sidebar() {
               </p>
             )}
             <div className="space-y-0.5">
-              {group.items.map((item) => {
-                const active = item.exact ? location.pathname === item.to : location.pathname.startsWith(item.to);
+              {visibleItems.map((item) => {
+                const active = item === activeItem;
                 return (
                   <NavLink
                     key={item.to}
@@ -206,7 +226,8 @@ export function Sidebar() {
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
       </nav>
 
       <div className="border-t border-border p-3">

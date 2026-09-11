@@ -6,13 +6,24 @@ import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { toast } from "sonner";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHeader, TableRow, ResizableTableHead } from "../../components/ui/table";
+import {
+  Dialog,
+  DialogTrigger,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "../../components/ui/dialog";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { BulkActionBar } from "../../components/patterns/BulkActionBar";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { useSelection } from "../../lib/useSelection";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { createContract, createDepartment, createEmployee, createLeaveRequest, createPayrollRun, getHrDashboard, listAttendance, listContracts, listDepartments, listEmployees, listLeaveRequests, listPayslips, recordAttendance, reviewLeaveRequest, updatePayslip, type Employee, type LeaveRequest, type Payslip } from "./api";
 
@@ -96,7 +107,134 @@ function SimpleTable({ tableKey, headers, rows }: { tableKey: string; headers: s
     </div>
   );
 }
-function LeaveTable({ requests, token, onRefresh }: { requests: LeaveRequest[]; token: string; onRefresh: () => void }) { const { t } = useI18n(); const mutation = useMutation({ mutationFn: ({ id, status }: { id: string; status: "approved" | "rejected" }) => reviewLeaveRequest(token, id, status), onSuccess: onRefresh }); return <Card><CardHeader><CardTitle>{t("hr.leave.title")}</CardTitle></CardHeader><CardContent><SimpleTable tableKey="hr.leave" headers={[t("hr.employee.name"), t("hr.leave.type"), t("hr.leave.dates"), t("hr.employee.status")]} rows={requests.map((request) => [request.employee_name, request.leave_type, `${request.start_date} - ${request.end_date}`, request.status])} />{requests.filter((request) => request.status === "pending").map((request) => <div key={request.id} className="mt-2 flex justify-end gap-2"><Button size="sm" onClick={() => mutation.mutate({ id: request.id, status: "approved" })}>{t("hr.leave.approve")}</Button><Button size="sm" variant="outline" onClick={() => mutation.mutate({ id: request.id, status: "rejected" })}>{t("hr.leave.reject")}</Button></div>)}</CardContent></Card>; }
+function LeaveTable({ requests, token, onRefresh }: { requests: LeaveRequest[]; token: string; onRefresh: () => void }) {
+  const { t } = useI18n();
+  const mutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: "approved" | "rejected" }) => reviewLeaveRequest(token, id, status),
+    onSuccess: onRefresh,
+  });
+  const pending = requests.filter((request) => request.status === "pending");
+  const selection = useSelection(pending.map((request) => request.id));
+  const selectedRequests = pending.filter((request) => selection.isSelected(request.id));
+  const [bulkApproveOpen, setBulkApproveOpen] = useState(false);
+  const [bulkRejectOpen, setBulkRejectOpen] = useState(false);
+
+  const bulkMutation = useMutation({
+    mutationFn: async (status: "approved" | "rejected") => {
+      const settled = await Promise.allSettled(selectedRequests.map((request) => reviewLeaveRequest(token, request.id, status)));
+      return { succeeded: settled.filter((r) => r.status === "fulfilled").length, total: settled.length };
+    },
+    onSuccess: ({ succeeded, total }, status) => {
+      onRefresh();
+      const failed = total - succeeded;
+      const succeededKey = status === "approved" ? "hr.leave.bulkApproveSucceeded" : "hr.leave.bulkRejectSucceeded";
+      const failedKey = status === "approved" ? "hr.leave.bulkApproveFailed" : "hr.leave.bulkRejectFailed";
+      if (succeeded > 0) toast.success(`${succeeded} ${t(succeededKey)}`);
+      if (failed > 0) toast.error(`${failed} ${t(failedKey)}`);
+      setBulkApproveOpen(false);
+      setBulkRejectOpen(false);
+      selection.clear();
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{t("hr.leave.title")}</CardTitle>
+      </CardHeader>
+      <CardContent>
+        <SimpleTable
+          tableKey="hr.leave"
+          headers={[t("hr.employee.name"), t("hr.leave.type"), t("hr.leave.dates"), t("hr.employee.status")]}
+          rows={requests.map((request) => [request.employee_name, request.leave_type, `${request.start_date} - ${request.end_date}`, request.status])}
+        />
+        {pending.length > 0 && (
+          <div className="mt-3 space-y-2">
+            <BulkActionBar count={selection.count} onClear={selection.clear}>
+              <Dialog open={bulkApproveOpen} onOpenChange={setBulkApproveOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm">{t("hr.leave.bulkApprove")}</Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("hr.leave.dialog.bulkReview.title")}</DialogTitle>
+                    <DialogDescription>{t("hr.leave.dialog.bulkApprove.description")}</DialogDescription>
+                  </DialogHeader>
+                  <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                    {selectedRequests.map((request) => (
+                      <div key={request.id} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="font-medium">{request.employee_name}</span>
+                        <span className="text-muted-foreground">
+                          {request.start_date} - {request.end_date}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <Button className="w-full" onClick={() => bulkMutation.mutate("approved")} disabled={bulkMutation.isPending}>
+                    {bulkMutation.isPending ? t("hr.leave.bulkApproving") : t("hr.leave.bulkApprove")}
+                  </Button>
+                </DialogContent>
+              </Dialog>
+              <Dialog open={bulkRejectOpen} onOpenChange={setBulkRejectOpen}>
+                <DialogTrigger asChild>
+                  <Button size="sm" variant="outline">
+                    {t("hr.leave.bulkReject")}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("hr.leave.dialog.bulkReview.title")}</DialogTitle>
+                    <DialogDescription>{t("hr.leave.dialog.bulkReject.description")}</DialogDescription>
+                  </DialogHeader>
+                  <div className="max-h-56 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                    {selectedRequests.map((request) => (
+                      <div key={request.id} className="flex items-center justify-between gap-2 text-sm">
+                        <span className="font-medium">{request.employee_name}</span>
+                        <span className="text-muted-foreground">
+                          {request.start_date} - {request.end_date}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                  <Button
+                    className="w-full"
+                    variant="outline"
+                    onClick={() => bulkMutation.mutate("rejected")}
+                    disabled={bulkMutation.isPending}
+                  >
+                    {bulkMutation.isPending ? t("hr.leave.bulkRejecting") : t("hr.leave.bulkReject")}
+                  </Button>
+                </DialogContent>
+              </Dialog>
+            </BulkActionBar>
+            {pending.map((request) => (
+              <div key={request.id} className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-border px-3 py-2">
+                <div className="flex items-center gap-3">
+                  <Checkbox
+                    checked={selection.isSelected(request.id)}
+                    onCheckedChange={() => selection.toggle(request.id)}
+                    aria-label={t("hr.leave.approve")}
+                  />
+                  <span className="text-sm">
+                    {request.employee_name} · {request.start_date} - {request.end_date}
+                  </span>
+                </div>
+                <div className="flex gap-2">
+                  <Button size="sm" onClick={() => mutation.mutate({ id: request.id, status: "approved" })}>
+                    {t("hr.leave.approve")}
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => mutation.mutate({ id: request.id, status: "rejected" })}>
+                    {t("hr.leave.reject")}
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function PayslipsTable({ payslips, token, onRefresh }: { payslips: Payslip[]; token: string; onRefresh: () => void }) {
   const { t } = useI18n();

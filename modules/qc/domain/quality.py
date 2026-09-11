@@ -33,6 +33,11 @@ class QualityReport:
     report_date: datetime.date
     status: str
     revision: int
+    # The conditionnement (packaging) run this report inspects. Nullable only
+    # for rows created before this link existed -- see
+    # scripts/backfill_qc_conditionnement_links.py. Every report created by
+    # QualityReportService.create_report from here on has one.
+    conditionnement_report_id: str | None = None
     team: str | None = None
     shift: str | None = None
     created_by: str | None = None

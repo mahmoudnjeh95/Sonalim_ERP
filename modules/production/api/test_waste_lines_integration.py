@@ -34,7 +34,7 @@ TENANT = "integration-test-waste-lines"
 def env(db):
     actor = str(ULID())
     weight_uom, count_uom = str(ULID()), str(ULID())
-    product, rebut, scotch, location, packaging_location, work_center = (str(ULID()) for _ in range(6))
+    product, rebut, scotch, location, packaging_location, work_center, equipment = (str(ULID()) for _ in range(7))
 
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
@@ -68,6 +68,10 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'WASTE-WC', 'Line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'WASTE-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
     StockService(db).receive_stock(
         tenant_id=TENANT, product_id=product, location_id=location, quantity=100_000,
         correlation_id=str(ULID()), reference="seed", actor_id=actor,
@@ -85,6 +89,7 @@ def env(db):
         "location": location,
         "packaging_location": packaging_location,
         "work_center": work_center,
+        "equipment": equipment,
     }
 
 
@@ -117,6 +122,7 @@ def _draft(db, env, of, **detail):
     created = ProductionReportService(db).create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
         report_date=datetime.date(2026, 9, 1), shift="morning",
+        equipment_id=env["equipment"],
         detail=DailyReportDetail(**detail),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
@@ -313,6 +319,7 @@ def test_packaging_waste_moves_no_stock_either(db, env, of):
     created = service.create_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
         report_date=datetime.date(2026, 9, 3), shift="morning",
+        equipment_id=env["equipment"],
         detail=ConditionnementReportDetail(
             finished_product_quantity=0.2,
             packets_counted=400,
@@ -407,10 +414,16 @@ def test_the_deletion_audit_records_the_waste_that_was_there(db, env, of):
 # --- rebroyat ---------------------------------------------------------------
 
 
-def test_rebroyat_opens_its_scrap_against_the_item_the_report_names(db, env, of):
-    """A wrapped 500g packet is not what goes back through the mill. Before the
-    report could say so, the scrap record borrowed the OF's finished product,
-    which is why a shift's rebroyat was reported in packets rather than kilos."""
+def test_rebroyat_scrap_always_uses_the_tenant_regrind_product(db, env, of):
+    """A report naming a different item here (a raw material, say) used to send
+    that product's own identity onto the scrap record -- typically whichever
+    purchased semolina was in use that shift, denominated in that product's own
+    unit (tonnes). Since every regrind batch resolves to the same one output
+    product regardless (see RegrindService.create_regrind_batch), that free
+    choice added nothing but a unit-mismatch risk. The scrap now always opens
+    against the tenant's configured regrind output product, no matter what
+    regrind_product_id names -- `env["rebut"]` here stands in for "a report
+    author picked something else."""
     report = _draft(db, env, of, regrind_quantity=12, regrind_product_id=env["rebut"])
     _validate(db, env, report.id)
 
@@ -421,13 +434,15 @@ def test_rebroyat_opens_its_scrap_against_the_item_the_report_names(db, env, of)
         """,
         (TENANT, of.id),
     ).fetchone()
-    assert scrap[0] == env["rebut"]
+    assert scrap[0] == env["product"]
     assert float(scrap[1]) == 12
 
 
-def test_rebroyat_with_no_item_named_still_falls_back_to_the_of_product(db, env, of):
-    """Reports written before the field existed keep meaning what they meant.
-    Rewriting them to a product nobody chose would change history."""
+def test_rebroyat_with_no_item_named_still_uses_the_tenant_regrind_product(db, env, of):
+    """Same invariant with regrind_product_id left unset entirely -- it no
+    longer falls back to the OF's own finished product (a wrapped 500g packet
+    is not what goes back through the mill); it uses the same tenant-wide
+    regrind product as every other path."""
     report = _draft(db, env, of, regrind_quantity=12)
     _validate(db, env, report.id)
 

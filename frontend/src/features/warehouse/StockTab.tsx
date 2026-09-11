@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeftRight,
@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
-import { productRequiresIntegerQuantity } from "../../lib/units";
+import { productRequiresIntegerQuantity, productUnit } from "../../lib/units";
 import { ApiError } from "../../lib/api";
 import { cn } from "../../lib/utils";
 import { Button } from "../../components/ui/button";
@@ -48,8 +48,10 @@ import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { StockMoveHistoryTable } from "../../components/patterns/StockMoveHistoryTable";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
+import { StockHistoryChart } from "../../components/patterns/StockHistoryChart";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { relatedRegrindBatchId } from "../../lib/stockMoveTypes";
 import {
   adjustStock,
   adminSetStock,
@@ -66,6 +68,7 @@ import {
   type Location,
   type StockItem,
 } from "./api";
+import { getRegrindBatch, listWorkOrders, type RegrindScrapInput } from "../production/api";
 
 const reserveSchema = z.object({
   product_id: z.string().min(1, "Required"),
@@ -136,6 +139,9 @@ export function StockTab() {
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
+  // Best-effort: a role without production.view_work_orders just doesn't get the
+  // "work order" row in the move-detail dialog, rather than an error anywhere.
+  const { data: workOrders = [] } = useQuery({ queryKey: ["production", "work-orders"], queryFn: () => listWorkOrders(token) });
   const productName = (productId: string) => products.find((p) => p.id === productId)?.name ?? "—";
   // The printed form, not the code: "pièce" is what a reader expects beside a
   // count, and `code` stays the key imports and integrations match on.
@@ -159,6 +165,27 @@ export function StockTab() {
     queryKey: [...STOCK_MOVES_QUERY_KEY, "product", historyProductId],
     queryFn: () => listStockMoves(token, { product_id: historyProductId! }),
     enabled: historyProductId !== null,
+  });
+
+  // A regrind receipt's own reference names the grinding OF, not the
+  // production OF the scrap came from -- that second hop only exists in
+  // regrind_batches/regrind_batch_inputs, one extra call per distinct
+  // grinding OF referenced in this product's history. Best-effort, same as
+  // `workOrders` above: a role without production.view_regrind just doesn't
+  // get the "sourced from" line rather than an error anywhere.
+  const regrindBatchIds = Array.from(
+    new Set(historyMoves.map((move) => relatedRegrindBatchId(move)).filter((id): id is string => id !== null)),
+  );
+  const regrindBatchQueries = useQueries({
+    queries: regrindBatchIds.map((id) => ({
+      queryKey: ["production", "regrind-batches", id],
+      queryFn: () => getRegrindBatch(token, id),
+      retry: false,
+    })),
+  });
+  const regrindSourcesByWorkOrderId: Record<string, RegrindScrapInput[]> = {};
+  regrindBatchQueries.forEach((query, index) => {
+    if (query.data) regrindSourcesByWorkOrderId[regrindBatchIds[index]] = query.data.scrap_inputs;
   });
 
   const {
@@ -780,11 +807,18 @@ export function StockTab() {
             <DialogTitle>{historyProductId ? productName(historyProductId) : ""}</DialogTitle>
             <DialogDescription>{t("warehouse.stock.history.description")}</DialogDescription>
           </DialogHeader>
+          {historyProductId && <StockHistoryChart moves={historyMoves} unit={productUnit(historyProductId, products, uoms)} />}
           <StockMoveHistoryTable
             tableKey="warehouse.stock.productHistory"
             moves={historyMoves}
             isLoading={historyLoading}
             locationName={locationName}
+            locationCode={(id) => locations.find((l) => l.id === id)?.code}
+            productName={productName}
+            productSku={(id) => products.find((p) => p.id === id)?.sku}
+            unit={(productId) => productUnit(productId, products, uoms)}
+            workOrders={workOrders}
+            regrindSources={regrindSourcesByWorkOrderId}
           />
         </DialogContent>
       </Dialog>

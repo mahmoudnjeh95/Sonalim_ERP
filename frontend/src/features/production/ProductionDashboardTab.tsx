@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -8,37 +8,52 @@ import {
   ClipboardCheck,
   Factory,
   Gauge,
+  Loader2,
   PackageCheck,
   Recycle,
+  Sparkles,
   Timer,
   TrendingDown,
   TrendingUp,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
+import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
+import { Button } from "../../components/ui/button";
+import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { StatCard } from "../../components/patterns/StatCard";
 import { UnitBreakdownStat } from "../../components/patterns/UnitBreakdownStat";
+import { StatBreakdownPopover, type StatBreakdownRow } from "../../components/patterns/StatBreakdownPopover";
+import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
-import { commonUnit, convertQuantity, totalsByUomCategory } from "../../lib/units";
+import { commonUnit, convertQuantity, formatQuantity, productUnit, totalsByUomCategory } from "../../lib/units";
 import { listUoms } from "../warehouse/api";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { cn } from "../../lib/utils";
 import {
+  getRecipeCorrelationInsight,
   getWorkOrderConsolidation,
   listDowntimeReasons,
+  listMachinePerformance,
+  listMachines,
   listRecipeCorrelation,
   listReports,
   listTeamPerformance,
   listWorkOrders,
+  type Machine,
+  type MachinePerformanceRow,
   type OfConsolidation,
+  type RecipeCorrelationRow,
   type TeamPerformanceRow,
+  type WasteCategory,
+  type WorkOrder,
 } from "./api";
 import { listNonConformities } from "../qc/api";
-import { listProducts, listStock } from "../warehouse/api";
+import { listProducts, listStock, type Product } from "../warehouse/api";
 
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 const PENDING_QUERY_KEY = ["production", "reports", "pending"] as const;
@@ -51,6 +66,29 @@ const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 // constantly is an alert nobody reads.
 const WASTE_RATIO_ALERT = 0.05;
 const DOWNTIME_RATIO_ALERT = 0.15;
+
+// The daily report's own waste stages, in the plant's form order — never
+// product/packaging, which is the packing report's and isn't semoule any more.
+const DAILY_WASTE_CATEGORIES = [
+  "raw_material",
+  "press",
+  "pouring",
+  "cross",
+  "kneading",
+  "finished_product_conditioning",
+] as const satisfies readonly WasteCategory[];
+
+// Fixed categorical order (never cycled, never reassigned by a filter) — the
+// validated palette's first six slots, which clear the adjacent-pair CVD gate
+// stacked segments need.
+const WASTE_CATEGORY_COLORS: Record<(typeof DAILY_WASTE_CATEGORIES)[number], string> = {
+  raw_material: "#2a78d6",
+  press: "#eb6834",
+  pouring: "#1baf7a",
+  cross: "#eda100",
+  kneading: "#e87ba4",
+  finished_product_conditioning: "#008300",
+};
 
 type AlertTone = "warning" | "destructive";
 
@@ -102,6 +140,17 @@ export function ProductionDashboardTab() {
     queryKey: ["production", "recipe-correlation"],
     queryFn: () => listRecipeCorrelation(token),
   });
+  // Same grouping as team performance, keyed by machine instead of team — a
+  // line can run more than one machine at once, so productivity has to be
+  // checkable per machine, not just per line it sits on.
+  const { data: machinePerformance = [] } = useQuery({
+    queryKey: ["production", "machine-performance", range.from, range.to],
+    queryFn: () => listMachinePerformance(token, { grain: "week", date_from: range.from, date_to: range.to }),
+  });
+  const { data: machines = [] } = useQuery({
+    queryKey: ["production", "machines"],
+    queryFn: () => listMachines(token),
+  });
 
   // Consolidation is computed per OF and never stored, so the cockpit asks for
   // each active order's figures rather than reading a cached total.
@@ -122,6 +171,107 @@ export function ProductionDashboardTab() {
   // this totals within each measurement category and shows them side by side.
   const wasteEntries = loadedConsolidations.flatMap((c) => c.waste.by_product);
   const { totals: wasteTotals } = totalsByUomCategory(wasteEntries, products, uoms);
+
+  // Same validated reports the consolidation above sums, fetched again here
+  // only for their `team` field — so a tile can say which OF and which team
+  // a figure actually came from, not just the plant-wide total.
+  const activeOrderReports = useQueries({
+    queries: activeOrders.map((order) => ({
+      queryKey: ["production", "reports", "of", order.id, "validated"],
+      queryFn: () => listReports(token, { of_id: order.id, status: "validated" }),
+    })),
+  });
+  function teamsForOrder(index: number): string[] {
+    return [
+      ...new Set(
+        (activeOrderReports[index]?.data ?? [])
+          .map((report) => report.team)
+          .filter((team): team is string => Boolean(team)),
+      ),
+    ];
+  }
+
+  // One drill-down row set per stat tile, each answering "which OF, and which
+  // team" for that tile's own number. Built from the same activeOrders /
+  // consolidations already fetched above, never a second source of truth.
+  const activeOrdersRows: StatBreakdownRow[] = activeOrders.map((order, index) => {
+    const data = consolidations[index]?.data;
+    return {
+      id: order.id,
+      label: order.reference,
+      href: `/production/work-orders/${order.id}`,
+      status: <StatusBadge status={order.status} />,
+      teams: teamsForOrder(index),
+      lines: data
+        ? [
+            {
+              label: t("production.dashboard.active.breakdown.progress"),
+              value: `${Math.round(data.produced_quantity)} / ${Math.round(data.material_input_quantity)}`,
+            },
+          ]
+        : [],
+    };
+  });
+
+  const producedRows: StatBreakdownRow[] = activeOrders
+    .map((order, index): StatBreakdownRow | null => {
+      const data = consolidations[index]?.data;
+      if (!data || data.produced_quantity <= 0) return null;
+      return {
+        id: order.id,
+        label: order.reference,
+        href: `/production/work-orders/${order.id}`,
+        teams: teamsForOrder(index),
+        lines: [
+          {
+            label: t("production.dashboard.stat.produced"),
+            value: formatQuantity(data.produced_quantity, productUnit(data.product_id, products, uoms)),
+          },
+        ],
+      };
+    })
+    .filter((row): row is StatBreakdownRow => row !== null);
+
+  const semolinaRows: StatBreakdownRow[] = activeOrders
+    .map((order, index): StatBreakdownRow | null => {
+      const data = consolidations[index]?.data;
+      if (!data || data.raw_material.semolina_quantity <= 0) return null;
+      return {
+        id: order.id,
+        label: order.reference,
+        href: `/production/work-orders/${order.id}`,
+        teams: teamsForOrder(index),
+        lines: [
+          {
+            label: t("production.dashboard.stat.semolina"),
+            value: formatQuantity(
+              data.raw_material.semolina_quantity,
+              productUnit(data.raw_material.semolina_product_id, products, uoms),
+            ),
+          },
+        ],
+      };
+    })
+    .filter((row): row is StatBreakdownRow => row !== null);
+
+  const wasteRows: StatBreakdownRow[] = activeOrders
+    .map((order, index): StatBreakdownRow | null => {
+      const data = consolidations[index]?.data;
+      if (!data || data.waste.by_product.length === 0) return null;
+      return {
+        id: order.id,
+        label: order.reference,
+        href: `/production/work-orders/${order.id}`,
+        teams: teamsForOrder(index),
+        lines: data.waste.by_product.map((entry) => ({
+          label:
+            (entry.product_id && products.find((p) => p.id === entry.product_id)?.name) ||
+            t("production.waste.unknownItem"),
+          value: formatQuantity(entry.quantity, productUnit(entry.product_id, products, uoms)),
+        })),
+      };
+    })
+    .filter((row): row is StatBreakdownRow => row !== null);
 
   // A total spanning several orders only has a unit when they all share one.
   const producedUnit = commonUnit(
@@ -160,16 +310,36 @@ export function ProductionDashboardTab() {
   const downtimeRatio =
     productionMinutes + downtimeMinutes > 0 ? downtimeMinutes / (productionMinutes + downtimeMinutes) : null;
 
+  // Which single active order is behind the plant-wide ratio above — so the
+  // alert can send the reader somewhere specific instead of a generic tab.
+  const worstWaste = worstWasteOrder(loadedConsolidations, products, uoms);
+  const worstDowntime = worstDowntimeOrder(loadedConsolidations);
+
   // One point per week, every team folded together — the same conversion the
   // snapshot ratios above use, applied per period instead of once. Weeks with
   // nothing validated yet are dropped rather than plotted as a false zero.
   const performanceTrend = buildPerformanceTrend(teamPerformance as TeamPerformanceRow[], semolinaProductId, products, uoms);
 
+  // Folded across the whole selected range, per team rather than per period —
+  // the trend above answers "is it improving," this answers "whose semoule is
+  // it." Worst offender first, matching the downtime-reasons ranking below.
+  const teamSemouleWaste = buildTeamSemouleWaste(
+    teamPerformance as TeamPerformanceRow[],
+    t("production.dashboard.chart.semouleWaste.noTeam"),
+  );
+
+  // Folded across the whole selected range, per machine — same shape as
+  // teamSemouleWaste above. Most produced first: this answers "which machine
+  // is carrying the line," downtime is a column here rather than the sort key.
+  const machineSummary = buildMachineSummary(machinePerformance as MachinePerformanceRow[], machines);
+
   const alerts = buildAlerts({
     pendingCount: pendingReports.length,
     lowStock: lowStockProducts(stock, products),
     wasteRatio,
+    worstWaste,
     downtimeRatio,
+    worstDowntime,
     quarantined: nonConformities.filter((n) => n.status === "quarantined").length,
   });
 
@@ -185,31 +355,69 @@ export function ProductionDashboardTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-        <StatCard
-          label={t("production.dashboard.stat.activeOrders")}
-          value={activeOrders.length}
-          icon={<Factory className="h-5 w-5" />}
-          accent="warning"
+        <StatBreakdownPopover
+          trigger={
+            <StatCard
+              label={t("production.dashboard.stat.activeOrders")}
+              value={activeOrders.length}
+              icon={<Factory className="h-5 w-5" />}
+              accent="warning"
+            />
+          }
+          title={t("production.dashboard.stat.activeOrders.breakdown.title")}
+          emptyMessage={t("production.dashboard.stat.activeOrders.breakdown.empty")}
+          rows={activeOrdersRows}
+          footer={
+            <a href="#active-work-orders" className="mt-2 block text-xs font-medium text-primary hover:underline">
+              {t("production.dashboard.stat.activeOrders.breakdown.tableLink")}
+            </a>
+          }
         />
-        <StatCard
-          label={t("production.dashboard.stat.produced")}
-          value={Math.round(produced)}
-          unit={producedUnit}
-          icon={<PackageCheck className="h-5 w-5" />}
-          accent="success"
+        <StatBreakdownPopover
+          trigger={
+            <StatCard
+              label={t("production.dashboard.stat.produced")}
+              value={Math.round(produced)}
+              unit={producedUnit}
+              icon={<PackageCheck className="h-5 w-5" />}
+              accent="success"
+            />
+          }
+          title={t("production.dashboard.stat.produced.breakdown.title")}
+          emptyMessage={t("production.dashboard.stat.produced.breakdown.empty")}
+          rows={producedRows}
         />
-        <StatCard
-          label={t("production.dashboard.stat.semolina")}
-          value={Math.round(semolina)}
-          unit={semolinaUnit}
-          icon={<Activity className="h-5 w-5" />}
-          accent="primary"
+        <StatBreakdownPopover
+          trigger={
+            <StatCard
+              label={t("production.dashboard.stat.semolina")}
+              value={Math.round(semolina)}
+              unit={semolinaUnit}
+              icon={<Activity className="h-5 w-5" />}
+              accent="primary"
+            />
+          }
+          title={t("production.dashboard.stat.semolina.breakdown.title")}
+          emptyMessage={t("production.dashboard.stat.semolina.breakdown.empty")}
+          rows={semolinaRows}
         />
-        <UnitBreakdownStat
-          label={t("production.dashboard.stat.waste")}
-          breakdown={wasteTotals.map((total) => ({ unit: total.unit, value: Math.round(total.value) }))}
-          icon={<Recycle className="h-5 w-5" />}
-          accent="destructive"
+        <StatBreakdownPopover
+          trigger={
+            <UnitBreakdownStat
+              label={t("production.dashboard.stat.waste")}
+              breakdown={wasteTotals.map((total) => ({ unit: total.unit, value: Math.round(total.value) }))}
+              icon={<Recycle className="h-5 w-5" />}
+              accent="destructive"
+            />
+          }
+          title={t("production.dashboard.stat.waste.breakdown.title")}
+          emptyMessage={t("production.dashboard.stat.waste.breakdown.empty")}
+          rows={wasteRows}
+          footer={
+            <a href="#team-waste-breakdown" className="mt-2 block text-xs font-medium text-primary hover:underline">
+              {t("production.dashboard.stat.waste.breakdown.teamsLink")}
+            </a>
+          }
         />
       </div>
 
@@ -280,6 +488,10 @@ export function ProductionDashboardTab() {
               label={t("production.dashboard.health.conformity")}
               ratio={conformityRate}
               goodIsHigh
+              // Quality checks are validated per OF; a closed OF's checks
+              // don't count here even if they exist elsewhere -- say so
+              // instead of leaving "nothing measured" to read as data loss.
+              noDataLabel={t("production.dashboard.health.conformityNoData")}
             />
             <Ratio
               icon={<TrendingDown className="h-4 w-4" />}
@@ -297,7 +509,7 @@ export function ProductionDashboardTab() {
         </Card>
       </div>
 
-      <Card>
+      <Card id="active-work-orders" className="scroll-mt-4">
         <CardHeader>
           <CardTitle>{t("production.dashboard.active.title")}</CardTitle>
           <p className="mt-0.5 text-sm text-muted-foreground">{t("production.dashboard.active.subtitle")}</p>
@@ -383,6 +595,72 @@ export function ProductionDashboardTab() {
         </Card>
       )}
 
+      <Card id="team-waste-breakdown" className="scroll-mt-4">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
+            <Recycle className="h-4 w-4" />
+            {t("production.dashboard.chart.semouleWaste.title")}
+          </CardTitle>
+          <CardDescription>{t("production.dashboard.chart.semouleWaste.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {teamSemouleWaste.length === 0 ? (
+            <EmptyState
+              icon={<Recycle className="h-5 w-5" />}
+              title={t("production.dashboard.chart.semouleWaste.empty.title")}
+              description={t("production.dashboard.chart.semouleWaste.empty.description")}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <ResponsiveContainer width="100%" height={Math.max(200, Math.min(8, teamSemouleWaste.length) * 48)}>
+                <BarChart data={teamSemouleWaste} layout="vertical" margin={{ left: 24 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
+                  <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
+                  <YAxis
+                    type="category"
+                    dataKey="team"
+                    width={110}
+                    tick={{ fontSize: 11, fill: "hsl(215 16% 47%)" }}
+                    axisLine={false}
+                    tickLine={false}
+                  />
+                  <Tooltip
+                    formatter={(value) => formatQty(Number(value))}
+                    contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
+                  />
+                  <Legend wrapperStyle={{ fontSize: 11 }} />
+                  {DAILY_WASTE_CATEGORIES.map((category) => (
+                    <Bar
+                      key={category}
+                      dataKey={category}
+                      stackId="semoule-waste"
+                      name={t(`production.waste.category.${category}` as Parameters<typeof t>[0])}
+                      fill={WASTE_CATEGORY_COLORS[category]}
+                    />
+                  ))}
+                </BarChart>
+              </ResponsiveContainer>
+              <div className="space-y-1.5">
+                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {t("production.dashboard.chart.semouleWaste.netLabel")}
+                </p>
+                {teamSemouleWaste.map((row) => (
+                  <div
+                    key={row.team}
+                    className="flex items-center justify-between rounded-lg border border-border px-3 py-2 text-sm"
+                  >
+                    <span className="font-medium">{row.team}</span>
+                    <span className={cn("tabular-nums", row.netSemouleWaste > 0 ? "text-destructive" : "text-muted-foreground")}>
+                      {formatQty(row.netSemouleWaste)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card>
         <CardHeader>
           <CardTitle>{t("production.dashboard.chart.downtimeReasons.title")}</CardTitle>
@@ -414,38 +692,284 @@ export function ProductionDashboardTab() {
 
       <Card>
         <CardHeader>
+          <CardTitle>{t("production.dashboard.machinePerformance.title")}</CardTitle>
+          <CardDescription>{t("production.dashboard.machinePerformance.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {machineSummary.length === 0 ? (
+            <EmptyState
+              icon={<Gauge className="h-5 w-5" />}
+              title={t("production.dashboard.machinePerformance.empty.title")}
+              description={t("production.dashboard.machinePerformance.empty.description")}
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("production.dashboard.machinePerformance.column.machine")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.machinePerformance.column.reports")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.machinePerformance.column.produced")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.machinePerformance.column.productionMinutes")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.machinePerformance.column.downtimeMinutes")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {machineSummary.map((row) => (
+                  <TableRow key={row.equipmentId}>
+                    <TableCell className="font-medium">{row.label}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.reportCount}</TableCell>
+                    <TableCell className="text-right tabular-nums">{formatQty(row.produced)}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.productionMinutes}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <span className={row.downtimeMinutes > 0 ? "text-destructive" : undefined}>{row.downtimeMinutes}</span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>{t("production.dashboard.chart.recipeCorrelation.title")}</CardTitle>
           <CardDescription>{t("production.dashboard.chart.recipeCorrelation.description")}</CardDescription>
         </CardHeader>
         <CardContent>
-          {recipeCorrelation.length < 3 ? (
+          {recipeCorrelation.length === 0 ? (
             <EmptyState
               icon={<Activity className="h-5 w-5" />}
               title={t("production.dashboard.chart.recipeCorrelation.empty.title")}
               description={t("production.dashboard.chart.recipeCorrelation.empty.description")}
             />
           ) : (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <RecipeScatter
-                title={t("production.dashboard.chart.recipeCorrelation.water")}
-                xLabel={t("production.dashboard.chart.recipeCorrelation.waterAxis")}
-                data={recipeCorrelation
-                  .filter((r) => r.water_percentage !== null)
-                  .map((r) => ({ x: r.water_percentage as number, y: Math.round(r.yield_ratio * 1000) / 10 }))}
-              />
-              <RecipeScatter
-                title={t("production.dashboard.chart.recipeCorrelation.flowRate")}
-                xLabel={t("production.dashboard.chart.recipeCorrelation.flowRateAxis")}
-                data={recipeCorrelation
-                  .filter((r) => r.semolina_flow_rate !== null)
-                  .map((r) => ({ x: r.semolina_flow_rate as number, y: Math.round(r.yield_ratio * 1000) / 10 }))}
-              />
-            </div>
+            <RecipeCorrelationSection rows={recipeCorrelation} workOrders={workOrders} products={products} />
           )}
         </CardContent>
       </Card>
     </div>
   );
+}
+
+/** Below this, a scatter is a handful of dots, not a trend — a table reads better. */
+const RECIPE_CORRELATION_SCATTER_MIN_ROWS = 20;
+/** Mirrors MIN_ROWS_FOR_INSIGHT in recipe_correlation_insight_service.py — kept in
+ * sync so the button disables itself instead of round-tripping to learn the same thing. */
+const RECIPE_CORRELATION_INSIGHT_MIN_ROWS = 10;
+
+function recipeWaterStatus(row: RecipeCorrelationRow): "below" | "above" | null {
+  if (row.water_percentage === null || row.water_target_min === null || row.water_target_max === null) return null;
+  if (row.water_percentage < row.water_target_min) return "below";
+  if (row.water_percentage > row.water_target_max) return "above";
+  return null;
+}
+
+function RecipeCorrelationSection({
+  rows,
+  workOrders,
+  products,
+}: {
+  rows: RecipeCorrelationRow[];
+  workOrders: WorkOrder[];
+  products: Product[];
+}) {
+  const { t, language } = useI18n();
+  const { session } = useAuth();
+  const token = session!.token;
+
+  // User-triggered only -- never on mount or on a data refetch. Each call is a
+  // real request against the Gemini free tier's rate limit, and every viewer
+  // opening this dashboard must not silently spend it.
+  const insightMutation = useMutation({
+    mutationFn: () => getRecipeCorrelationInsight(token, language),
+  });
+
+  const columns: ColumnDef<RecipeCorrelationRow>[] = [
+    {
+      key: "date",
+      header: t("production.dashboard.chart.recipeCorrelation.column.date"),
+      defaultWidth: 110,
+      // Guarded against a stale/partial API response rather than trusting report_date
+      // is always a valid date string -- Intl.DateTimeFormat.format throws (not NaN)
+      // on an Invalid Date, which would otherwise take the whole card down.
+      cell: (row) => {
+        if (!row.report_date) return "—";
+        const parsed = new Date(row.report_date);
+        return Number.isNaN(parsed.getTime()) ? "—" : new Intl.DateTimeFormat(currentLocale()).format(parsed);
+      },
+      sortValue: (row) => row.report_date ?? "",
+    },
+    {
+      key: "team",
+      header: t("production.dashboard.chart.recipeCorrelation.column.team"),
+      defaultWidth: 110,
+      cell: (row) => row.team ?? t("production.dashboard.chart.semouleWaste.noTeam"),
+      sortValue: (row) => row.team ?? "",
+    },
+    {
+      key: "workOrder",
+      header: t("production.dashboard.chart.recipeCorrelation.column.workOrder"),
+      defaultWidth: 140,
+      cell: (row) => <span className="font-medium">{workOrders.find((o) => o.id === row.of_id)?.reference ?? row.of_id}</span>,
+      sortValue: (row) => workOrders.find((o) => o.id === row.of_id)?.reference ?? row.of_id,
+    },
+    {
+      key: "product",
+      header: t("production.dashboard.chart.recipeCorrelation.column.product"),
+      defaultWidth: 160,
+      cell: (row) => products.find((p) => p.id === row.product_id)?.name ?? "—",
+      sortValue: (row) => products.find((p) => p.id === row.product_id)?.name ?? "",
+    },
+    {
+      key: "water",
+      header: t("production.dashboard.chart.recipeCorrelation.waterAxis"),
+      defaultWidth: 190,
+      headerClassName: "text-right",
+      cellClassName: "text-right",
+      cell: (row) => {
+        const status = recipeWaterStatus(row);
+        return (
+          <div>
+            <div className="flex items-center justify-end gap-2 tabular-nums">
+              <span>{row.water_percentage !== null ? `${row.water_percentage}%` : "—"}</span>
+              {status && (
+                <Badge variant="warning">
+                  {t(
+                    status === "below"
+                      ? "production.dashboard.chart.recipeCorrelation.badge.belowTarget"
+                      : "production.dashboard.chart.recipeCorrelation.badge.aboveTarget",
+                  )}
+                </Badge>
+              )}
+            </div>
+            {row.water_target_min !== null && row.water_target_max !== null && (
+              <div className="text-xs text-muted-foreground">
+                {t("production.dashboard.chart.recipeCorrelation.column.target")} {row.water_target_min}–{row.water_target_max}%
+              </div>
+            )}
+          </div>
+        );
+      },
+      sortValue: (row) => row.water_percentage,
+    },
+    {
+      key: "flowRate",
+      header: t("production.dashboard.chart.recipeCorrelation.flowRateAxis"),
+      defaultWidth: 130,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (row) => (row.semolina_flow_rate !== null ? row.semolina_flow_rate : "—"),
+      sortValue: (row) => row.semolina_flow_rate,
+    },
+    {
+      key: "yield",
+      header: t("production.dashboard.chart.recipeCorrelation.yieldAxis"),
+      defaultWidth: 120,
+      alwaysVisible: true,
+      headerClassName: "text-right",
+      cellClassName: "text-right font-medium tabular-nums",
+      cell: (row) => `${Math.round(row.yield_ratio * 1000) / 10}%`,
+      sortValue: (row) => row.yield_ratio,
+    },
+  ];
+
+  const { visibleColumns, colWidths, getWidth, setWidth, sortDirectionFor, toggleSort, sortRows } = useTableColumns(
+    "production.dashboard.recipeCorrelation",
+    columns,
+  );
+  // Newest shift first until a header is actually clicked. Falls back to "" rather
+  // than crashing the whole card if a stale backend response is missing the field.
+  const sortedRows = sortRows([...rows].sort((a, b) => (b.report_date ?? "").localeCompare(a.report_date ?? "")));
+
+  const hasEnoughRowsForInsight = rows.length >= RECIPE_CORRELATION_INSIGHT_MIN_ROWS;
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={() => insightMutation.mutate()}
+          disabled={insightMutation.isPending || !hasEnoughRowsForInsight}
+        >
+          {insightMutation.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+          {insightMutation.isPending
+            ? t("production.dashboard.chart.recipeCorrelation.insight.loading")
+            : t("production.dashboard.chart.recipeCorrelation.insight.button")}
+        </Button>
+        {!hasEnoughRowsForInsight && (
+          <p className="text-sm text-muted-foreground">{t("production.dashboard.chart.recipeCorrelation.insight.minRowsHint")}</p>
+        )}
+        {hasEnoughRowsForInsight && insightMutation.isSuccess && (
+          <p className="text-sm text-muted-foreground">
+            {insightMutation.data.available ? insightMutation.data.text : t("production.dashboard.chart.recipeCorrelation.insight.unavailable")}
+          </p>
+        )}
+        {hasEnoughRowsForInsight && insightMutation.isError && (
+          <p className="text-sm text-destructive">{t("production.dashboard.chart.recipeCorrelation.insight.error")}</p>
+        )}
+      </div>
+
+      <Table colWidths={colWidths}>
+        <TableHeader>
+          <TableRow>
+            {visibleColumns.map((column) => (
+              <ResizableTableHead
+                key={column.key}
+                width={getWidth(column.key)}
+                onResize={(width) => setWidth(column.key, width)}
+                className={column.headerClassName}
+                sortDirection={sortDirectionFor(column.key)}
+                onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
+              >
+                {column.header}
+              </ResizableTableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {sortedRows.map((row) => (
+            <TableRow key={row.report_id}>
+              {visibleColumns.map((column) => (
+                <TableCell key={column.key} className={column.cellClassName}>
+                  {column.cell(row)}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+
+      {rows.length >= RECIPE_CORRELATION_SCATTER_MIN_ROWS ? (
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+          <RecipeScatter
+            title={t("production.dashboard.chart.recipeCorrelation.water")}
+            xLabel={t("production.dashboard.chart.recipeCorrelation.waterAxis")}
+            data={rows
+              .filter((r) => r.water_percentage !== null)
+              .map((r) => ({ x: r.water_percentage as number, y: Math.round(r.yield_ratio * 1000) / 10 }))}
+          />
+          <RecipeScatter
+            title={t("production.dashboard.chart.recipeCorrelation.flowRate")}
+            xLabel={t("production.dashboard.chart.recipeCorrelation.flowRateAxis")}
+            data={rows
+              .filter((r) => r.semolina_flow_rate !== null)
+              .map((r) => ({ x: r.semolina_flow_rate as number, y: Math.round(r.yield_ratio * 1000) / 10 }))}
+          />
+        </div>
+      ) : (
+        <p className="text-xs text-muted-foreground">{t("production.dashboard.chart.recipeCorrelation.scatter.hint")}</p>
+      )}
+    </div>
+  );
+}
+
+/** Padded to the data's own range rather than from zero — a tight cluster (e.g.
+ * yield sitting at 95-115%) would otherwise be squeezed into a sliver of a
+ * 0-120% axis. */
+function paddedDomain(padding: number): [(min: number) => number, (max: number) => number] {
+  return [(min: number) => Math.floor(min - padding), (max: number) => Math.ceil(max + padding)];
 }
 
 function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string; data: { x: number; y: number }[] }) {
@@ -460,6 +984,7 @@ function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string;
             type="number"
             dataKey="x"
             name={xLabel}
+            domain={paddedDomain(1)}
             tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }}
             axisLine={false}
             tickLine={false}
@@ -469,6 +994,7 @@ function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string;
             type="number"
             dataKey="y"
             name={t("production.dashboard.chart.recipeCorrelation.yieldAxis")}
+            domain={paddedDomain(2)}
             tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }}
             axisLine={false}
             tickLine={false}
@@ -537,6 +1063,110 @@ function buildPerformanceTrend(
     });
 }
 
+interface TeamSemouleWasteRow {
+  team: string;
+  raw_material: number;
+  press: number;
+  pouring: number;
+  cross: number;
+  kneading: number;
+  finished_product_conditioning: number;
+  regrindQuantity: number;
+  netSemouleWaste: number;
+}
+
+/**
+ * Folded across the whole selected range, per team — the écart the plant
+ * wants to minimise: daily-report déchet (never conditionnement's product/
+ * packaging, which isn't semoule any more) net of the rebroyat the team
+ * declared over the same reports. Worst team first, same ranking shape as
+ * `list_downtime_reasons` below.
+ */
+function buildTeamSemouleWaste(rows: TeamPerformanceRow[], noTeamLabel: string): TeamSemouleWasteRow[] {
+  const byTeam = new Map<string, TeamSemouleWasteRow>();
+  for (const row of rows) {
+    const team = row.team ?? noTeamLabel;
+    const entry: TeamSemouleWasteRow =
+      byTeam.get(team) ??
+      {
+        team,
+        raw_material: 0,
+        press: 0,
+        pouring: 0,
+        cross: 0,
+        kneading: 0,
+        finished_product_conditioning: 0,
+        regrindQuantity: 0,
+        netSemouleWaste: 0,
+      };
+    for (const category of DAILY_WASTE_CATEGORIES) {
+      entry[category] += row.daily_waste_by_category[category] ?? 0;
+    }
+    entry.regrindQuantity += row.regrind_quantity;
+    // Not derived from the categories above minus regrindQuantity: those
+    // categories are each converted into their own product's unit (e.g. tons
+    // for semoule stocked by the ton), while regrind_quantity is always raw
+    // kilograms off the report form — subtracting one from the other would
+    // net tons against kilos. net_semoule_waste is the backend's own figure,
+    // computed on a consistent raw-kg basis on both sides (see
+    // TeamPerformanceService.list_team_performance), and is additive across
+    // periods since kilograms don't need converting to be summed.
+    entry.netSemouleWaste += row.net_semoule_waste;
+    byTeam.set(team, entry);
+  }
+  return [...byTeam.values()].sort((a, b) => b.netSemouleWaste - a.netSemouleWaste);
+}
+
+interface MachineSummaryRow {
+  equipmentId: string;
+  label: string;
+  reportCount: number;
+  produced: number;
+  productionMinutes: number;
+  downtimeMinutes: number;
+}
+
+/**
+ * Folded across the whole selected range, per machine — same shape as
+ * buildTeamSemouleWaste, grouped by equipment_id instead of team. equipment_id
+ * is an opaque reference into the Maintenance module (production holds no live
+ * FK into its schema), so it's resolved to a code/name via the machines list
+ * fetched from GET /production/machines; a machine deleted since the report
+ * was filed falls back to showing its raw id rather than dropping the row.
+ */
+function buildMachineSummary(rows: MachinePerformanceRow[], machines: Machine[]): MachineSummaryRow[] {
+  const byMachine = new Map<string, MachineSummaryRow>();
+  for (const row of rows) {
+    if (!row.equipment_id) continue;
+    const machine = machines.find((m) => m.id === row.equipment_id);
+    const entry: MachineSummaryRow =
+      byMachine.get(row.equipment_id) ??
+      {
+        equipmentId: row.equipment_id,
+        label: machine ? `${machine.code} — ${machine.name}` : row.equipment_id,
+        reportCount: 0,
+        produced: 0,
+        productionMinutes: 0,
+        downtimeMinutes: 0,
+      };
+    entry.reportCount += row.report_count;
+    entry.produced += row.produced_quantity;
+    entry.productionMinutes += row.production_minutes;
+    entry.downtimeMinutes += row.downtime_minutes;
+    byMachine.set(row.equipment_id, entry);
+  }
+  return [...byMachine.values()].sort((a, b) => b.produced - a.produced);
+}
+
+// The dashboard's other quantities (tonnes produced, tonnes of semoule) run
+// into the thousands, so Math.round reads fine there. A team's net semoule
+// waste is routinely a small fraction of that unit and Math.round would
+// flatten every real value to the same "0" — this keeps two decimal places
+// instead of rounding them away.
+function formatQty(amount: number): string {
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 2 }).format(amount);
+}
+
 function sum(values: number[]): number {
   return values.reduce((total, value) => total + value, 0);
 }
@@ -556,17 +1186,70 @@ function lowStockProducts(
     .map((p) => p.name);
 }
 
+interface OrderRatio {
+  of_id: string;
+  reference: string;
+  ratio: number;
+}
+
+/**
+ * Which single active order contributes most to the plant-wide waste ratio.
+ *
+ * The alert fires on the aggregate (the KPI the plant tracks), but a
+ * plant-wide percentage gives nobody a place to start looking — this is
+ * where to send them instead. Same conversion as the aggregate above, applied
+ * per order rather than once across all of them.
+ */
+function worstWasteOrder(
+  consolidations: OfConsolidation[],
+  products: Parameters<typeof convertQuantity>[3],
+  uoms: Parameters<typeof convertQuantity>[4],
+): OrderRatio | null {
+  let worst: OrderRatio | null = null;
+  for (const c of consolidations) {
+    const semolinaProductId = c.raw_material.semolina_product_id;
+    if (!semolinaProductId || c.raw_material.semolina_quantity <= 0) continue;
+    const comparableWaste = c.waste.by_product.reduce((total, entry) => {
+      const converted = convertQuantity(entry.quantity, entry.product_id, semolinaProductId, products, uoms);
+      return converted === null ? total : total + converted;
+    }, 0);
+    const ratio = comparableWaste / c.raw_material.semolina_quantity;
+    if (worst === null || ratio > worst.ratio) {
+      worst = { of_id: c.of_id, reference: c.reference, ratio };
+    }
+  }
+  return worst;
+}
+
+/** Same idea as worstWasteOrder, for downtime instead of déchet. */
+function worstDowntimeOrder(consolidations: OfConsolidation[]): OrderRatio | null {
+  let worst: OrderRatio | null = null;
+  for (const c of consolidations) {
+    const total = c.time.production_minutes + c.time.downtime_minutes;
+    if (total <= 0) continue;
+    const ratio = c.time.downtime_minutes / total;
+    if (worst === null || ratio > worst.ratio) {
+      worst = { of_id: c.of_id, reference: c.reference, ratio };
+    }
+  }
+  return worst;
+}
+
 function buildAlerts({
   pendingCount,
   lowStock,
   wasteRatio,
+  worstWaste,
   downtimeRatio,
+  worstDowntime,
   quarantined,
 }: {
   pendingCount: number;
   lowStock: string[];
   wasteRatio: number | null;
+  worstWaste: OrderRatio | null;
   downtimeRatio: number | null;
+  worstDowntime: OrderRatio | null;
   quarantined: number;
 }): Alert[] {
   const alerts: Alert[] = [];
@@ -595,8 +1278,12 @@ function buildAlerts({
       code: "excessive-waste",
       tone: "destructive",
       titleKey: "production.dashboard.alert.excessiveWaste",
-      detail: `${(wasteRatio * 100).toFixed(1)}%`,
-      to: "/production?tab=daily-reports",
+      // Named when one order stands out, not just the plant-wide number --
+      // an alert that only says "13%" gives nobody a place to start.
+      detail: worstWaste
+        ? `${(wasteRatio * 100).toFixed(1)}% — ${worstWaste.reference}`
+        : `${(wasteRatio * 100).toFixed(1)}%`,
+      to: worstWaste ? `/production/work-orders/${worstWaste.of_id}` : "/production?tab=daily-reports",
     });
   }
   if (downtimeRatio !== null && downtimeRatio > DOWNTIME_RATIO_ALERT) {
@@ -604,8 +1291,10 @@ function buildAlerts({
       code: "excessive-downtime",
       tone: "destructive",
       titleKey: "production.dashboard.alert.excessiveDowntime",
-      detail: `${(downtimeRatio * 100).toFixed(1)}%`,
-      to: "/production?tab=daily-reports",
+      detail: worstDowntime
+        ? `${(downtimeRatio * 100).toFixed(1)}% — ${worstDowntime.reference}`
+        : `${(downtimeRatio * 100).toFixed(1)}%`,
+      to: worstDowntime ? `/production/work-orders/${worstDowntime.of_id}` : "/production?tab=daily-reports",
     });
   }
   if (quarantined > 0) {
@@ -625,11 +1314,16 @@ function Ratio({
   label,
   ratio,
   goodIsHigh,
+  noDataLabel,
 }: {
   icon: React.ReactNode;
   label: string;
   ratio: number | null;
   goodIsHigh: boolean;
+  /** Overrides the generic "nothing measured" text when a metric's own null
+   * reason needs saying — e.g. conformity's scope is active OFs only, so a
+   * closed OF's quality checks don't make it read as data gone missing. */
+  noDataLabel?: string;
 }) {
   const { t } = useI18n();
   // A null ratio is "nothing measured yet", which is not the same as zero — and
@@ -641,7 +1335,7 @@ function Ratio({
           {icon}
           {label}
         </div>
-        <p className="text-sm text-muted-foreground">{t("production.dashboard.health.noData")}</p>
+        <p className="text-sm text-muted-foreground">{noDataLabel ?? t("production.dashboard.health.noData")}</p>
       </div>
     );
   }

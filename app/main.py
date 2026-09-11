@@ -1,6 +1,15 @@
 import os
 from contextlib import asynccontextmanager
 
+from dotenv import load_dotenv
+
+# Local-dev convenience only: a .env at the repo root is loaded into the process
+# environment before anything below reads it, so DATABASE_URL/GEMINI_API_KEY/etc.
+# work the same whether uvicorn is started from a VS Code terminal, its debugger,
+# or a plain shell -- no launch config or manual `$env:` needed. A no-op wherever
+# no .env exists (Docker, Vercel), which already inject these variables directly.
+load_dotenv()
+
 import psycopg
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware

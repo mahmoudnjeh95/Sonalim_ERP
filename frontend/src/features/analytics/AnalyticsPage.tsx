@@ -1,16 +1,21 @@
 import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Users } from "lucide-react";
+import { Cog, Users } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
 import { TeamPerformanceTab } from "./TeamPerformanceTab";
+import { MachinePerformanceTab } from "./MachinePerformanceTab";
 
 // Cross-module KPIs — anything that reads more than one module's data to answer
 // one question (here: production's reports and qc's quality reports, by team)
 // lives here rather than inside the module whose tables happen to back it, so
 // Production's tabs stay about the OF and Quality's about the report/NC record.
+// Machine performance is single-module (production only), but sits beside team
+// performance rather than inside a Production tab because it answers the same
+// kind of cross-cutting "who/what is producing well" question, at a different grain.
 const TABS = [
   { value: "team-performance", labelKey: "analytics.tabs.teamPerformance", icon: Users, Component: TeamPerformanceTab },
+  { value: "machine-performance", labelKey: "analytics.tabs.machinePerformance", icon: Cog, Component: MachinePerformanceTab },
 ] as const;
 
 type TabValue = (typeof TABS)[number]["value"];

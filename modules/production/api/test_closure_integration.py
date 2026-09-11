@@ -14,9 +14,10 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
+from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import DailyReportDetail, SemolinaLine
+from modules.production.domain.production_report import ConditionnementReportDetail, DailyReportDetail, SemolinaLine
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.api.quality_service import QualityReportService
 from modules.qc.domain.quality import QualityReportDetail
@@ -28,7 +29,7 @@ TENANT = "integration-test-closure"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, location, quarantine, work_center = (str(ULID()) for _ in range(5))
+    uom, product, location, quarantine, work_center, equipment = (str(ULID()) for _ in range(6))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -54,6 +55,10 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'CLOSE-WC', 'Line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'CLOSE-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
     StockService(db).receive_stock(
         tenant_id=TENANT, product_id=product, location_id=location, quantity=100_000,
         correlation_id=str(ULID()), reference="seed", actor_id=actor,
@@ -64,6 +69,7 @@ def env(db):
         "location": location,
         "quarantine": quarantine,
         "work_center": work_center,
+        "equipment": equipment,
     }
 
 
@@ -98,6 +104,7 @@ def _report(db, env, of, *, date, validate=True, submit=True, **detail):
     service = ProductionReportService(db)
     created = service.create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=date,
+        equipment_id=env["equipment"],
         detail=DailyReportDetail(**detail),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
@@ -186,9 +193,26 @@ def test_open_quality_follow_up_warns_but_never_blocks(db, env, of):
     """The 40-day window outlives production by design."""
     _report(db, env, of, date=datetime.date(2026, 9, 1))
 
+    packing = ConditionnementReportService(db).create_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 1),
+        equipment_id=env["equipment"],
+        detail=ConditionnementReportDetail(),
+    )
+    assert isinstance(packing, Ok), getattr(packing, "message", "")
+    packing_report_id = packing.value["report"].id
+    # Submitted and validated immediately -- a draft packing report would itself
+    # block closure, and that is not what this test is about.
+    reports = ProductionReportService(db)
+    assert isinstance(
+        reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=packing_report_id), Ok
+    )
+    assert isinstance(
+        reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=packing_report_id), Ok
+    )
+
     quality = QualityReportService(db)
     created = quality.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 1),
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing_report_id,
         detail=QualityReportDetail(conforming_cartons=100),
     )
     report_id = created.value["report"].id

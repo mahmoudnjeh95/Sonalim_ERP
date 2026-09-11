@@ -3,12 +3,12 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { CalendarClock, FlaskConical, Pencil, Plus, Send } from "lucide-react";
+import { CalendarClock, FlaskConical, History, Pencil, Plus, Send, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -25,7 +25,6 @@ import {
   DialogTitle,
   DialogDescription,
 } from "../../components/ui/dialog";
-import { ShiftTeamFields } from "../../components/patterns/ShiftTeamFields";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
@@ -43,9 +42,11 @@ import {
   deleteQualityReport,
   getQualityReport,
   listFollowUps,
+  listInspectableConditionnementReports,
   listQualityReports,
   submitQualityReport,
   updateQualityReport,
+  type InspectableConditionnementReport,
   type QualityReport,
   type QualityReportDetail,
   type QualityReportStatus,
@@ -65,16 +66,24 @@ const detailSchema = z.object({
 });
 
 const createSchema = detailSchema.extend({
-  of_id: z.string().min(1, "Required"),
-  report_date: z.string().min(1, "Required"),
-  team: z.string().optional(),
-  shift: z.string().optional(),
+  conditionnement_report_id: z.string().min(1, "Required"),
 });
 type CreateForm = z.infer<typeof createSchema>;
 
 const QUERY_KEY = ["qc", "quality-reports"] as const;
 const FOLLOW_UPS_QUERY_KEY = ["qc", "follow-ups"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
+const INSPECTABLE_QUERY_KEY = ["qc", "conditionnement-reports"] as const;
+
+function conditionnementLabel(
+  row: InspectableConditionnementReport,
+  referenceOf: (ofId: string) => string,
+  t: (key: TranslationKey) => string,
+): string {
+  return [referenceOf(row.of_id), row.report_date, row.shift, row.team, t(`status.${row.status}` as TranslationKey)]
+    .filter(Boolean)
+    .join(" · ");
+}
 
 type StatusFilter = "all" | QualityReportStatus;
 
@@ -90,10 +99,6 @@ const EMPTY_DETAIL = {
   comments: "",
   corrective_action: "",
 };
-
-function todayIso() {
-  return new Date().toISOString().slice(0, 10);
-}
 
 function toDetail(input: CreateForm): Partial<QualityReportDetail> {
   return {
@@ -117,12 +122,16 @@ export function QualityReportsTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [openReport, setOpenReport] = useState<QualityReport | null>(null);
+  const [openMode, setOpenMode] = useState<"view" | "edit" | "history" | "delete">("view");
   // Which report is open lives in the URL as well as in state, so an OF's
   // quality panel can link straight to one instead of landing on the list.
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedId = searchParams.get("report");
+  function openReportAt(report: QualityReport, mode: "view" | "edit" | "history" | "delete") {
+    setOpenReport(report);
+    setOpenMode(mode);
+  }
 
   const { data: reports = [], isLoading } = useQuery({
     queryKey: QUERY_KEY,
@@ -136,6 +145,14 @@ export function QualityReportsTab() {
     queryKey: WORK_ORDERS_QUERY_KEY,
     queryFn: () => listWorkOrders(token),
   });
+  // Conditionnement reports not yet inspected, enriched with the hint figures
+  // (packets, cartons, regrind) shown once one is picked. QC always inspects a
+  // specific packaging run -- never just "an OF" -- so this backs the create
+  // form's only selector.
+  const { data: inspectable = [] } = useQuery({
+    queryKey: INSPECTABLE_QUERY_KEY,
+    queryFn: () => listInspectableConditionnementReports(token),
+  });
 
   // Quality outlives production, so a closed OF is still a legitimate target.
   const referenceOf = (ofId: string) => workOrders.find((o) => o.id === ofId)?.reference ?? ofId;
@@ -145,22 +162,22 @@ export function QualityReportsTab() {
 
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
-    defaultValues: { of_id: "", report_date: todayIso(), team: "", shift: "", ...EMPTY_DETAIL },
+    defaultValues: { conditionnement_report_id: "", ...EMPTY_DETAIL },
   });
+  const selectedConditionnementId = form.watch("conditionnement_report_id");
+  const selectedConditionnement = inspectable.find((r) => r.conditionnement_report_id === selectedConditionnementId);
 
   const createMutation = useMutation({
     mutationFn: (input: CreateForm) =>
       createQualityReport(token, {
-        of_id: input.of_id,
-        report_date: input.report_date,
-        team: input.team || undefined,
-        shift: input.shift || undefined,
+        conditionnement_report_id: input.conditionnement_report_id,
         detail: toDetail(input),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: INSPECTABLE_QUERY_KEY });
       setDialogOpen(false);
-      form.reset({ of_id: "", report_date: todayIso(), team: "", shift: "", ...EMPTY_DETAIL });
+      form.reset({ conditionnement_report_id: "", ...EMPTY_DETAIL });
       toast.success(t("qc.quality.created"));
     },
     onError: (error) => {
@@ -269,8 +286,7 @@ export function QualityReportsTab() {
       cell: (r) => (
         <QualityRowActions
           report={r}
-          isEditing={editingId === r.id}
-          onOpenEdit={(open) => setEditingId(open ? r.id : null)}
+          onOpenReport={(mode) => openReportAt(r, mode)}
           onSubmitReport={() => submitMutation.mutate(r.id)}
           isSubmitting={submitMutation.isPending && submitMutation.variables === r.id}
         />
@@ -334,7 +350,7 @@ export function QualityReportsTab() {
               />
               <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button size="sm" disabled={workOrders.length === 0}>
+                  <Button size="sm" disabled={inspectable.length === 0}>
                     <Plus className="h-4 w-4" />
                     {t("qc.quality.new")}
                   </Button>
@@ -345,30 +361,46 @@ export function QualityReportsTab() {
                     <DialogDescription>{t("qc.quality.dialog.create.description")}</DialogDescription>
                   </DialogHeader>
                   <form className="space-y-4" onSubmit={form.handleSubmit((input) => createMutation.mutate(input))}>
-                    <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div className="grid grid-cols-1 gap-3">
                       <div className="space-y-1.5">
-                        <Label htmlFor="q_of_id">{t("production.reports.field.of")}</Label>
-                        <Select id="q_of_id" {...form.register("of_id")}>
+                        <Label htmlFor="q_conditionnement_report_id">
+                          {t("qc.quality.field.conditionnementReport")}
+                        </Label>
+                        <Select id="q_conditionnement_report_id" {...form.register("conditionnement_report_id")}>
                           <option value="">—</option>
-                          {workOrders.map((o) => (
-                            <option key={o.id} value={o.id}>
-                              {o.reference}
+                          {inspectable.map((row) => (
+                            <option key={row.conditionnement_report_id} value={row.conditionnement_report_id}>
+                              {conditionnementLabel(row, referenceOf, t)}
                             </option>
                           ))}
                         </Select>
-                        {form.formState.errors.of_id && (
-                          <p className="text-sm text-destructive">{form.formState.errors.of_id.message}</p>
+                        {form.formState.errors.conditionnement_report_id && (
+                          <p className="text-sm text-destructive">
+                            {form.formState.errors.conditionnement_report_id.message}
+                          </p>
                         )}
                       </div>
-                      <div className="space-y-1.5">
-                        <Label htmlFor="q_report_date">{t("production.reports.field.date")}</Label>
-                        <Input id="q_report_date" type="date" {...form.register("report_date")} />
-                      </div>
-                      <ShiftTeamFields
-                        idPrefix="q_"
-                        teamField={form.register("team")}
-                        shiftField={form.register("shift")}
-                      />
+                      {selectedConditionnement && (
+                        <div className="rounded-md border border-border bg-muted/30 p-3">
+                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                            {t("qc.quality.hint.title")}
+                          </p>
+                          <div className="grid grid-cols-3 gap-2 text-sm">
+                            <div>
+                              <span className="text-muted-foreground">{t("qc.quality.hint.packets")}: </span>
+                              {selectedConditionnement.packets_counted}
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">{t("qc.quality.hint.cartons")}: </span>
+                              {selectedConditionnement.carton_quantity}
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">{t("qc.quality.hint.regrind")}: </span>
+                              {selectedConditionnement.regrind_quantity ?? t("qc.quality.hint.regrindUnavailable")}
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                     <QualityDetailFields form={form} />
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
@@ -421,7 +453,7 @@ export function QualityReportsTab() {
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                      onClick={() => setOpenReport(report)}
+                      onClick={() => openReportAt(report, "view")}
                     >
                       {table.visibleColumns.map((column) => (
                         <TableCell
@@ -443,10 +475,16 @@ export function QualityReportsTab() {
 
       {focusedReport && (
         <QualityReportDialog
+          // Remount per report so a row's Edit/History/Delete action always
+          // lands the dialog on the right tab instead of reusing whatever
+          // tab a previous report was left on.
+          key={focusedReport.id}
           report={focusedReport}
           reference={referenceOf(focusedReport.of_id)}
+          initialMode={openMode}
           onClose={() => {
             setOpenReport(null);
+            setOpenMode("view");
             // Drop the deep link too, or closing reopens it on the next render.
             if (linkedId) {
               const next = new URLSearchParams(searchParams);
@@ -468,10 +506,12 @@ export function QualityReportsTab() {
 function QualityReportDialog({
   report,
   reference,
+  initialMode,
   onClose,
 }: {
   report: QualityReport;
   reference: string;
+  initialMode?: "view" | "edit" | "history" | "delete";
   onClose: () => void;
 }) {
   const { session } = useAuth();
@@ -489,10 +529,7 @@ function QualityReportDialog({
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
     values: {
-      of_id: report.of_id,
-      report_date: report.report_date,
-      team: report.team ?? "",
-      shift: report.shift ?? "",
+      conditionnement_report_id: report.conditionnement_report_id ?? "",
       ...EMPTY_DETAIL,
       ...(detail ?? {}),
       defect_details: detail?.defect_details ?? "",
@@ -551,7 +588,10 @@ function QualityReportDialog({
       subtitle={[report.shift, report.team].filter(Boolean).join(" \u00b7 ") || t("common.none")}
       status={report.status}
       revision={report.revision}
+      reportId={report.id}
+      historyEntityType="quality_report"
       figures={figures}
+      initialMode={initialMode}
       onDelete={async (deleteReason) => {
         await deleteQualityReport(token, report.id, deleteReason);
         invalidate();
@@ -655,93 +695,50 @@ function QualityDetailFields({ form }: { form: ReturnType<typeof useForm<CreateF
   );
 }
 
+/**
+ * Per-row actions. Edit/History/Delete all jump into the same detail dialog
+ * used when a row itself is clicked (see `QualityReportDialog` above) — that
+ * dialog already knows how each status behaves, so the row buttons only need
+ * to say which tab to land on, not re-implement any of that.
+ */
 function QualityRowActions({
   report,
-  isEditing,
-  onOpenEdit,
+  onOpenReport,
   onSubmitReport,
   isSubmitting,
 }: {
   report: QualityReport;
-  isEditing: boolean;
-  onOpenEdit: (open: boolean) => void;
+  onOpenReport: (mode: "edit" | "history" | "delete") => void;
   onSubmitReport: () => void;
   isSubmitting: boolean;
 }) {
-  const { session } = useAuth();
   const { t } = useI18n();
-  const token = session!.token;
-  const queryClient = useQueryClient();
-
-  // Fetched only once the dialog is actually open — the row renders this
-  // component for every visible report, and most of them never get edited.
-  const { data: full } = useQuery({
-    queryKey: ["qc", "quality-reports", report.id],
-    queryFn: () => getQualityReport(token, report.id),
-    enabled: isEditing,
-  });
-  const detail = full?.detail as QualityReportDetail | undefined;
-
-  const form = useForm<CreateForm>({
-    resolver: zodResolver(createSchema),
-    values: {
-      of_id: report.of_id,
-      report_date: report.report_date,
-      ...EMPTY_DETAIL,
-      ...(detail ?? {}),
-      defect_details: detail?.defect_details ?? "",
-      comments: detail?.comments ?? "",
-      corrective_action: detail?.corrective_action ?? "",
-    } as CreateForm,
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (input: CreateForm) => updateQualityReport(token, report.id, toDetail(input)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      onOpenEdit(false);
-      toast.success(t("production.reports.updated"));
-    },
-    onError: (error) => {
-      toast.error(t("production.reports.updateError"), {
-        description: error instanceof ApiError ? error.message : undefined,
-      });
-    },
-  });
 
   return (
-    <div className="flex justify-end gap-2">
+    <div className="flex justify-end items-center gap-1">
+      {report.status === "rejected" && report.rejection_reason && (
+        <span className="mr-1 text-xs text-destructive">{report.rejection_reason}</span>
+      )}
+      <Button size="sm" variant="ghost" aria-label={t("common.edit")} onClick={() => onOpenReport("edit")}>
+        <Pencil className="h-3.5 w-3.5" />
+      </Button>
       {report.status === "draft" && (
-        <>
-          <Dialog open={isEditing} onOpenChange={onOpenEdit}>
-            <DialogTrigger asChild>
-              <Button size="sm" variant="ghost">
-                <Pencil className="h-3.5 w-3.5" />
-                {t("common.edit")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>{t("qc.quality.dialog.edit.title")}</DialogTitle>
-                <DialogDescription>{t("production.dailyReports.dialog.edit.description")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={form.handleSubmit((input) => updateMutation.mutate(input))}>
-                <QualityDetailFields form={form} />
-                <Button type="submit" className="w-full" disabled={updateMutation.isPending}>
-                  {updateMutation.isPending ? t("common.saving") : t("common.save")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-          <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
-            <Send className="h-3.5 w-3.5" />
-            {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
-          </Button>
-        </>
+        <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
+          <Send className="h-3.5 w-3.5" />
+          {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
+        </Button>
       )}
-      {report.status === "rejected" && (
-        <span className="text-xs text-destructive">{report.rejection_reason ?? t("status.rejected")}</span>
-      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t("production.reports.history.title")}
+        onClick={() => onOpenReport("history")}
+      >
+        <History className="h-3.5 w-3.5" />
+      </Button>
+      <Button size="sm" variant="ghost" aria-label={t("common.delete")} onClick={() => onOpenReport("delete")}>
+        <Trash2 className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }

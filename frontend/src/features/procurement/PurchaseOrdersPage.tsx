@@ -1172,12 +1172,42 @@ function OrderActions({
                       <HelpTooltip text={t("procurement.help.landedCost")} />
                     </Label>
                     <div className="grid grid-cols-3 gap-2">
-                      <Input type="number" step="any" placeholder={t("procurement.field.baseCost")} {...receiveForm.register("base_cost")} />
-                      <Input type="number" step="any" placeholder={t("procurement.field.licenseFee")} {...receiveForm.register("license_fee")} />
-                      <Input type="number" step="any" placeholder={t("procurement.field.insuranceFee")} {...receiveForm.register("insurance_fee")} />
-                      <Input type="number" step="any" placeholder={t("procurement.field.transitFee")} {...receiveForm.register("transit_fee")} />
-                      <Input type="number" step="any" placeholder={t("procurement.field.transportFee")} {...receiveForm.register("transport_fee")} />
-                      <Input type="number" step="any" placeholder={t("procurement.field.customsDuty")} {...receiveForm.register("customs_duty")} />
+                      <div className="space-y-1">
+                        <Label htmlFor={`receive_base_cost_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                          {t("procurement.field.baseCost")}
+                        </Label>
+                        <Input id={`receive_base_cost_${order.id}`} type="number" step="any" {...receiveForm.register("base_cost")} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`receive_license_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                          {t("procurement.field.licenseFee")}
+                        </Label>
+                        <Input id={`receive_license_fee_${order.id}`} type="number" step="any" {...receiveForm.register("license_fee")} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`receive_insurance_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                          {t("procurement.field.insuranceFee")}
+                        </Label>
+                        <Input id={`receive_insurance_fee_${order.id}`} type="number" step="any" {...receiveForm.register("insurance_fee")} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`receive_transit_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                          {t("procurement.field.transitFee")}
+                        </Label>
+                        <Input id={`receive_transit_fee_${order.id}`} type="number" step="any" {...receiveForm.register("transit_fee")} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`receive_transport_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                          {t("procurement.field.transportFee")}
+                        </Label>
+                        <Input id={`receive_transport_fee_${order.id}`} type="number" step="any" {...receiveForm.register("transport_fee")} />
+                      </div>
+                      <div className="space-y-1">
+                        <Label htmlFor={`receive_customs_duty_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                          {t("procurement.field.customsDuty")}
+                        </Label>
+                        <Input id={`receive_customs_duty_${order.id}`} type="number" step="any" {...receiveForm.register("customs_duty")} />
+                      </div>
                     </div>
                   </div>
 

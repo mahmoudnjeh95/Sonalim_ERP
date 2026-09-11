@@ -148,6 +148,8 @@ export interface StockMove {
   actor_id: string | null;
   reason: string | null;
   created_at: string;
+  /** Set when this movement came from a production report -- the work order it belongs to. */
+  of_id: string | null;
 }
 
 export function listStockMoves(
@@ -161,28 +163,6 @@ export function listStockMoves(
   if (params.limit) query.set("limit", String(params.limit));
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return apiFetch<StockMove[]>(`/warehouse/stock/moves${suffix}`, { token });
-}
-
-// --- Audit log (core.audit_log, ISO 9001 traceability) --------------------
-
-export interface AuditLogEntry {
-  id: string;
-  actor_id: string;
-  actor_email: string | null;
-  action: string;
-  entity_type: string;
-  entity_id: string;
-  occurred_at: string;
-  payload: Record<string, unknown>;
-}
-
-export function listAuditLog(token: string, params: { entity_type?: string; entity_id?: string; limit?: number } = {}) {
-  const query = new URLSearchParams();
-  if (params.entity_type) query.set("entity_type", params.entity_type);
-  if (params.entity_id) query.set("entity_id", params.entity_id);
-  if (params.limit) query.set("limit", String(params.limit));
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return apiFetch<AuditLogEntry[]>(`/core/audit-log${suffix}`, { token });
 }
 
 export type LotSerialTracking = "none" | "lot" | "serial";

@@ -11,7 +11,9 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Ok
+from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.api.service import WorkOrderService
+from modules.production.domain.production_report import ConditionnementReportDetail
 from modules.qc.api.quality_service import QualityReportService
 from modules.qc.domain.quality import QualityReportDetail
 
@@ -52,10 +54,19 @@ def of(db, env):
 
 
 def _validated_quality_report(db, env, of, *, team, report_date, conforming, non_conforming):
-    service = QualityReportService(db)
-    created = service.create_report(
+    """`team` is set on the conditionnement report, exactly as a real packaging
+    run would carry it -- the quality report only ever derives its team from
+    the run it inspects, it never accepts one directly."""
+    packing = ConditionnementReportService(db).create_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
         team=team, shift="morning",
+        detail=ConditionnementReportDetail(),
+    )
+    assert isinstance(packing, Ok), getattr(packing, "message", "")
+
+    service = QualityReportService(db)
+    created = service.create_report(
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
         detail=QualityReportDetail(
             conforming_cartons=conforming,
             non_conforming_cartons=non_conforming,
@@ -88,9 +99,14 @@ def test_conformity_is_bucketed_by_team_and_period(db, env, of):
 
 
 def test_draft_quality_reports_are_excluded(db, env, of):
-    QualityReportService(db).create_report(
+    packing = ConditionnementReportService(db).create_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 15),
         team="Z", shift="morning",
+        detail=ConditionnementReportDetail(),
+    )
+    assert isinstance(packing, Ok), getattr(packing, "message", "")
+    QualityReportService(db).create_report(
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
         detail=QualityReportDetail(conforming_cartons=5, non_conforming_cartons=5),
     )
     rows = QualityReportService(db).team_conformity(tenant_id=TENANT, grain="week")

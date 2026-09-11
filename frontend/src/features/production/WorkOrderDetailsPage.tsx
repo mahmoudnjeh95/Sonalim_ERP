@@ -388,13 +388,6 @@ export function WorkOrderDetailsPage() {
               unit: regrindUom,
             },
             {
-              // Dough is never stocked, so it has no product of its own; it is
-              // the semoule it was made from, weighed after mixing.
-              label: t("production.dailyReports.field.dough"),
-              value: consolidation?.raw_material.dough_quantity,
-              unit: semolinaUom,
-            },
-            {
               label: t("production.conditionnement.field.film"),
               value: consolidation?.packaging.film_quantity,
               unit: filmUom,

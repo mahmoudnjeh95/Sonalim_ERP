@@ -2,7 +2,7 @@
   "name": "production",
   "version": "0.10.0",
   "depends": ["core"],
-  "optional_depends": ["warehouse", "qc"],
+  "optional_depends": ["warehouse", "qc", "maintenance"],
   "provides_api": [
     "WorkOrderService",
     "ProductClassificationService",
@@ -17,7 +17,9 @@
     "OfConsolidationService",
     "RegrindDefaultsService",
     "PackagingVarianceService",
-    "PackagingTolerancePolicyService"
+    "PackagingTolerancePolicyService",
+    "TeamPerformanceService",
+    "MachinePerformanceService"
   ],
   "publishes_events": [
     "production.work_order.closed",
@@ -54,6 +56,7 @@
     "production.view_reports",
     "production.manage_reports",
     "production.validate_reports",
-    "production.admin_reports"
+    "production.admin_reports",
+    "production.use_ia_assistant"
   ]
 }

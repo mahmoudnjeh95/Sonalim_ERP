@@ -32,7 +32,7 @@ TENANT = "integration-test-downtime-lines"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, location, work_center = (str(ULID()) for _ in range(4))
+    uom, product, location, work_center, equipment = (str(ULID()) for _ in range(5))
 
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
@@ -54,12 +54,16 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'DT-WC', 'Line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'DT-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
     StockService(db).receive_stock(
         tenant_id=TENANT, product_id=product, location_id=location, quantity=100_000,
         correlation_id=str(ULID()), reference="seed", actor_id=actor,
     )
     RegrindDefaultsService(db).set_default(tenant_id=TENANT, actor_id=actor, output_product_id=product)
-    return {"actor": actor, "product": product, "location": location, "work_center": work_center}
+    return {"actor": actor, "product": product, "location": location, "work_center": work_center, "equipment": equipment}
 
 
 @pytest.fixture
@@ -87,6 +91,7 @@ def _draft(db, env, of, **detail):
     created = ProductionReportService(db).create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
         report_date=datetime.date(2026, 9, 1), shift="morning",
+        equipment_id=env["equipment"],
         detail=DailyReportDetail(**detail),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")

@@ -3,6 +3,7 @@ from __future__ import annotations
 import psycopg
 
 from core.domain.result import Err, Ok, Result
+from modules.production.domain.production_report import WASTE_CATEGORIES_BY_REPORT_TYPE
 
 # Only validated reports count. A draft is a team's working notes and a rejected
 # report has been refused — consolidating either would let figures nobody approved
@@ -53,7 +54,10 @@ class OfConsolidationService:
         # What actually went into the mix: fresh semoule plus any rebroyat poured
         # back in. This is the basis the plant judges a run against — the planned
         # figure says what was scheduled, not what the line was given to work with.
-        material_input = semolina + daily["regrind_input_quantity"]
+        # The rebroyat term is restated against semoule's own unit (see
+        # _daily_totals) so a kg-denominated rebroyat line can't skew a total
+        # otherwise counted in tonnes.
+        material_input = semolina + daily["regrind_input_quantity_normalized"]
 
         return Ok(
             {
@@ -129,6 +133,14 @@ class OfConsolidationService:
                         "quantity": daily["regrind_quantity"],
                         "product_id": daily["regrind_product_id"],
                     },
+                    # The semoule genuinely lost: daily-report déchet (never
+                    # conditionnement's product/packaging, which isn't semoule
+                    # any more) net of what the shift declared as rebroyat that
+                    # same period. What the plant actually wants to minimise.
+                    # Both terms are the form's own kilos -- see
+                    # `_waste_totals`'s `daily_raw_kg_total` -- not the
+                    # per-item-unit figures `by_category` reports above.
+                    "net_semoule_waste": waste["daily_raw_kg_total"] - daily["regrind_quantity"],
                 },
                 "time": {
                     "production_minutes": daily["production_minutes"] + packing["production_minutes"],
@@ -144,11 +156,19 @@ class OfConsolidationService:
         )
 
     def _daily_totals(self, *, tenant_id: str, of_id: str) -> dict:
+        # Computed first: material_input needs rebroyat restated against
+        # whatever unit the semoule side is actually in for this OF, not a
+        # fixed assumption -- see the join comment below and
+        # `_semolina_totals`'s `weight_ratio_to_base`.
+        semolina = self._semolina_totals(tenant_id=tenant_id, of_id=of_id)
+        anchor_ratio = semolina["weight_ratio_to_base"] or 1.0
+
         row = self._connection.execute(
             f"""
             SELECT
                 count(*),
                 COALESCE(SUM(d.regrind_input_quantity), 0),
+                COALESCE(SUM(d.regrind_input_quantity * COALESCE(riu.ratio_to_base, %s) / %s), 0),
                 COALESCE(SUM(d.dough_quantity), 0),
                 COALESCE(SUM(d.regrind_quantity), 0),
                 COALESCE(SUM(d.water_quantity), 0),
@@ -161,32 +181,46 @@ class OfConsolidationService:
                 CASE WHEN COUNT(DISTINCT d.regrind_product_id) = 1 THEN MIN(d.regrind_product_id) END
             FROM production.production_reports r
             JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            -- Rebroyat poured back in is weighed against whatever product the
+            -- report names for it -- the dedicated rebroyat product most of
+            -- the time, but an old report can name a raw material bought in a
+            -- different unit instead. Restated against the semoule side's own
+            -- unit (the `anchor_ratio` bound above -- 1 when unresolvable,
+            -- which leaves the row unconverted, same as before this fix) so
+            -- material_input adds like with like. The native figure returned
+            -- below (paired with regrind_input_product_id) is left alone for
+            -- display. Same fix as regrind_service.create_regrind_batch's
+            -- scrap intake, which anchors to the output product instead.
+            LEFT JOIN core.products rip ON rip.id = d.regrind_input_product_id AND rip.tenant_id = r.tenant_id
+            LEFT JOIN core.uoms riu ON riu.id = rip.uom_id AND riu.tenant_id = rip.tenant_id
             WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'daily' AND r.{_VALIDATED}
             """,
-            (tenant_id, of_id),
+            (anchor_ratio, anchor_ratio, tenant_id, of_id),
         ).fetchone()
-        semolina = self._semolina_totals(tenant_id=tenant_id, of_id=of_id)
         return {
             "report_count": int(row[0]),
             "semolina_quantity": semolina["total"],
             "semolina_by_product": semolina["by_product"],
             "regrind_input_quantity": float(row[1]),
-            "dough_quantity": float(row[2]),
-            "regrind_quantity": float(row[3]),
-            "water_quantity": float(row[4]),
-            "fuel_quantity": float(row[5]),
-            "gasoil_quantity": float(row[6]),
-            "electricity_quantity": float(row[7]),
-            "production_minutes": int(row[8]),
+            # In the semoule side's own unit, for material_input only -- see
+            # the join comment above.
+            "regrind_input_quantity_normalized": float(row[2]),
+            "dough_quantity": float(row[3]),
+            "regrind_quantity": float(row[4]),
+            "water_quantity": float(row[5]),
+            "fuel_quantity": float(row[6]),
+            "gasoil_quantity": float(row[7]),
+            "electricity_quantity": float(row[8]),
+            "production_minutes": int(row[9]),
             # Now a list (report_downtime_lines) rather than one column, same
             # reason semoule and waste are their own query below.
             "downtime_minutes": self._downtime_totals(tenant_id=tenant_id, of_id=of_id),
             # Reported for yield, never added to produced_quantity.
-            "reported_finished_product_quantity": float(row[9]),
+            "reported_finished_product_quantity": float(row[10]),
             # Null when the lines disagree: a single unit would be a lie.
             "semolina_product_id": semolina["product_id"],
-            "regrind_input_product_id": row[10],
-            "regrind_product_id": row[11],
+            "regrind_input_product_id": row[11],
+            "regrind_product_id": row[12],
         }
 
     def _downtime_totals(self, *, tenant_id: str, of_id: str) -> int:
@@ -216,18 +250,30 @@ class OfConsolidationService:
         into a query that also sums single-valued daily_reports columns would
         multiply every one of those columns by the line count. Same shape as
         `_waste_totals` below, for the same reason.
+
+        Every quality bought for this tenant is denominated in tonnes today,
+        the same basis `finished_product_quantity` uses, so the raw sum is
+        already the right number -- see `_daily_totals` for the one term
+        (rebroyat reuse) that can legitimately disagree with that basis and
+        needs restating before it joins this total. `weight_ratio_to_base` is
+        that basis, exposed so `_daily_totals` can restate rebroyat against it
+        instead of against a fixed unit -- null when there is no semoule to
+        anchor to, or when the qualities poured don't even agree on a unit.
         """
         rows = self._connection.execute(
             f"""
-            SELECT sl.product_id, COALESCE(SUM(sl.quantity), 0)
+            SELECT sl.product_id, COALESCE(SUM(sl.quantity), 0), MIN(u.ratio_to_base)
             FROM production.report_semolina_lines sl
             JOIN production.production_reports r ON r.id = sl.report_id AND r.tenant_id = sl.tenant_id
+            LEFT JOIN core.products p ON p.id = sl.product_id AND p.tenant_id = r.tenant_id
+            LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
             WHERE r.tenant_id = %s AND r.of_id = %s AND r.{_VALIDATED}
             GROUP BY sl.product_id
             """,
             (tenant_id, of_id),
         ).fetchall()
-        by_product = {product_id: float(quantity) for product_id, quantity in rows if product_id is not None}
+        by_product = {product_id: float(quantity) for product_id, quantity, _ in rows if product_id is not None}
+        ratios = {float(ratio) for _, _, ratio in rows if ratio is not None}
         return {
             "total": sum(by_product.values()),
             "by_product": [
@@ -235,6 +281,7 @@ class OfConsolidationService:
                 for product_id, quantity in sorted(by_product.items(), key=lambda kv: -kv[1])
             ],
             "product_id": next(iter(by_product)) if len(by_product) == 1 else None,
+            "weight_ratio_to_base": ratios.pop() if len(ratios) == 1 else None,
         }
 
     def _conditionnement_totals(self, *, tenant_id: str, of_id: str) -> dict:
@@ -285,23 +332,54 @@ class OfConsolidationService:
         One report type's categories cannot leak into the other's: a daily
         report only ever carries raw_material and press lines, a packing report
         only product and packaging, and the domain refuses anything else.
+
+        A daily report's déchet is always weighed in kg on the form
+        (WasteLinesField's fixedUnit), regardless of the item's own declared
+        unit -- a semoule bought and poured by the tonne is still spilled by
+        the kilo. Left as stored kilos, "by_category"/"by_product" would
+        silently disagree with `raw_material.semolina_quantity` and every other
+        figure that trusts a product's own UOM (decision: everything a caller
+        reads off a product is in that product's declared unit). So daily-stage
+        rows are restated here, per item, into their product's own unit --
+        product/packaging (the packing report's own categories, weighed in
+        whatever the item is actually stocked in) pass through unchanged. A
+        product with no honest kg->its-unit path (not weight-category, or no
+        product named at all) is left in raw kilos rather than guessed at.
+        `net_semoule_waste` below needs the original kilo figure regardless --
+        `daily_raw_kg_total` carries it unconverted.
         """
+        daily_categories = list(WASTE_CATEGORIES_BY_REPORT_TYPE["daily"])
         rows = self._connection.execute(
             f"""
-            SELECT w.category, w.product_id, COALESCE(SUM(w.quantity), 0)
+            SELECT
+                w.category,
+                w.product_id,
+                COALESCE(SUM(w.quantity), 0),
+                COALESCE(SUM(
+                    CASE
+                        WHEN w.category = ANY(%s) AND u.category = 'weight' AND u.ratio_to_base > 0
+                            THEN w.quantity / u.ratio_to_base
+                        ELSE w.quantity
+                    END
+                ), 0)
             FROM production.report_waste_lines w
             JOIN production.production_reports r ON r.id = w.report_id AND r.tenant_id = w.tenant_id
+            LEFT JOIN core.products p ON p.id = w.product_id AND p.tenant_id = r.tenant_id
+            LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
             WHERE r.tenant_id = %s AND r.of_id = %s AND r.{_VALIDATED}
             GROUP BY w.category, w.product_id
             """,
-            (tenant_id, of_id),
+            (daily_categories, tenant_id, of_id),
         ).fetchall()
 
         by_category: dict[str, float] = {}
         by_product: dict[str, float] = {}
         unattributed = 0.0
-        for category, product_id, quantity in rows:
-            amount = float(quantity)
+        daily_raw_kg_total = 0.0
+        for category, product_id, raw_quantity, converted_quantity in rows:
+            if category in WASTE_CATEGORIES_BY_REPORT_TYPE["daily"]:
+                daily_raw_kg_total += float(raw_quantity)
+            amount = float(converted_quantity)
             by_category[category] = by_category.get(category, 0.0) + amount
             if product_id is None:
                 unattributed += amount
@@ -317,6 +395,9 @@ class OfConsolidationService:
                 for product_id, quantity in sorted(by_product.items(), key=lambda kv: -kv[1])
             ],
             "unattributed_quantity": unattributed,
+            # Unconverted kilos, daily-stage rows only -- what net_semoule_waste
+            # (in kilos, same as regrind_quantity) is netted against.
+            "daily_raw_kg_total": daily_raw_kg_total,
         }
 
     def _quality_summary(self, *, tenant_id: str, of_id: str) -> dict:

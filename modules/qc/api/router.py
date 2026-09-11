@@ -49,10 +49,10 @@ class QualityDetailRequest(BaseModel):
 
 
 class CreateQualityReportRequest(BaseModel):
-    of_id: str
-    report_date: datetime.date
-    team: str | None = None
-    shift: str | None = None
+    # The conditionnement (packaging) run this report inspects. of_id, the
+    # report date, shift and team are all derived from it -- see
+    # QualityReportService._resolve_conditionnement -- never asked here.
+    conditionnement_report_id: str
     detail: QualityDetailRequest = QualityDetailRequest()
 
 
@@ -62,9 +62,9 @@ class UpdateQualityReportRequest(BaseModel):
 
 class AdminUpdateQualityReportRequest(BaseModel):
     detail: QualityDetailRequest | None = None
-    team: str | None = None
-    shift: str | None = None
-    report_date: datetime.date | None = None
+    # Re-linking to a different conditionnement report re-derives of_id,
+    # team, shift and report_date together -- see admin_update_report.
+    conditionnement_report_id: str | None = None
     reason: str | None = None
 
 
@@ -144,11 +144,8 @@ def create_quality_report(
         result = QualityReportService(connection).create_report(
             tenant_id=tenant.tenant_id,
             actor_id=tenant.user_id,
-            of_id=body.of_id,
-            report_date=body.report_date,
+            conditionnement_report_id=body.conditionnement_report_id,
             detail=body.detail.to_detail(),
-            team=body.team,
-            shift=body.shift,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -168,6 +165,35 @@ def list_quality_reports(
             tenant_id=tenant.tenant_id, of_id=of_id, status=status_filter
         )
     return [_serialize_report(report) for report in reports]
+
+
+@router.get("/conditionnement-reports")
+def list_inspectable_conditionnement_reports(
+    of_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("qc.view_quality_reports")),
+) -> list[dict]:
+    """Conditionnement reports with no quality report yet, enriched with the
+    hint figures (packets, cartons, regrind) the create-report form shows
+    once one is picked."""
+    with get_connection() as connection:
+        rows = QualityReportService(connection).list_inspectable_conditionnement_reports(
+            tenant_id=tenant.tenant_id, of_id=of_id
+        )
+    return [
+        {
+            "conditionnement_report_id": row["conditionnement_report_id"],
+            "of_id": row["of_id"],
+            "report_date": row["report_date"].isoformat(),
+            "shift": row["shift"],
+            "team": row["team"],
+            "status": row["status"],
+            "packets_counted": row["packets_counted"],
+            "carton_quantity": row["carton_quantity"],
+            "finished_product_quantity": row["finished_product_quantity"],
+            "regrind_quantity": row["regrind_quantity"],
+        }
+        for row in rows
+    ]
 
 
 @router.get("/quality-reports/team-performance")
@@ -232,9 +258,7 @@ def admin_update_quality_report(
             actor_id=tenant.user_id,
             report_id=report_id,
             detail=body.detail.to_detail() if body.detail is not None else None,
-            team=body.team,
-            shift=body.shift,
-            report_date=body.report_date,
+            conditionnement_report_id=body.conditionnement_report_id,
             reason=body.reason,
         )
         if isinstance(result, Err):
@@ -584,6 +608,7 @@ def _serialize_report(report: QualityReport) -> dict:
     return {
         "id": report.id,
         "of_id": report.of_id,
+        "conditionnement_report_id": report.conditionnement_report_id,
         "report_date": report.report_date.isoformat(),
         "status": report.status,
         "revision": report.revision,

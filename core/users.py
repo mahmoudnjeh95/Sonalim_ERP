@@ -23,12 +23,17 @@ class RoleRef(BaseModel):
 class UserSummary(BaseModel):
     id: str
     email: str
+    full_name: str | None
     permissions: list[str]
     roles: list[RoleRef]
 
 
 class GrantPermissionRequest(BaseModel):
     permission: str
+
+
+class UpdateUserRequest(BaseModel):
+    full_name: str | None = None
 
 
 @router.get("/permissions/catalog")
@@ -43,7 +48,7 @@ def list_users(tenant: TenantContext = Depends(require_permission(MANAGE_PERMISS
     with get_connection() as connection:
         rows = connection.execute(
             """
-            SELECT u.id, u.email,
+            SELECT u.id, u.email, u.full_name,
                    COALESCE(array_agg(DISTINCT p.permission) FILTER (WHERE p.permission IS NOT NULL), '{}'),
                    COALESCE(
                        json_agg(DISTINCT jsonb_build_object('id', r.id, 'code', r.code, 'name', r.name))
@@ -55,7 +60,7 @@ def list_users(tenant: TenantContext = Depends(require_permission(MANAGE_PERMISS
             LEFT JOIN core.user_roles ur ON ur.user_id = u.id
             LEFT JOIN core.roles r ON r.id = ur.role_id
             WHERE u.tenant_id = %s
-            GROUP BY u.id, u.email
+            GROUP BY u.id, u.email, u.full_name
             ORDER BY u.email
             """,
             (tenant.tenant_id,),
@@ -64,11 +69,37 @@ def list_users(tenant: TenantContext = Depends(require_permission(MANAGE_PERMISS
         UserSummary(
             id=row[0],
             email=row[1],
-            permissions=sorted(row[2]),
-            roles=sorted(row[3], key=lambda role: role["name"]),
+            full_name=row[2],
+            permissions=sorted(row[3]),
+            roles=sorted(row[4], key=lambda role: role["name"]),
         )
         for row in rows
     ]
+
+
+@router.patch("/users/{user_id}")
+def update_user(
+    user_id: str,
+    body: UpdateUserRequest,
+    tenant: TenantContext = Depends(require_permission(MANAGE_PERMISSIONS)),
+) -> dict:
+    with get_connection() as connection:
+        _assert_same_tenant(connection, tenant_id=tenant.tenant_id, user_id=user_id)
+        connection.execute(
+            "UPDATE core.users SET full_name = %s WHERE id = %s",
+            (body.full_name, user_id),
+        )
+        record_audit(
+            connection,
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            action="user.updated",
+            entity_type="user",
+            entity_id=user_id,
+            payload={"full_name": body.full_name},
+        )
+        connection.commit()
+    return {"user_id": user_id, "full_name": body.full_name}
 
 
 def _assert_same_tenant(connection: psycopg.Connection, *, tenant_id: str, user_id: str) -> None:

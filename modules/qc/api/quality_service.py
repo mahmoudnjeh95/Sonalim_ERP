@@ -22,7 +22,7 @@ from modules.qc.domain.quality import (
 )
 
 _REPORT_COLUMNS = """
-    id, of_id, report_date, status, revision, team, shift, created_by,
+    id, of_id, report_date, status, revision, conditionnement_report_id, team, shift, created_by,
     submitted_at, validated_by, validated_at, rejection_reason
 """
 
@@ -48,13 +48,14 @@ def _row_to_report(row: tuple) -> QualityReport:
         report_date=row[2],
         status=row[3],
         revision=row[4],
-        team=row[5],
-        shift=row[6],
-        created_by=row[7],
-        submitted_at=row[8],
-        validated_by=row[9],
-        validated_at=row[10],
-        rejection_reason=row[11],
+        conditionnement_report_id=row[5],
+        team=row[6],
+        shift=row[7],
+        created_by=row[8],
+        submitted_at=row[9],
+        validated_by=row[10],
+        validated_at=row[11],
+        rejection_reason=row[12],
     )
 
 
@@ -313,42 +314,127 @@ class QualityReportService:
 
     # ---- writes ----------------------------------------------------------
 
+    def _resolve_conditionnement(self, *, tenant_id: str, conditionnement_report_id: str) -> Result[dict]:
+        """Resolve a conditionnement report into what a quality report needs from it.
+
+        Production is the authority on of_id/team/shift/date and on the
+        packaging figures QC shows as a hint before the inspector fills
+        anything in. qc never reads production's tables for this -- it asks
+        production's own service for an immediate answer, the same
+        synchronous cross-module call production already makes into qc for
+        get_conformity_summary, just in the other direction.
+        """
+        from modules.production.api.production_report_service import ProductionReportService
+
+        reports = ProductionReportService(self._connection)
+        found = reports.get_report(tenant_id=tenant_id, report_id=conditionnement_report_id)
+        if found is None:
+            return Err("NOT_FOUND", f"conditionnement report {conditionnement_report_id} not found")
+        header, detail = found["report"], found["detail"]
+        if header.report_type != "conditionnement":
+            return Err("WRONG_REPORT_TYPE", f"report {conditionnement_report_id} is not a conditionnement report")
+
+        regrind_quantity = None
+        if detail.daily_report_id is not None:
+            daily = reports.get_report(tenant_id=tenant_id, report_id=detail.daily_report_id)
+            if daily is not None and daily["detail"] is not None:
+                regrind_quantity = daily["detail"].regrind_quantity
+
+        return Ok(
+            {
+                "of_id": header.of_id,
+                "report_date": header.report_date,
+                "shift": header.shift,
+                "team": header.team,
+                "status": header.status,
+                "packets_counted": detail.packets_counted,
+                "carton_quantity": detail.carton_quantity,
+                "finished_product_quantity": detail.finished_product_quantity,
+                "regrind_quantity": regrind_quantity,
+            }
+        )
+
+    def list_inspectable_conditionnement_reports(
+        self, *, tenant_id: str, of_id: str | None = None
+    ) -> list[dict]:
+        """Conditionnement reports a QC report can still be opened against.
+
+        Backs both the picker in the create-report form and the hint panel
+        shown once one is selected -- one call gives the inspector the OF,
+        team, shift, date, and the packets/carton/regrind figures to check
+        their reading against, before they type anything.
+        """
+        from modules.production.api.production_report_service import ProductionReportService
+
+        already_linked = {
+            row[0]
+            for row in self._connection.execute(
+                "SELECT conditionnement_report_id FROM qc.quality_reports "
+                "WHERE tenant_id = %s AND conditionnement_report_id IS NOT NULL",
+                (tenant_id,),
+            ).fetchall()
+        }
+
+        reports = ProductionReportService(self._connection)
+        candidates = reports.list_reports(tenant_id=tenant_id, of_id=of_id, report_type="conditionnement")
+
+        rows = []
+        for header in candidates:
+            if header.id in already_linked:
+                continue
+            resolved = self._resolve_conditionnement(tenant_id=tenant_id, conditionnement_report_id=header.id)
+            if isinstance(resolved, Err):
+                continue
+            rows.append({"conditionnement_report_id": header.id, **resolved.value})
+        return rows
+
     def create_report(
         self,
         *,
         tenant_id: str,
         actor_id: str,
-        of_id: str,
-        report_date: datetime.date,
+        conditionnement_report_id: str,
         detail: QualityReportDetail | None = None,
-        team: str | None = None,
-        shift: str | None = None,
     ) -> Result[dict]:
-        if not of_id.strip():
-            return Err("MISSING_OF", "a quality report must belong to a work order")
+        if not conditionnement_report_id.strip():
+            return Err("MISSING_CONDITIONNEMENT_REPORT", "a quality report must inspect a conditionnement report")
 
         detail = detail or QualityReportDetail()
         validation = validate_quality_detail(detail)
         if isinstance(validation, Err):
             return validation
 
+        resolved = self._resolve_conditionnement(
+            tenant_id=tenant_id, conditionnement_report_id=conditionnement_report_id
+        )
+        if isinstance(resolved, Err):
+            return resolved
+        link = resolved.value
+
         duplicate = self._connection.execute(
-            """
-            SELECT 1 FROM qc.quality_reports
-            WHERE tenant_id = %s AND of_id = %s AND report_date = %s AND shift IS NOT DISTINCT FROM %s
-            """,
-            (tenant_id, of_id, report_date, shift),
+            "SELECT 1 FROM qc.quality_reports WHERE tenant_id = %s AND conditionnement_report_id = %s",
+            (tenant_id, conditionnement_report_id),
         ).fetchone()
         if duplicate is not None:
-            return Err("DUPLICATE_REPORT", "a quality report already exists for this work order, date and shift")
+            return Err("DUPLICATE_REPORT", "a quality report already exists for this conditionnement report")
 
         report_id = str(ULID())
         self._connection.execute(
             """
-            INSERT INTO qc.quality_reports (id, tenant_id, of_id, report_date, status, revision, team, shift, created_by)
-            VALUES (%s, %s, %s, %s, 'draft', 1, %s, %s, %s)
+            INSERT INTO qc.quality_reports
+                (id, tenant_id, of_id, report_date, status, revision, conditionnement_report_id, team, shift, created_by)
+            VALUES (%s, %s, %s, %s, 'draft', 1, %s, %s, %s, %s)
             """,
-            (report_id, tenant_id, of_id, report_date, team, shift, actor_id),
+            (
+                report_id,
+                tenant_id,
+                link["of_id"],
+                link["report_date"],
+                conditionnement_report_id,
+                link["team"],
+                link["shift"],
+                actor_id,
+            ),
         )
         self._connection.execute(
             f"""
@@ -364,7 +450,11 @@ class QualityReportService:
             action="quality_report.created",
             entity_type="quality_report",
             entity_id=report_id,
-            payload={"of_id": of_id, "report_date": report_date.isoformat()},
+            payload={
+                "of_id": link["of_id"],
+                "conditionnement_report_id": conditionnement_report_id,
+                "report_date": link["report_date"].isoformat(),
+            },
         )
         return Ok(self._read(tenant_id=tenant_id, report_id=report_id))
 
@@ -400,9 +490,7 @@ class QualityReportService:
         actor_id: str,
         report_id: str,
         detail: QualityReportDetail | None = None,
-        team: str | None = None,
-        shift: str | None = None,
-        report_date: datetime.date | None = None,
+        conditionnement_report_id: str | None = None,
         reason: str | None = None,
     ) -> Result[dict]:
         """Edit-in-place, gated by qc.admin_quality_reports.
@@ -410,6 +498,12 @@ class QualityReportService:
         A separate, more trusted right than progressing a report through its normal
         workflow — and allowed regardless of status, because the permission is what
         limits the blast radius, not a status check.
+
+        Re-linking to a different conditionnement_report_id re-derives of_id,
+        report_date, shift and team together from it. There is no path left to
+        set those independently, even in this elevated path -- a correction
+        can never leave the report pointing at one conditionnement run while
+        carrying another run's team or shift.
         """
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
@@ -421,13 +515,34 @@ class QualityReportService:
         if isinstance(validation, Err):
             return validation
 
+        link = None
+        if conditionnement_report_id is not None:
+            resolved = self._resolve_conditionnement(
+                tenant_id=tenant_id, conditionnement_report_id=conditionnement_report_id
+            )
+            if isinstance(resolved, Err):
+                return resolved
+            duplicate = self._connection.execute(
+                "SELECT 1 FROM qc.quality_reports WHERE tenant_id = %s AND conditionnement_report_id = %s AND id != %s",
+                (tenant_id, conditionnement_report_id, report_id),
+            ).fetchone()
+            if duplicate is not None:
+                return Err("DUPLICATE_REPORT", "a quality report already exists for this conditionnement report")
+            link = resolved.value
+
         self._write_detail(tenant_id=tenant_id, report_id=report_id, detail=updated)
         self._connection.execute(
-            "UPDATE qc.quality_reports SET team = %s, shift = %s, report_date = %s, updated_at = NOW() WHERE id = %s",
+            """
+            UPDATE qc.quality_reports
+            SET conditionnement_report_id = %s, of_id = %s, team = %s, shift = %s, report_date = %s, updated_at = NOW()
+            WHERE id = %s
+            """,
             (
-                team if team is not None else report.team,
-                shift if shift is not None else report.shift,
-                report_date if report_date is not None else report.report_date,
+                conditionnement_report_id if link is not None else report.conditionnement_report_id,
+                link["of_id"] if link is not None else report.of_id,
+                link["team"] if link is not None else report.team,
+                link["shift"] if link is not None else report.shift,
+                link["report_date"] if link is not None else report.report_date,
                 report_id,
             ),
         )
@@ -439,9 +554,7 @@ class QualityReportService:
             entity_type="quality_report",
             entity_id=report_id,
             payload={
-                "team": team,
-                "shift": shift,
-                "report_date": report_date.isoformat() if report_date is not None else None,
+                "conditionnement_report_id": conditionnement_report_id,
                 "non_conforming_cartons": updated.non_conforming_cartons,
                 "reason": reason,
             },

@@ -38,9 +38,10 @@ from modules.production.domain.production_report import (
     validate_daily_stock_targets,
     validate_report_header,
 )
+from modules.warehouse.api.service import StockService
 
 _HEADER_COLUMNS = """
-    id, of_id, report_type, report_date, status, revision, team, work_center_id, shift,
+    id, of_id, report_type, report_date, status, revision, team, work_center_id, equipment_id, shift,
     created_by, submitted_at, validated_by, validated_at, rejection_reason
 """
 
@@ -53,7 +54,8 @@ _DAILY_COLUMNS = """
     regrind_quantity, water_quantity, fuel_quantity, gasoil_quantity, electricity_quantity,
     start_time, end_time, production_minutes,
     raw_material_location_id, regrind_input_quantity, regrind_input_product_id,
-    regrind_product_id, mold_id, water_percentage, semolina_flow_rate
+    regrind_product_id, mold_id, water_percentage, semolina_flow_rate,
+    fuel_supplier_id, gasoil_supplier_id
 """
 
 # An OF that has been closed or written off takes no new reports: closure is the
@@ -72,6 +74,7 @@ def _row_to_header(row: tuple) -> ProductionReport:
         revision,
         team,
         work_center_id,
+        equipment_id,
         shift,
         created_by,
         submitted_at,
@@ -88,6 +91,7 @@ def _row_to_header(row: tuple) -> ProductionReport:
         revision=revision,
         team=team,
         work_center_id=work_center_id,
+        equipment_id=equipment_id,
         shift=shift,
         created_by=created_by,
         submitted_at=submitted_at,
@@ -121,6 +125,8 @@ def _row_to_daily_detail(
         mold_id=row[14],
         water_percentage=float(row[15]),
         semolina_flow_rate=float(row[16]),
+        fuel_supplier_id=row[17],
+        gasoil_supplier_id=row[18],
         waste_lines=waste_lines,
         semolina_lines=semolina_lines,
         downtime_lines=downtime_lines,
@@ -280,6 +286,7 @@ class ProductionReportService:
         detail: DailyReportDetail | None = None,
         team: str | None = None,
         work_center_id: str | None = None,
+        equipment_id: str | None = None,
         shift: str | None = None,
     ) -> Result[dict]:
         header_validation = validate_report_header(report_type="daily", of_id=of_id)
@@ -310,8 +317,9 @@ class ProductionReportService:
         self._connection.execute(
             """
             INSERT INTO production.production_reports
-                (id, tenant_id, of_id, report_type, report_date, status, revision, team, work_center_id, shift, created_by)
-            VALUES (%s, %s, %s, 'daily', %s, 'draft', 1, %s, %s, %s, %s)
+                (id, tenant_id, of_id, report_type, report_date, status, revision, team, work_center_id,
+                 equipment_id, shift, created_by)
+            VALUES (%s, %s, %s, 'daily', %s, 'draft', 1, %s, %s, %s, %s, %s)
             """,
             (
                 report_id,
@@ -322,6 +330,7 @@ class ProductionReportService:
                 # The OF's own work center is the default: the report is about the
                 # machine the order runs on, so it should never have to be re-picked.
                 work_center_id if work_center_id is not None else of_work_center_id,
+                equipment_id,
                 shift,
                 actor_id,
             ),
@@ -392,6 +401,13 @@ class ProductionReportService:
         result = transition_report(header, "submitted")
         if isinstance(result, Err):
             return result
+
+        # A draft may be saved before the shift knows which machine it ran on,
+        # but a report handed to the validation desk without one can never be
+        # attributed to a machine again -- so this is enforced here, not at
+        # creation, the same way stock targets are.
+        if not header.equipment_id:
+            return Err("MISSING_MACHINE", "a report must name the machine it ran on before it can be submitted")
 
         detail = self._load_detail(tenant_id=tenant_id, report_id=report_id, report_type=header.report_type)
         if detail is None:
@@ -604,7 +620,7 @@ class ProductionReportService:
             # Before anything is posted: the ecart this report will be judged on
             # has to be pinned to the packaging it was actually validated against.
             effects["packaging_parameters"] = freeze_packaging_parameters(
-                self._connection, tenant_id=tenant_id, report_id=report_id, product_id=work_order[0]
+                self._connection, tenant_id=tenant_id, report_id=report_id, product_id=work_order[0], detail=detail
             )
 
             posted = stock.post_conditionnement_report(
@@ -660,7 +676,15 @@ class ProductionReportService:
     # ---- undoing a validated report --------------------------------------
 
     def _reverse_validated_effects(
-        self, *, tenant_id: str, actor_id: str, header: ProductionReport, correlation_id: str
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        header: ProductionReport,
+        correlation_id: str,
+        force: bool = False,
+        new_regrind_quantity: float | None = None,
+        reason: str | None = None,
     ) -> Result[dict]:
         """Undo everything validating this report caused.
 
@@ -670,7 +694,9 @@ class ProductionReportService:
         The rebroyat chain is the awkward part: validating a daily report can open
         a regrind OF, and if that batch has already been ground and received into
         stock there is no honest way to unwind it — the material physically
-        exists. That case is refused rather than fudged.
+        exists. That case is refused unless `force` is set, in which case the
+        receipt itself is reversed too (see `_unwind_regrind`) rather than left
+        to silently disagree with a report that no longer exists.
         """
         detail = self._load_detail(tenant_id=tenant_id, report_id=header.id, report_type=header.report_type)
         if detail is None:
@@ -704,16 +730,53 @@ class ProductionReportService:
             return undone
 
         removed_scrap = 0
+        reversed_regrind_stock: list[dict] = []
+        skip_regrind_rebuild = False
         if header.report_type == "daily":
-            unwound = self._unwind_regrind(tenant_id=tenant_id, header=header)
+            unwound = self._unwind_regrind(
+                tenant_id=tenant_id, actor_id=actor_id, header=header, correlation_id=correlation_id, force=force,
+                new_regrind_quantity=new_regrind_quantity, reason=reason,
+            )
             if isinstance(unwound, Err):
                 return unwound
-            removed_scrap = unwound.value
+            removed_scrap = unwound.value["removed_scrap_records"]
+            reversed_regrind_stock = unwound.value["reversed_regrind_stock"]
+            skip_regrind_rebuild = unwound.value.get("skip_regrind_rebuild", False)
 
-        return Ok({"reversed_movements": undone.value, "removed_scrap_records": removed_scrap})
+        return Ok(
+            {
+                "reversed_movements": undone.value,
+                "removed_scrap_records": removed_scrap,
+                "reversed_regrind_stock": reversed_regrind_stock,
+                "skip_regrind_rebuild": skip_regrind_rebuild,
+            }
+        )
 
-    def _unwind_regrind(self, *, tenant_id: str, header: ProductionReport) -> Result[int]:
-        """Remove the scrap and regrind OF this report's validation created."""
+    def _unwind_regrind(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        header: ProductionReport,
+        correlation_id: str,
+        force: bool = False,
+        new_regrind_quantity: float | None = None,
+        reason: str | None = None,
+    ) -> Result[dict]:
+        """Remove the scrap and regrind OF this report's validation created.
+
+        A batch already ground and received into stock is refused unless `force`
+        is set — its output physically exists, so silently deleting the order
+        underneath it would leave stock nobody can explain. `force` posts the
+        mirror movement that undoes the receipt (the same "reverse by posting
+        the opposite" rule every other report reversal follows) before removing
+        the batch, its inputs and the work order itself.
+
+        `new_regrind_quantity` marks the other caller, `correct_validated_report`:
+        there, a closed batch isn't refused outright — it's reconciled against
+        the corrected figure instead, see `_reconcile_closed_regrind_batch`.
+        `delete_report` never passes it, so its behavior here is unchanged.
+        """
         scrap_rows = self._connection.execute(
             """
             SELECT id FROM production.scrap_records
@@ -723,27 +786,68 @@ class ProductionReportService:
             (tenant_id, header.of_id, f"daily report {header.id}%"),
         ).fetchall()
         if not scrap_rows:
-            return Ok(0)
+            return Ok({"removed_scrap_records": 0, "reversed_regrind_stock": [], "skip_regrind_rebuild": False})
         scrap_ids = [row[0] for row in scrap_rows]
 
         batch_rows = self._connection.execute(
             """
-            SELECT DISTINCT rbi.regrind_batch_work_order_id, wo.status
+            SELECT DISTINCT rbi.regrind_batch_work_order_id, wo.status, wo.product_id, rb.actual_output_quantity,
+                   rb.input_quantity_total
             FROM production.regrind_batch_inputs rbi
             JOIN production.work_orders wo ON wo.id = rbi.regrind_batch_work_order_id
+            JOIN production.regrind_batches rb ON rb.work_order_id = rbi.regrind_batch_work_order_id
             WHERE rbi.scrap_record_id = ANY(%s)
             """,
             (scrap_ids,),
         ).fetchall()
-        for batch_of_id, batch_status in batch_rows:
-            if batch_status == "closed":
-                return Err(
-                    "REGRIND_ALREADY_COMPLETED",
-                    "the rebroyat order this report opened has already been ground and received into stock;"
-                    " it cannot be unwound automatically",
-                )
 
-        for batch_of_id, _ in batch_rows:
+        if new_regrind_quantity is not None:
+            return self._reconcile_closed_regrind_batch(
+                tenant_id=tenant_id, actor_id=actor_id, header=header, force=force, reason=reason,
+                new_regrind_quantity=new_regrind_quantity, batch_rows=batch_rows,
+            )
+
+        if not force:
+            for _, batch_status, _, _, _ in batch_rows:
+                if batch_status == "closed":
+                    return Err(
+                        "REGRIND_ALREADY_COMPLETED",
+                        "the rebroyat order this report opened has already been ground and received into stock;"
+                        " it cannot be unwound automatically",
+                    )
+
+        stock = StockService(self._connection)
+        reversed_regrind_stock: list[dict] = []
+        for batch_of_id, batch_status, product_id, actual_output_quantity, _ in batch_rows:
+            if batch_status != "closed" or actual_output_quantity is None or float(actual_output_quantity) <= 0:
+                continue
+            # The batch's own receipt is the only record of which location it
+            # landed in -- regrind_batches never stores one, so it is looked up
+            # from the stock move `complete_batch` posted rather than guessed at.
+            receipt = stock.list_stock_moves(
+                tenant_id=tenant_id, product_id=product_id, move_type="production",
+                reference=f"work_order:{batch_of_id}", limit=1,
+            )
+            if not receipt:
+                return Err(
+                    "REGRIND_STOCK_MOVE_NOT_FOUND",
+                    f"no stock receipt found for regrind order {batch_of_id}; refusing to force-delete blind",
+                )
+            location_id = receipt[0]["location_id"]
+            quantity = float(actual_output_quantity)
+            reversed_move = stock.post_production_movement(
+                tenant_id=tenant_id, product_id=product_id, location_id=location_id, quantity=quantity,
+                direction="out", correlation_id=correlation_id, reference=f"work_order:{batch_of_id}:reversed",
+                move_type="production_reversal", actor_id=actor_id,
+                source_type="production.regrind_batch", source_id=batch_of_id, of_id=batch_of_id,
+            )
+            if isinstance(reversed_move, Err):
+                return reversed_move
+            reversed_regrind_stock.append(
+                {"work_order_id": batch_of_id, "product_id": product_id, "location_id": location_id, "quantity": quantity}
+            )
+
+        for batch_of_id, _, _, _, _ in batch_rows:
             self._connection.execute(
                 "DELETE FROM production.regrind_batch_inputs WHERE regrind_batch_work_order_id = %s", (batch_of_id,)
             )
@@ -756,16 +860,158 @@ class ProductionReportService:
             )
 
         self._connection.execute("DELETE FROM production.scrap_records WHERE id = ANY(%s)", (scrap_ids,))
-        return Ok(len(scrap_ids))
+        return Ok(
+            {
+                "removed_scrap_records": len(scrap_ids),
+                "reversed_regrind_stock": reversed_regrind_stock,
+                "skip_regrind_rebuild": False,
+            }
+        )
+
+    def _reconcile_closed_regrind_batch(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        header: ProductionReport,
+        force: bool,
+        reason: str | None,
+        new_regrind_quantity: float,
+        batch_rows: list,
+    ) -> Result[dict]:
+        """Compare a correction's rebroyat figure against a closed batch instead of refusing it outright.
+
+        Only a closed batch needs this: an open one never received stock, so it
+        can still be unwound and rebuilt exactly like the normal path. A closed
+        one's output physically exists, so the three ways the figure can move
+        are handled instead of blocked:
+          - unchanged: leave the batch alone.
+          - higher: the batch can't retroactively absorb more input, so a
+            second, independent order is opened for just the difference —
+            confirmed first via `force`, the same gate `delete_report` uses.
+          - lower: the batch already produced and received the larger amount,
+            so on-hand is reduced by the difference instead, carrying the
+            correction's own reason for the audit trail. No confirmation
+            needed: nothing is being destroyed, only reconciled.
+        """
+        closed = [row for row in batch_rows if row[1] == "closed"]
+        other = [row for row in batch_rows if row[1] != "closed"]
+
+        if len(closed) > 1:
+            return Err(
+                "REGRIND_MULTIPLE_CLOSED_BATCHES",
+                "more than one closed rebroyat order is tied to this report; resolve manually",
+            )
+
+        # Any other (non-closed) batch this report opened -- e.g. a still-open
+        # delta order from an earlier correction -- never received stock, so it
+        # is unwound exactly like the normal path.
+        removed_scrap = 0
+        if other:
+            other_scrap_rows = self._connection.execute(
+                """
+                SELECT scrap_record_id FROM production.regrind_batch_inputs
+                WHERE regrind_batch_work_order_id = ANY(%s)
+                """,
+                ([row[0] for row in other],),
+            ).fetchall()
+            other_scrap_ids = [row[0] for row in other_scrap_rows]
+            for batch_of_id, _, _, _, _ in other:
+                self._connection.execute(
+                    "DELETE FROM production.regrind_batch_inputs WHERE regrind_batch_work_order_id = %s",
+                    (batch_of_id,),
+                )
+                self._connection.execute(
+                    "DELETE FROM production.regrind_batches WHERE work_order_id = %s AND tenant_id = %s",
+                    (batch_of_id, tenant_id),
+                )
+                self._connection.execute(
+                    "DELETE FROM production.work_orders WHERE id = %s AND tenant_id = %s", (batch_of_id, tenant_id)
+                )
+            if other_scrap_ids:
+                self._connection.execute("DELETE FROM production.scrap_records WHERE id = ANY(%s)", (other_scrap_ids,))
+            removed_scrap = len(other_scrap_ids)
+
+        if not closed:
+            return Ok({"removed_scrap_records": removed_scrap, "reversed_regrind_stock": [], "skip_regrind_rebuild": False})
+
+        batch_of_id, _, product_id, _, input_quantity_total = closed[0]
+        input_quantity_total = float(input_quantity_total)
+        delta = new_regrind_quantity - input_quantity_total
+
+        if abs(delta) < 1e-6:
+            return Ok({"removed_scrap_records": removed_scrap, "reversed_regrind_stock": [], "skip_regrind_rebuild": True})
+
+        if delta > 0:
+            if not force:
+                return Err(
+                    "REGRIND_DELTA_REQUIRES_NEW_ORDER",
+                    f"the rebroyat order this report opened already ground {input_quantity_total:g} kg and is"
+                    f" closed; the corrected {new_regrind_quantity:g} kg is {delta:g} kg more — confirm to open a"
+                    " new rebroyat order for the difference",
+                )
+            scrap = self._record_regrind_scrap(
+                tenant_id=tenant_id, actor_id=actor_id, header=header, quantity_override=delta
+            )
+            if isinstance(scrap, Err):
+                return scrap
+            if scrap.value is not None:
+                opened = self._open_regrind_order(
+                    tenant_id=tenant_id, actor_id=actor_id, header=header, scrap_record_id=scrap.value
+                )
+                if isinstance(opened, Err):
+                    return opened
+            return Ok({"removed_scrap_records": removed_scrap, "reversed_regrind_stock": [], "skip_regrind_rebuild": True})
+
+        # delta < 0: the closed batch already produced more than the corrected figure calls for.
+        stock = StockService(self._connection)
+        receipt = stock.list_stock_moves(
+            tenant_id=tenant_id, product_id=product_id, move_type="production",
+            reference=f"work_order:{batch_of_id}", limit=1,
+        )
+        if not receipt:
+            return Err(
+                "REGRIND_STOCK_MOVE_NOT_FOUND",
+                f"no stock receipt found for regrind order {batch_of_id}; refusing to adjust stock blind",
+            )
+        location_id = receipt[0]["location_id"]
+        adjusted = stock.adjust_stock(
+            tenant_id=tenant_id, product_id=product_id, location_id=location_id, delta=delta,
+            reason=reason or "production report correction", actor_id=actor_id,
+            reference=f"work_order:{batch_of_id}:report_correction:{header.id}",
+        )
+        if isinstance(adjusted, Err):
+            return adjusted
+        return Ok(
+            {
+                "removed_scrap_records": removed_scrap,
+                "reversed_regrind_stock": [
+                    {"work_order_id": batch_of_id, "product_id": product_id, "location_id": location_id, "quantity": delta}
+                ],
+                "skip_regrind_rebuild": True,
+            }
+        )
 
     def delete_report(
-        self, *, tenant_id: str, actor_id: str, report_id: str, reason: str, correlation_id: str | None = None
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        report_id: str,
+        reason: str,
+        correlation_id: str | None = None,
+        force: bool = False,
     ) -> Result[dict]:
         """Delete a report, undoing whatever it posted.
 
         A reason is mandatory. The row itself is gone afterwards, so the audit
         entry is the only record that it ever existed — it carries the full detail
         and the reason, which is exactly what the audit rule asks of a delete.
+
+        `force` is for the one case that is otherwise refused outright: a daily
+        report whose rebroyat has already been ground and received into stock.
+        Forcing also reverses that receipt and removes the regrind order with the
+        report, rather than leaving stock and a now-deleted report disagreeing.
         """
         if not reason.strip():
             return Err("MISSING_REASON", "deleting a report must record why")
@@ -778,7 +1024,8 @@ class ProductionReportService:
         effects: dict = {}
         if header.status == "validated":
             reversed_effects = self._reverse_validated_effects(
-                tenant_id=tenant_id, actor_id=actor_id, header=header, correlation_id=correlation_id or str(ULID())
+                tenant_id=tenant_id, actor_id=actor_id, header=header,
+                correlation_id=correlation_id or str(ULID()), force=force,
             )
             if isinstance(reversed_effects, Err):
                 return reversed_effects
@@ -806,6 +1053,7 @@ class ProductionReportService:
                 "report_type": header.report_type,
                 "report_date": header.report_date.isoformat(),
                 "status_at_deletion": header.status,
+                "forced": force,
                 "detail": _detail_to_json(detail) if detail is not None else None,
                 **effects,
             },
@@ -821,12 +1069,18 @@ class ProductionReportService:
         detail,
         reason: str,
         correlation_id: str | None = None,
+        force: bool = False,
     ) -> Result[dict]:
         """Change a validated report's figures, reversing and re-posting stock.
 
         The old movements are undone and the new ones posted, so inventory always
         matches the figures that justify it. The correction is appended as a new
         revision with its reason — the team's original submission is never touched.
+
+        `force` only matters for a daily report whose rebroyat opened a regrind
+        order that's already closed, and only when the corrected figure is
+        *higher* than what that order ground — see `_reconcile_closed_regrind_batch`.
+        Everywhere else it's a no-op, same as `delete_report`'s own `force`.
         """
         if not reason.strip():
             return Err("MISSING_REASON", "a correction must record why the figures were changed")
@@ -847,7 +1101,9 @@ class ProductionReportService:
 
         before = self._load_detail(tenant_id=tenant_id, report_id=report_id, report_type=header.report_type)
         reversed_effects = self._reverse_validated_effects(
-            tenant_id=tenant_id, actor_id=actor_id, header=header, correlation_id=correlation_id
+            tenant_id=tenant_id, actor_id=actor_id, header=header, correlation_id=correlation_id, force=force,
+            new_regrind_quantity=detail.regrind_quantity if header.report_type == "daily" else None,
+            reason=reason,
         )
         if isinstance(reversed_effects, Err):
             return reversed_effects
@@ -882,8 +1138,11 @@ class ProductionReportService:
         if isinstance(posted, Err):
             return posted
 
-        # The rebroyat chain is rebuilt from the corrected figures.
-        if header.report_type == "daily":
+        # The rebroyat chain is rebuilt from the corrected figures -- unless
+        # _reverse_validated_effects already reconciled a closed batch itself
+        # (unchanged, a new delta order, or a stock adjustment), in which case
+        # rebuilding it here from scratch would double it up.
+        if header.report_type == "daily" and not reversed_effects.value.get("skip_regrind_rebuild"):
             scrap = self._record_regrind_scrap(tenant_id=tenant_id, actor_id=actor_id, header=header)
             if isinstance(scrap, Err):
                 return scrap
@@ -951,12 +1210,11 @@ class ProductionReportService:
         from modules.production.api.regrind_service import RegrindService
 
         scrap_row = self._connection.execute(
-            "SELECT product_id, quantity FROM production.scrap_records WHERE id = %s AND tenant_id = %s",
+            "SELECT id FROM production.scrap_records WHERE id = %s AND tenant_id = %s",
             (scrap_record_id, tenant_id),
         ).fetchone()
         if scrap_row is None:
             return Err("NOT_FOUND", f"scrap record {scrap_record_id} not found")
-        _input_product_id, quantity = scrap_row
 
         # The output product itself is resolved inside create_regrind_batch, from
         # the tenant-wide regrind default only — never per-input — so this and the
@@ -971,11 +1229,17 @@ class ProductionReportService:
         if work_center_id is None:
             return Err("MISSING_WORK_CENTER", "cannot open a regrind order without a work center")
 
+        # output_quantity is left unset: the scrap this report just wrote is
+        # recorded in whatever unit its own product uses (tonnes for a raw
+        # semolina, kilos for others), which is not necessarily the rebroyat
+        # product's own unit. create_regrind_batch converts it and uses that
+        # as the estimate -- passing this report's raw `quantity` here would
+        # reintroduce the same unit mismatch for the estimate that it now
+        # guards against for input_quantity_total.
         batch = RegrindService(self._connection).create_regrind_batch(
             tenant_id=tenant_id,
             actor_id=actor_id,
             scrap_record_ids=[scrap_record_id],
-            output_quantity=float(quantity),
             work_center_id=work_center_id,
         )
         if isinstance(batch, Err):
@@ -1081,7 +1345,7 @@ class ProductionReportService:
         return row is not None
 
     def _record_regrind_scrap(
-        self, *, tenant_id: str, actor_id: str, header: ProductionReport
+        self, *, tenant_id: str, actor_id: str, header: ProductionReport, quantity_override: float | None = None
     ) -> Result[str | None]:
         """Turn a validated report's rebroyat figure into a scrap record.
 
@@ -1089,33 +1353,51 @@ class ProductionReportService:
         becomes a derived ledger: this is what keeps regrind_batch_inputs supplied
         once the daily report owns the waste figures. Phase 5 additionally opens
         the regrind OF from here.
-        """
-        detail = self._load_daily_detail(tenant_id=tenant_id, report_id=header.id)
-        if detail is None or detail.regrind_quantity <= 0:
-            return Ok(None)
 
-        product_row = self._connection.execute(
-            "SELECT product_id FROM production.work_orders WHERE id = %s AND tenant_id = %s",
+        `quantity_override` is for `_reconcile_closed_regrind_batch`: it records
+        just the delta above an already-closed batch, not the report's full
+        (not-yet-persisted-at-this-point) rebroyat figure.
+        """
+        if quantity_override is None:
+            detail = self._load_daily_detail(tenant_id=tenant_id, report_id=header.id)
+            if detail is None or detail.regrind_quantity <= 0:
+                return Ok(None)
+            quantity = detail.regrind_quantity
+        else:
+            if quantity_override <= 0:
+                return Ok(None)
+            quantity = quantity_override
+
+        order_row = self._connection.execute(
+            "SELECT 1 FROM production.work_orders WHERE id = %s AND tenant_id = %s",
             (header.of_id, tenant_id),
         ).fetchone()
-        if product_row is None:
+        if order_row is None:
             return Err("NOT_FOUND", f"work order {header.of_id} not found")
-
-        # The report says what its rebroyat is; the OF's finished product is
-        # only the fallback for reports written before the field existed. It
-        # was never right -- a wrapped 500g packet is not what goes back
-        # through the mill -- but it is what those reports recorded, and
-        # rewriting them here would change history rather than describe it.
-        scrap_product_id = (detail.regrind_product_id or "").strip() or product_row[0]
-        if not scrap_product_id:
-            return Err(
-                "MISSING_REGRIND_PRODUCT",
-                "this work order has no product yet and the report does not name a regrind product",
-            )
 
         # Imported here rather than at module scope: regrind_service imports the
         # work order service, and a top-level import would close the cycle.
-        from modules.production.api.regrind_service import ScrapService
+        from modules.production.api.regrind_service import RegrindDefaultsService, ScrapService
+
+        # Always the tenant's one rebroyat product -- never `detail.regrind_product_id`
+        # (a free pick the report author made, typically the raw semolina actually
+        # in use that shift) and never the OF's finished product (a wrapped 500g
+        # packet is not what goes back through the mill). Every regrind batch
+        # resolves to this same single product regardless of what fed it (see
+        # RegrindService.create_regrind_batch), so recording the scrap against
+        # anything else only invited a mismatched unit -- raw semolina is bought
+        # by the tonne, rebroyat is weighed in kg, and that exact mismatch is
+        # what caused the 1000x scale bug scripts/fix_regrind_batch_scale*.py
+        # corrected. `detail.regrind_product_id` is kept only as an informational
+        # field on the report itself (see of_consolidation_service.py).
+        scrap_product_id = RegrindDefaultsService(self._connection).resolve_output_product(
+            tenant_id=tenant_id, input_product_id=None
+        )
+        if scrap_product_id is None:
+            return Err(
+                "REGRIND_DEFAULT_MISSING",
+                "no regrind output product is configured — set one in Production Settings before regrinding",
+            )
 
         scrap = ScrapService(self._connection).record_scrap(
             tenant_id=tenant_id,
@@ -1124,7 +1406,7 @@ class ProductionReportService:
             work_center_id=header.work_center_id,
             scrap_type="daily_report",
             product_id=scrap_product_id,
-            quantity=detail.regrind_quantity,
+            quantity=quantity,
             source_note=f"daily report {header.id} revision {header.revision}",
         )
         if isinstance(scrap, Err):
@@ -1190,6 +1472,8 @@ class ProductionReportService:
             detail.mold_id,
             detail.water_percentage,
             detail.semolina_flow_rate,
+            detail.fuel_supplier_id,
+            detail.gasoil_supplier_id,
         )
 
     def _write_revision(

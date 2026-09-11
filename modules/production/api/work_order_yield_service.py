@@ -9,13 +9,26 @@ class WorkOrderYieldService:
     Every term now comes from the OF's **validated** reports rather than from
     columns cached on the order:
 
-    * finished product — the sum of the conditionnement reports, which is the
-      tonnage that actually became sellable stock. Rebroyat generated during the
-      shift is waste recorded separately, not counted as output here;
+    * finished product — the sum of the daily reports' own Produit fini figure,
+      the tonnage off the scale at the press (see the daily_reports migration
+      comment: "feeds yield and consolidation only"). Not the conditionnement
+      reports' tonnage — packaging can lag the press by days, and a yield that
+      waits on it tells the plant nothing while the shift can still act;
     * material poured in — the daily reports' semoule figures (one term per
       report — semoule_x + semoule_y + ... across every validated shift) plus
       the rebroyat poured back into the mix. That is everything that went into
       the line, fresh or recycled.
+
+    Semoule's own raw stored number needs no restating: it's already the basis
+    `finished_product_quantity` implicitly uses (tonnes, for this tenant).
+    Rebroyat poured back in is a different story: it is normally stocked in
+    kg, but a report can name a raw material bought in a different unit
+    instead, and summing that raw number alongside semoule inflated old OFs'
+    yield denominator by up to 1000x. Restated against the OF's own semoule
+    unit before it joins the sum -- not a fixed unit, since a test fixture and
+    this tenant's real data don't agree on one; see regrind_service
+    .create_regrind_batch's scrap intake for the same anchor-to-a-reference-
+    product fix applied earlier to the batch side of the same chain.
 
     Nothing is persisted, matching the convention already used for regrind's
     loss_quantity. Yield is available while an OF is still running — it simply
@@ -40,15 +53,45 @@ class WorkOrderYieldService:
 
         rows = self._connection.execute(
             f"""
+            WITH sem_ratio AS (
+                -- Each OF's own semoule unit, when its qualities agree on one --
+                -- null otherwise, which leaves rebroyat unconverted below, same
+                -- as before this fix. Anchoring to what this OF actually bought
+                -- rather than to a fixed unit is what keeps a kg-uniform test
+                -- fixture and a tonne-buying real tenant both correct.
+                SELECT r2.of_id,
+                       CASE WHEN COUNT(DISTINCT u2.ratio_to_base) = 1 THEN MIN(u2.ratio_to_base) END AS ratio_to_base
+                FROM production.report_semolina_lines sl2
+                JOIN production.production_reports r2 ON r2.id = sl2.report_id AND r2.tenant_id = sl2.tenant_id
+                LEFT JOIN core.products p2 ON p2.id = sl2.product_id AND p2.tenant_id = r2.tenant_id
+                LEFT JOIN core.uoms u2 ON u2.id = p2.uom_id AND u2.tenant_id = p2.tenant_id
+                WHERE r2.tenant_id = %s AND r2.status = 'validated'
+                GROUP BY r2.of_id
+            )
             SELECT r.of_id,
-                   COALESCE(SUM(sl.total_quantity), 0) + COALESCE(SUM(d.regrind_input_quantity), 0),
+                   COALESCE(SUM(sl.total_quantity), 0)
+                       + COALESCE(SUM(
+                           d.regrind_input_quantity
+                           * COALESCE(riu.ratio_to_base, COALESCE(sr.ratio_to_base, 1))
+                           / COALESCE(sr.ratio_to_base, 1)
+                       ), 0),
                    COALESCE(SUM(d.regrind_quantity), 0),
-                   COALESCE(SUM(c.finished_product_quantity), 0)
+                   COALESCE(SUM(d.finished_product_quantity), 0)
             FROM production.production_reports r
             LEFT JOIN production.daily_reports d
                    ON d.report_id = r.id AND d.tenant_id = r.tenant_id
-            LEFT JOIN production.conditionnement_reports c
-                   ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+            -- Rebroyat poured back in is weighed against whatever product the
+            -- report names for it -- the dedicated rebroyat product most of
+            -- the time, but an old report can name a raw material bought in a
+            -- different unit instead. Restated against this OF's own semoule
+            -- unit (sem_ratio, joined below) so material_input adds like with
+            -- like. Same fix as regrind_service.create_regrind_batch's scrap
+            -- intake, which anchors to the output product instead.
+            LEFT JOIN core.products rip
+                   ON rip.id = d.regrind_input_product_id AND rip.tenant_id = r.tenant_id
+            LEFT JOIN core.uoms riu
+                   ON riu.id = rip.uom_id AND riu.tenant_id = rip.tenant_id
+            LEFT JOIN sem_ratio sr ON sr.of_id = r.of_id
             -- Pre-aggregated per report before joining: a report can carry
             -- several semoule lines, and joining that many-rows table straight
             -- in would multiply every other summed column by the line count.
@@ -58,9 +101,9 @@ class WorkOrderYieldService:
                 GROUP BY report_id, tenant_id
             ) sl ON sl.report_id = r.id AND sl.tenant_id = r.tenant_id
             WHERE {' AND '.join(clauses)}
-            GROUP BY r.of_id
+            GROUP BY r.of_id, sr.ratio_to_base
             """,
-            params,
+            [tenant_id, *params],
         ).fetchall()
         return {
             of_id: {
@@ -114,26 +157,47 @@ class WorkOrderYieldService:
         a finer one would need a new per-shift output figure that does not
         exist. Rows with nothing dosed or metered yet are left out, same as a
         yield with no semoule poured.
+
+        Also carries the OF's recipe's own water line (min/max/default %),
+        when it has one classified is_water, so a caller can flag a shift
+        whose water_percentage drifted from what the formula actually calls
+        for — recipe_check_service never covers this: it compares poured
+        *quantities* against the mix, and water is dosed as a bare percentage
+        with no quantity of its own to compare.
         """
         rows = self._connection.execute(
             """
-            SELECT r.id, r.of_id, w.product_id, d.water_percentage, d.semolina_flow_rate
+            WITH water_line AS (
+                SELECT rl.recipe_id,
+                       MIN(rl.min_percentage) AS min_percentage,
+                       MIN(rl.max_percentage) AS max_percentage,
+                       MIN(rl.default_percentage) AS default_percentage
+                FROM production.recipe_lines rl
+                JOIN production.product_classifications pc
+                     ON pc.product_id = rl.component_product_id AND pc.tenant_id = rl.tenant_id AND pc.is_water
+                WHERE rl.tenant_id = %s
+                GROUP BY rl.recipe_id
+            )
+            SELECT r.id, r.of_id, w.product_id, r.report_date, r.team,
+                   d.water_percentage, d.semolina_flow_rate,
+                   wl.min_percentage, wl.max_percentage, wl.default_percentage
             FROM production.production_reports r
             JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
             JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
+            LEFT JOIN water_line wl ON wl.recipe_id = w.recipe_id
             WHERE r.tenant_id = %s AND r.status = 'validated'
               AND (d.water_percentage > 0 OR d.semolina_flow_rate > 0)
             """,
-            (tenant_id,),
+            (tenant_id, tenant_id),
         ).fetchall()
         if not rows:
             return []
 
-        of_ids = list({of_id for _, of_id, *_rest in rows})
+        of_ids = list({row[1] for row in rows})
         totals = self._totals_by_work_order(tenant_id, of_ids)
 
         results = []
-        for report_id, of_id, product_id, water_percentage, semolina_flow_rate in rows:
+        for report_id, of_id, product_id, report_date, team, water_percentage, semolina_flow_rate, water_min, water_max, water_default in rows:
             computed = self._to_result(of_id, totals[of_id]) if of_id in totals else None
             if computed is None:
                 continue
@@ -142,9 +206,14 @@ class WorkOrderYieldService:
                     "report_id": report_id,
                     "of_id": of_id,
                     "product_id": product_id,
+                    "report_date": report_date.isoformat(),
+                    "team": team,
                     "water_percentage": float(water_percentage) if water_percentage is not None else None,
                     "semolina_flow_rate": float(semolina_flow_rate) if semolina_flow_rate is not None else None,
                     "yield_ratio": computed["yield_ratio"],
+                    "water_target_min": float(water_min) if water_min is not None else None,
+                    "water_target_max": float(water_max) if water_max is not None else None,
+                    "water_target_default": float(water_default) if water_default is not None else None,
                 }
             )
         return results

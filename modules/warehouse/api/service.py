@@ -677,6 +677,7 @@ class StockService:
         delta: float,
         reason: str,
         actor_id: str | None = None,
+        reference: str = "manual_adjustment",
     ) -> Result[StockLevel]:
         """Records an "ajustement" — a manual correction to on-hand quantity (e.g. a physical count)."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=delta)
@@ -718,7 +719,7 @@ class StockService:
             INSERT INTO warehouse.stock_moves (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id, reason)
             VALUES (%s, %s, %s, %s, %s, 'adjustment', %s, %s, %s)
             """,
-            (str(ULID()), tenant_id, location_id, product_id, delta, "manual_adjustment", actor_id, reason),
+            (str(ULID()), tenant_id, location_id, product_id, delta, reference, actor_id, reason),
         )
         return result
 
@@ -729,6 +730,7 @@ class StockService:
         location_id: str | None = None,
         product_id: str | None = None,
         move_type: str | None = None,
+        reference: str | None = None,
         limit: int = 200,
     ) -> list[dict]:
         clauses = ["tenant_id = %s"]
@@ -742,11 +744,14 @@ class StockService:
         if move_type is not None:
             clauses.append("move_type = %s")
             params.append(move_type)
+        if reference is not None:
+            clauses.append("reference = %s")
+            params.append(reference)
         params.append(limit)
 
         rows = self._connection.execute(
             f"""
-            SELECT id, location_id, product_id, quantity, move_type, reference, actor_id, reason, created_at
+            SELECT id, location_id, product_id, quantity, move_type, reference, actor_id, reason, created_at, of_id
             FROM warehouse.stock_moves
             WHERE {' AND '.join(clauses)}
             ORDER BY created_at DESC
@@ -765,8 +770,9 @@ class StockService:
                 "actor_id": actor_id,
                 "reason": reason,
                 "created_at": created_at.isoformat(),
+                "of_id": of_id,
             }
-            for mid, location_id, product_id, quantity, move_type, reference, actor_id, reason, created_at in rows
+            for mid, location_id, product_id, quantity, move_type, reference, actor_id, reason, created_at, of_id in rows
         ]
 
     def transfer_stock(

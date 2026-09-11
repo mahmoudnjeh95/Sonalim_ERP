@@ -13,7 +13,7 @@ from core.events.outbox import publish_event
 from modules.production.domain.entities import VALID_TRANSITIONS, WorkOrder, transition
 
 _WORK_ORDER_COLUMNS = """
-    id, reference, product_id, planned_quantity, status, work_center_id, recipe_id,
+    id, reference, product_id, planned_quantity, status, work_center_id, supervisor_id, recipe_id,
     packaging_bom_id, start_date, product_type, notes, created_by, closed_at, closed_by
 """
 
@@ -26,6 +26,7 @@ def _row_to_work_order(row: tuple) -> WorkOrder:
         planned_quantity,
         status,
         work_center_id,
+        supervisor_id,
         recipe_id,
         packaging_bom_id,
         start_date,
@@ -42,6 +43,7 @@ def _row_to_work_order(row: tuple) -> WorkOrder:
         planned_quantity=float(planned_quantity) if planned_quantity is not None else None,
         status=status,
         work_center_id=work_center_id,
+        supervisor_id=supervisor_id,
         recipe_id=recipe_id,
         packaging_bom_id=packaging_bom_id,
         start_date=start_date,
@@ -79,6 +81,9 @@ class WorkOrderService:
         # Decision 15: the OF's work center is required and always asked for
         # directly — no other field on this order resolves it implicitly.
         work_center_id: str | None = None,
+        # Optional: the user responsible for this OF. Unlike work_center_id this
+        # is never required to create an order.
+        supervisor_id: str | None = None,
         recipe_id: str | None = None,
         packaging_bom_id: str | None = None,
         start_date: datetime.date | None = None,
@@ -86,6 +91,15 @@ class WorkOrderService:
         notes: str | None = None,
         poured_inputs: list[tuple[str, float]] | None = None,
         poured_inputs_location_id: str | None = None,
+        # A regrind batch is created through this same method (see
+        # RegrindService.create_regrind_batch) but must never be numbered out of
+        # the same counter as a production order — the two used to share
+        # "production.work_orders" / "OF-" and came out interleaved and visually
+        # identical (both "OF-000045"). The caller names its own counter and
+        # prefix; production's is the default so every existing call site keeps
+        # counting from where it already was.
+        reference_sequence: str = "production.work_orders",
+        reference_prefix: str = "OF-",
     ) -> Result[WorkOrder]:
         if planned_quantity is not None and planned_quantity <= 0:
             return Err("INVALID_QUANTITY", "planned quantity must be positive")
@@ -97,13 +111,13 @@ class WorkOrderService:
             return Err("MISSING_POURED_INPUTS_LOCATION", "poured_inputs_location_id is required when poured_inputs is provided")
 
         work_order_id = str(ULID())
-        reference = next_sequence_value(self._connection, tenant_id=tenant_id, name="production.work_orders", prefix="OF-")
+        reference = next_sequence_value(self._connection, tenant_id=tenant_id, name=reference_sequence, prefix=reference_prefix)
         self._connection.execute(
             """
             INSERT INTO production.work_orders
-                (id, tenant_id, reference, product_id, planned_quantity, status, work_center_id,
+                (id, tenant_id, reference, product_id, planned_quantity, status, work_center_id, supervisor_id,
                  recipe_id, packaging_bom_id, start_date, product_type, notes, created_by)
-            VALUES (%s, %s, %s, %s, %s, 'planned', %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, 'planned', %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 work_order_id,
@@ -112,6 +126,7 @@ class WorkOrderService:
                 product_id,
                 planned_quantity,
                 work_center_id,
+                supervisor_id,
                 recipe_id,
                 packaging_bom_id,
                 start_date,
@@ -164,6 +179,7 @@ class WorkOrderService:
                 "product_id": product_id,
                 "planned_quantity": planned_quantity,
                 "work_center_id": work_center_id,
+                "supervisor_id": supervisor_id,
                 "start_date": start_date.isoformat() if start_date is not None else None,
                 "product_type": product_type,
                 "poured_inputs": [{"product_id": p, "quantity": q} for p, q in poured_inputs],
@@ -177,6 +193,7 @@ class WorkOrderService:
                 status="planned",
                 reference=reference,
                 work_center_id=work_center_id,
+                supervisor_id=supervisor_id,
                 recipe_id=recipe_id,
                 packaging_bom_id=packaging_bom_id,
                 start_date=start_date,
@@ -223,6 +240,27 @@ class WorkOrderService:
                 (tenant_id,),
             ).fetchall()
         return [_row_to_work_order(row) for row in rows]
+
+    def list_supervisor_options(self, *, tenant_id: str) -> list[dict]:
+        """Users who can be named as an OF's supervisor.
+
+        Scoped to the "Production" role (core.roles code 'production') rather
+        than every user in the tenant, so Finance/CRM/etc. accounts never show
+        up in this picker. full_name is set via Admin > Users; a user with none
+        on file yet falls back to email everywhere this is displayed.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT DISTINCT u.id, u.email, u.full_name
+            FROM core.users u
+            JOIN core.user_roles ur ON ur.user_id = u.id
+            JOIN core.roles r ON r.id = ur.role_id
+            WHERE u.tenant_id = %s AND r.tenant_id = %s AND r.code = 'production'
+            ORDER BY u.email
+            """,
+            (tenant_id, tenant_id),
+        ).fetchall()
+        return [{"id": row[0], "email": row[1], "full_name": row[2]} for row in rows]
 
     def get_work_order(self, *, tenant_id: str, work_order_id: str) -> WorkOrder | None:
         row = self._connection.execute(
@@ -283,6 +321,7 @@ class WorkOrderService:
         product_id: str | None = None,
         planned_quantity: float | None = None,
         work_center_id: str | None = None,
+        supervisor_id: str | None = None,
         recipe_id: str | None = None,
         packaging_bom_id: str | None = None,
         start_date: datetime.date | None = None,
@@ -298,6 +337,7 @@ class WorkOrderService:
         if updated_quantity is not None and updated_quantity <= 0:
             return Err("INVALID_QUANTITY", "planned quantity must be positive")
         updated_work_center_id = work_center_id if work_center_id is not None else current.work_center_id
+        updated_supervisor_id = supervisor_id if supervisor_id is not None else current.supervisor_id
         updated_recipe_id = recipe_id if recipe_id is not None else current.recipe_id
         updated_packaging_bom_id = packaging_bom_id if packaging_bom_id is not None else current.packaging_bom_id
         updated_start_date = start_date if start_date is not None else current.start_date
@@ -307,14 +347,15 @@ class WorkOrderService:
         self._connection.execute(
             """
             UPDATE production.work_orders
-            SET product_id = %s, planned_quantity = %s, work_center_id = %s, recipe_id = %s, packaging_bom_id = %s,
-                start_date = %s, product_type = %s, notes = %s
+            SET product_id = %s, planned_quantity = %s, work_center_id = %s, supervisor_id = %s, recipe_id = %s,
+                packaging_bom_id = %s, start_date = %s, product_type = %s, notes = %s
             WHERE id = %s
             """,
             (
                 updated_product_id,
                 updated_quantity,
                 updated_work_center_id,
+                updated_supervisor_id,
                 updated_recipe_id,
                 updated_packaging_bom_id,
                 updated_start_date,
@@ -334,6 +375,7 @@ class WorkOrderService:
                 "product_id": updated_product_id,
                 "planned_quantity": updated_quantity,
                 "work_center_id": updated_work_center_id,
+                "supervisor_id": updated_supervisor_id,
                 "recipe_id": updated_recipe_id,
                 "packaging_bom_id": updated_packaging_bom_id,
                 "start_date": updated_start_date.isoformat() if updated_start_date is not None else None,
@@ -348,6 +390,7 @@ class WorkOrderService:
                 status=current.status,
                 reference=current.reference,
                 work_center_id=updated_work_center_id,
+                supervisor_id=updated_supervisor_id,
                 recipe_id=updated_recipe_id,
                 packaging_bom_id=updated_packaging_bom_id,
                 start_date=updated_start_date,

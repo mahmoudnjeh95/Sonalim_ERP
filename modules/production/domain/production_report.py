@@ -30,6 +30,12 @@ class ProductionReport:
     revision: int
     team: str | None = None
     work_center_id: str | None = None
+    # Which physical machine within work_center_id ran this shift. Opaque
+    # reference into maintenance.equipment -- a line can carry more than one
+    # machine at once, so the line alone cannot tell them apart for productivity
+    # reporting. Set at creation only, same as work_center_id/team/shift, and
+    # required before a report can be submitted -- see submit_report.
+    equipment_id: str | None = None
     shift: str | None = None
     created_by: str | None = None
     submitted_at: datetime.datetime | None = None
@@ -137,9 +143,16 @@ class DailyReportDetail:
     # statistics too -- see PRODUCTION_RECIPE_STATISTICS_PLAN.md.
     water_percentage: float = 0
     fuel_quantity: float = 0
+    # Which fournisseur this shift's fioul came from. Fuel is never posted to
+    # stock (see the daily_reports migration comment), so this is informational
+    # only -- there is no lot or purchase order behind it, just the plant's own
+    # record of who delivered it, because more than one supplier can deliver it.
+    fuel_supplier_id: str | None = None
     # Gasoil (diesel) -- a separate fuel from fuel_quantity (fioul), tracked
     # alongside it rather than folded into it.
     gasoil_quantity: float = 0
+    # Same informational purpose as fuel_supplier_id, for gasoil's own fournisseur.
+    gasoil_supplier_id: str | None = None
     electricity_quantity: float = 0
     # Débit de semoule: how fast semoule was fed into the line, tonnes/hour.
     # Recorded only, for the same future statistics.
@@ -163,10 +176,13 @@ class DailyReportDetail:
     # list would have nothing to enumerate.
     regrind_input_quantity: float = 0
     regrind_input_product_id: str | None = None
-    # What this shift's rebroyat *is*. The scrap record and the regrind OF are
-    # opened against it, and it is what gives the figure a unit -- rebroyat is
-    # weighed, not counted in packets. None falls back to the OF's finished
-    # product, which is what happened before this field existed.
+    # Informational only: the scrap record _record_regrind_scrap opens for this
+    # figure always uses the tenant's one rebroyat product (production.regrind_
+    # defaults, input_product_id IS NULL), never this field -- letting a report
+    # name a different product here used to be how a purchased raw material's
+    # identity (and its own unit, e.g. tonnes) ended up on a rebroyat scrap
+    # record meant to be weighed in kg. Kept only for the OF-consolidation
+    # display (of_consolidation_service.py).
     regrind_product_id: str | None = None
     # Which mold this shift ran. Named per report, not on the OF: an order can
     # span several shifts and several molds over its life.
@@ -199,8 +215,22 @@ class ConditionnementReportDetail:
     film_product_id: str | None = None
     carton_product_id: str | None = None
     tape_product_id: str | None = None
+    # Which fournisseur each packaging item came from. Informational only, like
+    # fuel/gasoil_supplier_id on the daily report: film, carton and ruban can each
+    # come from more than one supplier, and stock itself does not split by
+    # supplier, so this is the report's own record of who delivered the batch
+    # actually consumed rather than a stock lot reference.
+    film_supplier_id: str | None = None
+    carton_supplier_id: str | None = None
+    tape_supplier_id: str | None = None
     packaging_location_id: str | None = None
     finished_goods_location_id: str | None = None
+    # The daily report whose output this run packaged. Always optional: a team
+    # may file conditionnement before that day's daily report exists, or
+    # package previously stored product with no same-shift daily report at
+    # all. Not a stock target -- it powers traceability (qc's inspection hint)
+    # rather than gating what can be posted.
+    daily_report_id: str | None = None
     waste_lines: tuple[WasteLine, ...] = ()
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import psycopg
 
 from core.domain.result import Err, Ok, Result
+from modules.production.domain.packaging_estimate import finished_quantity_from_count
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     DailyReportDetail,
@@ -211,11 +212,15 @@ class ReportStockService:
         # Decision 24. A carton tier makes the carton count the source of truth —
         # only a closed carton is finished goods ready to move. `packets_counted`
         # is the fallback for a sac (no carton tier) or a report nobody has
-        # boxed yet.
-        if packets_per_carton and packets_per_carton > 0 and detail.carton_quantity > 0:
-            finished_quantity = detail.carton_quantity * packets_per_carton
-        else:
-            finished_quantity = detail.packets_counted
+        # boxed yet. Shared with the tonnage this same count feeds into
+        # `finished_product_quantity` (`conditionnement_service.freeze_packaging_
+        # parameters`), so the stock quantity and the tonnage can never disagree
+        # about which count led.
+        finished_quantity = finished_quantity_from_count(
+            packets_per_carton=packets_per_carton,
+            carton_quantity=detail.carton_quantity,
+            packets_counted=detail.packets_counted,
+        )
 
         if finished_quantity > 0:
             received = self._stock.post_production_movement(

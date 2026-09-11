@@ -47,4 +47,12 @@ body {
   .scrollbar-thin::-webkit-scrollbar-thumb {
     @apply rounded-full bg-border;
   }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar {
+    display: none;
+  }
 }

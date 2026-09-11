@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { Boxes, CheckCircle2, Package, Pencil, Plus, Send } from "lucide-react";
+import { Boxes, CheckCircle2, History, Package, Pencil, Plus, Send, Sparkles, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
@@ -14,6 +14,7 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
+import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { Skeleton } from "../../components/ui/skeleton";
@@ -49,6 +50,7 @@ import {
   deleteReport,
   getReport,
   getReportPackagingVariance,
+  listMachines,
   listProducts,
   listReports,
   listWorkOrders,
@@ -58,7 +60,8 @@ import {
   type ProductionReport,
   type ReportStatus,
 } from "./api";
-import { listLocations, listUoms } from "../warehouse/api";
+import { listLocations, listSuggestedVendors, listUoms, type SuggestedVendor } from "../warehouse/api";
+import { listPartners, type Partner } from "../partners/api";
 import { productUnit, formatQuantity } from "../../lib/units";
 import { PackagingVariancePanel } from "./PackagingVariancePanel";
 
@@ -72,10 +75,13 @@ const detailSchema = z.object({
   finished_goods_location_id: z.string().optional(),
   film_quantity: z.coerce.number().min(0),
   film_product_id: z.string().optional(),
+  film_supplier_id: z.string().optional(),
   carton_quantity: z.coerce.number().min(0),
   carton_product_id: z.string().optional(),
+  carton_supplier_id: z.string().optional(),
   tape_quantity: z.coerce.number().min(0),
   tape_product_id: z.string().optional(),
+  tape_supplier_id: z.string().optional(),
   packaging_location_id: z.string().optional(),
   // Déchets. A list, so scotch -- which had no column at all -- can finally
   // be recorded, and every figure names the item that gives it a unit.
@@ -103,6 +109,14 @@ const createSchema = detailSchema.extend({
   // Only required when the chosen order has no product yet — this report is
   // then what names one.
   product_id: z.string().optional(),
+  // Which machine within the OF's line ran this shift. Optional here (a
+  // draft may be saved before the team knows) but required to submit.
+  equipment_id: z.string().optional(),
+  // The daily report whose output this run packaged. Always optional -- a
+  // team may file conditionnement before that day's daily report exists --
+  // but it's what lets QC see packets/cartons/regrind as a hint when they
+  // later pick this run to inspect.
+  daily_report_id: z.string().optional(),
 });
 type CreateForm = z.infer<typeof createSchema>;
 
@@ -111,6 +125,8 @@ const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
+const MACHINES_QUERY_KEY = ["production", "machines", "all"] as const;
+const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 
 type StatusFilter = "all" | ReportStatus;
 
@@ -119,10 +135,13 @@ const EMPTY_DETAIL = {
   finished_goods_location_id: "",
   film_quantity: 0,
   film_product_id: "",
+  film_supplier_id: "",
   carton_quantity: 0,
   carton_product_id: "",
+  carton_supplier_id: "",
   tape_quantity: 0,
   tape_product_id: "",
+  tape_supplier_id: "",
   packaging_location_id: "",
   waste_lines: [] as WasteLineForm<"product" | "packaging">[],
   machine_speed: undefined,
@@ -131,6 +150,7 @@ const EMPTY_DETAIL = {
   downtime_reason: "",
   lot_number: "",
   dlc_date: "",
+  daily_report_id: "",
 };
 
 function todayIso() {
@@ -143,10 +163,13 @@ function toDetail(input: CreateForm): Partial<ConditionnementReportDetail> {
     finished_goods_location_id: input.finished_goods_location_id || undefined,
     film_quantity: input.film_quantity,
     film_product_id: input.film_product_id || undefined,
+    film_supplier_id: input.film_supplier_id || undefined,
     carton_quantity: input.carton_quantity,
     carton_product_id: input.carton_product_id || undefined,
+    carton_supplier_id: input.carton_supplier_id || undefined,
     tape_quantity: input.tape_quantity,
     tape_product_id: input.tape_product_id || undefined,
+    tape_supplier_id: input.tape_supplier_id || undefined,
     packaging_location_id: input.packaging_location_id || undefined,
     waste_lines: fromWasteLineForms(input.waste_lines),
     machine_speed: input.machine_speed,
@@ -155,6 +178,7 @@ function toDetail(input: CreateForm): Partial<ConditionnementReportDetail> {
     downtime_reason: input.downtime_reason || undefined,
     lot_number: input.lot_number || undefined,
     dlc_date: input.dlc_date || undefined,
+    daily_report_id: input.daily_report_id || undefined,
   } as Partial<ConditionnementReportDetail>;
 }
 
@@ -165,12 +189,16 @@ export function ConditionnementTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [editingId, setEditingId] = useState<string | null>(null);
   const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
+  const [openMode, setOpenMode] = useState<"view" | "edit" | "history" | "delete">("view");
   // Which report is open lives in the URL as well as in state, so the OF
   // details page can link straight to one instead of landing on the list.
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedId = searchParams.get("report");
+  function openReportAt(report: ProductionReport, mode: "view" | "edit" | "history" | "delete") {
+    setOpenReport(report);
+    setOpenMode(mode);
+  }
 
   const { data: reports = [], isLoading } = useQuery({
     queryKey: QUERY_KEY,
@@ -186,6 +214,16 @@ export function ConditionnementTab() {
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
+  const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
+  const suppliers = partners.filter((p) => p.kind === "supplier" || p.kind === "both");
+  // Tenant-wide, for resolving a report's equipment_id to a name in the table —
+  // distinct from the create form's own line-scoped machines query below.
+  const { data: allMachines = [] } = useQuery({ queryKey: MACHINES_QUERY_KEY, queryFn: () => listMachines(token) });
+  const machineLabel = (machineId: string | null) => {
+    if (!machineId) return "—";
+    const machine = allMachines.find((m) => m.id === machineId);
+    return machine ? `${machine.code} — ${machine.name}` : "—";
+  };
 
   const openWorkOrders = workOrders.filter((o) => ["planned", "ongoing", "suspended"].includes(o.status));
   const referenceOf = (ofId: string) => workOrders.find((o) => o.id === ofId)?.reference ?? ofId;
@@ -195,10 +233,25 @@ export function ConditionnementTab() {
 
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
-    defaultValues: { of_id: "", report_date: todayIso(), team: "", shift: "", product_id: "", ...EMPTY_DETAIL },
+    defaultValues: { of_id: "", report_date: todayIso(), team: "", shift: "", product_id: "", equipment_id: "", ...EMPTY_DETAIL },
   });
   const selectedOfId = form.watch("of_id");
   const selectedOrderHasNoProduct = !!selectedOfId && !workOrders.find((o) => o.id === selectedOfId)?.product_id;
+  // Machines the chosen OF's line can be attributed to — a line like Line_1_PL
+  // can carry more than one at once, so the report must say which one it ran on.
+  const selectedWorkCenterId = workOrders.find((o) => o.id === selectedOfId)?.work_center_id;
+  const { data: machines = [] } = useQuery({
+    queryKey: ["production", "machines", selectedWorkCenterId],
+    queryFn: () => listMachines(token, selectedWorkCenterId!),
+    enabled: !!selectedWorkCenterId,
+  });
+  // The chosen OF's daily reports, to link this packing run back to the one
+  // whose output it packaged — see daily_report_id's docstring.
+  const { data: dailyReports = [] } = useQuery({
+    queryKey: ["production", "reports", "daily", selectedOfId],
+    queryFn: () => listReports(token, { of_id: selectedOfId, report_type: "daily" }),
+    enabled: !!selectedOfId,
+  });
 
   const createMutation = useMutation({
     mutationFn: (input: CreateForm) =>
@@ -208,12 +261,13 @@ export function ConditionnementTab() {
         team: input.team || undefined,
         shift: input.shift || undefined,
         product_id: input.product_id || undefined,
+        equipment_id: input.equipment_id || undefined,
         detail: toDetail(input),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      form.reset({ of_id: "", report_date: todayIso(), team: "", shift: "", product_id: "", ...EMPTY_DETAIL });
+      form.reset({ of_id: "", report_date: todayIso(), team: "", shift: "", product_id: "", equipment_id: "", ...EMPTY_DETAIL });
       toast.success(t("production.conditionnement.created"));
     },
     onError: (error) => {
@@ -241,6 +295,7 @@ export function ConditionnementTab() {
     { key: "date", kind: "text", getValue: (r) => r.report_date },
     { key: "team", kind: "text", getValue: (r) => r.team },
     { key: "shift", kind: "text", getValue: (r) => r.shift },
+    { key: "machine", kind: "text", getValue: (r) => machineLabel(r.equipment_id) },
   ];
   const columnFilters = useColumnFilters<ProductionReport>(filterFields);
   const visible = columnFilters.apply(
@@ -301,6 +356,19 @@ export function ConditionnementTab() {
       sortValue: (r) => r.shift,
     },
     {
+      key: "machine",
+      header: t("production.reports.column.machine"),
+      defaultWidth: 160,
+      cell: (r) => <span className="text-muted-foreground">{machineLabel(r.equipment_id)}</span>,
+      filterCell: {
+        type: "text",
+        placeholder: t("common.filter"),
+        value: columnFilters.text.machine ?? "",
+        onChange: (v) => columnFilters.setTextValue("machine", v),
+      },
+      sortValue: (r) => machineLabel(r.equipment_id),
+    },
+    {
       key: "status",
       header: t("production.reports.column.status"),
       defaultWidth: 130,
@@ -319,12 +387,7 @@ export function ConditionnementTab() {
       cell: (r) => (
         <PackingRowActions
           report={r}
-          products={products}
-          locations={locations}
-          uoms={uoms}
-          finishedProductId={productOfOrder(r.of_id)}
-          isEditing={editingId === r.id}
-          onOpenEdit={(open) => setEditingId(open ? r.id : null)}
+          onOpenReport={(mode) => openReportAt(r, mode)}
           onSubmitReport={() => submitMutation.mutate(r.id)}
           isSubmitting={submitMutation.isPending && submitMutation.variables === r.id}
         />
@@ -432,6 +495,20 @@ export function ConditionnementTab() {
                         teamField={form.register("team")}
                         shiftField={form.register("shift")}
                       />
+                      <div className="space-y-1.5">
+                        <Label htmlFor="c_equipment_id" className="flex items-center gap-1">
+                          {t("production.reports.field.machine")}
+                          <HelpTooltip text={t("production.reports.help.machine")} />
+                        </Label>
+                        <Select id="c_equipment_id" {...form.register("equipment_id")} disabled={!selectedWorkCenterId}>
+                          <option value="">—</option>
+                          {machines.map((m) => (
+                            <option key={m.id} value={m.id}>
+                              {m.code} — {m.name}
+                            </option>
+                          ))}
+                        </Select>
+                      </div>
                     </div>
                     {selectedOrderHasNoProduct && (
                       <div className="space-y-1.5 rounded-lg border border-border bg-muted/30 p-3">
@@ -456,6 +533,8 @@ export function ConditionnementTab() {
                 locations={locations}
                 uoms={uoms}
                 finishedProductId={productOfOrder(form.watch("of_id"))}
+                suppliers={suppliers}
+                dailyReports={dailyReports}
               />
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                       {createMutation.isPending ? t("common.saving") : t("production.conditionnement.create")}
@@ -507,7 +586,7 @@ export function ConditionnementTab() {
                       animate={{ opacity: 1 }}
                       exit={{ opacity: 0 }}
                       className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                      onClick={() => setOpenReport(report)}
+                      onClick={() => openReportAt(report, "view")}
                     >
                       {table.visibleColumns.map((column) => (
                         <TableCell
@@ -529,14 +608,21 @@ export function ConditionnementTab() {
 
       {focusedReport && (
         <PackingReportDialog
+          // Remount per report so a row's Edit/History/Delete action always
+          // lands the dialog on the right tab instead of reusing whatever
+          // tab a previous report was left on.
+          key={focusedReport.id}
           report={focusedReport}
           reference={referenceOf(focusedReport.of_id)}
           finishedProductId={productOfOrder(focusedReport.of_id)}
           products={products}
           locations={locations}
           uoms={uoms}
+          suppliers={suppliers}
+          initialMode={openMode}
           onClose={() => {
             setOpenReport(null);
+            setOpenMode("view");
             // Drop the deep link too, or closing reopens it next render.
             if (linkedId) {
               const next = new URLSearchParams(searchParams);
@@ -562,6 +648,8 @@ function PackingReportDialog({
   products,
   locations,
   uoms,
+  suppliers,
+  initialMode,
   onClose,
 }: {
   report: ProductionReport;
@@ -570,6 +658,8 @@ function PackingReportDialog({
   products: { id: string; name: string; uom_id: string }[];
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
+  suppliers: Partner[];
+  initialMode?: "view" | "edit" | "history" | "delete";
   onClose: () => void;
 }) {
   const { session } = useAuth();
@@ -583,6 +673,10 @@ function PackingReportDialog({
     queryFn: () => getReport(token, report.id),
   });
   const detail = full?.detail as ConditionnementReportDetail | undefined;
+  const { data: dailyReports = [] } = useQuery({
+    queryKey: ["production", "reports", "daily", report.of_id],
+    queryFn: () => listReports(token, { of_id: report.of_id, report_type: "daily" }),
+  });
 
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
@@ -599,9 +693,13 @@ function PackingReportDialog({
       film_product_id: detail?.film_product_id ?? "",
       carton_product_id: detail?.carton_product_id ?? "",
       tape_product_id: detail?.tape_product_id ?? "",
+      film_supplier_id: detail?.film_supplier_id ?? "",
+      carton_supplier_id: detail?.carton_supplier_id ?? "",
+      tape_supplier_id: detail?.tape_supplier_id ?? "",
       downtime_reason: detail?.downtime_reason ?? "",
       lot_number: detail?.lot_number ?? "",
       dlc_date: detail?.dlc_date ?? "",
+      daily_report_id: detail?.daily_report_id ?? "",
     } as CreateForm,
   });
 
@@ -644,19 +742,36 @@ function PackingReportDialog({
   const filmUnit = productUnit(detail?.film_product_id, products, uoms);
   const cartonUnit = productUnit(detail?.carton_product_id, products, uoms);
   const tapeUnit = productUnit(detail?.tape_product_id, products, uoms);
+  const supplierName = (id: string | null | undefined) => (id && suppliers.find((s) => s.id === id)?.name) || null;
+  const withSupplier = (label: string, supplierId: string | null | undefined) => {
+    const name = supplierName(supplierId);
+    return name ? `${label} — ${name}` : label;
+  };
 
   const figures: FigureRow[] = [
     // Decision 24/25: cartons lead -- for a product with a carton tier, this is
     // what decides the finished-goods quantity, not the machine's own tally
     // beside it.
-    { label: t("production.conditionnement.field.carton"), value: detail?.carton_quantity, unit: cartonUnit },
+    {
+      label: withSupplier(t("production.conditionnement.field.carton"), detail?.carton_supplier_id),
+      value: detail?.carton_quantity,
+      unit: cartonUnit,
+    },
     {
       label: t("production.conditionnement.field.packetsCounted"),
       value: detail?.packets_counted,
       unit: goodsUnit,
     },
-    { label: t("production.conditionnement.field.film"), value: detail?.film_quantity, unit: filmUnit },
-    { label: t("production.conditionnement.field.tape"), value: detail?.tape_quantity, unit: tapeUnit },
+    {
+      label: withSupplier(t("production.conditionnement.field.film"), detail?.film_supplier_id),
+      value: detail?.film_quantity,
+      unit: filmUnit,
+    },
+    {
+      label: withSupplier(t("production.conditionnement.field.tape"), detail?.tape_supplier_id),
+      value: detail?.tape_quantity,
+      unit: tapeUnit,
+    },
     // One row per déchet, each labelled with its own item and unit. Scotch
     // shows up here on its own now instead of having nowhere to go.
     ...(detail?.waste_lines ?? []).map((line) => ({
@@ -688,6 +803,7 @@ function PackingReportDialog({
       reportId={report.id}
       banner={<ReportVarianceBanner reportId={report.id} />}
       figures={figures}
+      initialMode={initialMode}
       onDelete={async (deleteReason) => {
         await deleteReport(token, report.id, deleteReason);
         invalidate();
@@ -700,6 +816,8 @@ function PackingReportDialog({
             locations={locations}
             uoms={uoms}
             finishedProductId={finishedProductId}
+            suppliers={suppliers}
+            dailyReports={dailyReports}
           />
           {needsReason && (
             <div className="space-y-1.5">
@@ -730,18 +848,84 @@ function PackingReportDialog({
   );
 }
 
+/**
+ * Which fournisseur a packaging item came from. Film, carton and ruban can
+ * each be delivered by more than one supplier, so this pairs a plain full
+ * supplier picker with a hint of which vendors are actually known to supply
+ * the item chosen above it -- the same vendor-suggestion match (by product
+ * tag) the purchase order screen already uses, reused here rather than
+ * reinvented.
+ */
+function PackagingSupplierField({
+  form,
+  name,
+  label,
+  productId,
+  suppliers,
+}: {
+  form: ReturnType<typeof useForm<CreateForm>>;
+  name: "film_supplier_id" | "carton_supplier_id" | "tape_supplier_id";
+  label: string;
+  productId: string | undefined;
+  suppliers: Partner[];
+}) {
+  const { session } = useAuth();
+  const token = session!.token;
+  const { data: suggested = [] } = useQuery({
+    queryKey: ["core", "products", productId, "suggested-vendors"],
+    queryFn: () => listSuggestedVendors(token, productId!),
+    enabled: !!productId,
+  });
+
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor={name}>{label}</Label>
+      {suggested.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {suggested.map((vendor: SuggestedVendor) => (
+            <button key={vendor.partner_id} type="button" onClick={() => form.setValue(name, vendor.partner_id)}>
+              <Badge variant="outline" className="gap-1">
+                <Sparkles className="h-3 w-3" />
+                {vendor.name}
+              </Badge>
+            </button>
+          ))}
+        </div>
+      )}
+      <Select id={name} {...form.register(name)}>
+        <option value="">—</option>
+        {suppliers.map((s) => (
+          <option key={s.id} value={s.id}>
+            {s.name}
+          </option>
+        ))}
+      </Select>
+    </div>
+  );
+}
+
 function PackingDetailFields({
   form,
   products,
   locations,
   uoms,
   finishedProductId,
+  suppliers,
+  dailyReports = [],
 }: {
   form: ReturnType<typeof useForm<CreateForm>>;
-  products: { id: string; name: string; uom_id: string; packets_per_carton?: number | null }[];
+  products: {
+    id: string;
+    name: string;
+    uom_id: string;
+    packets_per_carton?: number | null;
+    net_weight_grams?: number | null;
+  }[];
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
   finishedProductId: string | undefined;
+  suppliers: Partner[];
+  dailyReports?: ProductionReport[];
 }) {
   const { t } = useI18n();
   // Packaging leaves stock in its own unit and finished goods enter in theirs,
@@ -754,11 +938,23 @@ function PackingDetailFields({
 
   // Decision 24: the live cross-check between what the floor boxed and what the
   // machine tallied, shown while typing rather than only after saving.
-  const packetsPerCarton = products.find((p) => p.id === finishedProductId)?.packets_per_carton ?? null;
+  const finishedProduct = products.find((p) => p.id === finishedProductId);
+  const packetsPerCarton = finishedProduct?.packets_per_carton ?? null;
+  const netWeightGrams = finishedProduct?.net_weight_grams ?? null;
+  // A sac (or any product with no carton tier at all) has nothing to box, so
+  // the carton fields are meaningless for it — see the sac branch below.
+  const hasCartonTier = !!(packetsPerCarton && packetsPerCarton > 0);
   const cartonsEntered = Number(form.watch("carton_quantity")) || 0;
   const packetsEntered = Number(form.watch("packets_counted")) || 0;
   const realPacketsFromCartons = packetsPerCarton ? cartonsEntered * packetsPerCarton : null;
   const estimatedCartonsFromMachine = packetsPerCarton ? packetsEntered / packetsPerCarton : null;
+  // Same decision-24 rule the backend persists at validation
+  // (packaging_estimate.tonnage_from_count): cartons lead when there's a
+  // carton tier and some were counted, otherwise the tally itself — a sac's
+  // count — is the finished-goods figure. Shown live so a team sees the
+  // tonnage their count implies before it is ever saved.
+  const unitsFromCount = hasCartonTier && cartonsEntered > 0 ? cartonsEntered * (packetsPerCarton as number) : packetsEntered;
+  const estimatedTonnage = netWeightGrams && netWeightGrams > 0 ? (unitsFromCount * netWeightGrams) / 1_000_000 : null;
   const productOptions = (
     <>
       <option value="">—</option>
@@ -781,38 +977,63 @@ function PackingDetailFields({
           <HelpTooltip text={t("production.conditionnement.help.output")} />
         </div>
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="carton_quantity" className="flex items-center gap-1">
-              {withUnit(t("production.conditionnement.field.carton"), cartonUnit)}
-              <HelpTooltip text={t("production.conditionnement.help.cartonQuantity")} />
-            </Label>
-            <Input id="carton_quantity" type="number" step="any" {...form.register("carton_quantity")} />
-            {realPacketsFromCartons !== null && (
-              <p className="text-xs text-muted-foreground">
-                {t("production.conditionnement.hint.realPacketsFromCartons")}{" "}
-                {formatQuantity(realPacketsFromCartons)}
-              </p>
-            )}
-          </div>
+          {hasCartonTier && (
+            <div className="space-y-1.5">
+              <Label htmlFor="carton_quantity" className="flex items-center gap-1">
+                {withUnit(t("production.conditionnement.field.carton"), cartonUnit)}
+                <HelpTooltip text={t("production.conditionnement.help.cartonQuantity")} />
+              </Label>
+              <Input id="carton_quantity" type="number" step="any" {...form.register("carton_quantity")} />
+              {realPacketsFromCartons !== null && (
+                <p className="text-xs text-muted-foreground">
+                  {t("production.conditionnement.hint.realPacketsFromCartons")}{" "}
+                  {formatQuantity(realPacketsFromCartons)}
+                </p>
+              )}
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="packets_counted" className="flex items-center gap-1">
-              {withUnit(t("production.conditionnement.field.packetsCounted"), goodsUnit)}
+              {withUnit(
+                t(
+                  hasCartonTier
+                    ? "production.conditionnement.field.packetsCounted"
+                    : "production.conditionnement.field.sacsCounted",
+                ),
+                goodsUnit,
+              )}
               <HelpTooltip text={t("production.conditionnement.help.packetsCounted")} />
             </Label>
             <Input id="packets_counted" type="number" step="any" {...form.register("packets_counted")} />
-            {estimatedCartonsFromMachine !== null && (
+            {hasCartonTier && estimatedCartonsFromMachine !== null && (
               <p className="text-xs text-muted-foreground">
                 {t("production.conditionnement.hint.estimatedCartonsFromMachine")}{" "}
                 {formatQuantity(estimatedCartonsFromMachine)}
               </p>
             )}
+            {estimatedTonnage !== null && (
+              <p className="text-xs text-muted-foreground">
+                {t("production.conditionnement.hint.estimatedTonnage")} {formatQuantity(estimatedTonnage, "t")}
+              </p>
+            )}
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="carton_product_id">{t("production.conditionnement.field.cartonProduct")}</Label>
-            <Select id="carton_product_id" {...form.register("carton_product_id")}>
-              {productOptions}
-            </Select>
-          </div>
+          {hasCartonTier && (
+            <div className="space-y-1.5">
+              <Label htmlFor="carton_product_id">{t("production.conditionnement.field.cartonProduct")}</Label>
+              <Select id="carton_product_id" {...form.register("carton_product_id")}>
+                {productOptions}
+              </Select>
+            </div>
+          )}
+          {hasCartonTier && (
+            <PackagingSupplierField
+              form={form}
+              name="carton_supplier_id"
+              label={t("production.conditionnement.field.cartonSupplier")}
+              productId={form.watch("carton_product_id")}
+              suppliers={suppliers}
+            />
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="finished_goods_location_id">{t("production.conditionnement.field.finishedGoodsStore")}</Label>
             <Select id="finished_goods_location_id" {...form.register("finished_goods_location_id")}>
@@ -820,6 +1041,20 @@ function PackingDetailFields({
               {locations.map((l) => (
                 <option key={l.id} value={l.id}>
                   {l.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="daily_report_id" className="flex items-center gap-1">
+              {t("production.conditionnement.field.dailyReport")}
+              <HelpTooltip text={t("production.conditionnement.help.dailyReport")} />
+            </Label>
+            <Select id="daily_report_id" {...form.register("daily_report_id")}>
+              <option value="">—</option>
+              {dailyReports.map((r) => (
+                <option key={r.id} value={r.id}>
+                  {[r.report_date, r.shift, r.team].filter(Boolean).join(" · ")}
                 </option>
               ))}
             </Select>
@@ -845,6 +1080,13 @@ function PackingDetailFields({
               {productOptions}
             </Select>
           </div>
+          <PackagingSupplierField
+            form={form}
+            name="film_supplier_id"
+            label={t("production.conditionnement.field.filmSupplier")}
+            productId={form.watch("film_product_id")}
+            suppliers={suppliers}
+          />
           <div className="space-y-1.5">
             <Label htmlFor="tape_quantity">{withUnit(t("production.conditionnement.field.tape"), tapeUnit)}</Label>
             <Input id="tape_quantity" type="number" step="any" {...form.register("tape_quantity")} />
@@ -855,6 +1097,13 @@ function PackingDetailFields({
               {productOptions}
             </Select>
           </div>
+          <PackagingSupplierField
+            form={form}
+            name="tape_supplier_id"
+            label={t("production.conditionnement.field.tapeSupplier")}
+            productId={form.watch("tape_product_id")}
+            suppliers={suppliers}
+          />
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="packaging_location_id">{t("production.conditionnement.field.packagingStore")}</Label>
             <Select id="packaging_location_id" {...form.register("packaging_location_id")}>
@@ -926,113 +1175,50 @@ function PackingDetailFields({
   );
 }
 
+/**
+ * Per-row actions. Edit/History/Delete all jump into the same detail dialog
+ * used when a row itself is clicked (see `PackingReportDialog` above) — that
+ * dialog already knows how each status behaves, so the row buttons only need
+ * to say which tab to land on, not re-implement any of that.
+ */
 function PackingRowActions({
   report,
-  products,
-  locations,
-  uoms,
-  finishedProductId,
-  isEditing,
-  onOpenEdit,
+  onOpenReport,
   onSubmitReport,
   isSubmitting,
 }: {
   report: ProductionReport;
-  products: { id: string; name: string; uom_id: string }[];
-  locations: { id: string; name: string }[];
-  uoms: { id: string; code: string }[];
-  finishedProductId: string | undefined;
-  isEditing: boolean;
-  onOpenEdit: (open: boolean) => void;
+  onOpenReport: (mode: "edit" | "history" | "delete") => void;
   onSubmitReport: () => void;
   isSubmitting: boolean;
 }) {
-  const { session } = useAuth();
   const { t } = useI18n();
-  const token = session!.token;
-  const queryClient = useQueryClient();
-
-  // Fetched only once the dialog is actually open — the row renders this
-  // component for every visible report, and most of them never get edited.
-  const { data: full } = useQuery({
-    queryKey: ["production", "reports", report.id],
-    queryFn: () => getReport(token, report.id),
-    enabled: isEditing,
-  });
-  const detail = full?.detail as ConditionnementReportDetail | undefined;
-
-  const form = useForm<CreateForm>({
-    resolver: zodResolver(createSchema),
-    values: {
-      of_id: report.of_id,
-      report_date: report.report_date,
-      ...EMPTY_DETAIL,
-      ...(detail ?? {}),
-      waste_lines: toWasteLineForms<"product" | "packaging">(detail?.waste_lines),
-      finished_goods_location_id: detail?.finished_goods_location_id ?? "",
-      packaging_location_id: detail?.packaging_location_id ?? "",
-      film_product_id: detail?.film_product_id ?? "",
-      carton_product_id: detail?.carton_product_id ?? "",
-      tape_product_id: detail?.tape_product_id ?? "",
-      downtime_reason: detail?.downtime_reason ?? "",
-      lot_number: detail?.lot_number ?? "",
-      dlc_date: detail?.dlc_date ?? "",
-    } as CreateForm,
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (input: CreateForm) => updateConditionnementReport(token, report.id, toDetail(input)),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      onOpenEdit(false);
-      toast.success(t("production.reports.updated"));
-    },
-    onError: (error) => {
-      toast.error(t("production.reports.updateError"), {
-        description: error instanceof ApiError ? error.message : undefined,
-      });
-    },
-  });
 
   return (
-    <div className="flex justify-end gap-2">
+    <div className="flex justify-end items-center gap-1">
+      {report.status === "rejected" && report.rejection_reason && (
+        <span className="mr-1 text-xs text-destructive">{report.rejection_reason}</span>
+      )}
+      <Button size="sm" variant="ghost" aria-label={t("common.edit")} onClick={() => onOpenReport("edit")}>
+        <Pencil className="h-3.5 w-3.5" />
+      </Button>
       {report.status === "draft" && (
-        <>
-          <Dialog open={isEditing} onOpenChange={onOpenEdit}>
-            <DialogTrigger asChild>
-              <Button size="sm" variant="ghost">
-                <Pencil className="h-3.5 w-3.5" />
-                {t("common.edit")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-4xl">
-              <DialogHeader>
-                <DialogTitle>{t("production.conditionnement.dialog.edit.title")}</DialogTitle>
-                <DialogDescription>{t("production.dailyReports.dialog.edit.description")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={form.handleSubmit((input) => updateMutation.mutate(input))}>
-                <PackingDetailFields
-                  form={form}
-                  products={products}
-                  locations={locations}
-                  uoms={uoms}
-                  finishedProductId={finishedProductId}
-                />
-                <Button type="submit" className="w-full" disabled={updateMutation.isPending}>
-                  {updateMutation.isPending ? t("common.saving") : t("common.save")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-          <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
-            <Send className="h-3.5 w-3.5" />
-            {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
-          </Button>
-        </>
+        <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
+          <Send className="h-3.5 w-3.5" />
+          {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
+        </Button>
       )}
-      {report.status === "rejected" && (
-        <span className="text-xs text-destructive">{report.rejection_reason ?? t("status.rejected")}</span>
-      )}
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t("production.reports.history.title")}
+        onClick={() => onOpenReport("history")}
+      >
+        <History className="h-3.5 w-3.5" />
+      </Button>
+      <Button size="sm" variant="ghost" aria-label={t("common.delete")} onClick={() => onOpenReport("delete")}>
+        <Trash2 className="h-3.5 w-3.5" />
+      </Button>
     </div>
   );
 }

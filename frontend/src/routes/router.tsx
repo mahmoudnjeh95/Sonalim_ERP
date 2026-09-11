@@ -11,7 +11,9 @@ import { PipelinePage } from "../features/crm/opportunities/PipelinePage";
 import { ActivitiesPage } from "../features/crm/activities/ActivitiesPage";
 import { UsersPage } from "../features/admin/users/UsersPage";
 import { RolesPage } from "../features/admin/roles/RolesPage";
+import { ActivityLogPage } from "../features/admin/activityLog/ActivityLogPage";
 import { ProductionPage } from "../features/production/ProductionPage";
+import { IaAssistantTab } from "../features/production/IaAssistantTab";
 import { QualityPage } from "../features/qc/QualityPage";
 import { AnalyticsPage } from "../features/analytics/AnalyticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
@@ -65,6 +67,7 @@ export const router = createBrowserRouter([
       { path: "/crm/pipeline", element: <PipelinePage /> },
       { path: "/crm/activities", element: <ActivitiesPage /> },
       { path: "/production", element: <ProductionPage /> },
+      { path: "/production/ia-assistant", element: <IaAssistantTab /> },
       { path: "/production/work-orders/:workOrderId", element: <WorkOrderDetailsPage /> },
       { path: "/quality", element: <QualityPage /> },
       { path: "/analytics", element: <AnalyticsPage /> },
@@ -78,6 +81,7 @@ export const router = createBrowserRouter([
       { path: "/finance", element: <FinanceInvoicesPage /> },
       { path: "/admin/users", element: <UsersPage /> },
       { path: "/admin/roles", element: <RolesPage /> },
+      { path: "/admin/activity-log", element: <ActivityLogPage /> },
       { path: "/settings", element: <SettingsPage /> },
       { path: "/hr", element: <HrPage /> },
     ],

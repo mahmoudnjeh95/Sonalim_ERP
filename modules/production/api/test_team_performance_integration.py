@@ -12,11 +12,13 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Ok
+from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.api.production_report_service import ProductionReportService
+from modules.production.api.regrind_service import RegrindDefaultsService
 from modules.production.api.service import WorkOrderService
 from modules.production.api.team_performance_service import TeamPerformanceService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
-from modules.production.domain.production_report import DailyReportDetail, DowntimeLine, SemolinaLine
+from modules.production.domain.production_report import DailyReportDetail, DowntimeLine, SemolinaLine, WasteLine
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-team-performance"
@@ -25,7 +27,7 @@ TENANT = "integration-test-team-performance"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, location, work_center = (str(ULID()) for _ in range(4))
+    uom, product, location, work_center, equipment = (str(ULID()) for _ in range(5))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -46,21 +48,31 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'TP-WC', 'Test line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'TP-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
     StockService(db).receive_stock(
         tenant_id=TENANT, product_id=product, location_id=location, quantity=100_000,
         correlation_id=str(ULID()), reference="test-seed", actor_id=actor,
     )
-    return {"actor": actor, "product": product, "location": location, "work_center": work_center}
+    # Needed only by tests that validate a report with rebroyat above zero —
+    # harmless to the rest, which never set regrind_quantity.
+    RegrindDefaultsService(db).set_default(tenant_id=TENANT, actor_id=actor, output_product_id=product)
+    return {"actor": actor, "product": product, "location": location, "work_center": work_center, "equipment": equipment}
 
 
 def _validated_report(
     db, env, *, team, report_date, semolina_quantity, production_minutes, downtime_minutes,
     downtime_reason=None, water_percentage=0, semolina_flow_rate=0, downtime_lines=None,
+    waste_lines=(), regrind_quantity=0, recipe_id=None,
+    semolina_product_id=None, regrind_input_quantity=0, regrind_input_product_id=None,
 ):
     orders = WorkOrderService(db)
     created = orders.create_work_order(
         tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"],
         planned_quantity=1000, work_center_id=env["work_center"], start_date=report_date,
+        recipe_id=recipe_id,
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
     order = created.value
@@ -68,7 +80,11 @@ def _validated_report(
 
     reports = ProductionReportService(db)
     detail = DailyReportDetail(
-        semolina_lines=(SemolinaLine(product_id=env["product"], quantity=semolina_quantity, location_id=env["location"]),),
+        semolina_lines=(
+            SemolinaLine(
+                product_id=semolina_product_id or env["product"], quantity=semolina_quantity, location_id=env["location"]
+            ),
+        ),
         raw_material_location_id=env["location"],
         production_minutes=production_minutes,
         downtime_lines=downtime_lines
@@ -85,10 +101,15 @@ def _validated_report(
         ),
         water_percentage=water_percentage,
         semolina_flow_rate=semolina_flow_rate,
+        waste_lines=waste_lines,
+        regrind_quantity=regrind_quantity,
+        regrind_product_id=env["product"] if regrind_quantity else None,
+        regrind_input_quantity=regrind_input_quantity,
+        regrind_input_product_id=regrind_input_product_id,
     )
     created_report = reports.create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=order.id, report_date=report_date,
-        team=team, shift="morning", detail=detail,
+        team=team, shift="morning", equipment_id=env["equipment"], detail=detail,
     )
     assert isinstance(created_report, Ok), getattr(created_report, "message", "")
     report_id = created_report.value["report"].id
@@ -127,6 +148,109 @@ def test_totals_are_bucketed_by_team_and_period(db, env):
 
     week2_a = next(r for (team, _), r in by_key.items() if team == "A" and r["semolina_quantity"] == 200)
     assert week1_a["period"] != week2_a["period"]
+
+
+def test_net_semoule_waste_is_daily_waste_net_of_declared_regrind(db, env):
+    """The écart the plant wants to minimise: semoule déchet across the daily
+    report's own stages, net of what the shift declared as recoverable rebroyat
+    over the same reports — never conditionnement's product/packaging waste,
+    which isn't semoule any more."""
+    _validated_report(
+        db, env, team="A", report_date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, production_minutes=400, downtime_minutes=0,
+        waste_lines=(
+            WasteLine(category="press", product_id=env["product"], quantity=30),
+            WasteLine(category="kneading", product_id=env["product"], quantity=10),
+        ),
+        regrind_quantity=25,
+    )
+
+    rows = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="week")
+    row = next(r for r in rows if r["team"] == "A")
+
+    assert row["daily_waste_by_category"] == {"press": 30.0, "kneading": 10.0}
+    assert row["regrind_quantity"] == 25.0
+    assert row["net_semoule_waste"] == 15.0
+
+
+def test_daily_waste_in_kg_is_restated_against_a_tonne_product(db, env):
+    """Same fix as OF consolidation's `_waste_totals`: a daily report's déchet
+    is always weighed in kg on the form (WasteLinesField's fixedUnit), even
+    for an item normally stocked by the tonne. `net_semoule_waste` must still
+    net against the form's own kilos, not the converted tonnes.
+    """
+    tonne_uom, tonne_product = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (tonne_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TP-TONNE', 'Tonne product', %s)",
+        (tonne_product, TENANT, tonne_uom),
+    )
+
+    _validated_report(
+        db, env, team="A", report_date=datetime.date(2026, 9, 1),
+        semolina_quantity=500, production_minutes=100, downtime_minutes=0,
+        waste_lines=(WasteLine(category="press", product_id=tonne_product, quantity=300),),
+    )
+
+    rows = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="week")
+    row = next(r for r in rows if r["team"] == "A")
+
+    assert row["daily_waste_by_category"]["press"] == pytest.approx(0.3)
+    by_product = {entry["product_id"]: entry["quantity"] for entry in row["waste_by_product"]}
+    assert by_product[tonne_product] == pytest.approx(0.3)
+    # Netted against the form's own 300 kg, not the converted 0.3 t.
+    assert row["net_semoule_waste"] == 300
+
+
+def test_material_input_restates_regrind_input_against_the_semoule_unit(db, env):
+    """The bug this closed: material_input_quantity summed semolina_quantity
+    (a tonne-denominated product here) and regrind_input_quantity (a
+    kg-denominated rebroyat product) as if they were the same unit, inflating
+    the denominator by up to 1000x and crashing the team's reported yield —
+    exactly what surfaced as Équipe B's rendement falling to ~33% on the
+    production dashboard for a week that included one large, kg-recorded
+    rebroyat input. WorkOrderYieldService and OfConsolidationService already
+    restate rebroyat against the semoule side's own unit; this is the same
+    fix for TeamPerformanceService.
+    """
+    ton_uom, ton_product = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (ton_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TP-TON-SEM', 'Tonne semoule', %s)",
+        (ton_product, TENANT, ton_uom),
+    )
+    StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=ton_product, location_id=env["location"], quantity=1000,
+        correlation_id=str(ULID()), reference="test-seed-ton", actor_id=env["actor"],
+    )
+    # env["product"] is kg-denominated (see the env fixture) and doubles as
+    # the rebroyat-input product here, so no separate product/stock is needed.
+
+    _validated_report(
+        db, env, team="B", report_date=datetime.date(2026, 9, 10),
+        semolina_quantity=12, production_minutes=100, downtime_minutes=0,
+        semolina_product_id=ton_product,
+        regrind_input_quantity=95, regrind_input_product_id=env["product"],
+    )
+
+    rows = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="week")
+    row = next(r for r in rows if r["team"] == "B")
+
+    assert row["semolina_quantity"] == 12
+    assert row["regrind_input_quantity"] == 95, "the native kg figure is left alone for display"
+    # 95 kg restated into tonnes (95 / 1000) before joining the tonne-denominated semoule.
+    assert row["material_input_quantity"] == pytest.approx(12.095), (
+        "regrind_input_quantity must be converted to the semoule's own unit, "
+        "not added to it raw"
+    )
 
 
 def test_draft_reports_are_excluded(db, env):
@@ -227,3 +351,50 @@ def test_recipe_correlation_skips_shifts_with_no_dosage_recorded(db, env):
     )
     rows = WorkOrderYieldService(db).list_recipe_correlation(tenant_id=TENANT)
     assert rows == []
+
+
+def test_recipe_correlation_carries_the_recipes_water_target_range(db, env):
+    """The OF's recipe names a water component with a min/max %; the shift's
+    own water_percentage should be checkable against it without recomputing
+    anything recipe_check_service already owns — that service compares poured
+    *quantities*, and water here is a bare percentage with no quantity of its
+    own to join against.
+    """
+    water_product = str(ULID())
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES "
+        "(%s, %s, 'TP-WATER', 'Water', (SELECT uom_id FROM core.products WHERE id = %s))",
+        (water_product, TENANT, env["product"]),
+    )
+    ProductClassificationService(db).set_classification(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=water_product,
+        category="raw_material", is_water=True,
+    )
+    recipe_id = str(ULID())
+    db.execute(
+        "INSERT INTO production.recipes (id, tenant_id, target_product_id, version, status) "
+        "VALUES (%s, %s, %s, 1, 'active')",
+        (recipe_id, TENANT, env["product"]),
+    )
+    db.execute(
+        "INSERT INTO production.recipe_lines "
+        "(id, recipe_id, tenant_id, component_product_id, default_percentage, min_percentage, max_percentage, is_hard_limit) "
+        "VALUES (%s, %s, %s, %s, 30, 28, 32, false)",
+        (str(ULID()), recipe_id, TENANT, water_product),
+    )
+
+    _validated_report(
+        db, env, team="A", report_date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, production_minutes=400, downtime_minutes=0,
+        water_percentage=35, semolina_flow_rate=4.5, recipe_id=recipe_id,
+    )
+
+    rows = WorkOrderYieldService(db).list_recipe_correlation(tenant_id=TENANT)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["water_percentage"] == 35
+    assert row["water_target_min"] == 28
+    assert row["water_target_max"] == 32
+    assert row["water_target_default"] == 30
+    assert row["report_date"] == "2026-09-01"
+    assert row["team"] == "A"

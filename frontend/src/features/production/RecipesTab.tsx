@@ -79,8 +79,6 @@ export function RecipesTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [targetManual, setTargetManual] = useState(false);
-  const [componentsManual, setComponentsManual] = useState(false);
 
   const STATUS_LABEL: Record<RecipeStatus, string> = {
     draft: t("production.recipes.status.draft"),
@@ -126,8 +124,6 @@ export function RecipesTab() {
     onSuccess: (recipe) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      setTargetManual(false);
-      setComponentsManual(false);
       reset({
         target_product_id: "",
         lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 95, max_percentage: 100, is_hard_limit: false }],
@@ -368,13 +364,7 @@ export function RecipesTab() {
           </div>
           <Dialog
             open={dialogOpen}
-            onOpenChange={(open) => {
-              setDialogOpen(open);
-              if (!open) {
-                setTargetManual(false);
-                setComponentsManual(false);
-              }
-            }}
+            onOpenChange={setDialogOpen}
           >
             <DialogTrigger asChild>
               <Button>
@@ -389,24 +379,19 @@ export function RecipesTab() {
               </DialogHeader>
               <form className="space-y-4" onSubmit={handleSubmit((input) => createMutation.mutate(input))}>
                 <div className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <Label htmlFor="target_product_id">{t("production.recipes.field.targetProduct")}</Label>
-                    <Button type="button" variant="ghost" size="sm" onClick={() => setTargetManual((prev) => !prev)}>
-                      {targetManual ? t("production.regrind.chooseFromList") : t("production.regrind.enterManually")}
-                    </Button>
-                  </div>
-                  {targetManual ? (
-                    <Input id="target_product_id" placeholder="e.g. fusilli-500g" {...register("target_product_id")} />
-                  ) : (
-                    <Select id="target_product_id" {...register("target_product_id")}>
-                      <option value="">—</option>
-                      {finishedGoodProducts.map((product) => (
-                        <option key={product.id} value={product.id}>
-                          {product.name}
-                        </option>
-                      ))}
-                    </Select>
-                  )}
+                  <Label htmlFor="target_product_id">{t("production.recipes.field.targetProduct")}</Label>
+                  {/* target_product_id has a real FK to core.products (recipes_target_product_id_fkey) --
+                      free text here used to reach the backend as-is and crash the request with an
+                      unhandled ForeignKeyViolation, which the browser then misreported as CORS
+                      blocked. Only a value that actually exists in this list can be submitted. */}
+                  <Select id="target_product_id" {...register("target_product_id")}>
+                    <option value="">—</option>
+                    {finishedGoodProducts.map((product) => (
+                      <option key={product.id} value={product.id}>
+                        {product.name}
+                      </option>
+                    ))}
+                  </Select>
                   {errors.target_product_id && <p className="text-sm text-destructive">{errors.target_product_id.message}</p>}
                 </div>
 
@@ -428,9 +413,6 @@ export function RecipesTab() {
                   <div className="flex items-center justify-between">
                     <Label>{t("production.recipes.field.components")}</Label>
                     <div className="flex items-center gap-1">
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setComponentsManual((prev) => !prev)}>
-                        {componentsManual ? t("production.regrind.chooseFromList") : t("production.regrind.enterManually")}
-                      </Button>
                       <Button
                         type="button"
                         variant="ghost"
@@ -453,22 +435,14 @@ export function RecipesTab() {
                           transition={{ duration: 0.18 }}
                           className="flex items-start gap-2"
                         >
-                          {componentsManual ? (
-                            <Input
-                              placeholder="Component product id"
-                              className="flex-1"
-                              {...register(`lines.${index}.component_product_id` as const)}
-                            />
-                          ) : (
-                            <Select className="flex-1" {...register(`lines.${index}.component_product_id` as const)}>
-                              <option value="">—</option>
-                              {recipeComponentProducts.map((product) => (
-                                <option key={product.id} value={product.id}>
-                                  {product.name}
-                                </option>
-                              ))}
-                            </Select>
-                          )}
+                          <Select className="flex-1" {...register(`lines.${index}.component_product_id` as const)}>
+                            <option value="">—</option>
+                            {recipeComponentProducts.map((product) => (
+                              <option key={product.id} value={product.id}>
+                                {product.name}
+                              </option>
+                            ))}
+                          </Select>
                           <Input
                             type="number"
                             step="any"

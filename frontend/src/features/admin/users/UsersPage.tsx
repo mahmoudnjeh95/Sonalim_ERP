@@ -21,6 +21,7 @@ import {
   listUsers,
   revokePermission,
   unassignRole,
+  updateUserName,
   type Role,
   type UserSummary,
 } from "./api";
@@ -103,6 +104,48 @@ function RoleAssignControl({ user, availableRoles }: { user: UserSummary; availa
       <Button size="sm" variant="outline" onClick={() => assignMutation.mutate(value)} disabled={assignMutation.isPending}>
         {t("admin.users.assignRole")}
       </Button>
+    </div>
+  );
+}
+
+// Editable inline rather than a separate dialog: a name is one short field,
+// and every other user picker in the app (an OF's supervisor, first) reads it
+// straight off core.users, so getting one on file is meant to be a two-second
+// action from the same table an admin already manages permissions from.
+function NameCell({ user }: { user: UserSummary }) {
+  const { session } = useAuth();
+  const { t } = useI18n();
+  const token = session!.token;
+  const queryClient = useQueryClient();
+  const [value, setValue] = useState(user.full_name ?? "");
+
+  const saveMutation = useMutation({
+    mutationFn: (fullName: string) => updateUserName(token, user.id, fullName),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: USERS_QUERY_KEY });
+      toast.success(t("admin.users.nameUpdated"));
+    },
+    onError: (error) => {
+      toast.error(t("admin.users.nameUpdateError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const trimmed = value.trim();
+  const isDirty = trimmed !== (user.full_name ?? "");
+
+  return (
+    <div className="flex items-center gap-2">
+      <Input
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        placeholder={t("admin.users.namePlaceholder")}
+        className="h-8"
+      />
+      {isDirty && (
+        <Button size="sm" variant="outline" onClick={() => saveMutation.mutate(trimmed)} disabled={saveMutation.isPending}>
+          {t("common.save")}
+        </Button>
+      )}
     </div>
   );
 }
@@ -217,6 +260,13 @@ export function UsersPage() {
     : users;
 
   const columns: ColumnDef<UserSummary>[] = [
+    {
+      key: "name",
+      header: t("admin.users.column.name"),
+      defaultWidth: 200,
+      cell: (user) => <NameCell user={user} />,
+      sortValue: (user) => user.full_name ?? "",
+    },
     { key: "email", header: t("admin.users.column.email"), defaultWidth: 220, cell: (user) => user.email, sortValue: (user) => user.email },
     {
       key: "permissions",

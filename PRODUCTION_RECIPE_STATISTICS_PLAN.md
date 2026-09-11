@@ -5,6 +5,19 @@ fixes (mold reference on its own line, two new déchet stages, a tooltip on
 "Pâte"). This file is the "we'll review it later" perspective the user asked
 for — nothing here is implemented beyond the data capture described below.
 
+**Update 2026-09-10:** a first shift-level correlation view now exists —
+`WorkOrderYieldService.list_recipe_correlation` and the "Water dosage and flow
+rate against yield" card on the production dashboard (`ProductionDashboardTab
+.tsx`). It answers question 3 below the coarse way (shift inputs against the
+OF's own yield, reusing `_to_result`) and question 4 (a table replaces the old
+2-3-point scatter below `RECIPE_CORRELATION_SCATTER_MIN_ROWS` = 20 rows; the
+scatter only renders above that). It also flags a shift whose `water_percentage`
+drifted outside its OF's recipe's own water line (`water_target_min/max`,
+joined from `production.recipe_lines` + `product_classifications.is_water`).
+Questions 1, 2 and "best recipe" ranking are still open and still deliberately
+unbuilt — this is a readability/sample-size fix and a per-shift compliance
+flag, not the cross-recipe analytics feature this file describes.
+
 ## The goal
 
 The plant wants to eventually correlate a shift's inputs against its outcome

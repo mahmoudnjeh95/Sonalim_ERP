@@ -3,7 +3,7 @@ import { useMutation, useQuery } from "@tanstack/react-query";
 import { AlertTriangle, History, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -12,7 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { Skeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { formatDuration, formatQuantity } from "../../lib/units";
-import { listAuditLog, type AuditLogEntry } from "../warehouse/api";
+import { listAuditLog, type AuditLogEntry } from "../admin/activityLog/api";
 
 export interface FigureRow {
   label: string;
@@ -20,6 +20,45 @@ export interface FigureRow {
   unit?: string | null;
   /** Render as a duration (min, then j/h/min) rather than a quantity. */
   duration?: boolean;
+  /**
+   * Which side of the material flow this figure belongs to — what the shift
+   * poured in, what came out, or a rate/duration that is neither. Omit to
+   * keep a report's figures in one flat block (Conditionnement and Quality
+   * reports don't set this yet); once any figure in the list sets it, the
+   * view groups all of them under "In" / "Out" / "Time" headings instead.
+   */
+  group?: "in" | "out" | "time";
+}
+
+// In → out → time, matching how a shift actually reads its own report: what
+// went into the mix, what came out of it, then how long it took.
+const FIGURE_GROUPS: { key: NonNullable<FigureRow["group"]>; labelKey: TranslationKey }[] = [
+  { key: "in", labelKey: "production.reportDetail.group.in" },
+  { key: "out", labelKey: "production.reportDetail.group.out" },
+  { key: "time", labelKey: "production.reportDetail.group.time" },
+];
+
+function FigureGroup({ label, figures }: { label?: string; figures: FigureRow[] }) {
+  if (figures.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-border p-4">
+      {label && <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>}
+      <dl className="grid grid-cols-1 gap-x-6 gap-y-2 sm:grid-cols-2">
+        {figures.map((figure) => (
+          <div key={figure.label} className="flex items-baseline justify-between gap-3">
+            <dt className="text-sm text-muted-foreground">{figure.label}</dt>
+            <dd className="text-sm font-medium tabular-nums">
+              {typeof figure.value === "string"
+                ? figure.value || "—"
+                : figure.duration
+                  ? formatDuration(figure.value)
+                  : formatQuantity(figure.value, figure.unit)}
+            </dd>
+          </div>
+        ))}
+      </dl>
+    </div>
+  );
 }
 
 /**
@@ -45,6 +84,8 @@ export function ReportDetailDialog({
   onDelete,
   isDeleting,
   canDelete = true,
+  initialMode = "view",
+  historyEntityType = "production_report",
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -55,11 +96,15 @@ export function ReportDetailDialog({
   /**
    * When given, a "History" action shows the full audit trail for this report
    * — every draft save, submit, correction and validation, who did it and
-   * when. Shared here rather than per report type since both daily and
-   * conditionnement reports write to the same `production_report` audit
-   * entity.
+   * when.
    */
   reportId?: string;
+  /**
+   * The audit entity type the history trail reads. Daily and conditionnement
+   * reports share `production_report`, quality reports write their own
+   * `quality_report` entity — see `record_audit` calls in each service.
+   */
+  historyEntityType?: string;
   figures: FigureRow[];
   /**
    * Shown above the figures in view mode. For the packing report this is the
@@ -68,16 +113,22 @@ export function ReportDetailDialog({
   banner?: ReactNode;
   /** The status-appropriate edit form, or null when this report is read-only. */
   editForm?: ReactNode;
-  onDelete?: (reason: string) => Promise<unknown>;
+  /**
+   * `force` is only ever true when the caller re-submits after a
+   * REGRIND_ALREADY_COMPLETED refusal — see the "force" button below.
+   */
+  onDelete?: (reason: string, force?: boolean) => Promise<unknown>;
   isDeleting?: boolean;
   canDelete?: boolean;
+  /** Which tab to land on when the dialog opens — a row's Edit/History/Delete action jumps straight there instead of through "view". */
+  initialMode?: "view" | "edit" | "delete" | "history";
 }) {
   const { t } = useI18n();
-  const [mode, setMode] = useState<"view" | "edit" | "delete" | "history">("view");
+  const [mode, setMode] = useState<"view" | "edit" | "delete" | "history">(initialMode);
   const [deleteReason, setDeleteReason] = useState("");
 
   const deleteMutation = useMutation({
-    mutationFn: () => onDelete!(deleteReason),
+    mutationFn: (force: boolean) => onDelete!(deleteReason, force),
     onSuccess: () => {
       toast.success(t("production.reports.deleted"));
       setMode("view");
@@ -90,11 +141,14 @@ export function ReportDetailDialog({
       });
     },
   });
+  const regrindAlreadyCompleted =
+    deleteMutation.error instanceof ApiError && deleteMutation.error.code === "REGRIND_ALREADY_COMPLETED";
 
   function close(next: boolean) {
     if (!next) {
       setMode("view");
       setDeleteReason("");
+      deleteMutation.reset();
     }
     onOpenChange(next);
   }
@@ -118,20 +172,18 @@ export function ReportDetailDialog({
         {mode === "view" && (
           <div className="space-y-4">
             {banner}
-            <dl className="grid grid-cols-1 gap-x-6 gap-y-2 rounded-lg border border-border p-4 sm:grid-cols-2">
-              {figures.map((figure) => (
-                <div key={figure.label} className="flex items-baseline justify-between gap-3">
-                  <dt className="text-sm text-muted-foreground">{figure.label}</dt>
-                  <dd className="text-sm font-medium tabular-nums">
-                    {typeof figure.value === "string"
-                      ? figure.value || "—"
-                      : figure.duration
-                        ? formatDuration(figure.value)
-                        : formatQuantity(figure.value, figure.unit)}
-                  </dd>
-                </div>
-              ))}
-            </dl>
+            {figures.some((figure) => figure.group) ? (
+              <div className="space-y-3">
+                {FIGURE_GROUPS.map(({ key, labelKey }) => {
+                  const groupFigures = figures.filter((figure) => figure.group === key);
+                  if (groupFigures.length === 0) return null;
+                  return <FigureGroup key={key} label={t(labelKey)} figures={groupFigures} />;
+                })}
+                <FigureGroup figures={figures.filter((figure) => !figure.group)} />
+              </div>
+            ) : (
+              <FigureGroup figures={figures} />
+            )}
 
             <div className="flex flex-wrap gap-2">
               {editForm && (
@@ -162,7 +214,7 @@ export function ReportDetailDialog({
 
         {mode === "history" && reportId && (
           <div className="space-y-3">
-            <ReportHistoryPanel reportId={reportId} />
+            <ReportHistoryPanel reportId={reportId} entityType={historyEntityType} />
             <Button size="sm" variant="ghost" className="w-full" onClick={() => setMode("view")}>
               {t("common.cancel")}
             </Button>
@@ -201,20 +253,40 @@ export function ReportDetailDialog({
               />
               <p className="text-xs text-muted-foreground">{t("production.reports.delete.reasonHelp")}</p>
             </div>
+
+            {regrindAlreadyCompleted && (
+              <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <p className="text-sm text-destructive">{t("production.reports.delete.forceWarning")}</p>
+              </div>
+            )}
+
             <div className="flex gap-2">
               <Button
                 className="flex-1"
                 variant="destructive"
-                onClick={() => deleteMutation.mutate()}
+                onClick={() => deleteMutation.mutate(false)}
                 disabled={!deleteReason.trim() || deleteMutation.isPending || isDeleting}
               >
                 <Trash2 className="h-4 w-4" />
                 {deleteMutation.isPending ? t("common.saving") : t("common.delete")}
               </Button>
-              <Button className="flex-1" variant="outline" onClick={() => setMode("view")}>
+              <Button className="flex-1" variant="outline" onClick={() => { setMode("view"); deleteMutation.reset(); }}>
                 {t("common.cancel")}
               </Button>
             </div>
+
+            {regrindAlreadyCompleted && (
+              <Button
+                className="w-full"
+                variant="destructive"
+                onClick={() => deleteMutation.mutate(true)}
+                disabled={!deleteReason.trim() || deleteMutation.isPending || isDeleting}
+              >
+                <Trash2 className="h-4 w-4" />
+                {deleteMutation.isPending ? t("common.saving") : t("production.reports.delete.forceButton")}
+              </Button>
+            )}
           </div>
         )}
       </DialogContent>
@@ -228,6 +300,10 @@ const HISTORY_ACTIONS = [
   "submitted",
   "corrected",
   "corrected_after_validation",
+  // Quality reports' elevated edit-in-place path (admin_update_report) — it
+  // applies regardless of status, so it doesn't split into "corrected" vs.
+  // "corrected_after_validation" the way production reports' does.
+  "updated",
   "validated",
   "rejected",
   "revised",
@@ -246,18 +322,19 @@ function formatWhen(iso: string, language: string) {
  * Who filled and edited this report, and when — every draft save, submit,
  * correction, validation, rejection and reopening. `record_audit()` already
  * writes one of these for every mutation on a report (see
- * production_report_service.py), so this is a pure read: nothing here posts
- * anything, it only surfaces a trail that already exists.
+ * production_report_service.py and quality_service.py), so this is a pure
+ * read: nothing here posts anything, it only surfaces a trail that already
+ * exists.
  */
-function ReportHistoryPanel({ reportId }: { reportId: string }) {
+function ReportHistoryPanel({ reportId, entityType }: { reportId: string; entityType: string }) {
   const { session } = useAuth();
   const { t, language } = useI18n();
   const token = session!.token;
   const [expanded, setExpanded] = useState<string | null>(null);
 
   const { data: entries, isLoading, isError } = useQuery({
-    queryKey: ["core", "audit-log", "production_report", reportId],
-    queryFn: () => listAuditLog(token, { entity_type: "production_report", entity_id: reportId, limit: 200 }),
+    queryKey: ["core", "audit-log", entityType, reportId],
+    queryFn: () => listAuditLog(token, { entity_type: entityType, entity_id: reportId, limit: 200 }),
   });
 
   function actionLabel(action: string): string {

@@ -12,7 +12,14 @@ from modules.production.api.packaging_bom_service import PackagingBomService
 from modules.production.api.resource_type_service import ResourceTypeService
 from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
+from modules.production.api.recipe_correlation_insight_service import (
+    RecipeCorrelationInsightUnavailable,
+    summarize_recipe_correlation,
+)
+from modules.production.api import ia_assistant_service
 from modules.production.api.team_performance_service import GRAINS, TeamPerformanceService
+from modules.production.api.machine_performance_service import MachinePerformanceService
+from modules.maintenance.api.equipment_service import EquipmentService
 from modules.production.domain.resource_type import ResourceType
 from modules.production.domain.product_classification import ProductClassification
 from modules.production.api.recipe_service import RecipeService
@@ -59,6 +66,8 @@ class CreateWorkOrderRequest(BaseModel):
     # Nullable: the quantity is assigned later, once known, via the edit form.
     planned_quantity: float | None = None
     work_center_id: str | None = None
+    # Optional: who is responsible for this OF. Never required, unlike work_center_id.
+    supervisor_id: str | None = None
     recipe_id: str | None = None
     packaging_bom_id: str | None = None
     start_date: datetime.date | None = None
@@ -72,6 +81,7 @@ class UpdateWorkOrderRequest(BaseModel):
     product_id: str | None = None
     planned_quantity: float | None = None
     work_center_id: str | None = None
+    supervisor_id: str | None = None
     recipe_id: str | None = None
     packaging_bom_id: str | None = None
     start_date: datetime.date | None = None
@@ -311,8 +321,12 @@ class DailyReportDetailRequest(BaseModel):
     # input; the frontend derives water_quantity from it.
     water_percentage: float = 0
     fuel_quantity: float = 0
+    # Which fournisseur this shift's fioul came from -- informational only, see
+    # DailyReportDetail.fuel_supplier_id.
+    fuel_supplier_id: str | None = None
     # Gasoil (diesel) -- a separate fuel from fuel_quantity (fioul).
     gasoil_quantity: float = 0
+    gasoil_supplier_id: str | None = None
     electricity_quantity: float = 0
     # Débit de semoule: feed rate in tonnes/hour. Recorded only, for future
     # recipe statistics -- see PRODUCTION_RECIPE_STATISTICS_PLAN.md.
@@ -353,6 +367,10 @@ class CreateDailyReportRequest(BaseModel):
     report_date: datetime.date
     team: str | None = None
     work_center_id: str | None = None
+    # Which machine within the work center ran this shift. Optional here (a
+    # draft may be saved before the team knows) but required to submit — see
+    # ProductionReportService.submit_report.
+    equipment_id: str | None = None
     shift: str | None = None
     detail: DailyReportDetailRequest = DailyReportDetailRequest()
 
@@ -364,6 +382,10 @@ class UpdateDailyReportRequest(BaseModel):
 class CorrectDailyReportRequest(BaseModel):
     detail: DailyReportDetailRequest
     reason: str
+    # Past the REGRIND_DELTA_REQUIRES_NEW_ORDER refusal: confirms opening a new
+    # rebroyat order for the difference when the corrected figure is higher than
+    # what an already-closed regrind order ground. Mirrors DeleteReportRequest.force.
+    force: bool = False
 
 
 class RejectReportRequest(BaseModel):
@@ -374,6 +396,9 @@ class DeleteReportRequest(BaseModel):
     # Mandatory: the row is gone afterwards, so the audit entry is the only record
     # that it ever existed.
     reason: str
+    # Past the REGRIND_ALREADY_COMPLETED refusal: also reverses the regrind
+    # order's stock receipt and removes the order along with the report.
+    force: bool = False
 
 
 class ValidateReportRequest(BaseModel):
@@ -405,8 +430,16 @@ class ConditionnementDetailRequest(BaseModel):
     film_product_id: str | None = None
     carton_product_id: str | None = None
     tape_product_id: str | None = None
+    # Which fournisseur each packaging item came from -- informational only, see
+    # ConditionnementReportDetail.film_supplier_id.
+    film_supplier_id: str | None = None
+    carton_supplier_id: str | None = None
+    tape_supplier_id: str | None = None
     packaging_location_id: str | None = None
     finished_goods_location_id: str | None = None
+    # The daily report whose output this run packaged. Optional -- see the
+    # field's docstring on ConditionnementReportDetail.
+    daily_report_id: str | None = None
     # Déchets: product and packaging stages only.
     waste_lines: list[WasteLineRequest] = []
 
@@ -427,6 +460,9 @@ class CreateConditionnementReportRequest(BaseModel):
     report_date: datetime.date
     team: str | None = None
     work_center_id: str | None = None
+    # Which machine within the work center ran this shift. Optional here, same
+    # as the daily report, and required to submit for the same reason.
+    equipment_id: str | None = None
     shift: str | None = None
     # Only required when the order has no product yet — its first packaging
     # report is what names one.
@@ -473,6 +509,7 @@ def create_work_order(
             product_id=body.product_id,
             planned_quantity=body.planned_quantity,
             work_center_id=body.work_center_id,
+            supervisor_id=body.supervisor_id,
             recipe_id=body.recipe_id,
             packaging_bom_id=body.packaging_bom_id,
             start_date=body.start_date,
@@ -499,6 +536,15 @@ def list_work_orders(
     return [_serialize_work_order(o) for o in orders]
 
 
+@router.get("/work-orders/supervisors")
+def list_work_order_supervisors(
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> list[dict]:
+    """Users with the Production role -- who can be named an OF's supervisor."""
+    with get_connection() as connection:
+        return WorkOrderService(connection).list_supervisor_options(tenant_id=tenant.tenant_id)
+
+
 @router.get("/work-orders/yields")
 def list_work_order_yields(
     tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
@@ -514,6 +560,112 @@ def list_recipe_correlation(
     """Each shift's water dosage and flow rate, against its OF's yield."""
     with get_connection() as connection:
         return WorkOrderYieldService(connection).list_recipe_correlation(tenant_id=tenant.tenant_id)
+
+
+@router.get("/work-orders/recipe-correlation/insight")
+def get_recipe_correlation_insight(
+    locale: str = "fr",
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> dict:
+    """A generated one-sentence reading of the same figures `list_recipe_correlation`
+    returns. Never raises for a missing key, a network error or an empty data set --
+    `available: false` just means the card shows nothing, the same way an OF with no
+    validated semoule shows no yield rather than an error."""
+    with get_connection() as connection:
+        rows = WorkOrderYieldService(connection).list_recipe_correlation(tenant_id=tenant.tenant_id)
+    try:
+        text = summarize_recipe_correlation(rows, locale=locale)
+    except RecipeCorrelationInsightUnavailable:
+        return {"available": False, "text": None}
+    return {"available": True, "text": text}
+
+
+class SendIaAssistantMessageRequest(BaseModel):
+    content: str
+    locale: str = "fr"
+
+
+@router.get("/ia-assistant/conversations")
+def list_ia_assistant_conversations(
+    tenant: TenantContext = Depends(require_permission("production.use_ia_assistant")),
+) -> list[dict]:
+    """Only this user's own conversations, in this tenant -- never another user's,
+    even to an admin. See ia_assistant_service's module docstring."""
+    with get_connection() as connection:
+        return ia_assistant_service.list_conversations(connection, tenant_id=tenant.tenant_id, user_id=tenant.user_id)
+
+
+@router.post("/ia-assistant/conversations", status_code=status.HTTP_201_CREATED)
+def create_ia_assistant_conversation(
+    tenant: TenantContext = Depends(require_permission("production.use_ia_assistant")),
+) -> dict:
+    with get_connection() as connection:
+        conversation = ia_assistant_service.create_conversation(connection, tenant_id=tenant.tenant_id, user_id=tenant.user_id)
+        connection.commit()
+    return conversation
+
+
+@router.delete("/ia-assistant/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def delete_ia_assistant_conversation(
+    conversation_id: str,
+    tenant: TenantContext = Depends(require_permission("production.use_ia_assistant")),
+) -> None:
+    with get_connection() as connection:
+        try:
+            ia_assistant_service.delete_conversation(
+                connection, tenant_id=tenant.tenant_id, user_id=tenant.user_id, conversation_id=conversation_id
+            )
+        except ia_assistant_service.IaAssistantNotFound:
+            connection.rollback()
+            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found"})
+        connection.commit()
+
+
+@router.get("/ia-assistant/conversations/{conversation_id}/messages")
+def list_ia_assistant_messages(
+    conversation_id: str,
+    tenant: TenantContext = Depends(require_permission("production.use_ia_assistant")),
+) -> list[dict]:
+    with get_connection() as connection:
+        try:
+            return ia_assistant_service.list_messages(
+                connection, tenant_id=tenant.tenant_id, user_id=tenant.user_id, conversation_id=conversation_id
+            )
+        except ia_assistant_service.IaAssistantNotFound:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found"})
+
+
+@router.post("/ia-assistant/conversations/{conversation_id}/messages", status_code=status.HTTP_201_CREATED)
+def send_ia_assistant_message(
+    conversation_id: str,
+    body: SendIaAssistantMessageRequest,
+    tenant: TenantContext = Depends(require_permission("production.use_ia_assistant")),
+) -> dict:
+    """Runs the Gemini tool-calling loop and persists the exchange. Never a bare
+    500: a missing key/network failure surfaces as 503 (available: false upstream
+    in the UI), a day's quota hit as 429 -- both are expected operating states for
+    a free-tier assistant, not bugs."""
+    with get_connection() as connection:
+        try:
+            reply = ia_assistant_service.send_message(
+                connection,
+                tenant_id=tenant.tenant_id,
+                user_id=tenant.user_id,
+                conversation_id=conversation_id,
+                user_text=body.content,
+                locale=body.locale,
+            )
+        except ia_assistant_service.IaAssistantNotFound:
+            connection.rollback()
+            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found"})
+        except ia_assistant_service.IaAssistantRateLimited as exc:
+            connection.rollback()
+            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, {"code": "RATE_LIMITED", "message": str(exc)})
+        except ia_assistant_service.IaAssistantUnavailable as exc:
+            connection.rollback()
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, {"code": "UNAVAILABLE", "message": str(exc)})
+        connection.commit()
+    return reply
 
 
 @router.get("/work-orders/{work_order_id}/inputs")
@@ -676,6 +828,7 @@ def update_work_order(
             product_id=body.product_id,
             planned_quantity=body.planned_quantity,
             work_center_id=body.work_center_id,
+            supervisor_id=body.supervisor_id,
             recipe_id=body.recipe_id,
             packaging_bom_id=body.packaging_bom_id,
             start_date=body.start_date,
@@ -966,6 +1119,7 @@ def _serialize_work_order(order: WorkOrder) -> dict:
         "planned_quantity": order.planned_quantity,
         "status": order.status,
         "work_center_id": order.work_center_id,
+        "supervisor_id": order.supervisor_id,
         "recipe_id": order.recipe_id,
         "packaging_bom_id": order.packaging_bom_id,
         "start_date": order.start_date.isoformat() if order.start_date is not None else None,
@@ -1094,6 +1248,26 @@ def list_work_centers(
         service = WorkCenterService(connection)
         work_centers = service.list_work_centers(tenant_id=tenant.tenant_id)
     return [_serialize_work_center(wc) for wc in work_centers]
+
+
+@router.get("/machines")
+def list_machines(
+    work_center_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """Machines a report can be attributed to -- every one tenant-wide, or one
+    line's, when `work_center_id` narrows it (e.g. filling a report's machine
+    field, where only the OF's own line's machines are offered).
+
+    A thin pass-through into maintenance's own EquipmentService (an in-process
+    call to its public API, the same pattern report_stock_service uses to call
+    warehouse), gated by a production permission -- so a floor user filing or
+    reading a report is never also required to hold maintenance.view_equipment
+    just to see which machine ran it.
+    """
+    with get_connection() as connection:
+        equipment = EquipmentService(connection).list_equipment(tenant_id=tenant.tenant_id, work_center_id=work_center_id)
+    return [{"id": e.id, "code": e.code, "name": e.name, "status": e.status} for e in equipment]
 
 
 @router.patch("/work-centers/{work_center_id}")
@@ -1356,6 +1530,7 @@ def _serialize_regrind_batch(batch: dict) -> dict:
     return {
         "work_order": _serialize_work_order(batch["work_order"]),
         "scrap_record_ids": batch["scrap_record_ids"],
+        "scrap_inputs": batch["scrap_inputs"],
         "input_quantity_total": batch["input_quantity_total"],
         "actual_output_quantity": batch["actual_output_quantity"],
         "loss_quantity": batch["loss_quantity"],
@@ -1580,6 +1755,9 @@ def _report_err_status(code: str) -> int:
         "REGRIND_DEFAULT_MISSING",
         "MISSING_STOCK_TARGET",
         "REGRIND_ALREADY_COMPLETED",
+        "REGRIND_STOCK_MOVE_NOT_FOUND",
+        "REGRIND_DELTA_REQUIRES_NEW_ORDER",
+        "REGRIND_MULTIPLE_CLOSED_BATCHES",
     ):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
@@ -1599,6 +1777,7 @@ def create_daily_report(
             detail=body.detail.to_detail(),
             team=body.team,
             work_center_id=body.work_center_id,
+            equipment_id=body.equipment_id,
             shift=body.shift,
         )
         if isinstance(result, Err):
@@ -1642,6 +1821,30 @@ def list_team_performance(
         )
     with get_connection() as connection:
         return TeamPerformanceService(connection).list_team_performance(
+            tenant_id=tenant.tenant_id, grain=grain, date_from=date_from, date_to=date_to
+        )
+
+
+@router.get("/reports/machine-performance")
+def list_machine_performance(
+    grain: str = Query(default="week"),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """Output, time and downtime from validated reports, bucketed by machine and period.
+
+    Rows are keyed by equipment_id, an opaque reference into maintenance's own
+    schema -- resolve it to a machine's code/name via
+    GET /production/work-centers/{id}/machines or GET /maintenance/equipment.
+    """
+    if grain not in GRAINS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"code": "INVALID_GRAIN", "message": f"grain must be one of {GRAINS}"},
+        )
+    with get_connection() as connection:
+        return MachinePerformanceService(connection).list_machine_performance(
             tenant_id=tenant.tenant_id, grain=grain, date_from=date_from, date_to=date_to
         )
 
@@ -1717,6 +1920,7 @@ def create_conditionnement_report(
             detail=body.detail.to_detail(),
             team=body.team,
             work_center_id=body.work_center_id,
+            equipment_id=body.equipment_id,
             shift=body.shift,
             product_id=body.product_id,
         )
@@ -1862,6 +2066,7 @@ def delete_report(
             actor_id=tenant.user_id,
             report_id=report_id,
             reason=body.reason,
+            force=body.force,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -1884,6 +2089,7 @@ def correct_validated_daily_report(
             report_id=report_id,
             detail=body.detail.to_detail(),
             reason=body.reason,
+            force=body.force,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -1940,6 +2146,7 @@ def _serialize_report(report: ProductionReport) -> dict:
         "revision": report.revision,
         "team": report.team,
         "work_center_id": report.work_center_id,
+        "equipment_id": report.equipment_id,
         "shift": report.shift,
         "created_by": report.created_by,
         "submitted_at": report.submitted_at.isoformat() if report.submitted_at is not None else None,
@@ -1957,7 +2164,9 @@ def _serialize_daily_detail(detail: DailyReportDetail) -> dict:
         "water_quantity": detail.water_quantity,
         "water_percentage": detail.water_percentage,
         "fuel_quantity": detail.fuel_quantity,
+        "fuel_supplier_id": detail.fuel_supplier_id,
         "gasoil_quantity": detail.gasoil_quantity,
+        "gasoil_supplier_id": detail.gasoil_supplier_id,
         "electricity_quantity": detail.electricity_quantity,
         "semolina_flow_rate": detail.semolina_flow_rate,
         "start_time": detail.start_time.isoformat() if detail.start_time is not None else None,
@@ -1993,8 +2202,12 @@ def _serialize_conditionnement_detail(detail: ConditionnementReportDetail) -> di
         "film_product_id": detail.film_product_id,
         "carton_product_id": detail.carton_product_id,
         "tape_product_id": detail.tape_product_id,
+        "film_supplier_id": detail.film_supplier_id,
+        "carton_supplier_id": detail.carton_supplier_id,
+        "tape_supplier_id": detail.tape_supplier_id,
         "packaging_location_id": detail.packaging_location_id,
         "finished_goods_location_id": detail.finished_goods_location_id,
+        "daily_report_id": detail.daily_report_id,
         "waste_lines": [_serialize_waste_line(line) for line in detail.waste_lines],
     }
 

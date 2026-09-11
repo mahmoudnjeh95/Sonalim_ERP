@@ -32,7 +32,7 @@ TENANT = "integration-test-variance"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, location, quarantine, work_center = (str(ULID()) for _ in range(5))
+    uom, product, location, quarantine, work_center, equipment = (str(ULID()) for _ in range(6))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -64,6 +64,10 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'VAR-WC', 'Line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'VAR-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
 
     # Cartons are a real stock consumption, so the carton figure has to name a
     # product and a store before a report will submit.
@@ -93,6 +97,7 @@ def env(db):
         "location": location,
         "quarantine": quarantine,
         "work_center": work_center,
+        "equipment": equipment,
         "carton": carton,
         "packaging_location": packaging_location,
     }
@@ -124,6 +129,7 @@ def _validated_daily_report(db, env, of, *, tonnage, date, shift):
         of_id=of.id,
         report_date=date,
         shift=shift,
+        equipment_id=env["equipment"],
         detail=DailyReportDetail(finished_product_quantity=tonnage),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
@@ -143,6 +149,7 @@ def _validated_report(db, env, of, *, tonnage, packets, cartons, date, shift="mo
         of_id=of.id,
         report_date=date,
         shift=shift,
+        equipment_id=env["equipment"],
         detail=ConditionnementReportDetail(
             packets_counted=packets,
             carton_quantity=cartons,

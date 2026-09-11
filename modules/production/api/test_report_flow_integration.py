@@ -33,7 +33,7 @@ def env(db):
     tests pass on any migrated database — seeded or empty.
     """
     actor = str(ULID())
-    uom, product, location, work_center = (str(ULID()) for _ in range(4))
+    uom, product, location, work_center, equipment = (str(ULID()) for _ in range(5))
 
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
@@ -55,6 +55,10 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'TEST-WC', 'Test line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'TEST-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
 
     # Stock for the line to consume. Without this every validated report would be a
     # shortfall, which is a real case but not the ordinary one.
@@ -72,6 +76,7 @@ def env(db):
         "product": product,
         "location": location,
         "work_center": work_center,
+        "equipment": equipment,
     }
 
 
@@ -130,6 +135,7 @@ def _draft_report(db, env, of_id, report_date=datetime.date(2026, 9, 1), shift="
         report_date=report_date,
         team="A",
         shift=shift,
+        equipment_id=env["equipment"],
         detail=_detail(env, **detail_kwargs),
     )
     assert isinstance(result, Ok), getattr(result, "message", "")
@@ -200,6 +206,70 @@ def test_an_of_must_name_its_work_center(db, env):
             "VALUES (%s, %s, 'OF-Y', %s, 1, 'planned')",
             (str(ULID()), TENANT, env["product"]),
         )
+
+
+# --- supervisor --------------------------------------------------------------
+
+
+def test_an_of_can_be_created_and_later_given_a_supervisor(db, env):
+    """Unlike work_center_id, supervisor_id is never required -- it can be left
+    unset at creation and named later through the edit form."""
+    service = WorkOrderService(db)
+    created = service.create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"],
+        planned_quantity=100, work_center_id=env["work_center"],
+    )
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    assert created.value.supervisor_id is None
+
+    updated = service.admin_update_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], work_order_id=created.value.id, supervisor_id=env["actor"],
+    )
+    assert isinstance(updated, Ok), getattr(updated, "message", "")
+    assert updated.value.supervisor_id == env["actor"]
+
+    reloaded = service.get_work_order(tenant_id=TENANT, work_order_id=created.value.id)
+    assert reloaded.supervisor_id == env["actor"]
+
+
+def test_an_of_can_name_its_supervisor_at_creation(db, env):
+    service = WorkOrderService(db)
+    created = service.create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"],
+        planned_quantity=100, work_center_id=env["work_center"], supervisor_id=env["actor"],
+    )
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    assert created.value.supervisor_id == env["actor"]
+
+
+def test_supervisor_options_are_scoped_to_the_production_role(db, env):
+    """Finance/CRM/etc. accounts must never show up in the OF supervisor picker."""
+    role_production, role_finance = str(ULID()), str(ULID())
+    production_user, finance_user = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.roles (id, tenant_id, code, name) VALUES (%s, %s, 'production', 'Production')",
+        (role_production, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.roles (id, tenant_id, code, name) VALUES (%s, %s, 'finance', 'Finance')",
+        (role_finance, TENANT),
+    )
+    for user_id, email in ((production_user, "floor-lead@test.local"), (finance_user, "accountant@test.local")):
+        db.execute(
+            "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
+            (user_id, TENANT, email),
+        )
+    db.execute(
+        "INSERT INTO core.user_roles (user_id, role_id) VALUES (%s, %s)", (production_user, role_production)
+    )
+    db.execute(
+        "INSERT INTO core.user_roles (user_id, role_id) VALUES (%s, %s)", (finance_user, role_finance)
+    )
+
+    options = WorkOrderService(db).list_supervisor_options(tenant_id=TENANT)
+    emails = {o["email"] for o in options}
+    assert "floor-lead@test.local" in emails
+    assert "accountant@test.local" not in emails
 
 
 # --- revision snapshots -----------------------------------------------------
@@ -593,6 +663,7 @@ def test_a_report_must_name_what_it_moves_before_it_can_be_submitted(db, env):
         actor_id=env["actor"],
         of_id=_open_of(db, env).id,
         report_date=datetime.date(2026, 9, 4),
+        equipment_id=env["equipment"],
         detail=DailyReportDetail(semolina_lines=(SemolinaLine(quantity=1000),)),
     )
     assert isinstance(result, Ok), getattr(result, "message", "")
@@ -602,6 +673,27 @@ def test_a_report_must_name_what_it_moves_before_it_can_be_submitted(db, env):
     )
     assert isinstance(submitted, Err)
     assert submitted.code == "MISSING_STOCK_TARGET"
+
+
+def test_a_report_without_a_machine_cannot_be_submitted(db, env):
+    """A line like Line_1_PL can carry more than one machine at once, so a report
+    that never names which one it ran on can never be attributed to a machine
+    again once it leaves the draft stage."""
+    result = ProductionReportService(db).create_daily_report(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=_open_of(db, env).id,
+        report_date=datetime.date(2026, 9, 5),
+        detail=_detail(env, semolina_quantity=500),
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+    assert result.value["report"].equipment_id is None
+
+    submitted = ProductionReportService(db).submit_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=result.value["report"].id
+    )
+    assert isinstance(submitted, Err)
+    assert submitted.code == "MISSING_MACHINE"
 
 
 # --- reject and revise ------------------------------------------------------

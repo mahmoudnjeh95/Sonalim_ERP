@@ -1,13 +1,17 @@
+import { useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { History } from "lucide-react";
 import { Badge } from "../ui/badge";
 import { Skeleton } from "../ui/skeleton";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../ui/table";
 import { EmptyState } from "./EmptyState";
 import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
+import { StockMoveDetailDialog } from "./StockMoveDetailDialog";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { MOVE_TYPE_VARIANT, useMoveTypeLabels } from "../../lib/stockMoveTypes";
+import { MOVE_TYPE_VARIANT, formatMoveReference, signedMoveQuantity, useMoveTypeLabels, useReferenceKindLabels } from "../../lib/stockMoveTypes";
 import { useI18n } from "../../lib/i18n";
 import type { StockMove } from "../../features/warehouse/api";
+import type { RegrindScrapInput } from "../../features/production/api";
 
 function formatWhen(iso: string, language: string) {
   return new Date(iso).toLocaleString(language === "fr" ? "fr-FR" : "en-US", { dateStyle: "medium", timeStyle: "short" });
@@ -24,18 +28,35 @@ export function StockMoveHistoryTable({
   moves,
   isLoading,
   locationName,
+  locationCode,
   productName,
+  productSku,
+  unit,
+  workOrders,
+  regrindSources,
   showProductColumn = false,
 }: {
   tableKey: string;
   moves: StockMove[];
   isLoading: boolean;
   locationName: (id: string) => string;
+  /** Optional -- the row-detail dialog shows the location's code alongside its name when given. */
+  locationCode?: (id: string) => string | null | undefined;
   productName?: (id: string) => string;
+  /** Optional -- the row-detail dialog shows the product's SKU alongside its name when given. */
+  productSku?: (id: string) => string | null | undefined;
+  /** Optional -- lets the row-detail dialog print the quantity with its unit. */
+  unit?: (productId: string) => string | null;
+  /** Optional -- lets the row-detail dialog show the work order behind a movement, by its own reference. */
+  workOrders?: { id: string; reference: string }[];
+  /** Optional -- lets the row-detail dialog trace a regrind receipt back to the production OF(s) its scrap came from, keyed by the regrind batch's own work order id. */
+  regrindSources?: Record<string, RegrindScrapInput[]>;
   showProductColumn?: boolean;
 }) {
   const { t, language } = useI18n();
   const MOVE_TYPE_LABEL = useMoveTypeLabels();
+  const REFERENCE_KIND_LABEL = useReferenceKindLabels();
+  const [selectedMove, setSelectedMove] = useState<StockMove | null>(null);
 
   const allColumns: ColumnDef<StockMove>[] = [
     {
@@ -62,10 +83,10 @@ export function StockMoveHistoryTable({
     {
       key: "type",
       header: t("warehouse.stockHistory.column.type"),
-      defaultWidth: 170,
+      defaultWidth: 220,
       cell: (move) => (
-        <Badge variant={MOVE_TYPE_VARIANT[move.move_type]} dot>
-          {MOVE_TYPE_LABEL[move.move_type]}
+        <Badge variant={MOVE_TYPE_VARIANT[move.move_type]} dot className="max-w-full" title={MOVE_TYPE_LABEL[move.move_type]}>
+          <span className="min-w-0 truncate">{MOVE_TYPE_LABEL[move.move_type]}</span>
         </Badge>
       ),
       sortValue: (move) => MOVE_TYPE_LABEL[move.move_type],
@@ -74,19 +95,30 @@ export function StockMoveHistoryTable({
       key: "quantity",
       header: t("warehouse.stockHistory.column.quantity"),
       defaultWidth: 140,
-      cell: (move) => (
-        <span className={`tabular-nums ${move.quantity < 0 || move.move_type === "issue" ? "text-destructive" : "text-success"}`}>
-          {move.move_type === "issue" ? "-" : move.quantity > 0 && move.move_type !== "adjustment" ? "+" : ""}
-          {move.quantity}
-        </span>
-      ),
-      sortValue: (move) => move.quantity,
+      cell: (move) => {
+        const signed = signedMoveQuantity(move);
+        return (
+          <span className={`tabular-nums ${signed < 0 ? "text-destructive" : "text-success"}`}>
+            {signed > 0 ? "+" : ""}
+            {signed}
+          </span>
+        );
+      },
+      sortValue: (move) => signedMoveQuantity(move),
     },
     {
       key: "reference",
       header: t("warehouse.stockHistory.column.reference"),
-      defaultWidth: 180,
-      cell: (move) => <span className="text-muted-foreground">{move.reference}</span>,
+      defaultWidth: 220,
+      cell: (move) => {
+        const { label, suffix } = formatMoveReference(move.reference, REFERENCE_KIND_LABEL);
+        return (
+          <span className="flex min-w-0 items-baseline gap-1 text-muted-foreground" title={move.reference}>
+            <span className="min-w-0 truncate">{label}</span>
+            {suffix && <span className="shrink-0 font-mono text-xs text-muted-foreground/70">#{suffix}</span>}
+          </span>
+        );
+      },
       sortValue: (move) => move.reference,
     },
     {
@@ -144,17 +176,43 @@ export function StockMoveHistoryTable({
               </TableCell>
             </TableRow>
           )}
-          {sortedMoves.map((move) => (
-            <TableRow key={move.id}>
-              {visibleColumns.map((column) => (
-                <TableCell key={column.key} className={column.cellClassName}>
-                  {column.cell(move)}
-                </TableCell>
-              ))}
-            </TableRow>
-          ))}
+          <AnimatePresence initial={false}>
+            {sortedMoves.map((move) => (
+              <motion.tr
+                key={move.id}
+                layout
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                exit={{ opacity: 0 }}
+                className="cursor-pointer border-b border-border transition-colors hover:bg-muted/50"
+                onClick={() => setSelectedMove(move)}
+              >
+                {visibleColumns.map((column) => (
+                  <TableCell key={column.key} className={column.cellClassName}>
+                    {column.cell(move)}
+                  </TableCell>
+                ))}
+              </motion.tr>
+            ))}
+          </AnimatePresence>
         </TableBody>
       </Table>
+
+      {selectedMove && (
+        <StockMoveDetailDialog
+          move={selectedMove}
+          moveTypeLabel={MOVE_TYPE_LABEL[selectedMove.move_type]}
+          productLabel={productName ? productName(selectedMove.product_id) : selectedMove.product_id}
+          productSku={productSku?.(selectedMove.product_id)}
+          locationLabel={locationName(selectedMove.location_id)}
+          locationCode={locationCode?.(selectedMove.location_id)}
+          unit={unit ? unit(selectedMove.product_id) : null}
+          workOrders={workOrders}
+          productName={productName}
+          regrindSources={regrindSources}
+          onClose={() => setSelectedMove(null)}
+        />
+      )}
     </div>
   );
 }

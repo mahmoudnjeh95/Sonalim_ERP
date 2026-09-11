@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -29,10 +30,12 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { StockMoveDetailDialog } from "../../components/patterns/StockMoveDetailDialog";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { MOVE_TYPE_VARIANT, useMoveTypeLabels } from "../../lib/stockMoveTypes";
+import { MOVE_TYPE_VARIANT, formatMoveReference, signedMoveQuantity, useMoveTypeLabels, useReferenceKindLabels } from "../../lib/stockMoveTypes";
 import { adjustStock, listLocations, listProducts, listStockMoves, listUoms, type StockMove, type StockMoveType } from "./api";
+import { listWorkOrders } from "../production/api";
 
 const adjustSchema = z.object({
   product_id: z.string().min(1, "Required"),
@@ -58,12 +61,20 @@ export function StockHistoryTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [moveTypeFilter, setMoveTypeFilter] = useState<MoveTypeFilter>("all");
+  const [selectedMove, setSelectedMove] = useState<StockMove | null>(null);
 
   const MOVE_TYPE_LABEL = useMoveTypeLabels();
+  const REFERENCE_KIND_LABEL = useReferenceKindLabels();
 
   const { data: moves = [], isLoading } = useQuery({ queryKey: MOVES_QUERY_KEY, queryFn: () => listStockMoves(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
+  // Best-effort: a role without production.view_work_orders just doesn't get the
+  // "work order" row in the move-detail dialog, rather than an error anywhere.
+  const { data: workOrders = [] } = useQuery({
+    queryKey: ["production", "work-orders"],
+    queryFn: () => listWorkOrders(token),
+  });
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
   const locationName = (id: string) => locations.find((l) => l.id === id)?.name ?? "—";
@@ -139,10 +150,10 @@ export function StockHistoryTab() {
     {
       key: "type",
       header: t("warehouse.stockHistory.column.type"),
-      defaultWidth: 160,
+      defaultWidth: 220,
       cell: (move) => (
-        <Badge variant={MOVE_TYPE_VARIANT[move.move_type]} dot>
-          {MOVE_TYPE_LABEL[move.move_type]}
+        <Badge variant={MOVE_TYPE_VARIANT[move.move_type]} dot className="max-w-full" title={MOVE_TYPE_LABEL[move.move_type]}>
+          <span className="min-w-0 truncate">{MOVE_TYPE_LABEL[move.move_type]}</span>
         </Badge>
       ),
       sortValue: (move) => MOVE_TYPE_LABEL[move.move_type],
@@ -151,12 +162,15 @@ export function StockHistoryTab() {
       key: "quantity",
       header: t("warehouse.stockHistory.column.quantity"),
       defaultWidth: 140,
-      cell: (move) => (
-        <span className={`tabular-nums ${move.quantity < 0 || move.move_type === "issue" ? "text-destructive" : "text-success"}`}>
-          {move.move_type === "issue" ? "-" : move.quantity > 0 && move.move_type !== "adjustment" ? "+" : ""}
-          {move.quantity}
-        </span>
-      ),
+      cell: (move) => {
+        const signed = signedMoveQuantity(move);
+        return (
+          <span className={`tabular-nums ${signed < 0 ? "text-destructive" : "text-success"}`}>
+            {signed > 0 ? "+" : ""}
+            {signed}
+          </span>
+        );
+      },
       filterCell: {
         type: "range",
         min: columnFilters.range.quantity?.min ?? "",
@@ -164,13 +178,21 @@ export function StockHistoryTab() {
         onMinChange: (v) => columnFilters.setRangeValue("quantity", "min", v),
         onMaxChange: (v) => columnFilters.setRangeValue("quantity", "max", v),
       },
-      sortValue: (move) => move.quantity,
+      sortValue: (move) => signedMoveQuantity(move),
     },
     {
       key: "reference",
       header: t("warehouse.stockHistory.column.reference"),
-      defaultWidth: 180,
-      cell: (move) => <span className="text-muted-foreground">{move.reference}</span>,
+      defaultWidth: 220,
+      cell: (move) => {
+        const { label, suffix } = formatMoveReference(move.reference, REFERENCE_KIND_LABEL);
+        return (
+          <span className="flex min-w-0 items-baseline gap-1 text-muted-foreground" title={move.reference}>
+            <span className="min-w-0 truncate">{label}</span>
+            {suffix && <span className="shrink-0 font-mono text-xs text-muted-foreground/70">#{suffix}</span>}
+          </span>
+        );
+      },
       filterCell: {
         type: "text",
         value: columnFilters.text.reference ?? "",
@@ -329,18 +351,42 @@ export function StockHistoryTab() {
                 </TableCell>
               </TableRow>
             )}
-            {sortedMoves.map((move) => (
-              <TableRow key={move.id}>
-                {visibleColumns.map((column) => (
-                  <TableCell key={column.key} className={column.cellClassName}>
-                    {column.cell(move)}
-                  </TableCell>
-                ))}
-              </TableRow>
-            ))}
+            <AnimatePresence initial={false}>
+              {sortedMoves.map((move) => (
+                <motion.tr
+                  key={move.id}
+                  layout
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="cursor-pointer border-b border-border transition-colors hover:bg-muted/50"
+                  onClick={() => setSelectedMove(move)}
+                >
+                  {visibleColumns.map((column) => (
+                    <TableCell key={column.key} className={column.cellClassName}>
+                      {column.cell(move)}
+                    </TableCell>
+                  ))}
+                </motion.tr>
+              ))}
+            </AnimatePresence>
           </TableBody>
         </Table>
       </CardContent>
+
+      {selectedMove && (
+        <StockMoveDetailDialog
+          move={selectedMove}
+          moveTypeLabel={MOVE_TYPE_LABEL[selectedMove.move_type]}
+          productLabel={productName(selectedMove.product_id)}
+          productSku={products.find((p) => p.id === selectedMove.product_id)?.sku}
+          locationLabel={locationName(selectedMove.location_id)}
+          locationCode={locations.find((l) => l.id === selectedMove.location_id)?.code}
+          unit={productUnit(selectedMove.product_id, products, uoms)}
+          workOrders={workOrders}
+          onClose={() => setSelectedMove(null)}
+        />
+      )}
     </Card>
   );
 }

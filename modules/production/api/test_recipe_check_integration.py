@@ -29,7 +29,7 @@ TENANT = "integration-test-recipe-check"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, semoule, rebroyat, additive, pasta, location, work_center = (str(ULID()) for _ in range(7))
+    uom, semoule, rebroyat, additive, pasta, location, work_center, equipment = (str(ULID()) for _ in range(8))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -56,6 +56,10 @@ def env(db):
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'RC-WC', 'Line')",
         (work_center, TENANT),
     )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'RC-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
     stock = StockService(db)
     for product_id in (semoule, rebroyat, additive):
         stock.receive_stock(
@@ -71,6 +75,7 @@ def env(db):
         "pasta": pasta,
         "location": location,
         "work_center": work_center,
+        "equipment": equipment,
     }
 
 
@@ -122,6 +127,7 @@ def _daily(db, env, of, *, date, shift="morning", validate=True, **detail):
     service = ProductionReportService(db)
     created = service.create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=date, shift=shift,
+        equipment_id=env["equipment"],
         detail=DailyReportDetail(**detail),
     )
     assert isinstance(created, Ok), getattr(created, "message", "")

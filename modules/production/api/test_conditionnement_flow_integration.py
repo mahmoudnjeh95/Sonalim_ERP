@@ -26,7 +26,7 @@ TENANT = "integration-test-cond"
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, location, work_center = (str(ULID()) for _ in range(4))
+    uom, product, location, work_center, equipment = (str(ULID()) for _ in range(5))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -46,6 +46,10 @@ def env(db):
     db.execute(
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'TEST-WC', 'Test line')",
         (work_center, TENANT),
+    )
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'TEST-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
     )
 
     film, carton, tape = (str(ULID()) for _ in range(3))
@@ -75,6 +79,7 @@ def env(db):
         "product": product,
         "location": location,
         "work_center": work_center,
+        "equipment": equipment,
         "film": film,
         "carton": carton,
         "tape": tape,
@@ -111,6 +116,7 @@ def _report(db, env, of, **detail_kwargs):
         report_date=datetime.date(2026, 9, 1),
         team="B",
         shift="afternoon",
+        equipment_id=env["equipment"],
         detail=ConditionnementReportDetail(**detail_kwargs),
     )
     assert isinstance(result, Ok), getattr(result, "message", "")

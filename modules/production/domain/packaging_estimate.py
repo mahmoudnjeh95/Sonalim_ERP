@@ -206,6 +206,48 @@ def compute_variance(
     )
 
 
+def finished_quantity_from_count(
+    *, packets_per_carton: float | None, carton_quantity: float, packets_counted: float
+) -> float:
+    """What a carton/sac count says actually became finished goods.
+
+    Decision 24, pulled out of `report_stock_service.post_conditionnement_report`
+    so the stock quantity and the tonnage below are always the same count read
+    two ways rather than two rules that could drift apart. A carton tier makes
+    the carton count the source of truth -- only a closed carton is finished
+    goods ready to move. `packets_counted` is the fallback for a sac (no carton
+    tier) or a report nobody has boxed yet.
+    """
+    if packets_per_carton and packets_per_carton > 0 and carton_quantity > 0:
+        return carton_quantity * packets_per_carton
+    return packets_counted
+
+
+def tonnage_from_count(
+    *,
+    net_weight_grams: float | None,
+    packets_per_carton: float | None,
+    carton_quantity: float,
+    packets_counted: float,
+) -> float:
+    """The weight a carton/sac count represents, in tonnes.
+
+    The inverse of `estimate_packaging`: instead of turning a weighed tonnage
+    into an expected count, this turns the count the line actually reported
+    into a weight, via `finished_quantity_from_count`'s same decision-24 rule.
+    Zero when the product has no net weight configured yet, matching
+    `ConditionnementReportDetail.finished_product_quantity`'s own default --
+    there is nothing to compute from, and a validated report cannot carry a
+    missing figure the way an estimate can.
+    """
+    if net_weight_grams is None or net_weight_grams <= 0:
+        return 0.0
+    units = finished_quantity_from_count(
+        packets_per_carton=packets_per_carton, carton_quantity=carton_quantity, packets_counted=packets_counted
+    )
+    return units * net_weight_grams / GRAMS_PER_TONNE
+
+
 def variance_to_json(variance: PackagingVariance) -> dict:
     """Wire shape. Kept beside the dataclass so the two cannot drift."""
     return {

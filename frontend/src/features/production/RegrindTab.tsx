@@ -36,6 +36,9 @@ import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { useSelection } from "../../lib/useSelection";
+import { useScrapTypeLabels } from "../../lib/scrapTypes";
+import { BulkActionBar } from "../../components/patterns/BulkActionBar";
 import {
   assignRegrindBatch,
   completeRegrindBatch,
@@ -109,6 +112,7 @@ function formatKg(value: number) {
 export function RegrindTab() {
   const { session, hasPermission } = useAuth();
   const { t } = useI18n();
+  const SCRAP_TYPE_LABEL = useScrapTypeLabels();
   const token = session!.token;
   const queryClient = useQueryClient();
   const [scrapDialogOpen, setScrapDialogOpen] = useState(false);
@@ -116,7 +120,6 @@ export function RegrindTab() {
   const [selectedScrapIds, setSelectedScrapIds] = useState<string[]>([]);
   const [regrindFilter, setRegrindFilter] = useState<RegrindFilter>("all");
   const [sourceUncertain, setSourceUncertain] = useState(false);
-  const [productManual, setProductManual] = useState(false);
 
   const { data: scrapRecords = [], isLoading } = useQuery({ queryKey: SCRAP_QUERY_KEY, queryFn: () => listScrapRecords(token) });
   const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
@@ -152,7 +155,6 @@ export function RegrindTab() {
       queryClient.invalidateQueries({ queryKey: SCRAP_QUERY_KEY });
       setScrapDialogOpen(false);
       setSourceUncertain(false);
-      setProductManual(false);
       scrapForm.reset({ scrap_type: "cutting" });
       toast.success(t("production.regrind.recorded"));
     },
@@ -179,6 +181,32 @@ export function RegrindTab() {
       toast.error(t("production.regrind.batches.assignError"), {
         description: error instanceof ApiError ? error.message : undefined,
       });
+    },
+  });
+
+  // Bulk assign: only a batch still in "new" is eligible -- an assigned or
+  // finished one has nothing left for this action to do.
+  const [bulkAssignOpen, setBulkAssignOpen] = useState(false);
+  const batchSelection = useSelection(
+    canAssign ? regrindBatches.filter((b) => b.stage === "new").map((b) => b.work_order_id) : [],
+  );
+  const bulkAssignForm = useForm<AssignBatchForm>({ resolver: zodResolver(assignBatchSchema), defaultValues: { team: "" } });
+
+  const bulkAssignMutation = useMutation({
+    mutationFn: async (input: AssignBatchForm) => {
+      const ids = batchSelection.selectedIds;
+      const settled = await Promise.allSettled(ids.map((id) => assignRegrindBatch(token, id, input.team)));
+      return settled.filter((r) => r.status === "fulfilled").length;
+    },
+    onSuccess: (succeededCount) => {
+      queryClient.invalidateQueries({ queryKey: REGRIND_BATCHES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: WORK_ORDERS_QUERY_KEY });
+      const failedCount = batchSelection.selectedIds.length - succeededCount;
+      if (succeededCount > 0) toast.success(`${succeededCount} ${t("production.regrind.batches.bulkAssignSucceeded")}`);
+      if (failedCount > 0) toast.error(`${failedCount} ${t("production.regrind.batches.bulkAssignFailed")}`);
+      setBulkAssignOpen(false);
+      bulkAssignForm.reset({ team: "" });
+      batchSelection.clear();
     },
   });
 
@@ -247,7 +275,7 @@ export function RegrindTab() {
       : scrapRecords.filter((s) => (regrindFilter === "reground" ? s.is_reground : !s.is_reground));
 
   function scrapTypeLabel(record: ScrapRecord): string {
-    return record.scrap_type === "cutting" ? t("production.regrind.scrapType.cutting") : t("production.regrind.scrapType.fillingDosing");
+    return SCRAP_TYPE_LABEL[record.scrap_type];
   }
 
   function workCenterLabel(workCenterId: string | null): string {
@@ -371,6 +399,30 @@ export function RegrindTab() {
   const sortedScrapRecords = scrapTable.sortRows(filteredScrapRecords);
 
   const batchColumns: ColumnDef<RegrindBatchSummary>[] = [
+    ...(canAssign
+      ? [
+          {
+            key: "select",
+            header: (
+              <Checkbox
+                checked={batchSelection.allSelected}
+                onCheckedChange={() => batchSelection.toggleAll()}
+                aria-label={t("common.selectAll")}
+              />
+            ),
+            defaultWidth: 40,
+            alwaysVisible: true,
+            cell: (batch) =>
+              batch.stage === "new" && (
+                <Checkbox
+                  checked={batchSelection.isSelected(batch.work_order_id)}
+                  onCheckedChange={() => batchSelection.toggle(batch.work_order_id)}
+                  aria-label={t("production.regrind.batches.assign")}
+                />
+              ),
+          } satisfies ColumnDef<RegrindBatchSummary>,
+        ]
+      : []),
     {
       key: "output",
       header: t("production.regrind.batches.column.output"),
@@ -631,7 +683,6 @@ export function RegrindTab() {
                 setScrapDialogOpen(open);
                 if (!open) {
                   setSourceUncertain(false);
-                  setProductManual(false);
                 }
               }}
             >
@@ -733,24 +784,19 @@ export function RegrindTab() {
                   </div>
 
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between">
-                      <Label htmlFor="product_id">{t("production.regrind.field.scrapProductId")}</Label>
-                      <Button type="button" variant="ghost" size="sm" onClick={() => setProductManual((prev) => !prev)}>
-                        {productManual ? t("production.regrind.chooseFromList") : t("production.regrind.enterManually")}
-                      </Button>
-                    </div>
-                    {productManual ? (
-                      <Input id="product_id" placeholder="e.g. fusilli-dough-scrap" {...scrapForm.register("product_id")} />
-                    ) : (
-                      <Select id="product_id" {...scrapForm.register("product_id")}>
-                        <option value="">—</option>
-                        {products.map((product) => (
-                          <option key={product.id} value={product.id}>
-                            {product.name}
-                          </option>
-                        ))}
-                      </Select>
-                    )}
+                    <Label htmlFor="product_id">{t("production.regrind.field.scrapProductId")}</Label>
+                    {/* product_id has a real FK to core.products (scrap_records_product_id_fkey) --
+                        free text here used to reach the backend as-is and crash the request with an
+                        unhandled ForeignKeyViolation, which the browser then misreported as CORS
+                        blocked. Only a value that actually exists in this list can be submitted. */}
+                    <Select id="product_id" {...scrapForm.register("product_id")}>
+                      <option value="">—</option>
+                      {products.map((product) => (
+                        <option key={product.id} value={product.id}>
+                          {product.name}
+                        </option>
+                      ))}
+                    </Select>
                     {scrapForm.formState.errors.product_id && (
                       <p className="text-sm text-destructive">{scrapForm.formState.errors.product_id.message}</p>
                     )}
@@ -927,6 +973,72 @@ export function RegrindTab() {
               onReset={batchTable.resetAll}
             />
           </div>
+          {canAssign && (
+            <BulkActionBar count={batchSelection.count} onClear={batchSelection.clear}>
+              <Dialog
+                open={bulkAssignOpen}
+                onOpenChange={(open) => {
+                  setBulkAssignOpen(open);
+                  if (open) bulkAssignForm.reset({ team: "" });
+                }}
+              >
+                <DialogTrigger asChild>
+                  <Button size="sm">
+                    <Users className="h-3.5 w-3.5" />
+                    {t("production.regrind.batches.bulkAssign")}
+                  </Button>
+                </DialogTrigger>
+                <DialogContent>
+                  <DialogHeader>
+                    <DialogTitle>{t("production.regrind.batches.dialog.bulkAssign.title")}</DialogTitle>
+                    <DialogDescription>{t("production.regrind.batches.dialog.bulkAssign.description")}</DialogDescription>
+                  </DialogHeader>
+                  {/* The review step: what "bulk" actually means here, spelled out
+                      row by row, before one team gets handed all of it at once. */}
+                  <div className="max-h-48 space-y-1 overflow-y-auto rounded-md border border-border p-2">
+                    {regrindBatches
+                      .filter((batch) => batchSelection.isSelected(batch.work_order_id))
+                      .map((batch) => (
+                        <div key={batch.work_order_id} className="flex items-center justify-between gap-2 text-sm">
+                          <span className="font-medium">{productName(batch.output_product_id)}</span>
+                          <span className="tabular-nums text-muted-foreground">{formatKg(batch.output_quantity)} KG</span>
+                        </div>
+                      ))}
+                  </div>
+                  {teamOptions.length === 0 ? (
+                    <div className="rounded-lg border border-warning/20 bg-warning-soft p-3 text-sm text-warning">
+                      {t("production.regrind.batches.noTeamsConfigured")}
+                    </div>
+                  ) : (
+                    <form
+                      className="space-y-4"
+                      onSubmit={bulkAssignForm.handleSubmit((input) => bulkAssignMutation.mutate(input))}
+                    >
+                      <div className="space-y-1.5">
+                        <Label htmlFor="bulk_batch_team">{t("production.regrind.batches.field.team")}</Label>
+                        <Select id="bulk_batch_team" {...bulkAssignForm.register("team")}>
+                          <option value="">—</option>
+                          {teamOptions.map((team) => (
+                            <option key={team} value={team}>
+                              {team}
+                            </option>
+                          ))}
+                        </Select>
+                        {bulkAssignForm.formState.errors.team && (
+                          <p className="text-sm text-destructive">{bulkAssignForm.formState.errors.team.message}</p>
+                        )}
+                      </div>
+                      <Button type="submit" className="w-full" disabled={bulkAssignMutation.isPending}>
+                        {bulkAssignMutation.isPending
+                          ? t("production.regrind.batches.bulkAssigning")
+                          : t("production.regrind.batches.bulkAssign")}
+                      </Button>
+                    </form>
+                  )}
+                </DialogContent>
+              </Dialog>
+            </BulkActionBar>
+          )}
         </CardHeader>
         <CardContent className="p-0">
           <Table colWidths={batchTable.colWidths}>
