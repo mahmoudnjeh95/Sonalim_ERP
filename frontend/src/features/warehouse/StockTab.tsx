@@ -7,6 +7,7 @@ import {
   ArrowLeftRight,
   Boxes,
   MoreHorizontal,
+  Package,
   PackageCheck,
   PackageMinus,
   PackageSearch,
@@ -16,10 +17,11 @@ import {
   Warehouse,
   Wrench,
 } from "lucide-react";
+import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { currentLocale, useI18n } from "../../lib/i18n";
 import { productRequiresIntegerQuantity, productUnit } from "../../lib/units";
 import { ApiError } from "../../lib/api";
 import { cn } from "../../lib/utils";
@@ -112,6 +114,10 @@ const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 
+function formatQty(amount: number) {
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 1 }).format(amount);
+}
+
 function breakdownByUnit(items: StockItem[], unitOf: (item: StockItem) => string, pick: (item: StockItem) => number): UnitBreakdownEntry[] {
   const totals = new Map<string, number>();
   for (const item of items) {
@@ -134,6 +140,7 @@ export function StockTab() {
   const [activeLocationId, setActiveLocationId] = useState<string | "all">("all");
   const [historyProductId, setHistoryProductId] = useState<string | null>(null);
   const [rowAction, setRowAction] = useState<RowAction | null>(null);
+  const [cartonItem, setCartonItem] = useState<StockItem | null>(null);
 
   const { data: items = [], isLoading } = useQuery({ queryKey: STOCK_QUERY_KEY, queryFn: () => listStock(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
@@ -159,6 +166,14 @@ export function StockTab() {
     if (!productId) return null;
     const unit = productUomCode(productId);
     return productRequiresIntegerQuantity(productId, products, uoms) ? `${unit} · ${t("common.wholeNumberOnly")}` : unit;
+  };
+  // Only finished goods carry this -- packets-per-carton is set per product in
+  // Production > Product Classifications. Raw materials, spares, etc. have no
+  // carton, so the column just shows a dash for them rather than a bogus 1-pack figure.
+  const packetsPerCarton = (productId: string) => products.find((p) => p.id === productId)?.packets_per_carton ?? null;
+  const cartonsOnHand = (item: StockItem) => {
+    const perCarton = packetsPerCarton(item.product_id);
+    return perCarton ? item.quantity_on_hand / perCarton : null;
   };
 
   const { data: historyMoves = [], isLoading: historyLoading } = useQuery({
@@ -395,6 +410,30 @@ export function StockTab() {
         onMaxChange: (v) => columnFilters.setRangeValue("quantity_on_hand", "max", v),
       },
       sortValue: (item) => item.quantity_on_hand,
+    },
+    {
+      key: "cartons",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("warehouse.stock.column.cartons")}
+          <HelpTooltip text={t("warehouse.stock.cartons.notConfigured")} />
+        </span>
+      ),
+      defaultWidth: 130,
+      cell: (item) => {
+        const cartons = cartonsOnHand(item);
+        if (cartons === null) return <span className="text-muted-foreground">—</span>;
+        return (
+          <button
+            type="button"
+            className="tabular-nums text-left text-muted-foreground hover:text-foreground hover:underline"
+            onClick={() => setCartonItem(item)}
+          >
+            {formatQty(cartons)}
+          </button>
+        );
+      },
+      sortValue: (item) => cartonsOnHand(item) ?? -1,
     },
     {
       key: "quantity_reserved",
@@ -820,6 +859,72 @@ export function StockTab() {
             workOrders={workOrders}
             regrindSources={regrindSourcesByWorkOrderId}
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={cartonItem !== null} onOpenChange={(open) => !open && setCartonItem(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>
+              {cartonItem ? `${productName(cartonItem.product_id)} · ${locationName(cartonItem.location_id)}` : ""}
+            </DialogTitle>
+            <DialogDescription>{t("warehouse.stock.cartons.dialogDescription")}</DialogDescription>
+          </DialogHeader>
+          {cartonItem &&
+            (() => {
+              const perCarton = packetsPerCarton(cartonItem.product_id)!;
+              const totalPieces = cartonItem.quantity_on_hand;
+              const fullCartons = Math.floor(totalPieces / perCarton);
+              const loosePieces = totalPieces - fullCartons * perCarton;
+              const chartData = [
+                { label: t("warehouse.stock.cartons.chart.fullCartons"), pieces: fullCartons * perCarton },
+                { label: t("warehouse.stock.cartons.chart.loosePieces"), pieces: loosePieces },
+              ];
+              const barColors = ["hsl(217 91% 45%)", "hsl(31 91% 48%)"];
+              return (
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+                    <StatCard
+                      label={t("warehouse.stock.cartons.stat.total")}
+                      value={totalPieces}
+                      icon={<Package className="h-5 w-5" />}
+                      accent="primary"
+                    />
+                    <StatCard
+                      label={t("warehouse.stock.cartons.stat.fullCartons")}
+                      value={fullCartons}
+                      icon={<Boxes className="h-5 w-5" />}
+                      accent="success"
+                    />
+                    <StatCard
+                      label={t("warehouse.stock.cartons.stat.loosePieces")}
+                      value={loosePieces}
+                      icon={<PackageMinus className="h-5 w-5" />}
+                      accent="warning"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    {t("warehouse.stock.cartons.stat.perCarton")}: <span className="tabular-nums">{formatQty(perCarton)}</span>
+                  </p>
+                  <ResponsiveContainer width="100%" height={220}>
+                    <BarChart data={chartData}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
+                      <XAxis dataKey="label" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
+                      <YAxis tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
+                      <Tooltip
+                        formatter={(value) => `${formatQty(Number(value))} ${t("warehouse.stock.cartons.chart.pieces")}`}
+                        contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
+                      />
+                      <Bar dataKey="pieces" radius={[4, 4, 0, 0]}>
+                        {chartData.map((entry, index) => (
+                          <Cell key={entry.label} fill={barColors[index]} />
+                        ))}
+                      </Bar>
+                    </BarChart>
+                  </ResponsiveContainer>
+                </div>
+              );
+            })()}
         </DialogContent>
       </Dialog>
 
