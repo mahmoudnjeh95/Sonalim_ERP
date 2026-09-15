@@ -104,3 +104,24 @@ export function CategoryBadge({ category }: { category: string }) {
   const label = CATEGORY_VARIANT[category as Category] ? t(key) : category;
   return <Badge variant={variant}>{label}</Badge>;
 }
+
+type Priority = "low" | "medium" | "high";
+
+const PRIORITY_VARIANT: Record<Priority, BadgeProps["variant"]> = {
+  low: "outline",
+  medium: "warning",
+  high: "destructive",
+};
+
+/** Red/amber/gray so a scan of the board or table finds the urgent deals first. */
+export function PriorityBadge({ priority }: { priority: string }) {
+  const { t } = useI18n();
+  const variant = PRIORITY_VARIANT[priority as Priority] ?? "default";
+  const key = `priority.${priority}` as Parameters<typeof t>[0];
+  const label = PRIORITY_VARIANT[priority as Priority] ? t(key) : priority;
+  return (
+    <Badge variant={variant} dot={priority === "high"}>
+      {label}
+    </Badge>
+  );
+}

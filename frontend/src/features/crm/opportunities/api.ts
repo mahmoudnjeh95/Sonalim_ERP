@@ -14,6 +14,7 @@ export interface Opportunity {
   owner_id: string | null;
   priority: Priority;
   lost_reason: string | null;
+  created_at: string;
 }
 
 export interface CreateOpportunityInput {

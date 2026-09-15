@@ -1,33 +1,20 @@
 import { useState } from "react";
-import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowRightCircle, BadgeDollarSign, Pencil, Target, ThumbsDown, Trophy } from "lucide-react";
+import { ArrowRightCircle, Pencil, Target, ThumbsDown, Trophy } from "lucide-react";
 import { toast } from "sonner";
-import { z } from "zod";
 import { useAuth } from "../../../lib/auth";
 import { ApiError } from "../../../lib/api";
 import { currentLocale, useI18n } from "../../../lib/i18n";
+import { cn } from "../../../lib/utils";
 import { listUserDirectory, userDisplayName } from "../../../lib/usersApi";
 import { Button } from "../../../components/ui/button";
-import { Input } from "../../../components/ui/input";
-import { Label } from "../../../components/ui/label";
-import { Select } from "../../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../../components/ui/table";
 import { Skeleton } from "../../../components/ui/skeleton";
-import {
-  Dialog,
-  DialogTrigger,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "../../../components/ui/dialog";
 import { StatCard } from "../../../components/patterns/StatCard";
 import { EmptyState } from "../../../components/patterns/EmptyState";
-import { StatusBadge } from "../../../components/patterns/StatusBadge";
+import { StatusBadge, PriorityBadge } from "../../../components/patterns/StatusBadge";
 import { FilterTabs } from "../../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
@@ -35,36 +22,18 @@ import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import { listPartners } from "../../partners/api";
-import {
-  createOpportunity,
-  DEFAULT_PROBABILITY_BY_STAGE,
-  listOpportunities,
-  NEXT_STAGES,
-  transitionOpportunity,
-  updateOpportunity,
-  type Opportunity,
-  type Priority,
-} from "./api";
-
-const newOpportunitySchema = z.object({
-  partner_id: z.string().min(1, "Required"),
-  name: z.string().min(1, "Required"),
-  amount: z.coerce.number().min(0, "Must be >= 0"),
-  expected_close_date: z.string().optional(),
-  probability: z.coerce.number().min(0).max(100),
-  owner_id: z.string().optional(),
-  priority: z.enum(["low", "medium", "high"]),
-});
-type NewOpportunityForm = z.infer<typeof newOpportunitySchema>;
+import { listOpportunities, NEXT_STAGES, transitionOpportunity, type Opportunity } from "./api";
+import { OpportunityFormDialog } from "./OpportunityFormDialog";
+import { MarkLostDialog } from "./MarkLostDialog";
 
 const OPPORTUNITIES_QUERY_KEY = ["crm", "opportunities"] as const;
+const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
 const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 const USER_DIRECTORY_QUERY_KEY = ["core", "users", "directory"] as const;
-const LOST_REASON_CATEGORIES = ["price", "competitor", "timing", "budget", "no_response", "other"] as const;
 type StageFilter = "all" | "open" | "won" | "lost";
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
 }
 
 export function OpportunitiesPage() {
@@ -77,8 +46,6 @@ export function OpportunitiesPage() {
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [mineOnly, setMineOnly] = useState(false);
   const [losingOpportunity, setLosingOpportunity] = useState<Opportunity | null>(null);
-  const [lostReasonCategory, setLostReasonCategory] = useState<string>("");
-  const [lostReasonOther, setLostReasonOther] = useState("");
 
   const {
     data: opportunities = [],
@@ -95,85 +62,28 @@ export function OpportunitiesPage() {
     return user ? userDisplayName(user) : ownerId;
   };
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<NewOpportunityForm>({
-    resolver: zodResolver(newOpportunitySchema),
-    defaultValues: { amount: 0, probability: DEFAULT_PROBABILITY_BY_STAGE.prospecting, priority: "medium" },
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (input: NewOpportunityForm) =>
-      createOpportunity(token, { ...input, expected_close_date: input.expected_close_date || undefined }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: OPPORTUNITIES_QUERY_KEY });
-      setDialogOpen(false);
-      reset({ amount: 0, probability: DEFAULT_PROBABILITY_BY_STAGE.prospecting, priority: "medium" });
-      toast.success(t("crm.opportunities.created"));
-    },
-    onError: (error) => {
-      toast.error(t("crm.opportunities.createError"), { description: error instanceof ApiError ? error.message : undefined });
-    },
-  });
-
-  const updateMutation = useMutation({
-    mutationFn: (input: NewOpportunityForm) =>
-      updateOpportunity(token, editingOpportunity!.id, {
-        ...input,
-        expected_close_date: input.expected_close_date || undefined,
-      }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: OPPORTUNITIES_QUERY_KEY });
-      setDialogOpen(false);
-      setEditingOpportunity(null);
-      reset({ amount: 0, probability: DEFAULT_PROBABILITY_BY_STAGE.prospecting, priority: "medium" });
-      toast.success(t("crm.opportunities.updated"));
-    },
-    onError: (error) => {
-      toast.error(t("crm.opportunities.updateError"), { description: error instanceof ApiError ? error.message : undefined });
-    },
-  });
-
   function openCreateDialog() {
     setEditingOpportunity(null);
-    reset({ partner_id: "", name: "", amount: 0, expected_close_date: "", probability: DEFAULT_PROBABILITY_BY_STAGE.prospecting, owner_id: "", priority: "medium" });
     setDialogOpen(true);
   }
 
   function openEditDialog(opportunity: Opportunity) {
     setEditingOpportunity(opportunity);
-    reset({
-      partner_id: opportunity.partner_id,
-      name: opportunity.name,
-      amount: opportunity.amount,
-      expected_close_date: opportunity.expected_close_date ?? "",
-      probability: opportunity.probability,
-      owner_id: opportunity.owner_id ?? "",
-      priority: opportunity.priority,
-    });
     setDialogOpen(true);
   }
 
   const transitionMutation = useMutation({
-    mutationFn: ({ id, stage, lostReason }: { id: string; stage: Opportunity["stage"]; lostReason?: string }) =>
-      transitionOpportunity(token, id, stage, { lostReason, correlationId: crypto.randomUUID() }),
+    mutationFn: ({ id, stage }: { id: string; stage: Opportunity["stage"] }) =>
+      transitionOpportunity(token, id, stage, { correlationId: crypto.randomUUID() }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: OPPORTUNITIES_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: DASHBOARD_QUERY_KEY });
       toast.success(t("crm.opportunities.updated"));
     },
     onError: (error) => {
       toast.error(t("crm.opportunities.updateError"), { description: error instanceof ApiError ? error.message : undefined });
     },
   });
-
-  function openLostDialog(opportunity: Opportunity) {
-    setLosingOpportunity(opportunity);
-    setLostReasonCategory("");
-    setLostReasonOther("");
-  }
 
   const openCount = opportunities.filter((o) => o.stage !== "won" && o.stage !== "lost").length;
   const wonTotal = opportunities.filter((o) => o.stage === "won").reduce((sum, o) => sum + o.amount, 0);
@@ -244,6 +154,13 @@ export function OpportunitiesPage() {
       sortValue: (opportunity) => opportunity.probability,
     },
     {
+      key: "priority",
+      header: t("crm.opportunities.column.priority"),
+      defaultWidth: 110,
+      cell: (opportunity) => <PriorityBadge priority={opportunity.priority} />,
+      sortValue: (opportunity) => opportunity.priority,
+    },
+    {
       key: "owner",
       header: t("crm.opportunities.column.owner"),
       defaultWidth: 160,
@@ -308,7 +225,7 @@ export function OpportunitiesPage() {
               </Button>
             )}
             {nextStages.includes("lost") && (
-              <Button size="sm" variant="ghost" onClick={() => openLostDialog(opportunity)} disabled={isUpdating}>
+              <Button size="sm" variant="ghost" onClick={() => setLosingOpportunity(opportunity)} disabled={isUpdating}>
                 <ThumbsDown className="h-3.5 w-3.5" />
                 {t("crm.opportunities.markLost")}
               </Button>
@@ -335,9 +252,9 @@ export function OpportunitiesPage() {
         <StatCard
           label={t("crm.opportunities.stat.won")}
           value={Math.round(wonTotal)}
-          icon={<BadgeDollarSign className="h-5 w-5" />}
+          icon={<Trophy className="h-5 w-5" />}
           accent="success"
-          prefix="$"
+          unit="F CFA"
         />
       </div>
 
@@ -365,119 +282,14 @@ export function OpportunitiesPage() {
             )}
             <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
           </div>
-          <Dialog
-            open={dialogOpen}
-            onOpenChange={(open) => {
-              setDialogOpen(open);
-              if (!open) setEditingOpportunity(null);
-            }}
+          <Button
+            onClick={openCreateDialog}
+            disabled={activePartners.length === 0}
+            title={activePartners.length === 0 ? t("crm.opportunities.noAccounts") : undefined}
           >
-            <DialogTrigger asChild>
-              <Button
-                onClick={openCreateDialog}
-                disabled={activePartners.length === 0}
-                title={activePartners.length === 0 ? t("crm.opportunities.noAccounts") : undefined}
-              >
-                <Target className="h-4 w-4" />
-                {t("crm.opportunities.new")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>
-                  {editingOpportunity ? t("crm.opportunities.dialog.editTitle") : t("crm.opportunities.dialog.title")}
-                </DialogTitle>
-                <DialogDescription>
-                  {editingOpportunity
-                    ? t("crm.opportunities.dialog.editDescription")
-                    : t("crm.opportunities.dialog.description")}
-                </DialogDescription>
-              </DialogHeader>
-              <form
-                className="space-y-4"
-                onSubmit={handleSubmit((input) =>
-                  editingOpportunity ? updateMutation.mutate(input) : createMutation.mutate(input),
-                )}
-              >
-                <div className="space-y-1.5">
-                  <Label htmlFor="partner_id">{t("crm.opportunities.field.account")}</Label>
-                  <Select id="partner_id" {...register("partner_id")}>
-                    <option value="">—</option>
-                    {activePartners.map((partner) => (
-                      <option key={partner.id} value={partner.id}>
-                        {partner.name}
-                      </option>
-                    ))}
-                  </Select>
-                  {errors.partner_id && <p className="text-sm text-destructive">{errors.partner_id.message}</p>}
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="name">{t("crm.opportunities.field.name")}</Label>
-                  <Input id="name" {...register("name")} />
-                  {errors.name && <p className="text-sm text-destructive">{errors.name.message}</p>}
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="amount">{t("crm.opportunities.field.amount")}</Label>
-                    <Input id="amount" type="number" step="any" {...register("amount")} />
-                    {errors.amount && <p className="text-sm text-destructive">{errors.amount.message}</p>}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="expected_close_date">{t("crm.opportunities.field.closeDate")}</Label>
-                    <Input id="expected_close_date" type="date" {...register("expected_close_date")} />
-                  </div>
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="probability">{t("crm.opportunities.field.probability")}</Label>
-                    <Input id="probability" type="number" min={0} max={100} {...register("probability")} />
-                    {errors.probability && <p className="text-sm text-destructive">{errors.probability.message}</p>}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="priority">{t("crm.opportunities.field.priority")}</Label>
-                    <Select id="priority" {...register("priority")}>
-                      {(["low", "medium", "high"] as Priority[]).map((priority) => (
-                        <option key={priority} value={priority}>
-                          {t(`priority.${priority}` as Parameters<typeof t>[0])}
-                        </option>
-                      ))}
-                    </Select>
-                  </div>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="owner_id">{t("crm.opportunities.field.owner")}</Label>
-                  <Select id="owner_id" {...register("owner_id")}>
-                    <option value="">{t("crm.opportunities.unassigned")}</option>
-                    {users.map((user) => (
-                      <option key={user.id} value={user.id}>
-                        {userDisplayName(user)}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                {(editingOpportunity ? updateMutation.isError : createMutation.isError) && (
-                  <p className="text-sm text-destructive">
-                    {(editingOpportunity ? updateMutation.error : createMutation.error) instanceof ApiError
-                      ? (editingOpportunity ? updateMutation.error : createMutation.error)?.message
-                      : t(editingOpportunity ? "crm.opportunities.updateError" : "crm.opportunities.createError")}
-                  </p>
-                )}
-                <Button
-                  type="submit"
-                  className="w-full"
-                  disabled={editingOpportunity ? updateMutation.isPending : createMutation.isPending}
-                >
-                  {editingOpportunity
-                    ? updateMutation.isPending
-                      ? t("crm.opportunities.updating")
-                      : t("crm.opportunities.update")
-                    : createMutation.isPending
-                      ? t("crm.opportunities.creating")
-                      : t("crm.opportunities.create")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+            <Target className="h-4 w-4" />
+            {t("crm.opportunities.new")}
+          </Button>
         </CardHeader>
         <CardContent className="p-0">
           <Table colWidths={colWidths}>
@@ -533,7 +345,10 @@ export function OpportunitiesPage() {
                     initial={{ opacity: 0, y: 8 }}
                     animate={{ opacity: 1, y: 0, transition: { delay: Math.min(i * 0.04, 0.3) } }}
                     exit={{ opacity: 0 }}
-                    className="border-b border-border last:border-0 hover:bg-muted/50"
+                    className={cn(
+                      "border-b border-border last:border-0 hover:bg-muted/50",
+                      opportunity.stage === "won" && "bg-success-soft/40 hover:bg-success-soft/60",
+                    )}
                   >
                     {visibleColumns.map((column) => (
                       <TableCell key={column.key} className={column.cellClassName}>
@@ -548,53 +363,15 @@ export function OpportunitiesPage() {
         </CardContent>
       </Card>
 
-      <Dialog open={losingOpportunity !== null} onOpenChange={(open) => !open && setLosingOpportunity(null)}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>{t("crm.opportunities.dialog.lostReasonTitle")}</DialogTitle>
-            <DialogDescription>{t("crm.opportunities.dialog.lostReasonDescription")}</DialogDescription>
-          </DialogHeader>
-          <form
-            className="space-y-4"
-            onSubmit={(event) => {
-              event.preventDefault();
-              if (!losingOpportunity) return;
-              const reason = lostReasonCategory === "other" ? lostReasonOther : lostReasonCategory;
-              transitionMutation.mutate(
-                { id: losingOpportunity.id, stage: "lost", lostReason: reason },
-                { onSuccess: () => setLosingOpportunity(null) },
-              );
-            }}
-          >
-            <div className="space-y-1.5">
-              <Label htmlFor="lost-reason-category">{t("crm.opportunities.field.lostReason")}</Label>
-              <Select
-                id="lost-reason-category"
-                required
-                value={lostReasonCategory}
-                onChange={(e) => setLostReasonCategory(e.target.value)}
-              >
-                <option value="">—</option>
-                {LOST_REASON_CATEGORIES.map((reason) => (
-                  <option key={reason} value={reason}>
-                    {t(`crm.opportunities.lostReason.${reason}` as Parameters<typeof t>[0])}
-                  </option>
-                ))}
-              </Select>
-            </div>
-            {lostReasonCategory === "other" && (
-              <Input required value={lostReasonOther} onChange={(e) => setLostReasonOther(e.target.value)} />
-            )}
-            <Button
-              type="submit"
-              className="w-full"
-              disabled={transitionMutation.isPending || !lostReasonCategory || (lostReasonCategory === "other" && !lostReasonOther.trim())}
-            >
-              {transitionMutation.isPending ? t("crm.opportunities.updating") : t("crm.opportunities.confirmMarkLost")}
-            </Button>
-          </form>
-        </DialogContent>
-      </Dialog>
+      <OpportunityFormDialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          setDialogOpen(open);
+          if (!open) setEditingOpportunity(null);
+        }}
+        opportunity={editingOpportunity}
+      />
+      <MarkLostDialog opportunity={losingOpportunity} onOpenChange={(open) => !open && setLosingOpportunity(null)} />
     </div>
   );
 }
