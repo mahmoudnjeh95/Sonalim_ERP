@@ -32,6 +32,7 @@ class PurchaseOrder:
     expected_date: str | None
     currency_code: str | None
     notes: str | None
+    is_import: bool = False
 
 
 def validate_new_purchase_order(*, currency_code: str | None = None) -> Result[None]:
@@ -68,6 +69,7 @@ def _with_status(order: PurchaseOrder, new_status: str) -> PurchaseOrder:
         expected_date=order.expected_date,
         currency_code=order.currency_code,
         notes=order.notes,
+        is_import=order.is_import,
     )
 
 
@@ -164,6 +166,7 @@ class PurchaseOrderReceipt:
     transit_fee: float
     transport_fee: float
     customs_duty: float
+    handling_fee: float
     total_cost: float
     confirmed_at: str | None
 
@@ -194,11 +197,56 @@ def compute_landed_cost(
     transport_fee: float,
     customs_duty: float,
     quantity: float,
+    handling_fee: float = 0,
 ) -> Result[tuple[float, float]]:
     if quantity <= 0:
         return Err("INVALID_QUANTITY", "quantity must be positive")
-    total_cost = base_cost + license_fee + insurance_fee + transit_fee + transport_fee + customs_duty
+    total_cost = base_cost + license_fee + insurance_fee + transit_fee + transport_fee + customs_duty + handling_fee
     return Ok((total_cost, total_cost / quantity))
+
+
+COST_ANOMALY_THRESHOLD_PCT = 15.0
+
+
+def compute_cost_anomaly(*, cost_per_unit: float, baseline_avg_cost_per_unit: float | None) -> tuple[float | None, bool]:
+    """Flags a receipt line whose cost/unit lands materially above what this material has
+    typically cost -- mirrors the "Majoration" warning triangle in the BD MP tracking sheet
+    this feature is modeled on. baseline_avg_cost_per_unit is that product's (weighted)
+    average cost/unit across every *other* confirmed receipt for it -- None when this is the
+    first receipt for that product/unit, since there's nothing yet to compare against, so
+    nothing is flagged. Only flags overspend (not unusually cheap receipts): "Majoration"
+    means a markup, not a generic anomaly."""
+    if baseline_avg_cost_per_unit is None or baseline_avg_cost_per_unit <= 0:
+        return None, False
+    deviation_pct = (cost_per_unit - baseline_avg_cost_per_unit) / baseline_avg_cost_per_unit * 100
+    return deviation_pct, deviation_pct > COST_ANOMALY_THRESHOLD_PCT
+
+
+# license/insurance/transit/customs only make sense once goods cross a border -- handling
+# and transport are incurred on local deliveries too, so they're not gated here. This is
+# what lets a buyer flip "importation" off at order creation (point 1 of the MP cost plan)
+# and trust that nobody can then sneak a customs line onto a local CFA purchase.
+IMPORT_ONLY_FEES = ("license_fee", "insurance_fee", "transit_fee", "customs_duty")
+
+
+def validate_receipt_fees(
+    *,
+    is_import: bool,
+    license_fee: float,
+    insurance_fee: float,
+    transit_fee: float,
+    customs_duty: float,
+) -> Result[None]:
+    if is_import:
+        return Ok(None)
+    fees = {"license_fee": license_fee, "insurance_fee": insurance_fee, "transit_fee": transit_fee, "customs_duty": customs_duty}
+    offending = [name for name, value in fees.items() if value > 0]
+    if offending:
+        return Err(
+            "IMPORT_FEE_ON_LOCAL_ORDER",
+            f"cannot set {', '.join(offending)} on a receipt for a non-import purchase order",
+        )
+    return Ok(None)
 
 
 @dataclass(frozen=True)

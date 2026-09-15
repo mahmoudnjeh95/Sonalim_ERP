@@ -57,13 +57,11 @@ export function StocksTab() {
     byProduct.set(item.product_id, bucket);
   }
 
-  const allRows: StockRow[] = products
-    .map((product) => {
-      const totals = byProduct.get(product.id) ?? { onHand: 0, reserved: 0, available: 0 };
-      const belowAlert = product.stock_alert_threshold != null && totals.onHand < product.stock_alert_threshold;
-      return { product, ...totals, belowAlert };
-    })
-    .filter((row) => row.onHand !== 0 || row.reserved !== 0);
+  const allRows: StockRow[] = products.map((product) => {
+    const totals = byProduct.get(product.id) ?? { onHand: 0, reserved: 0, available: 0 };
+    const belowAlert = product.stock_alert_threshold != null && totals.onHand < product.stock_alert_threshold;
+    return { product, ...totals, belowAlert };
+  });
 
   const alertFilteredRows = alertFilter === "belowAlert" ? allRows.filter((row) => row.belowAlert) : allRows;
 

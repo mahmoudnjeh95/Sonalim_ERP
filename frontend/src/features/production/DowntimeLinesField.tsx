@@ -3,9 +3,11 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
+import { Select } from "../../components/ui/select";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useI18n } from "../../lib/i18n";
 import { formatDuration } from "../../lib/units";
+import { DOWNTIME_MOTIFS } from "./DowntimeMotifSelect";
 
 /** One row of the arrêt editor. */
 export interface DowntimeLineForm {
@@ -60,11 +62,17 @@ export function DowntimeLinesField<TFieldValues extends FieldValues>({
                 <Label htmlFor={`${name}_${index}_motif`} className="text-xs">
                   {t("production.downtime.field.motif")}
                 </Label>
-                <Input
+                <Select
                   id={`${name}_${index}_motif`}
-                  placeholder={t("production.downtime.motifPlaceholder")}
                   {...form.register(`${name}.${index}.motif` as Path<TFieldValues>)}
-                />
+                >
+                  <option value="">—</option>
+                  {DOWNTIME_MOTIFS.map((motif) => (
+                    <option key={motif} value={motif}>
+                      {t(`production.downtime.motif.${motif}` as Parameters<typeof t>[0])}
+                    </option>
+                  ))}
+                </Select>
               </div>
 
               <div className="space-y-1">

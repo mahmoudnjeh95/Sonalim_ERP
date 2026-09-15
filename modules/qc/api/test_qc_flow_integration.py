@@ -387,7 +387,7 @@ def test_deleting_a_validated_report_closes_its_follow_up_window(db, env, of):
 def test_a_report_with_a_non_conformity_cannot_be_deleted(db, env, of):
     """The NC has already moved product into quarantine. Deleting the report it
     came from would leave that stock stranded with nothing explaining it."""
-    report = _quality_report(db, env, of)
+    report = _quality_report(db, env, of, non_conforming_cartons=10, defect_details="bad film seal")
     NonConformityService(db).raise_non_conformity(
         tenant_id=TENANT,
         actor_id=env["actor"],
@@ -556,6 +556,89 @@ def test_disposition_takes_the_product_back_out_of_quarantine(db, env, of):
         ),
     )
     assert _on_hand(db, env["product"], env["quarantine"]) == 0, "never a straight write-off"
+
+
+def test_rejecting_a_report_returns_its_quarantined_stock_to_source(db, env, of):
+    """A rejected report never made its hold official -- the product must land
+    back where it was pulled from, not just be issued off the books with
+    nothing downstream telling anyone where it went."""
+    report = _quality_report(db, env, of, non_conforming_cartons=10, defect_details="bad film seal")
+    before_shelf = _on_hand(db, env["product"], env["location"])
+
+    raised = NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        product_id=env["product"],
+        quantity=10.0,
+        source_location_id=env["location"],
+        quarantine_location_id=env["quarantine"],
+        defect_type="bad film seal",
+        correlation_id=str(ULID()),
+        quality_report_id=report.id,
+    )
+    assert isinstance(raised, Ok), getattr(raised, "message", "")
+    non_conformity_id = raised.value.id
+    assert _on_hand(db, env["product"], env["quarantine"]) == 10
+    assert _on_hand(db, env["product"], env["location"]) == before_shelf - 10
+
+    submitted = QualityReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    assert isinstance(submitted, Ok), getattr(submitted, "message", "")
+
+    rejected = QualityReportService(db).reject_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="wrong shift recorded"
+    )
+    assert isinstance(rejected, Ok), getattr(rejected, "message", "")
+    assert rejected.value.status == "rejected"
+
+    nc_row = db.execute(
+        "SELECT id FROM qc.non_conformities WHERE tenant_id = %s AND id = %s", (TENANT, non_conformity_id)
+    ).fetchone()
+    assert nc_row is None, "the hold never should have happened once the report describing it is rejected"
+    assert _on_hand(db, env["product"], env["quarantine"]) == 0
+    assert _on_hand(db, env["product"], env["location"]) == before_shelf, "stock must return, not vanish"
+
+
+def test_a_quality_report_backed_nc_converts_cartons_to_the_products_own_unit(db, env, of):
+    """A rapport declares its rejection in cartons; the product here is stocked
+    in pieces (a carton tier of 20). The caller passing a raw carton count as
+    `quantity` -- exactly the bug this closes -- must not reach stock or the
+    ticket unconverted: 1 carton non-conforme has to move and record 20."""
+    db.execute(
+        "UPDATE core.products SET packets_per_carton = 20 WHERE id = %s AND tenant_id = %s",
+        (env["product"], TENANT),
+    )
+    report = _quality_report(db, env, of, non_conforming_cartons=1, defect_details="pieces endommagees")
+    before_shelf = _on_hand(db, env["product"], env["location"])
+
+    raised = NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT,
+        actor_id=env["actor"],
+        of_id=of.id,
+        product_id=env["product"],
+        quantity=1.0,  # what an unconverted caller would send -- must be ignored
+        source_location_id=env["location"],
+        quarantine_location_id=env["quarantine"],
+        defect_type="pieces endommagees",
+        correlation_id=str(ULID()),
+        quality_report_id=report.id,
+    )
+    assert isinstance(raised, Ok), getattr(raised, "message", "")
+    assert raised.value.quantity == 20
+    assert _on_hand(db, env["product"], env["quarantine"]) == 20
+    assert _on_hand(db, env["product"], env["location"]) == before_shelf - 20
+
+
+def test_a_manually_raised_nc_keeps_the_quantity_it_is_given(db, env, of):
+    """No quality report attached -- there is no rapport carton count to derive
+    from, so the quantity the caller supplies (already in the product's own
+    unit, per the manual raise form) is trusted as-is."""
+    db.execute(
+        "UPDATE core.products SET packets_per_carton = 20 WHERE id = %s AND tenant_id = %s",
+        (env["product"], TENANT),
+    )
+    non_conformity = _raise_nc(db, env, of, quantity=7)
+    assert non_conformity.quantity == 7
 
 
 def test_packaging_is_never_deducted_a_second_time(db, env, of):

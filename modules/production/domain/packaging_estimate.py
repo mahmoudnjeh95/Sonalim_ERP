@@ -36,6 +36,20 @@ daily tonnage), and a `None` tonnage is treated exactly like a missing net
 weight: the weight-based figures go absent rather than wrong, and
 `machine_carton_variance` -- which needs no tonnage at all -- still stands on
 its own.
+
+**`waste_cartons` -- cartons the line counted that never held sellable product.**
+A damaged or short-filled carton still gets swept into the floor's physical
+carton tally (`counted_cartons`) the same as a good one, but it has no packets
+to compare against and no business posting as finished goods. Left at the
+default of zero, nothing here changes. Passed a figure, `good_cartons =
+counted_cartons - waste_cartons` is what the carton-side arithmetic actually
+uses -- `carton_variance` against the tonnage estimate, and the carton side of
+`machine_carton_variance` -- so a shift that already told the report "8 of
+these were empty" does not also have that same 8 read back as unaccounted
+product. This is deliberately distinct from quality's `rejected_packets`: a
+rejected packet was real product in a real carton the line still built (the
+carton count is right, only the fate of what was inside it is not), while a
+waste carton was never real product at all.
 """
 
 from __future__ import annotations
@@ -118,6 +132,12 @@ class PackagingVariance:
     undecided_packets: float
     good_packets: float
 
+    # Cartons the line counted that never held product -- empty or damaged,
+    # swept into `counted_cartons` the same as a good one. `good_cartons` is
+    # what the carton-side arithmetic below is actually judged against.
+    waste_cartons: float
+    good_cartons: float
+
     packet_variance: float | None
     packet_variance_ratio: float | None
     carton_variance: float | None
@@ -148,6 +168,7 @@ def compute_variance(
     counted_cartons: float,
     rejected_packets: float = 0.0,
     undecided_packets: float = 0.0,
+    waste_cartons: float = 0.0,
     tolerance_percent: float = DEFAULT_TOLERANCE_PERCENT,
 ) -> PackagingVariance:
     """Compare a tonnage's expected packaging against what was counted.
@@ -156,6 +177,11 @@ def compute_variance(
     scale against the counter, complete the moment a report is validated. Passing
     quality's subtraction gives the ecart net. Same arithmetic either way, which
     is why they can never drift apart.
+
+    `waste_cartons` nets out of the carton side the same way `rejected_packets`
+    nets out of the packet side -- both scopes (report and OF) pass it the same
+    way, so `carton_variance` and `machine_carton_variance` are never inflated by
+    a carton the line itself already said was empty.
     """
     estimate = estimate_packaging(
         tonnage=tonnage,
@@ -164,15 +190,17 @@ def compute_variance(
     )
 
     good_packets = counted_packets - rejected_packets
+    good_cartons = counted_cartons - waste_cartons
 
     packet_variance = None if estimate.packets is None else good_packets - estimate.packets
-    carton_variance = None if estimate.cartons is None else counted_cartons - estimate.cartons
+    carton_variance = None if estimate.cartons is None else good_cartons - estimate.cartons
     packet_ratio = _ratio(packet_variance, estimate.packets)
 
     # Decision 23. Only meaningful for a product with a carton tier -- a sac has
-    # nothing to compare its tally against.
+    # nothing to compare its tally against. `good_cartons` here too: an empty
+    # carton has no packets to reconcile the machine's tally against either.
     carton_equivalent_packets = (
-        None if packets_per_carton is None or packets_per_carton <= 0 else counted_cartons * packets_per_carton
+        None if packets_per_carton is None or packets_per_carton <= 0 else good_cartons * packets_per_carton
     )
     machine_carton_variance = (
         None if carton_equivalent_packets is None else counted_packets - carton_equivalent_packets
@@ -194,6 +222,8 @@ def compute_variance(
         rejected_packets=rejected_packets,
         undecided_packets=undecided_packets,
         good_packets=good_packets,
+        waste_cartons=waste_cartons,
+        good_cartons=good_cartons,
         packet_variance=packet_variance,
         packet_variance_ratio=packet_ratio,
         carton_variance=carton_variance,
@@ -207,7 +237,11 @@ def compute_variance(
 
 
 def finished_quantity_from_count(
-    *, packets_per_carton: float | None, carton_quantity: float, packets_counted: float
+    *,
+    packets_per_carton: float | None,
+    carton_quantity: float,
+    packets_counted: float,
+    waste_carton_quantity: float = 0.0,
 ) -> float:
     """What a carton/sac count says actually became finished goods.
 
@@ -217,9 +251,15 @@ def finished_quantity_from_count(
     the carton count the source of truth -- only a closed carton is finished
     goods ready to move. `packets_counted` is the fallback for a sac (no carton
     tier) or a report nobody has boxed yet.
+
+    `waste_carton_quantity` is the part of `carton_quantity` the line itself
+    says never held sellable product -- empty or damaged cartons swept into the
+    same physical tally as a good one. Without subtracting it here, a report
+    with waste cartons would post more finished goods than the line actually
+    packed; see `packaging_estimate`'s module docstring.
     """
     if packets_per_carton and packets_per_carton > 0 and carton_quantity > 0:
-        return carton_quantity * packets_per_carton
+        return max(carton_quantity - waste_carton_quantity, 0.0) * packets_per_carton
     return packets_counted
 
 
@@ -229,21 +269,25 @@ def tonnage_from_count(
     packets_per_carton: float | None,
     carton_quantity: float,
     packets_counted: float,
+    waste_carton_quantity: float = 0.0,
 ) -> float:
     """The weight a carton/sac count represents, in tonnes.
 
     The inverse of `estimate_packaging`: instead of turning a weighed tonnage
     into an expected count, this turns the count the line actually reported
-    into a weight, via `finished_quantity_from_count`'s same decision-24 rule.
-    Zero when the product has no net weight configured yet, matching
-    `ConditionnementReportDetail.finished_product_quantity`'s own default --
-    there is nothing to compute from, and a validated report cannot carry a
-    missing figure the way an estimate can.
+    into a weight, via `finished_quantity_from_count`'s same decision-24 rule
+    (and its waste-carton subtraction). Zero when the product has no net weight
+    configured yet, matching `ConditionnementReportDetail.finished_product_
+    quantity`'s own default -- there is nothing to compute from, and a
+    validated report cannot carry a missing figure the way an estimate can.
     """
     if net_weight_grams is None or net_weight_grams <= 0:
         return 0.0
     units = finished_quantity_from_count(
-        packets_per_carton=packets_per_carton, carton_quantity=carton_quantity, packets_counted=packets_counted
+        packets_per_carton=packets_per_carton,
+        carton_quantity=carton_quantity,
+        packets_counted=packets_counted,
+        waste_carton_quantity=waste_carton_quantity,
     )
     return units * net_weight_grams / GRAMS_PER_TONNE
 
@@ -261,6 +305,8 @@ def variance_to_json(variance: PackagingVariance) -> dict:
         "rejected_packets": variance.rejected_packets,
         "undecided_packets": variance.undecided_packets,
         "good_packets": variance.good_packets,
+        "waste_cartons": variance.waste_cartons,
+        "good_cartons": variance.good_cartons,
         "packet_variance": variance.packet_variance,
         "packet_variance_ratio": variance.packet_variance_ratio,
         "carton_variance": variance.carton_variance,

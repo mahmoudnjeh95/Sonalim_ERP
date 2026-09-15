@@ -101,9 +101,12 @@ class OfConsolidationService:
                     "film_quantity": packing["film_quantity"],
                     "film_product_id": packing["film_product_id"],
                     "carton_quantity": packing["carton_quantity"],
+                    "waste_carton_quantity": packing["waste_carton_quantity"],
                     "carton_product_id": packing["carton_product_id"],
-                    "tape_quantity": packing["tape_quantity"],
-                    "tape_product_id": packing["tape_product_id"],
+                    "scotch_quantity": packing["scotch_quantity"],
+                    "scotch_product_id": packing["scotch_product_id"],
+                    "ruban_quantity": packing["ruban_quantity"],
+                    "ruban_product_id": packing["ruban_product_id"],
                 },
                 "utilities": {
                     "water_quantity": daily["water_quantity"],
@@ -293,12 +296,15 @@ class OfConsolidationService:
                 COALESCE(SUM(c.packets_counted), 0),
                 COALESCE(SUM(c.film_quantity), 0),
                 COALESCE(SUM(c.carton_quantity), 0),
-                COALESCE(SUM(c.tape_quantity), 0),
+                COALESCE(SUM(c.waste_carton_quantity), 0),
+                COALESCE(SUM(c.scotch_quantity), 0),
+                COALESCE(SUM(c.ruban_quantity), 0),
                 COALESCE(SUM(c.production_minutes), 0),
                 COALESCE(SUM(c.downtime_minutes), 0),
                 CASE WHEN COUNT(DISTINCT c.film_product_id) = 1 THEN MIN(c.film_product_id) END,
                 CASE WHEN COUNT(DISTINCT c.carton_product_id) = 1 THEN MIN(c.carton_product_id) END,
-                CASE WHEN COUNT(DISTINCT c.tape_product_id) = 1 THEN MIN(c.tape_product_id) END
+                CASE WHEN COUNT(DISTINCT c.scotch_product_id) = 1 THEN MIN(c.scotch_product_id) END,
+                CASE WHEN COUNT(DISTINCT c.ruban_product_id) = 1 THEN MIN(c.ruban_product_id) END
             FROM production.production_reports r
             JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
             WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'conditionnement' AND r.{_VALIDATED}
@@ -314,12 +320,17 @@ class OfConsolidationService:
             "packets_counted": float(row[2]),
             "film_quantity": float(row[3]),
             "carton_quantity": float(row[4]),
-            "tape_quantity": float(row[5]),
-            "production_minutes": int(row[6]),
-            "downtime_minutes": int(row[7]),
-            "film_product_id": row[8],
-            "carton_product_id": row[9],
-            "tape_product_id": row[10],
+            # Part of carton_quantity above that held no product -- see
+            # ConditionnementReportDetail.waste_carton_quantity.
+            "waste_carton_quantity": float(row[5]),
+            "scotch_quantity": float(row[6]),
+            "ruban_quantity": float(row[7]),
+            "production_minutes": int(row[8]),
+            "downtime_minutes": int(row[9]),
+            "film_product_id": row[10],
+            "carton_product_id": row[11],
+            "scotch_product_id": row[12],
+            "ruban_product_id": row[13],
         }
 
     def _waste_totals(self, *, tenant_id: str, of_id: str) -> dict:

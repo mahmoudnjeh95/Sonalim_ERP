@@ -106,6 +106,29 @@ export function listQualityTeamPerformance(
   return apiFetch<TeamConformityRow[]>(`/qc/quality-reports/team-performance?${query.toString()}`, { token });
 }
 
+export interface QualityIndexTrendRow {
+  period: string;
+  report_count: number;
+  pre_dryer_index: number | null;
+  humidity_percentage: number | null;
+  cooling_index: number | null;
+  pf_index: number | null;
+  sumo_index: number | null;
+}
+
+/** Plant-wide, not by team -- these are leading process indices, not a
+ * ranking. A period's average is null (not dragged to zero) when no
+ * validated report in it recorded that particular index. */
+export function listQualityIndexTrend(
+  token: string,
+  params: { grain: PerformanceGrain; date_from?: string; date_to?: string },
+) {
+  const query = new URLSearchParams({ grain: params.grain });
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  return apiFetch<QualityIndexTrendRow[]>(`/qc/quality-reports/index-trend?${query.toString()}`, { token });
+}
+
 export function listQualityReports(
   token: string,
   params: { of_id?: string; status?: QualityReportStatus } = {},
@@ -363,15 +386,21 @@ export interface DispositionSummaryRow {
   disposition: NcDisposition;
   quantity: number;
   count: number;
+  /** Total weight in kg, only when every contributing product has a known net weight. */
+  weight_kg: number | null;
 }
 
 /**
  * Where rejected product ended up — regrind, déchet, rework, back to stock.
  * Restricted server-side to the `product` component, so quantity is always
- * comparable across rows.
+ * comparable across rows. Pass `of_id` to scope this to one work order.
  */
-export function getDispositionSummary(token: string, params: { date_from?: string; date_to?: string } = {}) {
+export function getDispositionSummary(
+  token: string,
+  params: { of_id?: string; date_from?: string; date_to?: string } = {},
+) {
   const query = new URLSearchParams();
+  if (params.of_id) query.set("of_id", params.of_id);
   if (params.date_from) query.set("date_from", params.date_from);
   if (params.date_to) query.set("date_to", params.date_to);
   const suffix = query.toString() ? `?${query.toString()}` : "";

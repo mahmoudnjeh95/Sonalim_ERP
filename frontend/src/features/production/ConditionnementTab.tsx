@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,7 +16,7 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
+import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead, ResizableTableHead } from "../../components/ui/table";
 import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
@@ -34,14 +34,17 @@ import {
   toWasteLineForms,
   type WasteLineForm,
 } from "./WasteLinesField";
+import { DOWNTIME_MOTIFS } from "./DowntimeMotifSelect";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { GroupHeaderRow } from "../../components/patterns/GroupHeaderRow";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { groupRows, type GroupSpec } from "../../lib/groupRows";
 import { ReportDetailDialog, type FigureRow } from "./ReportDetailDialog";
 import {
   correctConditionnementReport,
@@ -57,13 +60,52 @@ import {
   submitReport,
   updateConditionnementReport,
   type ConditionnementReportDetail,
+  type DailyReportDetail,
+  type Product,
   type ProductionReport,
   type ReportStatus,
 } from "./api";
 import { listLocations, listSuggestedVendors, listUoms, type SuggestedVendor } from "../warehouse/api";
 import { listPartners, type Partner } from "../partners/api";
+import { listProductTags, type ProductTag } from "../products/api";
 import { productUnit, formatQuantity } from "../../lib/units";
 import { PackagingVariancePanel } from "./PackagingVariancePanel";
+import { OfConsolidationHint } from "./OfConsolidationHint";
+
+// A product qualifies for a packaging role (Film/Carton/Ruban) by tag, and for a
+// PC-only or PL-only variant by product_family -- see
+// scripts/fix_packaging_product_tags_and_family.py for how both are populated.
+// A product with no product_family is generic and fits either order type.
+function packagingRoleOptions(
+  products: Product[],
+  tagId: string | undefined,
+  orderType: string | null | undefined,
+  selectedId: string | undefined,
+): Product[] {
+  // Tags not loaded yet, or the role tag doesn't exist -- fall back to the
+  // unfiltered list rather than hiding every option.
+  if (!tagId) return products;
+  const filtered = products.filter(
+    (p) => p.tag_ids.includes(tagId) && (!p.product_family || !orderType || p.product_family === orderType),
+  );
+  // An already-saved report may reference a product the current filter would
+  // exclude (order type changed, tagging changed since) -- keep it selectable
+  // so editing the report doesn't silently blank out its own value.
+  if (selectedId && !filtered.some((p) => p.id === selectedId)) {
+    const selected = products.find((p) => p.id === selectedId);
+    if (selected) return [...filtered, selected];
+  }
+  return filtered;
+}
+
+function finishedGoodOptions(products: Product[], orderType: string | null | undefined, selectedId: string | undefined): Product[] {
+  const filtered = products.filter((p) => p.is_sellable && (!orderType || p.product_type === orderType));
+  if (selectedId && !filtered.some((p) => p.id === selectedId)) {
+    const selected = products.find((p) => p.id === selectedId);
+    if (selected) return [...filtered, selected];
+  }
+  return filtered;
+}
 
 // The packing report. This is the one that puts finished product into stock and
 // takes packaging out — the only place packaging is ever deducted.
@@ -77,11 +119,18 @@ const detailSchema = z.object({
   film_product_id: z.string().optional(),
   film_supplier_id: z.string().optional(),
   carton_quantity: z.coerce.number().min(0),
+  // Part of carton_quantity that held no sellable product -- empty or damaged
+  // cartons still swept into the physical tally. Never its own consumption,
+  // so it carries no product/supplier of its own.
+  waste_carton_quantity: z.coerce.number().min(0),
   carton_product_id: z.string().optional(),
   carton_supplier_id: z.string().optional(),
-  tape_quantity: z.coerce.number().min(0),
-  tape_product_id: z.string().optional(),
-  tape_supplier_id: z.string().optional(),
+  scotch_quantity: z.coerce.number().min(0),
+  scotch_product_id: z.string().optional(),
+  scotch_supplier_id: z.string().optional(),
+  ruban_quantity: z.coerce.number().min(0),
+  ruban_product_id: z.string().optional(),
+  ruban_supplier_id: z.string().optional(),
   packaging_location_id: z.string().optional(),
   // Déchets. A list, so scotch -- which had no column at all -- can finally
   // be recorded, and every figure names the item that gives it a unit.
@@ -97,6 +146,7 @@ const detailSchema = z.object({
   production_minutes: z.coerce.number().int().min(0),
   downtime_minutes: z.coerce.number().int().min(0),
   downtime_reason: z.string().optional(),
+  downtime_note: z.string().optional(),
   lot_number: z.string().optional(),
   dlc_date: z.string().optional(),
 });
@@ -123,12 +173,14 @@ type CreateForm = z.infer<typeof createSchema>;
 const QUERY_KEY = ["production", "reports", "conditionnement"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
+const PRODUCT_TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const MACHINES_QUERY_KEY = ["production", "machines", "all"] as const;
 const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 
 type StatusFilter = "all" | ReportStatus;
+type GroupByOption = "none" | "of" | "team" | "shift";
 
 const EMPTY_DETAIL = {
   packets_counted: 0,
@@ -137,17 +189,22 @@ const EMPTY_DETAIL = {
   film_product_id: "",
   film_supplier_id: "",
   carton_quantity: 0,
+  waste_carton_quantity: 0,
   carton_product_id: "",
   carton_supplier_id: "",
-  tape_quantity: 0,
-  tape_product_id: "",
-  tape_supplier_id: "",
+  scotch_quantity: 0,
+  scotch_product_id: "",
+  scotch_supplier_id: "",
+  ruban_quantity: 0,
+  ruban_product_id: "",
+  ruban_supplier_id: "",
   packaging_location_id: "",
   waste_lines: [] as WasteLineForm<"product" | "packaging">[],
   machine_speed: undefined,
   production_minutes: 0,
   downtime_minutes: 0,
   downtime_reason: "",
+  downtime_note: "",
   lot_number: "",
   dlc_date: "",
   daily_report_id: "",
@@ -165,17 +222,22 @@ function toDetail(input: CreateForm): Partial<ConditionnementReportDetail> {
     film_product_id: input.film_product_id || undefined,
     film_supplier_id: input.film_supplier_id || undefined,
     carton_quantity: input.carton_quantity,
+    waste_carton_quantity: input.waste_carton_quantity,
     carton_product_id: input.carton_product_id || undefined,
     carton_supplier_id: input.carton_supplier_id || undefined,
-    tape_quantity: input.tape_quantity,
-    tape_product_id: input.tape_product_id || undefined,
-    tape_supplier_id: input.tape_supplier_id || undefined,
+    scotch_quantity: input.scotch_quantity,
+    scotch_product_id: input.scotch_product_id || undefined,
+    scotch_supplier_id: input.scotch_supplier_id || undefined,
+    ruban_quantity: input.ruban_quantity,
+    ruban_product_id: input.ruban_product_id || undefined,
+    ruban_supplier_id: input.ruban_supplier_id || undefined,
     packaging_location_id: input.packaging_location_id || undefined,
     waste_lines: fromWasteLineForms(input.waste_lines),
     machine_speed: input.machine_speed,
     production_minutes: input.production_minutes,
     downtime_minutes: input.downtime_minutes,
     downtime_reason: input.downtime_reason || undefined,
+    downtime_note: input.downtime_note || undefined,
     lot_number: input.lot_number || undefined,
     dlc_date: input.dlc_date || undefined,
     daily_report_id: input.daily_report_id || undefined,
@@ -189,6 +251,13 @@ export function ConditionnementTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  // Conditionnement is the OF's final stage, so tracking one order's packing
+  // runs together end-to-end is the default view.
+  const [groupBy, setGroupBy] = useState<GroupByOption>("of");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Only the first group starts open; re-collapse the rest each time the
+  // grouping changes rather than only on first mount.
+  const collapseInitializedFor = useRef<GroupByOption | null>(null);
   const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
   const [openMode, setOpenMode] = useState<"view" | "edit" | "history" | "delete">("view");
   // Which report is open lives in the URL as well as in state, so the OF
@@ -212,6 +281,7 @@ export function ConditionnementTab() {
     queryFn: () => listWorkOrders(token),
   });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: productTags = [] } = useQuery({ queryKey: PRODUCT_TAGS_QUERY_KEY, queryFn: () => listProductTags(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
@@ -230,6 +300,7 @@ export function ConditionnementTab() {
   // The packed article is the order's product; the report never names it again,
   // except its very first filing, which is what names one if the OF has none yet.
   const productOfOrder = (ofId: string) => workOrders.find((o) => o.id === ofId)?.product_id ?? undefined;
+  const orderTypeOf = (ofId: string) => workOrders.find((o) => o.id === ofId)?.product_type ?? null;
 
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
@@ -397,6 +468,32 @@ export function ConditionnementTab() {
   const table = useTableColumns("production.conditionnement", columns);
   const sortedReports = table.sortRows(visible);
 
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const groupSpec: GroupSpec<ProductionReport> | undefined =
+    groupBy === "none"
+      ? undefined
+      : groupBy === "of"
+        ? { key: "of", label: t("production.reports.groupBy.of"), getGroupKey: (r) => r.of_id, getGroupLabel: (r) => referenceOf(r.of_id) }
+        : groupBy === "team"
+          ? { key: "team", label: t("production.reports.groupBy.team"), getGroupKey: (r) => r.team ?? "", getGroupLabel: (r) => r.team || t("common.none") }
+          : { key: "shift", label: t("production.reports.groupBy.shift"), getGroupKey: (r) => r.shift ?? "", getGroupLabel: (r) => r.shift || t("common.none") };
+  const rowGroups = groupRows(sortedReports, groupSpec);
+
+  useEffect(() => {
+    if (groupBy === "none" || rowGroups.length === 0) return;
+    if (collapseInitializedFor.current === groupBy) return;
+    collapseInitializedFor.current = groupBy;
+    setCollapsedGroups(new Set(rowGroups.slice(1).map((g) => g.key)));
+  }, [groupBy, rowGroups]);
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -437,6 +534,19 @@ export function ConditionnementTab() {
               value={statusFilter}
               onChange={setStatusFilter}
             />
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{t("production.reports.groupBy.label")}:</span>
+              <FilterTabs
+                options={[
+                  { value: "none", label: t("production.reports.groupBy.none") },
+                  { value: "of", label: t("production.reports.groupBy.of") },
+                  { value: "team", label: t("production.reports.groupBy.team") },
+                  { value: "shift", label: t("production.reports.groupBy.shift") },
+                ]}
+                value={groupBy}
+                onChange={setGroupBy}
+              />
+            </div>
             {columnFilters.isActive && (
               <Button size="sm" variant="ghost" onClick={columnFilters.reset}>
                 {t("common.clearFilters")}
@@ -510,12 +620,13 @@ export function ConditionnementTab() {
                         </Select>
                       </div>
                     </div>
+                    <OfConsolidationHint workOrderId={selectedOfId || undefined} />
                     {selectedOrderHasNoProduct && (
                       <div className="space-y-1.5 rounded-lg border border-border bg-muted/30 p-3">
                         <Label htmlFor="c_product_id">{t("production.conditionnement.field.product")}</Label>
                         <Select id="c_product_id" {...form.register("product_id")}>
                           <option value="">—</option>
-                          {products.map((product) => (
+                          {finishedGoodOptions(products, orderTypeOf(selectedOfId), form.watch("product_id")).map((product) => (
                             <option key={product.id} value={product.id}>
                               {product.name}
                             </option>
@@ -530,6 +641,8 @@ export function ConditionnementTab() {
                     <PackingDetailFields
                 form={form}
                 products={products}
+                productTags={productTags}
+                orderType={orderTypeOf(selectedOfId)}
                 locations={locations}
                 uoms={uoms}
                 finishedProductId={productOfOrder(form.watch("of_id"))}
@@ -578,27 +691,48 @@ export function ConditionnementTab() {
               </TableHeader>
               <TableBody>
                 <AnimatePresence initial={false}>
-                  {sortedReports.map((report) => (
-                    <motion.tr
-                      key={report.id}
-                      layout
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                      onClick={() => openReportAt(report, "view")}
-                    >
-                      {table.visibleColumns.map((column) => (
-                        <TableCell
-                          key={column.key}
-                          className={column.cellClassName}
-                          onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
-                        >
-                          {column.cell(report)}
-                        </TableCell>
-                      ))}
-                    </motion.tr>
-                  ))}
+                  {rowGroups.flatMap((group) => {
+                    const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
+                    const rows: ReactNode[] = [];
+                    if (groupSpec) {
+                      rows.push(
+                        <GroupHeaderRow
+                          key={`group-${group.key}`}
+                          label={group.label}
+                          count={group.rows.length}
+                          collapsed={collapsed}
+                          onToggle={() => toggleGroup(group.key)}
+                          colSpan={table.visibleColumns.length}
+                        />,
+                      );
+                    }
+                    if (!collapsed) {
+                      for (const report of group.rows) {
+                        rows.push(
+                          <motion.tr
+                            key={report.id}
+                            layout
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
+                            onClick={() => openReportAt(report, "view")}
+                          >
+                            {table.visibleColumns.map((column) => (
+                              <TableCell
+                                key={column.key}
+                                className={column.cellClassName}
+                                onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
+                              >
+                                {column.cell(report)}
+                              </TableCell>
+                            ))}
+                          </motion.tr>,
+                        );
+                      }
+                    }
+                    return rows;
+                  })}
                 </AnimatePresence>
               </TableBody>
             </Table>
@@ -615,6 +749,7 @@ export function ConditionnementTab() {
           report={focusedReport}
           reference={referenceOf(focusedReport.of_id)}
           finishedProductId={productOfOrder(focusedReport.of_id)}
+          orderType={orderTypeOf(focusedReport.of_id)}
           products={products}
           locations={locations}
           uoms={uoms}
@@ -641,10 +776,11 @@ export function ConditionnementTab() {
  * stock and taken packaging out, so editing or deleting it reverses those
  * movements first - both ask for a reason that lands in the audit trail.
  */
-function PackingReportDialog({
+export function PackingReportDialog({
   report,
   reference,
   finishedProductId,
+  orderType,
   products,
   locations,
   uoms,
@@ -655,7 +791,8 @@ function PackingReportDialog({
   report: ProductionReport;
   reference: string;
   finishedProductId: string | undefined;
-  products: { id: string; name: string; uom_id: string }[];
+  orderType: string | null;
+  products: Product[];
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
   suppliers: Partner[];
@@ -677,6 +814,7 @@ function PackingReportDialog({
     queryKey: ["production", "reports", "daily", report.of_id],
     queryFn: () => listReports(token, { of_id: report.of_id, report_type: "daily" }),
   });
+  const { data: productTags = [] } = useQuery({ queryKey: PRODUCT_TAGS_QUERY_KEY, queryFn: () => listProductTags(token) });
 
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
@@ -692,11 +830,14 @@ function PackingReportDialog({
       packaging_location_id: detail?.packaging_location_id ?? "",
       film_product_id: detail?.film_product_id ?? "",
       carton_product_id: detail?.carton_product_id ?? "",
-      tape_product_id: detail?.tape_product_id ?? "",
+      scotch_product_id: detail?.scotch_product_id ?? "",
+      ruban_product_id: detail?.ruban_product_id ?? "",
       film_supplier_id: detail?.film_supplier_id ?? "",
       carton_supplier_id: detail?.carton_supplier_id ?? "",
-      tape_supplier_id: detail?.tape_supplier_id ?? "",
+      scotch_supplier_id: detail?.scotch_supplier_id ?? "",
+      ruban_supplier_id: detail?.ruban_supplier_id ?? "",
       downtime_reason: detail?.downtime_reason ?? "",
+      downtime_note: detail?.downtime_note ?? "",
       lot_number: detail?.lot_number ?? "",
       dlc_date: detail?.dlc_date ?? "",
       daily_report_id: detail?.daily_report_id ?? "",
@@ -739,38 +880,12 @@ function PackingReportDialog({
   });
 
   const goodsUnit = productUnit(finishedProductId, products, uoms);
-  const filmUnit = productUnit(detail?.film_product_id, products, uoms);
-  const cartonUnit = productUnit(detail?.carton_product_id, products, uoms);
-  const tapeUnit = productUnit(detail?.tape_product_id, products, uoms);
-  const supplierName = (id: string | null | undefined) => (id && suppliers.find((s) => s.id === id)?.name) || null;
-  const withSupplier = (label: string, supplierId: string | null | undefined) => {
-    const name = supplierName(supplierId);
-    return name ? `${label} — ${name}` : label;
-  };
 
   const figures: FigureRow[] = [
-    // Decision 24/25: cartons lead -- for a product with a carton tier, this is
-    // what decides the finished-goods quantity, not the machine's own tally
-    // beside it.
-    {
-      label: withSupplier(t("production.conditionnement.field.carton"), detail?.carton_supplier_id),
-      value: detail?.carton_quantity,
-      unit: cartonUnit,
-    },
     {
       label: t("production.conditionnement.field.packetsCounted"),
       value: detail?.packets_counted,
       unit: goodsUnit,
-    },
-    {
-      label: withSupplier(t("production.conditionnement.field.film"), detail?.film_supplier_id),
-      value: detail?.film_quantity,
-      unit: filmUnit,
-    },
-    {
-      label: withSupplier(t("production.conditionnement.field.tape"), detail?.tape_supplier_id),
-      value: detail?.tape_quantity,
-      unit: tapeUnit,
     },
     // One row per déchet, each labelled with its own item and unit. Scotch
     // shows up here on its own now instead of having nowhere to go.
@@ -785,7 +900,13 @@ function PackingReportDialog({
     { label: t("production.conditionnement.field.machineSpeed"), value: detail?.machine_speed, unit: "u/min" },
     { label: t("production.ofDetails.time.production"), value: detail?.production_minutes, duration: true },
     { label: t("production.ofDetails.time.downtime"), value: detail?.downtime_minutes, duration: true },
-    { label: t("production.reports.field.downtimeReason"), value: detail?.downtime_reason ?? "—" },
+    {
+      label: t("production.downtime.field.motif"),
+      value: detail?.downtime_reason
+        ? t(`production.downtime.motif.${detail.downtime_reason}` as Parameters<typeof t>[0]) ?? detail.downtime_reason
+        : "—",
+    },
+    { label: t("production.downtime.field.note"), value: detail?.downtime_note ?? "—" },
     { label: t("production.conditionnement.field.lotNumber"), value: detail?.lot_number ?? "—" },
     { label: t("production.conditionnement.field.dlc"), value: detail?.dlc_date ?? "—" },
   ];
@@ -801,7 +922,12 @@ function PackingReportDialog({
       status={report.status}
       revision={report.revision}
       reportId={report.id}
-      banner={<ReportVarianceBanner reportId={report.id} />}
+      banner={
+        <>
+          <ReportVarianceBanner reportId={report.id} />
+          <PackagingConsumptionSummary detail={detail} products={products} uoms={uoms} suppliers={suppliers} />
+        </>
+      }
       figures={figures}
       initialMode={initialMode}
       onDelete={async (deleteReason) => {
@@ -813,6 +939,8 @@ function PackingReportDialog({
           <PackingDetailFields
             form={form}
             products={products}
+            productTags={productTags}
+            orderType={orderType}
             locations={locations}
             uoms={uoms}
             finishedProductId={finishedProductId}
@@ -849,12 +977,97 @@ function PackingReportDialog({
 }
 
 /**
- * Which fournisseur a packaging item came from. Film, carton and ruban can
- * each be delivered by more than one supplier, so this pairs a plain full
- * supplier picker with a hint of which vendors are actually known to supply
- * the item chosen above it -- the same vendor-suggestion match (by product
- * tag) the purchase order screen already uses, reused here rather than
- * reinvented.
+ * The view-mode read-out of what packaging this report consumed: one row per
+ * item (Film/Carton/Scotch/Ruban) with its quantity, product and fournisseur
+ * side by side, rather than the supplier name squeezed into a figure's label
+ * with no product name at all. Items with nothing recorded are left out.
+ */
+function PackagingConsumptionSummary({
+  detail,
+  products,
+  uoms,
+  suppliers,
+}: {
+  detail: ConditionnementReportDetail | undefined;
+  products: Product[];
+  uoms: { id: string; code: string }[];
+  suppliers: Partner[];
+}) {
+  const { t } = useI18n();
+  if (!detail) return null;
+
+  const productName = (id: string | null | undefined) => (id && products.find((p) => p.id === id)?.name) || "—";
+  const supplierName = (id: string | null | undefined) => (id && suppliers.find((s) => s.id === id)?.name) || "—";
+
+  const rows = [
+    {
+      label: t("production.conditionnement.field.film"),
+      quantity: detail.film_quantity,
+      unit: productUnit(detail.film_product_id, products, uoms),
+      productId: detail.film_product_id,
+      supplierId: detail.film_supplier_id,
+    },
+    {
+      label: t("production.conditionnement.field.carton"),
+      quantity: detail.carton_quantity,
+      unit: productUnit(detail.carton_product_id, products, uoms),
+      productId: detail.carton_product_id,
+      supplierId: detail.carton_supplier_id,
+    },
+    {
+      label: t("production.conditionnement.field.scotch"),
+      quantity: detail.scotch_quantity,
+      unit: productUnit(detail.scotch_product_id, products, uoms),
+      productId: detail.scotch_product_id,
+      supplierId: detail.scotch_supplier_id,
+    },
+    {
+      label: t("production.conditionnement.field.ruban"),
+      quantity: detail.ruban_quantity,
+      unit: productUnit(detail.ruban_product_id, products, uoms),
+      productId: detail.ruban_product_id,
+      supplierId: detail.ruban_supplier_id,
+    },
+  ].filter((row) => row.quantity > 0 || row.productId || row.supplierId);
+
+  if (rows.length === 0) return null;
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-border">
+      <p className="border-b border-border bg-muted/30 px-3 py-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t("production.conditionnement.section.packaging")}
+      </p>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>{t("production.conditionnement.summary.item")}</TableHead>
+            <TableHead>{t("production.conditionnement.summary.quantity")}</TableHead>
+            <TableHead>{t("production.conditionnement.summary.product")}</TableHead>
+            <TableHead>{t("production.conditionnement.summary.supplier")}</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {rows.map((row) => (
+            <TableRow key={row.label}>
+              <TableCell className="font-medium">{row.label}</TableCell>
+              <TableCell className="tabular-nums">{formatQuantity(row.quantity, row.unit)}</TableCell>
+              <TableCell>{productName(row.productId)}</TableCell>
+              <TableCell>{supplierName(row.supplierId)}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </div>
+  );
+}
+
+/**
+ * Which fournisseur a packaging item came from. Film, carton, scotch and
+ * ruban can each be delivered by more than one supplier, so this pairs a
+ * supplier picker narrowed to the ones actually tagged for that item with a
+ * hint of which are preferred -- the same vendor-suggestion match (by
+ * product tag) the purchase order screen already uses, reused here rather
+ * than reinvented.
  */
 function PackagingSupplierField({
   form,
@@ -864,7 +1077,7 @@ function PackagingSupplierField({
   suppliers,
 }: {
   form: ReturnType<typeof useForm<CreateForm>>;
-  name: "film_supplier_id" | "carton_supplier_id" | "tape_supplier_id";
+  name: "film_supplier_id" | "carton_supplier_id" | "scotch_supplier_id" | "ruban_supplier_id";
   label: string;
   productId: string | undefined;
   suppliers: Partner[];
@@ -876,6 +1089,19 @@ function PackagingSupplierField({
     queryFn: () => listSuggestedVendors(token, productId!),
     enabled: !!productId,
   });
+
+  // Once a product names its role (film/carton/scotch/ruban), narrow the
+  // dropdown to suppliers actually tagged for that role instead of every
+  // supplier in the system -- the same tag match that produces the "suggested"
+  // chips above. Falls back to the full list when no product is chosen yet or
+  // nothing is tagged for it, so the field is never a dead end.
+  const selectedId = form.watch(name);
+  const options: (Partner | SuggestedVendor)[] =
+    suggested.length > 0
+      ? suggested.some((v) => v.partner_id === selectedId)
+        ? suggested
+        : [...suggested, ...suppliers.filter((s) => s.id === selectedId)]
+      : suppliers;
 
   return (
     <div className="space-y-1.5">
@@ -894,8 +1120,8 @@ function PackagingSupplierField({
       )}
       <Select id={name} {...form.register(name)}>
         <option value="">—</option>
-        {suppliers.map((s) => (
-          <option key={s.id} value={s.id}>
+        {options.map((s) => (
+          <option key={"partner_id" in s ? s.partner_id : s.id} value={"partner_id" in s ? s.partner_id : s.id}>
             {s.name}
           </option>
         ))}
@@ -904,9 +1130,53 @@ function PackagingSupplierField({
   );
 }
 
+/** What a packaging run should expect to bag, pulled from the specific daily
+ * report it's linked to -- the same per-item hint pattern QC uses once it
+ * picks which conditionnement run to inspect. */
+function DailyReportPackagingHint({ dailyReportId }: { dailyReportId: string | undefined }) {
+  const { session } = useAuth();
+  const token = session!.token;
+  const { t } = useI18n();
+
+  const { data: dailyReport } = useQuery({
+    queryKey: ["production", "report", dailyReportId],
+    queryFn: () => getReport(token, dailyReportId!),
+    enabled: !!dailyReportId,
+  });
+
+  if (!dailyReport?.detail) return null;
+  const detail = dailyReport.detail as DailyReportDetail;
+
+  return (
+    <div className="rounded-md border border-border bg-muted/30 p-3">
+      <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t("production.conditionnement.hint.dailyReport.title")}
+      </p>
+      <div className="grid grid-cols-3 gap-2 text-sm">
+        <div>
+          <span className="text-muted-foreground">{t("production.conditionnement.hint.dailyReport.dough")}: </span>
+          {formatQuantity(detail.dough_quantity, "kg")}
+        </div>
+        <div>
+          <span className="text-muted-foreground">
+            {t("production.conditionnement.hint.dailyReport.finishedProduct")}:{" "}
+          </span>
+          {formatQuantity(detail.finished_product_quantity, "t")}
+        </div>
+        <div>
+          <span className="text-muted-foreground">{t("production.conditionnement.hint.dailyReport.regrind")}: </span>
+          {formatQuantity(detail.regrind_quantity, "kg")}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PackingDetailFields({
   form,
   products,
+  productTags,
+  orderType,
   locations,
   uoms,
   finishedProductId,
@@ -914,13 +1184,9 @@ function PackingDetailFields({
   dailyReports = [],
 }: {
   form: ReturnType<typeof useForm<CreateForm>>;
-  products: {
-    id: string;
-    name: string;
-    uom_id: string;
-    packets_per_carton?: number | null;
-    net_weight_grams?: number | null;
-  }[];
+  products: Product[];
+  productTags: ProductTag[];
+  orderType: string | null;
   locations: { id: string; name: string }[];
   uoms: { id: string; code: string }[];
   finishedProductId: string | undefined;
@@ -928,12 +1194,21 @@ function PackingDetailFields({
   dailyReports?: ProductionReport[];
 }) {
   const { t } = useI18n();
+  const tagId = (name: string) => productTags.find((tag) => tag.name === name)?.id;
+  const filmOptions = packagingRoleOptions(products, tagId("FILM"), orderType, form.watch("film_product_id"));
+  const cartonOptions = packagingRoleOptions(products, tagId("CARTON"), orderType, form.watch("carton_product_id"));
+  const scotchOptions = packagingRoleOptions(products, tagId("SCOTCH"), orderType, form.watch("scotch_product_id"));
+  // Ruban's own list can include several models (e.g. TB200, Videojet) as
+  // distinct tagged products -- which one applies is just whichever the
+  // operator picks here, not a separate field.
+  const rubanOptions = packagingRoleOptions(products, tagId("RUBAN"), orderType, form.watch("ruban_product_id"));
   // Packaging leaves stock in its own unit and finished goods enter in theirs,
   // so every quantity here states the unit the warehouse will move.
   const goodsUnit = productUnit(finishedProductId, products, uoms);
   const filmUnit = productUnit(form.watch("film_product_id"), products, uoms);
   const cartonUnit = productUnit(form.watch("carton_product_id"), products, uoms);
-  const tapeUnit = productUnit(form.watch("tape_product_id"), products, uoms);
+  const scotchUnit = productUnit(form.watch("scotch_product_id"), products, uoms);
+  const rubanUnit = productUnit(form.watch("ruban_product_id"), products, uoms);
   const withUnit = (label: string, unit: string | null) => (unit ? `${label} (${unit})` : label);
 
   // Decision 24: the live cross-check between what the floor boxed and what the
@@ -945,20 +1220,26 @@ function PackingDetailFields({
   // the carton fields are meaningless for it — see the sac branch below.
   const hasCartonTier = !!(packetsPerCarton && packetsPerCarton > 0);
   const cartonsEntered = Number(form.watch("carton_quantity")) || 0;
+  const wasteCartonsEntered = Number(form.watch("waste_carton_quantity")) || 0;
+  // Empty/damaged cartons hold no packets, so the "real packets" and
+  // finished-goods figures below are judged against good cartons only — the
+  // same subtraction the backend applies (packaging_estimate.finished_
+  // quantity_from_count / tonnage_from_count).
+  const goodCartonsEntered = Math.max(cartonsEntered - wasteCartonsEntered, 0);
   const packetsEntered = Number(form.watch("packets_counted")) || 0;
-  const realPacketsFromCartons = packetsPerCarton ? cartonsEntered * packetsPerCarton : null;
+  const realPacketsFromCartons = packetsPerCarton ? goodCartonsEntered * packetsPerCarton : null;
   const estimatedCartonsFromMachine = packetsPerCarton ? packetsEntered / packetsPerCarton : null;
   // Same decision-24 rule the backend persists at validation
   // (packaging_estimate.tonnage_from_count): cartons lead when there's a
   // carton tier and some were counted, otherwise the tally itself — a sac's
   // count — is the finished-goods figure. Shown live so a team sees the
   // tonnage their count implies before it is ever saved.
-  const unitsFromCount = hasCartonTier && cartonsEntered > 0 ? cartonsEntered * (packetsPerCarton as number) : packetsEntered;
+  const unitsFromCount = hasCartonTier && cartonsEntered > 0 ? goodCartonsEntered * (packetsPerCarton as number) : packetsEntered;
   const estimatedTonnage = netWeightGrams && netWeightGrams > 0 ? (unitsFromCount * netWeightGrams) / 1_000_000 : null;
-  const productOptions = (
+  const renderProductOptions = (list: Product[]) => (
     <>
       <option value="">—</option>
-      {products.map((p) => (
+      {list.map((p) => (
         <option key={p.id} value={p.id}>
           {p.name}
         </option>
@@ -992,6 +1273,20 @@ function PackingDetailFields({
               )}
             </div>
           )}
+          {hasCartonTier && (
+            <div className="space-y-1.5">
+              <Label htmlFor="waste_carton_quantity" className="flex items-center gap-1">
+                {t("production.conditionnement.field.wasteCarton")}
+                <HelpTooltip text={t("production.conditionnement.help.wasteCarton")} />
+              </Label>
+              <Input
+                id="waste_carton_quantity"
+                type="number"
+                step="any"
+                {...form.register("waste_carton_quantity")}
+              />
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor="packets_counted" className="flex items-center gap-1">
               {withUnit(
@@ -1021,7 +1316,7 @@ function PackingDetailFields({
             <div className="space-y-1.5">
               <Label htmlFor="carton_product_id">{t("production.conditionnement.field.cartonProduct")}</Label>
               <Select id="carton_product_id" {...form.register("carton_product_id")}>
-                {productOptions}
+                {renderProductOptions(cartonOptions)}
               </Select>
             </div>
           )}
@@ -1059,6 +1354,7 @@ function PackingDetailFields({
               ))}
             </Select>
           </div>
+          <DailyReportPackagingHint dailyReportId={form.watch("daily_report_id") || undefined} />
         </div>
       </section>
 
@@ -1069,51 +1365,80 @@ function PackingDetailFields({
           </p>
           <HelpTooltip text={t("production.conditionnement.help.packaging")} />
         </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="film_quantity">{withUnit(t("production.conditionnement.field.film"), filmUnit)}</Label>
-            <Input id="film_quantity" type="number" step="any" {...form.register("film_quantity")} />
+        <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="film_quantity">{withUnit(t("production.conditionnement.field.film"), filmUnit)}</Label>
+              <Input id="film_quantity" type="number" step="any" {...form.register("film_quantity")} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="film_product_id">{t("production.conditionnement.field.filmProduct")}</Label>
+              <Select id="film_product_id" {...form.register("film_product_id")}>
+                {renderProductOptions(filmOptions)}
+              </Select>
+            </div>
+            <PackagingSupplierField
+              form={form}
+              name="film_supplier_id"
+              label={t("production.conditionnement.field.filmSupplier")}
+              productId={form.watch("film_product_id")}
+              suppliers={suppliers}
+            />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="film_product_id">{t("production.conditionnement.field.filmProduct")}</Label>
-            <Select id="film_product_id" {...form.register("film_product_id")}>
-              {productOptions}
-            </Select>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="scotch_quantity">{withUnit(t("production.conditionnement.field.scotch"), scotchUnit)}</Label>
+              <Input id="scotch_quantity" type="number" step="any" {...form.register("scotch_quantity")} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="scotch_product_id">{t("production.conditionnement.field.scotchProduct")}</Label>
+              <Select id="scotch_product_id" {...form.register("scotch_product_id")}>
+                {renderProductOptions(scotchOptions)}
+              </Select>
+            </div>
+            <PackagingSupplierField
+              form={form}
+              name="scotch_supplier_id"
+              label={t("production.conditionnement.field.scotchSupplier")}
+              productId={form.watch("scotch_product_id")}
+              suppliers={suppliers}
+            />
           </div>
-          <PackagingSupplierField
-            form={form}
-            name="film_supplier_id"
-            label={t("production.conditionnement.field.filmSupplier")}
-            productId={form.watch("film_product_id")}
-            suppliers={suppliers}
-          />
-          <div className="space-y-1.5">
-            <Label htmlFor="tape_quantity">{withUnit(t("production.conditionnement.field.tape"), tapeUnit)}</Label>
-            <Input id="tape_quantity" type="number" step="any" {...form.register("tape_quantity")} />
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="ruban_quantity">{withUnit(t("production.conditionnement.field.ruban"), rubanUnit)}</Label>
+              <Input id="ruban_quantity" type="number" step="any" {...form.register("ruban_quantity")} />
+            </div>
+            <div className="space-y-1.5">
+              {/* Model (TB200, Videojet, ...) is whichever RUBAN-tagged product is picked here -- not a separate field. */}
+              <Label htmlFor="ruban_product_id">{t("production.conditionnement.field.rubanProduct")}</Label>
+              <Select id="ruban_product_id" {...form.register("ruban_product_id")}>
+                {renderProductOptions(rubanOptions)}
+              </Select>
+            </div>
+            <PackagingSupplierField
+              form={form}
+              name="ruban_supplier_id"
+              label={t("production.conditionnement.field.rubanSupplier")}
+              productId={form.watch("ruban_product_id")}
+              suppliers={suppliers}
+            />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="tape_product_id">{t("production.conditionnement.field.tapeProduct")}</Label>
-            <Select id="tape_product_id" {...form.register("tape_product_id")}>
-              {productOptions}
-            </Select>
-          </div>
-          <PackagingSupplierField
-            form={form}
-            name="tape_supplier_id"
-            label={t("production.conditionnement.field.tapeSupplier")}
-            productId={form.watch("tape_product_id")}
-            suppliers={suppliers}
-          />
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="packaging_location_id">{t("production.conditionnement.field.packagingStore")}</Label>
-            <Select id="packaging_location_id" {...form.register("packaging_location_id")}>
-              <option value="">—</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </Select>
+
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="packaging_location_id">{t("production.conditionnement.field.packagingStore")}</Label>
+              <Select id="packaging_location_id" {...form.register("packaging_location_id")}>
+                <option value="">—</option>
+                {locations.map((l) => (
+                  <option key={l.id} value={l.id}>
+                    {l.name}
+                  </option>
+                ))}
+              </Select>
+            </div>
           </div>
         </div>
       </section>
@@ -1165,9 +1490,20 @@ function PackingDetailFields({
             <Label htmlFor="c_downtime_minutes">{t("production.reports.field.downtimeMinutes")} (min)</Label>
             <Input id="c_downtime_minutes" type="number" {...form.register("downtime_minutes")} />
           </div>
-          <div className="space-y-1.5 sm:col-span-3">
-            <Label htmlFor="c_downtime_reason">{t("production.reports.field.downtimeReason")}</Label>
-            <Input id="c_downtime_reason" {...form.register("downtime_reason")} />
+          <div className="space-y-1.5">
+            <Label htmlFor="c_downtime_reason">{t("production.downtime.field.motif")}</Label>
+            <Select id="c_downtime_reason" {...form.register("downtime_reason")}>
+              <option value="">—</option>
+              {DOWNTIME_MOTIFS.map((motif) => (
+                <option key={motif} value={motif}>
+                  {t(`production.downtime.motif.${motif}` as Parameters<typeof t>[0])}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="c_downtime_note">{t("production.downtime.field.note")}</Label>
+            <Input id="c_downtime_note" placeholder={t("production.waste.notePlaceholder")} {...form.register("downtime_note")} />
           </div>
         </div>
       </section>

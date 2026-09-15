@@ -323,8 +323,8 @@ def test_packaging_waste_moves_no_stock_either(db, env, of):
         detail=ConditionnementReportDetail(
             finished_product_quantity=0.2,
             packets_counted=400,
-            tape_quantity=6,
-            tape_product_id=env["scotch"],
+            scotch_quantity=6,
+            scotch_product_id=env["scotch"],
             packaging_location_id=env["packaging_location"],
             finished_goods_location_id=env["location"],
             waste_lines=(WasteLine(category="packaging", product_id=env["scotch"], quantity=2),),

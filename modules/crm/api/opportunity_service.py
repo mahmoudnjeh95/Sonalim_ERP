@@ -16,7 +16,9 @@ from modules.crm.domain.opportunity import (
     validate_lost_reason,
 )
 
-_OPPORTUNITY_COLUMNS = "id, partner_id, name, stage, amount, expected_close_date, probability, owner_id, priority, lost_reason"
+_OPPORTUNITY_COLUMNS = (
+    "id, partner_id, name, stage, amount, expected_close_date, probability, owner_id, priority, lost_reason, created_at"
+)
 
 
 def _opportunity_from_row(row) -> Opportunity:
@@ -31,6 +33,7 @@ def _opportunity_from_row(row) -> Opportunity:
         owner_id=row[7],
         priority=row[8],
         lost_reason=row[9],
+        created_at=row[10].isoformat() if row[10] else None,
     )
 
 
@@ -57,13 +60,14 @@ class OpportunityService:
 
         resolved_probability = probability if probability is not None else DEFAULT_PROBABILITY_BY_STAGE["prospecting"]
         opportunity_id = str(ULID())
-        self._connection.execute(
+        inserted = self._connection.execute(
             """
             INSERT INTO crm.opportunities (id, tenant_id, partner_id, name, stage, amount, expected_close_date, probability, owner_id, priority)
             VALUES (%s, %s, %s, %s, 'prospecting', %s, %s, %s, %s, %s)
+            RETURNING created_at
             """,
             (opportunity_id, tenant_id, partner_id, name, amount, expected_close_date, resolved_probability, owner_id, priority),
-        )
+        ).fetchone()
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -84,6 +88,7 @@ class OpportunityService:
                 probability=resolved_probability,
                 owner_id=owner_id,
                 priority=priority,
+                created_at=inserted[0].isoformat() if inserted else None,
             )
         )
 
@@ -120,6 +125,7 @@ class OpportunityService:
             owner_id=owner_id if owner_id is not None else current.owner_id,
             priority=priority if priority is not None else current.priority,
             lost_reason=current.lost_reason,
+            created_at=current.created_at,
         )
         validation = validate_amount(updated.amount)
         if isinstance(validation, Err):
@@ -196,7 +202,7 @@ class OpportunityService:
                 id=result.value.id, partner_id=result.value.partner_id, name=result.value.name, stage=result.value.stage,
                 amount=result.value.amount, expected_close_date=result.value.expected_close_date,
                 probability=result.value.probability, owner_id=result.value.owner_id, priority=result.value.priority,
-                lost_reason=resolved_lost_reason,
+                lost_reason=resolved_lost_reason, created_at=result.value.created_at,
             )
         )
 

@@ -134,7 +134,8 @@ class ReportStockService:
         lines = [
             (detail.film_quantity, detail.film_product_id),
             (detail.carton_quantity, detail.carton_product_id),
-            (detail.tape_quantity, detail.tape_product_id),
+            (detail.scotch_quantity, detail.scotch_product_id),
+            (detail.ruban_quantity, detail.ruban_product_id),
         ]
         return [(quantity, product_id) for quantity, product_id in lines if quantity > 0 and product_id]
 
@@ -220,6 +221,7 @@ class ReportStockService:
             packets_per_carton=packets_per_carton,
             carton_quantity=detail.carton_quantity,
             packets_counted=detail.packets_counted,
+            waste_carton_quantity=detail.waste_carton_quantity,
         )
 
         if finished_quantity > 0:

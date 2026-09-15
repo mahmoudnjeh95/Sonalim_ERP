@@ -8,7 +8,7 @@ VALID_KINDS = {"customer", "supplier", "both"}
 
 PARTNER_VALID_TRANSITIONS = {
     "active": {"archived"},
-    "archived": set(),
+    "archived": {"active"},
 }
 
 

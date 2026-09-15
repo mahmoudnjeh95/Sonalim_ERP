@@ -26,12 +26,14 @@ from modules.warehouse.api.lot_service import LotService
 # The two snapshot columns are deliberately NOT here: they are written once, by
 # the validation path, and an editable detail write must never touch them.
 _COLUMNS = """
-    finished_product_quantity, packets_counted, film_quantity, carton_quantity, tape_quantity,
+    finished_product_quantity, packets_counted, film_quantity, carton_quantity, waste_carton_quantity, tape_quantity,
+    scotch_quantity, ruban_quantity,
     machine_speed,
     production_minutes, downtime_minutes, downtime_reason, lot_number, dlc_date,
-    film_product_id, carton_product_id, tape_product_id, packaging_location_id,
+    film_product_id, carton_product_id, tape_product_id, scotch_product_id, ruban_product_id,
+    packaging_location_id,
     finished_goods_location_id, daily_report_id,
-    film_supplier_id, carton_supplier_id, tape_supplier_id
+    film_supplier_id, carton_supplier_id, tape_supplier_id, scotch_supplier_id, ruban_supplier_id
 """
 
 _OF_STATUSES_ACCEPTING_REPORTS = {"planned", "ongoing", "suspended"}
@@ -43,22 +45,29 @@ def _row_to_detail(row: tuple, waste_lines: tuple[WasteLine, ...] = ()) -> Condi
         packets_counted=float(row[1]),
         film_quantity=float(row[2]),
         carton_quantity=float(row[3]),
-        tape_quantity=float(row[4]),
-        machine_speed=float(row[5]) if row[5] is not None else None,
-        production_minutes=int(row[6]),
-        downtime_minutes=int(row[7]),
-        downtime_reason=row[8],
-        lot_number=row[9],
-        dlc_date=row[10],
-        film_product_id=row[11],
-        carton_product_id=row[12],
-        tape_product_id=row[13],
-        packaging_location_id=row[14],
-        finished_goods_location_id=row[15],
-        daily_report_id=row[16],
-        film_supplier_id=row[17],
-        carton_supplier_id=row[18],
-        tape_supplier_id=row[19],
+        waste_carton_quantity=float(row[4]),
+        tape_quantity=float(row[5]),
+        scotch_quantity=float(row[6]),
+        ruban_quantity=float(row[7]),
+        machine_speed=float(row[8]) if row[8] is not None else None,
+        production_minutes=int(row[9]),
+        downtime_minutes=int(row[10]),
+        downtime_reason=row[11],
+        lot_number=row[12],
+        dlc_date=row[13],
+        film_product_id=row[14],
+        carton_product_id=row[15],
+        tape_product_id=row[16],
+        scotch_product_id=row[17],
+        ruban_product_id=row[18],
+        packaging_location_id=row[19],
+        finished_goods_location_id=row[20],
+        daily_report_id=row[21],
+        film_supplier_id=row[22],
+        carton_supplier_id=row[23],
+        tape_supplier_id=row[24],
+        scotch_supplier_id=row[25],
+        ruban_supplier_id=row[26],
         waste_lines=waste_lines,
     )
 
@@ -69,7 +78,10 @@ def _values(detail: ConditionnementReportDetail) -> tuple:
         detail.packets_counted,
         detail.film_quantity,
         detail.carton_quantity,
+        detail.waste_carton_quantity,
         detail.tape_quantity,
+        detail.scotch_quantity,
+        detail.ruban_quantity,
         detail.machine_speed,
         detail.production_minutes,
         detail.downtime_minutes,
@@ -79,12 +91,16 @@ def _values(detail: ConditionnementReportDetail) -> tuple:
         detail.film_product_id,
         detail.carton_product_id,
         detail.tape_product_id,
+        detail.scotch_product_id,
+        detail.ruban_product_id,
         detail.packaging_location_id,
         detail.finished_goods_location_id,
         detail.daily_report_id,
         detail.film_supplier_id,
         detail.carton_supplier_id,
         detail.tape_supplier_id,
+        detail.scotch_supplier_id,
+        detail.ruban_supplier_id,
     )
 
 
@@ -195,6 +211,7 @@ def freeze_packaging_parameters(
         packets_per_carton=packets_per_carton,
         carton_quantity=detail.carton_quantity,
         packets_counted=detail.packets_counted,
+        waste_carton_quantity=detail.waste_carton_quantity,
     )
 
     connection.execute(
@@ -233,6 +250,7 @@ def write_conditionnement_detail(
             packets_per_carton=snapshot_per_carton,
             carton_quantity=detail.carton_quantity,
             packets_counted=detail.packets_counted,
+            waste_carton_quantity=detail.waste_carton_quantity,
         ),
     )
 

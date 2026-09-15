@@ -5,7 +5,7 @@
   "optional_depends": [],
   "provides_api": ["StockService", "LocationService", "LotService"],
   "publishes_events": ["warehouse.stock.reserved", "warehouse.stock.received", "warehouse.stock.issued"],
-  "subscribes_events": ["procurement.purchase_order_receipt.confirmed"],
+  "subscribes_events": ["procurement.purchase_order_receipt.confirmed", "core.product.created"],
   "migrations_path": "./migrations",
   "permissions": [
     "warehouse.view_moves",

@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   ArrowLeftRight,
   Boxes,
+  Coins,
   MoreHorizontal,
   Package,
   PackageCheck,
@@ -14,6 +15,8 @@ import {
   Pencil,
   Plus,
   Trash2,
+  TrendingUp,
+  TriangleAlert,
   Warehouse,
   Wrench,
 } from "lucide-react";
@@ -59,6 +62,7 @@ import {
   adminSetStock,
   createLocation,
   deleteStockItem,
+  listConfirmedReceiptLineDetails,
   listLocations,
   listProducts,
   listStock,
@@ -68,7 +72,10 @@ import {
   transferStock,
   updateLocation,
   type Location,
+  type Product,
+  type ReceiptLineDetail,
   type StockItem,
+  type UnitOfMeasure,
 } from "./api";
 import { getRegrindBatch, listWorkOrders, type RegrindScrapInput } from "../production/api";
 
@@ -93,7 +100,14 @@ const rowAdjustSchema = z.object({
 type RowAdjustForm = z.infer<typeof rowAdjustSchema>;
 
 const adminSetSchema = z.object({
-  quantity_on_hand: z.coerce.number().min(0),
+  // On-hand alone may go negative: a validated production movement is allowed
+  // to drive it there (see StockService.post_production_movement) when the
+  // record disagrees with what inventory believes is on the shelf, and this
+  // is the screen that reconciles it back — refusing a negative correction
+  // here would make the correction follow the wrong number instead of fixing
+  // it. Reserved/in-production stay non-negative: both are promises about
+  // future stock, not records of the past, so a negative one is just wrong.
+  quantity_on_hand: z.coerce.number(),
   quantity_reserved: z.coerce.number().min(0),
   quantity_in_production: z.coerce.number().min(0),
 });
@@ -113,9 +127,61 @@ const STOCK_MOVES_QUERY_KEY = ["warehouse", "stock", "moves"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
+// Same key AnalysisTab.tsx uses for the same endpoint -- shares its cache entry.
+const RECEIPT_LINES_QUERY_KEY = ["procurement", "receipt-lines"] as const;
 
 function formatQty(amount: number) {
   return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 1 }).format(amount);
+}
+
+function formatMoney(amount: number) {
+  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
+}
+
+interface ProductValuation {
+  avgCostPerUnit: number;
+  margin: number | null;
+  marginPct: number | null;
+}
+
+/**
+ * Weighted-average landed cost for one product, from every confirmed purchase
+ * receipt line for it -- converted into the product's own unit (not the
+ * receipt line's, which may differ by ratio within the same category, e.g.
+ * ordering in tons for a kg-tracked product) before averaging, exactly like
+ * confirm_receipt does when it posts to stock. Receipt lines in a different
+ * unit *category* than the product (a data issue -- see the uomMismatch
+ * check in procurement) are skipped rather than blended in wrong.
+ * Margin/marginPct are null for a product with no selling price set.
+ */
+function productValuation(
+  productId: string,
+  products: Product[],
+  uoms: UnitOfMeasure[],
+  receiptLines: ReceiptLineDetail[],
+): ProductValuation | null {
+  const product = products.find((p) => p.id === productId);
+  const productUom = product ? uoms.find((u) => u.id === product.uom_id) : undefined;
+  if (!product || !productUom) return null;
+
+  let totalQuantity = 0;
+  let totalCostBase = 0;
+  for (const line of receiptLines) {
+    if (line.product_id !== productId) continue;
+    const lineUom = uoms.find((u) => u.id === line.uom_id);
+    if (!lineUom || lineUom.category !== productUom.category) continue;
+    totalQuantity += (line.quantity * lineUom.ratio_to_base) / productUom.ratio_to_base;
+    totalCostBase += line.total_cost_base;
+  }
+  if (totalQuantity <= 0) return null;
+
+  const avgCostPerUnit = totalCostBase / totalQuantity;
+  const hasSellingPrice = product.selling_price > 0;
+  return {
+    avgCostPerUnit,
+    margin: hasSellingPrice ? product.selling_price - avgCostPerUnit : null,
+    marginPct: hasSellingPrice ? ((product.selling_price - avgCostPerUnit) / product.selling_price) * 100 : null,
+  };
 }
 
 function breakdownByUnit(items: StockItem[], unitOf: (item: StockItem) => string, pick: (item: StockItem) => number): UnitBreakdownEntry[] {
@@ -149,6 +215,15 @@ export function StockTab() {
   // Best-effort: a role without production.view_work_orders just doesn't get the
   // "work order" row in the move-detail dialog, rather than an error anywhere.
   const { data: workOrders = [] } = useQuery({ queryKey: ["production", "work-orders"], queryFn: () => listWorkOrders(token) });
+  // Same best-effort pattern -- a role without procurement.view_purchase_orders just
+  // doesn't get avg-cost/margin figures (the columns and the history dialog's
+  // valuation stat both fall back to "—") rather than a 403 in the console.
+  const canViewCosts = hasPermission("procurement.view_purchase_orders");
+  const { data: receiptLines = [] } = useQuery({
+    queryKey: RECEIPT_LINES_QUERY_KEY,
+    queryFn: () => listConfirmedReceiptLineDetails(token),
+    enabled: canViewCosts,
+  });
   const productName = (productId: string) => products.find((p) => p.id === productId)?.name ?? "—";
   // The printed form, not the code: "pièce" is what a reader expects beside a
   // count, and `code` stays the key imports and integrations match on.
@@ -167,9 +242,9 @@ export function StockTab() {
     const unit = productUomCode(productId);
     return productRequiresIntegerQuantity(productId, products, uoms) ? `${unit} · ${t("common.wholeNumberOnly")}` : unit;
   };
-  // Only finished goods carry this -- packets-per-carton is set per product in
+  // Only finished goods carry this — packets-per-carton is set per product in
   // Production > Product Classifications. Raw materials, spares, etc. have no
-  // carton, so the column just shows a dash for them rather than a bogus 1-pack figure.
+  // carton, so the column just shows "—" for them rather than a bogus 1-pack figure.
   const packetsPerCarton = (productId: string) => products.find((p) => p.id === productId)?.packets_per_carton ?? null;
   const cartonsOnHand = (item: StockItem) => {
     const perCarton = packetsPerCarton(item.product_id);
@@ -401,7 +476,18 @@ export function StockTab() {
       key: "quantity_on_hand",
       header: t("warehouse.stock.column.onHand"),
       defaultWidth: 140,
-      cell: (item) => <span className="tabular-nums text-muted-foreground">{item.quantity_on_hand}</span>,
+      cell: (item) => (
+        <span className="inline-flex items-center gap-1.5">
+          <span className={cn("tabular-nums", item.quantity_on_hand < 0 ? "text-destructive font-medium" : "text-muted-foreground")}>
+            {item.quantity_on_hand}
+          </span>
+          {item.quantity_on_hand < 0 && (
+            <Badge variant="destructive" title={t("warehouse.stock.negativeOnHandHint")}>
+              {t("warehouse.stock.negativeOnHand")}
+            </Badge>
+          )}
+        </span>
+      ),
       filterCell: {
         type: "range",
         min: columnFilters.range.quantity_on_hand?.min ?? "",
@@ -483,6 +569,48 @@ export function StockTab() {
         onMaxChange: (v) => columnFilters.setRangeValue("quantity_available", "max", v),
       },
       sortValue: (item) => item.quantity_available,
+    },
+    {
+      key: "avgCost",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("warehouse.stock.column.avgCost")}
+          <HelpTooltip text={t("warehouse.stock.help.avgCost")} />
+        </span>
+      ),
+      defaultWidth: 150,
+      cell: (item) => {
+        const valuation = productValuation(item.product_id, products, uoms, receiptLines);
+        if (!valuation) return <span className="text-muted-foreground">—</span>;
+        return (
+          <span className="tabular-nums text-muted-foreground">
+            {formatMoney(valuation.avgCostPerUnit)} / {productUomCode(item.product_id)}
+          </span>
+        );
+      },
+      sortValue: (item) => productValuation(item.product_id, products, uoms, receiptLines)?.avgCostPerUnit ?? -1,
+    },
+    {
+      key: "margin",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("warehouse.stock.column.margin")}
+          <HelpTooltip text={t("warehouse.stock.help.margin")} />
+        </span>
+      ),
+      defaultWidth: 150,
+      cell: (item) => {
+        const valuation = productValuation(item.product_id, products, uoms, receiptLines);
+        if (!valuation || valuation.margin === null || valuation.marginPct === null) {
+          return <span className="text-muted-foreground">—</span>;
+        }
+        return (
+          <span className={cn("tabular-nums", valuation.margin >= 0 ? "text-success" : "text-destructive")}>
+            {formatMoney(valuation.margin)} ({valuation.marginPct.toFixed(0)}%)
+          </span>
+        );
+      },
+      sortValue: (item) => productValuation(item.product_id, products, uoms, receiptLines)?.margin ?? Number.NEGATIVE_INFINITY,
     },
     {
       key: "modifier",
@@ -847,6 +975,59 @@ export function StockTab() {
             <DialogDescription>{t("warehouse.stock.history.description")}</DialogDescription>
           </DialogHeader>
           {historyProductId && <StockHistoryChart moves={historyMoves} unit={productUnit(historyProductId, products, uoms)} />}
+          {historyProductId &&
+            (() => {
+              const valuation = productValuation(historyProductId, products, uoms, receiptLines);
+              if (!valuation) {
+                return canViewCosts ? (
+                  <p className="text-xs text-muted-foreground">{t("warehouse.stockHistory.valuation.noData")}</p>
+                ) : null;
+              }
+              return (
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <Card className="flex items-center gap-4 p-4">
+                    <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                      <Coins className="h-5 w-5" />
+                    </div>
+                    <div>
+                      <p className="text-2xl font-semibold tabular-nums tracking-tight">
+                        {formatMoney(valuation.avgCostPerUnit)}
+                        <span className="ml-1 text-base font-medium text-muted-foreground">
+                          / {productUomCode(historyProductId)}
+                        </span>
+                      </p>
+                      <p className="text-xs text-muted-foreground">{t("warehouse.stockHistory.valuation.avgCost")}</p>
+                    </div>
+                  </Card>
+                  {valuation.margin !== null && valuation.marginPct !== null && (
+                    <Card className="flex items-center gap-4 p-4">
+                      <div
+                        className={cn(
+                          "flex h-10 w-10 shrink-0 items-center justify-center rounded-lg",
+                          valuation.margin >= 0 ? "bg-success-soft text-success" : "bg-destructive-soft text-destructive",
+                        )}
+                      >
+                        <TrendingUp className="h-5 w-5" />
+                      </div>
+                      <div>
+                        <p
+                          className={cn(
+                            "text-2xl font-semibold tabular-nums tracking-tight",
+                            valuation.margin >= 0 ? "text-success" : "text-destructive",
+                          )}
+                        >
+                          {formatMoney(valuation.margin)}
+                          <span className="ml-1 text-base font-medium text-muted-foreground">
+                            ({valuation.marginPct.toFixed(0)}%)
+                          </span>
+                        </p>
+                        <p className="text-xs text-muted-foreground">{t("warehouse.stockHistory.valuation.margin")}</p>
+                      </div>
+                    </Card>
+                  )}
+                </div>
+              );
+            })()}
           <StockMoveHistoryTable
             tableKey="warehouse.stock.productHistory"
             moves={historyMoves}
@@ -1019,6 +1200,12 @@ export function StockTab() {
                 />
               </div>
             </div>
+            {adminSetForm.watch("quantity_on_hand") < 0 && (
+              <p className="flex items-start gap-1.5 text-sm text-destructive">
+                <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+                {t("warehouse.stock.negativeOnHandHint")}
+              </p>
+            )}
             {adminSetMutation.isError && (
               <p className="text-sm text-destructive">
                 {adminSetMutation.error instanceof ApiError ? adminSetMutation.error.message : t("warehouse.stock.adminUpdateError")}

@@ -171,28 +171,24 @@ class TeamPerformanceService:
         # the écart this powers. Grouped by category, not by product like above,
         # because the point here is which *stage* lost the material, not which item.
         #
-        # Every row here is already a daily-report category (the report_type
-        # filter guarantees it), so unlike waste_rows above there is no mixed
-        # set of categories to test — only whether the item is weight-denominated
-        # at all. Both the converted (per-item-unit) and raw-kilo figures are
-        # kept: `daily_waste_by_category` below reports the former, but
-        # `net_semoule_waste` is netted against `regrind_quantity` — also raw
-        # kilos — and must not mix the two bases.
+        # Deliberately raw kilos, the form's own basis (WasteLinesField's
+        # fixedUnit) — never each item's own unit. `finished_product_conditioning`
+        # is routinely logged against a finished-goods item stocked in kg while
+        # the other five stages use bulk semoule stocked in tonnes; converting
+        # each to its own unit before this dict is built made one category's
+        # figure look ~1000x the others once several stages are stacked and
+        # compared side by side (e.g. on the team-performance dashboard's
+        # semoule-waste chart) — a 12 kg category rendering as a bigger bar
+        # than a 119 kg one. `net_semoule_waste` below already nets on this
+        # same raw-kg basis for exactly that reason; this dict now matches it,
+        # so every stage stays comparable and the parts sum to the whole.
         category_waste_rows = self._connection.execute(
             f"""
             SELECT
                 r.team, date_trunc(%s, r.report_date)::date AS period, w.category,
-                COALESCE(SUM(w.quantity), 0),
-                COALESCE(SUM(
-                    CASE
-                        WHEN u.category = 'weight' AND u.ratio_to_base > 0 THEN w.quantity / u.ratio_to_base
-                        ELSE w.quantity
-                    END
-                ), 0)
+                COALESCE(SUM(w.quantity), 0)
             FROM production.report_waste_lines w
             JOIN production.production_reports r ON r.id = w.report_id AND r.tenant_id = w.tenant_id
-            LEFT JOIN core.products p ON p.id = w.product_id AND p.tenant_id = r.tenant_id
-            LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
             WHERE {where} AND r.report_type = 'daily'
             GROUP BY r.team, period, w.category
             """,
@@ -200,9 +196,9 @@ class TeamPerformanceService:
         ).fetchall()
         category_waste_by_key: dict[tuple[str | None, str], dict[str, float]] = {}
         raw_kg_by_key: dict[tuple[str | None, str], float] = {}
-        for team, period, category, raw_quantity, converted_quantity in category_waste_rows:
+        for team, period, category, raw_quantity in category_waste_rows:
             key = (team, period.isoformat())
-            category_waste_by_key.setdefault(key, {})[category] = float(converted_quantity)
+            category_waste_by_key.setdefault(key, {})[category] = float(raw_quantity)
             raw_kg_by_key[key] = raw_kg_by_key.get(key, 0.0) + float(raw_quantity)
 
         rows = []
@@ -294,4 +290,60 @@ class TeamPerformanceService:
         return [
             {"reason": reason, "minutes": int(minutes), "report_count": int(report_count)}
             for reason, minutes, report_count in rows
+        ]
+
+    def list_downtime_breakdown(
+        self,
+        *,
+        tenant_id: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """Minutes lost per reason, team and machine, from validated reports.
+
+        Same union as list_downtime_reasons, with the reporting header's own
+        team and equipment_id carried onto each row instead of being folded
+        away -- this is the full-granularity version a caller re-aggregates
+        by whichever dimension it needs (team, machine, or reason alone),
+        rather than three separate queries for three separate slices.
+        """
+        clauses = ["r.tenant_id = %s", "r.status = 'validated'"]
+        params: list[object] = [tenant_id]
+        if date_from is not None:
+            clauses.append("r.report_date >= %s")
+            params.append(date_from)
+        if date_to is not None:
+            clauses.append("r.report_date <= %s")
+            params.append(date_to)
+        where = " AND ".join(clauses)
+
+        rows = self._connection.execute(
+            f"""
+            WITH combined AS (
+                SELECT dl.motif AS reason, dl.minutes AS minutes, r.team AS team, r.equipment_id AS equipment_id
+                FROM production.report_downtime_lines dl
+                JOIN production.production_reports r ON r.id = dl.report_id AND r.tenant_id = dl.tenant_id
+                WHERE {where} AND dl.minutes > 0 AND dl.motif IS NOT NULL
+                UNION ALL
+                SELECT c.downtime_reason AS reason, c.downtime_minutes AS minutes, r.team AS team, r.equipment_id AS equipment_id
+                FROM production.conditionnement_reports c
+                JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
+                WHERE {where} AND c.downtime_minutes > 0 AND c.downtime_reason IS NOT NULL
+            )
+            SELECT reason, team, equipment_id, SUM(minutes) AS minutes, count(*) AS report_count
+            FROM combined
+            GROUP BY reason, team, equipment_id
+            ORDER BY minutes DESC
+            """,
+            params + params,
+        ).fetchall()
+        return [
+            {
+                "reason": reason,
+                "team": team,
+                "equipment_id": equipment_id,
+                "minutes": int(minutes),
+                "report_count": int(report_count),
+            }
+            for reason, team, equipment_id, minutes, report_count in rows
         ]

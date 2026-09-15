@@ -5,7 +5,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { Package, Pencil, Plus, Tag as TagIcon, Trash2 } from "lucide-react";
 import { toast } from "sonner";
-import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
@@ -35,93 +34,38 @@ import {
   setProductTags,
   updateProduct,
 } from "./api";
+import { ProductWizard, productWizardSchema, type ProductWizardForm } from "./ProductWizard";
 
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 
-// is_sellable/is_purchasable are driven by native <select> elements, so the form state
-// holds "true"/"false" strings throughout (register, defaultValues, reset) -- they're only
-// converted to real booleans once, at the API-call boundary in the mutation functions below.
-//
-// blankToUndefined: an empty number input reaches zod as "" (react-hook-form doesn't turn
-// that into undefined itself), and z.coerce.number() on "" produces 0 -- so a blank optional
-// field like net weight would coerce to 0 and fail a `.positive()` check, blocking submit
-// even though the user left it blank on purpose. Preprocessing "" (and null) to undefined
-// first lets `.optional()` short-circuit before the number coercion ever runs.
-function blankToUndefined<T extends z.ZodTypeAny>(schema: T) {
-  return z.preprocess((value) => (value === "" || value === null ? undefined : value), schema);
-}
-
-const productSchema = z.object({
-  sku: z.string().min(1, "Required"),
-  name: z.string().min(1, "Required"),
-  uom_id: z.string().min(1, "Required"),
-  net_weight_grams: blankToUndefined(z.coerce.number().positive().optional()),
-  is_sellable: z.enum(["true", "false"]),
-  is_purchasable: z.enum(["true", "false"]),
-  lot_serial_tracking: z.enum(["none", "lot", "serial"]),
-  expiry_date_policy: z.enum(["none", "sell_by", "eat_by"]),
-  description: z.string().optional(),
-  default_location_id: z.string().optional(),
-  stock_alert_threshold: blankToUndefined(z.coerce.number().min(0).optional()),
-  internal_note: z.string().optional(),
-  selling_price: blankToUndefined(z.coerce.number().min(0).optional()),
-  min_selling_price: blankToUndefined(z.coerce.number().min(0).optional()),
-  purchase_price: blankToUndefined(z.coerce.number().min(0).optional()),
-  tax_rate: blankToUndefined(z.coerce.number().min(0).optional()),
-  accounting_code_sale: z.string().optional(),
-  accounting_code_sale_export: z.string().optional(),
-  accounting_code_purchase: z.string().optional(),
-  accounting_code_purchase_import: z.string().optional(),
-});
-type ProductForm = z.infer<typeof productSchema>;
-
-const EMPTY_DEFAULTS: ProductForm = {
-  sku: "",
-  name: "",
-  uom_id: "",
-  net_weight_grams: undefined,
-  is_sellable: "true",
-  is_purchasable: "true",
-  lot_serial_tracking: "none",
-  expiry_date_policy: "none",
-  description: "",
-  default_location_id: "",
-  stock_alert_threshold: undefined,
-  internal_note: "",
-  selling_price: 0,
-  min_selling_price: undefined,
-  purchase_price: 0,
-  tax_rate: 0,
-  accounting_code_sale: "",
-  accounting_code_sale_export: "",
-  accounting_code_purchase: "",
-  accounting_code_purchase_import: "",
-};
-
-function toApiInput(input: ProductForm) {
+// Convert wizard form to API input (handles string-to-boolean conversions)
+function toApiInput(input: ProductWizardForm) {
   return {
     ...input,
     is_sellable: input.is_sellable === "true",
     is_purchasable: input.is_purchasable === "true",
-    net_weight_grams: input.net_weight_grams || undefined,
     default_location_id: input.default_location_id || undefined,
-    stock_alert_threshold: input.stock_alert_threshold ?? undefined,
-    selling_price: input.selling_price ?? 0,
-    min_selling_price: input.min_selling_price ?? undefined,
-    purchase_price: input.purchase_price ?? 0,
-    tax_rate: input.tax_rate ?? 0,
+    product_family: input.product_family || undefined,
   };
 }
 
-function productToFormDefaults(product: Product): ProductForm {
+// Convert Product entity to form defaults for edit mode (would need to add this to wizard)
+function productToFormDefaults(product: Product): ProductWizardForm {
   return {
     sku: product.sku,
     name: product.name,
+    product_type: (product as any).product_type ?? "PL",
+    product_family: (product as any).product_family ?? "",
     uom_id: product.uom_id,
     net_weight_grams: product.net_weight_grams ?? undefined,
+    empty_packaging_weight_grams: (product as any).empty_packaging_weight_grams ?? undefined,
+    sachets_per_package: (product as any).sachets_per_package ?? undefined,
+    packets_per_carton: product.packets_per_carton ?? undefined,
+    carton_weight_grams: (product as any).carton_weight_grams ?? undefined,
+    cartons_per_pallet: (product as any).cartons_per_pallet ?? undefined,
     is_sellable: product.is_sellable ? "true" : "false",
     is_purchasable: product.is_purchasable ? "true" : "false",
     lot_serial_tracking: product.lot_serial_tracking,
@@ -141,14 +85,14 @@ function productToFormDefaults(product: Product): ProductForm {
   };
 }
 
-type FormFieldsProps = Pick<UseFormReturn<ProductForm>, "register" | "formState" | "watch">;
+type FormFieldsProps = Pick<UseFormReturn<ProductWizardForm>, "register" | "formState" | "watch">;
 
 export function ProductListTab() {
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [lotTrackingFilter, setLotTrackingFilter] = useState<"all" | "none" | "lot" | "serial">("all");
@@ -164,19 +108,17 @@ export function ProductListTab() {
     .filter((p) => lotTrackingFilter === "all" || p.lot_serial_tracking === lotTrackingFilter)
     .filter((p) => sellableFilter === "all" || p.is_sellable);
 
-  const newForm = useForm<ProductForm>({ resolver: zodResolver(productSchema), defaultValues: EMPTY_DEFAULTS });
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
 
   const createMutation = useMutation({
-    mutationFn: async (input: ProductForm) => {
+    mutationFn: async (input: ProductWizardForm) => {
       const product = await createProduct(token, toApiInput(input));
       if (selectedTagIds.length > 0) await setProductTags(token, product.id, selectedTagIds);
       return product;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY });
-      setDialogOpen(false);
-      newForm.reset(EMPTY_DEFAULTS);
+      setWizardOpen(false);
       setSelectedTagIds([]);
       toast.success(t("products.created"));
     },
@@ -185,7 +127,7 @@ export function ProductListTab() {
     },
   });
 
-  const editForm = useForm<ProductForm>({ resolver: zodResolver(productSchema) });
+  const editForm = useForm<ProductWizardForm>({ resolver: zodResolver(productWizardSchema) });
   const [editTagIds, setEditTagIds] = useState<string[]>([]);
 
   const { data: currentTags = [] } = useQuery({
@@ -199,7 +141,7 @@ export function ProductListTab() {
   }, [currentTags]);
 
   const updateMutation = useMutation({
-    mutationFn: async ({ id, input }: { id: string; input: ProductForm }) => {
+    mutationFn: async ({ id, input }: { id: string; input: ProductWizardForm }) => {
       const product = await updateProduct(token, id, toApiInput(input));
       await setProductTags(token, id, editTagIds);
       return product;
@@ -449,6 +391,18 @@ export function ProductListTab() {
             {errors.uom_id && <p className="text-sm text-destructive">{errors.uom_id.message}</p>}
           </div>
           <div className="space-y-1.5">
+            <Label htmlFor={`${idPrefix}_type`}>{t("products.field.type")}</Label>
+            <Select id={`${idPrefix}_type`} {...form.register("product_type")}>
+              <option value="PL">Pâte Longues (PL)</option>
+              <option value="PC">Pâte Courte (PC)</option>
+            </Select>
+            {errors.product_type && <p className="text-sm text-destructive">{errors.product_type.message}</p>}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor={`${idPrefix}_family`}>{t("products.field.family")}</Label>
+            <Input id={`${idPrefix}_family`} placeholder="e.g., Spaghetti 1,1" {...form.register("product_family")} />
+          </div>
+          <div className="space-y-1.5">
             <Label htmlFor={`${idPrefix}_weight`}>{t("products.field.netWeight")}</Label>
             <Input id={`${idPrefix}_weight`} type="number" step="any" placeholder="N/A" {...form.register("net_weight_grams")} />
           </div>
@@ -493,6 +447,47 @@ export function ProductListTab() {
         <div className="space-y-1.5">
           <Label htmlFor={`${idPrefix}_description`}>{t("products.field.description")}</Label>
           <Input id={`${idPrefix}_description`} {...form.register("description")} />
+        </div>
+
+        <div className="space-y-1.5 rounded-lg border border-border p-3">
+          <Label className="text-xs text-muted-foreground">{t("products.statistics.packaging.title")} — {t("common.optional")}</Label>
+          <div className="grid grid-cols-2 gap-2">
+            <Input
+              placeholder={t("products.field.emptyPackagingWeight")}
+              type="number"
+              step="any"
+              {...form.register("empty_packaging_weight_grams")}
+              error={errors.empty_packaging_weight_grams?.message}
+            />
+            <Input
+              placeholder={t("products.field.sachetsPerPackage")}
+              type="number"
+              step="any"
+              {...form.register("sachets_per_package")}
+              error={errors.sachets_per_package?.message}
+            />
+            <Input
+              placeholder={t("products.field.packetsPerCarton")}
+              type="number"
+              step="any"
+              {...form.register("packets_per_carton")}
+              error={errors.packets_per_carton?.message}
+            />
+            <Input
+              placeholder={t("products.field.cartonWeight")}
+              type="number"
+              step="any"
+              {...form.register("carton_weight_grams")}
+              error={errors.carton_weight_grams?.message}
+            />
+            <Input
+              placeholder={t("products.field.cartonsPerPallet")}
+              type="number"
+              step="any"
+              {...form.register("cartons_per_pallet")}
+              error={errors.cartons_per_pallet?.message}
+            />
+          </div>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
@@ -592,31 +587,20 @@ export function ProductListTab() {
             )}
             <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4" />
-                {t("products.new")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>{t("products.dialog.title")}</DialogTitle>
-                <DialogDescription>{t("products.dialog.description")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={newForm.handleSubmit((input) => createMutation.mutate(input))}>
-                {renderFormFields(newForm, "new", selectedTagIds, setSelectedTagIds)}
-                {createMutation.isError && (
-                  <p className="text-sm text-destructive">
-                    {createMutation.error instanceof ApiError ? createMutation.error.message : t("products.createError")}
-                  </p>
-                )}
-                <Button type="submit" className="w-full" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? t("products.creating") : t("products.create")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <Button onClick={() => setWizardOpen(true)}>
+            <Plus className="h-4 w-4" />
+            {t("products.new")}
+          </Button>
+
+          <ProductWizard
+            open={wizardOpen}
+            onOpenChange={setWizardOpen}
+            uoms={uoms}
+            locations={locations}
+            onSubmit={(input) => createMutation.mutate(input)}
+            isLoading={createMutation.isPending}
+            t={t}
+          />
         </CardHeader>
         <CardContent className="p-0">
           <Table colWidths={colWidths}>

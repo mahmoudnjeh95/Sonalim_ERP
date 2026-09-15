@@ -3,6 +3,7 @@ from modules.procurement.domain.entities import (
     PurchaseOrder,
     PurchaseOrderLine,
     apply_receipt_to_line,
+    compute_cost_anomaly,
     compute_landed_cost,
     confirm_purchase_order_receipt,
     derive_order_status,
@@ -10,10 +11,11 @@ from modules.procurement.domain.entities import (
     transition_purchase_order,
     validate_new_purchase_order,
     validate_new_purchase_order_line,
+    validate_receipt_fees,
 )
 
 
-def _order(status: str = "draft") -> PurchaseOrder:
+def _order(status: str = "draft", is_import: bool = False) -> PurchaseOrder:
     return PurchaseOrder(
         id="po1",
         tenant_id="t1",
@@ -23,6 +25,7 @@ def _order(status: str = "draft") -> PurchaseOrder:
         expected_date="2026-08-15",
         currency_code="EUR",
         notes=None,
+        is_import=is_import,
     )
 
 
@@ -172,6 +175,65 @@ def test_landed_cost_sums_all_fees():
     total_cost, cost_per_unit = result.value
     assert total_cost == 1150
     assert cost_per_unit == 57.5
+
+
+def test_landed_cost_includes_handling_fee():
+    result = compute_landed_cost(
+        base_cost=1000,
+        license_fee=0,
+        insurance_fee=0,
+        transit_fee=0,
+        transport_fee=0,
+        customs_duty=0,
+        handling_fee=60,
+        quantity=20,
+    )
+    assert isinstance(result, Ok)
+    total_cost, cost_per_unit = result.value
+    assert total_cost == 1060
+    assert cost_per_unit == 53
+
+
+def test_validate_receipt_fees_allows_local_receipt_with_only_handling_and_transport():
+    result = validate_receipt_fees(is_import=False, license_fee=0, insurance_fee=0, transit_fee=0, customs_duty=0)
+    assert isinstance(result, Ok)
+
+
+def test_validate_receipt_fees_rejects_customs_duty_on_local_order():
+    result = validate_receipt_fees(is_import=False, license_fee=0, insurance_fee=0, transit_fee=0, customs_duty=50)
+    assert isinstance(result, Err)
+    assert result.code == "IMPORT_FEE_ON_LOCAL_ORDER"
+
+
+def test_validate_receipt_fees_allows_any_fee_on_import_order():
+    result = validate_receipt_fees(is_import=True, license_fee=10, insurance_fee=10, transit_fee=10, customs_duty=10)
+    assert isinstance(result, Ok)
+
+
+def test_cost_anomaly_none_when_no_baseline():
+    deviation_pct, is_anomaly = compute_cost_anomaly(cost_per_unit=1000, baseline_avg_cost_per_unit=None)
+    assert deviation_pct is None
+    assert is_anomaly is False
+
+
+def test_cost_anomaly_flags_receipt_well_above_average():
+    # 500 vs a 400 baseline is +25%, over the 15% threshold.
+    deviation_pct, is_anomaly = compute_cost_anomaly(cost_per_unit=500, baseline_avg_cost_per_unit=400)
+    assert deviation_pct == 25
+    assert is_anomaly is True
+
+
+def test_cost_anomaly_does_not_flag_receipt_within_threshold():
+    # 440 vs a 400 baseline is +10%, under the 15% threshold.
+    deviation_pct, is_anomaly = compute_cost_anomaly(cost_per_unit=440, baseline_avg_cost_per_unit=400)
+    assert deviation_pct == 10
+    assert is_anomaly is False
+
+
+def test_cost_anomaly_does_not_flag_a_cheaper_than_usual_receipt():
+    deviation_pct, is_anomaly = compute_cost_anomaly(cost_per_unit=200, baseline_avg_cost_per_unit=400)
+    assert deviation_pct == -50
+    assert is_anomaly is False
 
 
 def test_landed_cost_rejects_zero_quantity():

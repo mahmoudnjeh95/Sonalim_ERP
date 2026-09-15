@@ -193,7 +193,7 @@ class PackagingVarianceService:
         row = self._connection.execute(
             """
             SELECT r.of_id, w.product_id, w.reference, r.report_date, r.status,
-                   c.packets_counted, c.carton_quantity,
+                   c.packets_counted, c.carton_quantity, c.waste_carton_quantity,
                    c.snapshot_net_weight_grams, c.snapshot_packets_per_carton
             FROM production.production_reports r
             JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
@@ -213,6 +213,7 @@ class PackagingVarianceService:
             report_status,
             packets_counted,
             carton_quantity,
+            waste_carton_quantity,
             snapshot_weight,
             snapshot_per_carton,
         ) = row
@@ -231,6 +232,7 @@ class PackagingVarianceService:
             packets_per_carton=packets_per_carton,
             counted_packets=float(packets_counted),
             counted_cartons=float(carton_quantity),
+            waste_cartons=float(waste_carton_quantity),
             tolerance_percent=self._tolerances.resolve_tolerance_percent(
                 tenant_id=tenant_id, product_id=product_id
             ),
@@ -279,6 +281,7 @@ class PackagingVarianceService:
                 count(*),
                 COALESCE(SUM(c.packets_counted), 0),
                 COALESCE(SUM(c.carton_quantity), 0),
+                COALESCE(SUM(c.waste_carton_quantity), 0),
                 CASE WHEN COUNT(DISTINCT c.snapshot_net_weight_grams) = 1
                      THEN MIN(c.snapshot_net_weight_grams) END,
                 CASE WHEN COUNT(DISTINCT c.snapshot_packets_per_carton) = 1
@@ -293,7 +296,8 @@ class PackagingVarianceService:
 
         report_count = int(totals[0])
         packets_counted, cartons = float(totals[1]), float(totals[2])
-        agreed_weight, agreed_per_carton, distinct_weights = totals[3], totals[4], int(totals[5])
+        waste_cartons = float(totals[3])
+        agreed_weight, agreed_per_carton, distinct_weights = totals[4], totals[5], int(totals[6])
         tonnage = self._daily_tonnage(tenant_id=tenant_id, of_id=of_id)
 
         # When every validated report was frozen against the same parameters, use
@@ -319,6 +323,7 @@ class PackagingVarianceService:
             counted_cartons=cartons,
             rejected_packets=rejected["subtractable"],
             undecided_packets=rejected["undecided"],
+            waste_cartons=waste_cartons,
             tolerance_percent=self._tolerances.resolve_tolerance_percent(
                 tenant_id=tenant_id, product_id=product_id
             ),
@@ -379,7 +384,7 @@ class PackagingVarianceService:
         rows = self._connection.execute(
             f"""
             SELECT w.product_id, r.of_id, w.reference, r.id, r.report_date,
-                   c.packets_counted, c.carton_quantity,
+                   c.packets_counted, c.carton_quantity, c.waste_carton_quantity,
                    c.snapshot_net_weight_grams, c.snapshot_packets_per_carton
             FROM production.production_reports r
             JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
@@ -399,6 +404,7 @@ class PackagingVarianceService:
             report_date,
             packets,
             cartons,
+            waste_cartons,
             snapshot_weight,
             snapshot_per_carton,
         ) in rows:
@@ -408,6 +414,7 @@ class PackagingVarianceService:
                     "product_id": product_id,
                     "packets": 0.0,
                     "cartons": 0.0,
+                    "waste_cartons": 0.0,
                     "of_ids": set(),
                     "reports": [],
                     "weights": set(),
@@ -415,6 +422,7 @@ class PackagingVarianceService:
             )
             bucket["packets"] += float(packets)
             bucket["cartons"] += float(cartons)
+            bucket["waste_cartons"] += float(waste_cartons)
             bucket["of_ids"].add(of_id)
             bucket["weights"].add(float(snapshot_weight) if snapshot_weight is not None else None)
 
@@ -436,6 +444,7 @@ class PackagingVarianceService:
                             packets_per_carton=per_carton,
                             counted_packets=float(packets),
                             counted_cartons=float(cartons),
+                            waste_cartons=float(waste_cartons),
                         )
                     ),
                 }
@@ -482,6 +491,7 @@ class PackagingVarianceService:
                 counted_cartons=bucket["cartons"],
                 rejected_packets=subtractable,
                 undecided_packets=undecided,
+                waste_cartons=bucket["waste_cartons"],
                 tolerance_percent=self._tolerances.resolve_tolerance_percent(
                     tenant_id=tenant_id, product_id=product_id
                 ),

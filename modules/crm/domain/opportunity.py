@@ -35,6 +35,7 @@ class Opportunity:
     owner_id: str | None = None
     priority: str = "medium"
     lost_reason: str | None = None
+    created_at: str | None = None
 
 
 def validate_amount(amount: float) -> Result[None]:
@@ -66,5 +67,6 @@ def transition_opportunity(
             owner_id=opportunity.owner_id,
             priority=opportunity.priority,
             lost_reason=opportunity.lost_reason,
+            created_at=opportunity.created_at,
         )
     )

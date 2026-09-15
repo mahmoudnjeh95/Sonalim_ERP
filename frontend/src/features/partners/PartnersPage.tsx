@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { Archive, Building2, Factory, Eye, Pencil, Users } from "lucide-react";
+import { Archive, ArchiveRestore, Building2, Factory, Eye, Pencil, Users } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -33,7 +33,7 @@ import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { archivePartner, createPartner, updatePartner, listPartners, type Partner, type PartnerKind } from "./api";
+import { activatePartner, archivePartner, createPartner, updatePartner, listPartners, type Partner, type PartnerKind } from "./api";
 
 const newPartnerSchema = z.object({
   name: z.string().min(1, "Required"),
@@ -140,6 +140,17 @@ export function PartnersPage() {
     },
   });
 
+  const activateMutation = useMutation({
+    mutationFn: (partnerId: string) => activatePartner(token, partnerId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PARTNERS_QUERY_KEY });
+      toast.success(t("partners.activated"));
+    },
+    onError: (error) => {
+      toast.error(t("partners.activateError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
   const customerCount = partners.filter((p) => p.kind === "customer" || p.kind === "both").length;
   const supplierCount = partners.filter((p) => p.kind === "supplier" || p.kind === "both").length;
 
@@ -209,6 +220,19 @@ export function PartnersPage() {
               {archiveMutation.isPending && archiveMutation.variables === partner.id
                 ? t("partners.archiving")
                 : t("partners.archive")}
+            </Button>
+          )}
+          {partner.status === "archived" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => activateMutation.mutate(partner.id)}
+              disabled={activateMutation.isPending && activateMutation.variables === partner.id}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              {activateMutation.isPending && activateMutation.variables === partner.id
+                ? t("partners.activating")
+                : t("partners.activate")}
             </Button>
           )}
         </div>

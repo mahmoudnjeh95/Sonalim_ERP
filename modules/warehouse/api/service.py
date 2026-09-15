@@ -42,8 +42,7 @@ class StockService:
                 """
                 SELECT location_id, product_id, quantity_on_hand, quantity_reserved, quantity_in_production
                 FROM warehouse.stock_items
-                                WHERE tenant_id = %s AND location_id = %s
-                                    AND (quantity_on_hand > 0 OR quantity_reserved > 0 OR quantity_in_production > 0)
+                WHERE tenant_id = %s AND location_id = %s
                 ORDER BY product_id
                 """,
                 (tenant_id, location_id),
@@ -53,8 +52,7 @@ class StockService:
                 """
                 SELECT location_id, product_id, quantity_on_hand, quantity_reserved, quantity_in_production
                 FROM warehouse.stock_items
-                                WHERE tenant_id = %s
-                                    AND (quantity_on_hand > 0 OR quantity_reserved > 0 OR quantity_in_production > 0)
+                WHERE tenant_id = %s
                 ORDER BY location_id, product_id
                 """,
                 (tenant_id,),
@@ -420,6 +418,66 @@ class StockService:
         )
         if isinstance(released, Err):
             return released
+        return Ok(None)
+
+    def restore_from_quarantine(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        quarantine_location_id: str,
+        destination_location_id: str,
+        quantity: float,
+        correlation_id: str,
+        reference: str,
+        actor_id: str | None = None,
+        source_type: str | None = None,
+        source_id: str | None = None,
+        of_id: str | None = None,
+    ) -> Result[None]:
+        """Reverse a quarantine hold that turned out to be unwarranted.
+
+        Unlike `release_from_quarantine` (a one-way disposition exit — the
+        product is regrind/déchet/rework/back-to-stock and the disposition
+        event tells downstream modules where the value actually went), the
+        hold itself was wrong here — e.g. the quality report describing it
+        got rejected — so the product goes back to exactly where it was
+        pulled from. This is the mirror of `transfer_to_quarantine`, on the
+        books as well as on the floor.
+        """
+        out = self.post_production_movement(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            location_id=quarantine_location_id,
+            quantity=quantity,
+            direction="out",
+            correlation_id=correlation_id,
+            reference=reference,
+            move_type="transfer_out",
+            actor_id=actor_id,
+            source_type=source_type,
+            source_id=source_id,
+            of_id=of_id,
+        )
+        if isinstance(out, Err):
+            return out
+
+        into = self.post_production_movement(
+            tenant_id=tenant_id,
+            product_id=product_id,
+            location_id=destination_location_id,
+            quantity=quantity,
+            direction="in",
+            correlation_id=correlation_id,
+            reference=reference,
+            move_type="transfer_in",
+            actor_id=actor_id,
+            source_type=source_type,
+            source_id=source_id,
+            of_id=of_id,
+        )
+        if isinstance(into, Err):
+            return into
         return Ok(None)
 
     def would_go_negative(self, *, tenant_id: str, product_id: str, location_id: str, quantity: float) -> bool:
@@ -832,9 +890,20 @@ class StockService:
     ) -> Result[StockLevel]:
         """Administrative override: directly overwrites all three stock buckets,
         bypassing the normal-flow invariants (reserve/issue/etc. all check against
-        each other; this doesn't). Always audited since it's a direct correction."""
-        if quantity_on_hand < 0 or quantity_reserved < 0 or quantity_in_production < 0:
-            return Err("INVALID_QUANTITY", "quantities cannot be negative")
+        each other; this doesn't). Always audited since it's a direct correction.
+
+        quantity_on_hand alone may be negative: post_production_movement already
+        lets a validated production movement drive it there when the record
+        disagrees with what inventory believes is on the shelf (a record of the
+        past outranks a stock figure), and this override is exactly what
+        reconciles that gap back -- refusing a negative correction here would
+        make the correction follow the wrong number instead of fixing it.
+        quantity_reserved and quantity_in_production stay non-negative: both are
+        promises about future stock, not records of the past, so a negative one
+        is just wrong.
+        """
+        if quantity_reserved < 0 or quantity_in_production < 0:
+            return Err("INVALID_QUANTITY", "reserved and in-production quantities cannot be negative")
         for value in (quantity_on_hand, quantity_reserved, quantity_in_production):
             validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=value)
             if isinstance(validation, Err):

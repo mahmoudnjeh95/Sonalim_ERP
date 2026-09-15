@@ -209,6 +209,73 @@ def test_machine_carton_variance_is_not_quality_adjusted():
     assert variance.machine_carton_variance == 0
 
 
+# ---- waste cartons: counted but never held product ------------------------
+
+
+def test_waste_cartons_are_subtracted_from_the_carton_side():
+    # 100 cartons counted, 8 of them empty/damaged. The carton variance is
+    # judged against the 92 that actually could have held product.
+    variance = compute_variance(
+        tonnage=1,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=2000,
+        counted_cartons=100,
+        waste_cartons=8,
+    )
+    assert variance.good_cartons == 92
+    assert variance.carton_variance == -8
+
+
+def test_waste_cartons_are_excluded_from_the_machine_carton_comparison_too():
+    # The Doman PL 500gr example: 15532 cartons counted, 20 of quality's rejects
+    # plus 8 waste cartons (28 total) never went through the machine's counter,
+    # so its 310080-packet tally is short by exactly 28 cartons' worth -- but
+    # only the 8 waste cartons are cartons with nothing inside them at all.
+    variance = compute_variance(
+        tonnage=None,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=310_080,
+        counted_cartons=15_532,
+        waste_cartons=8,
+    )
+    # good_cartons = 15524, so the equivalent is 310480 packets against a
+    # 310080 machine tally -- the remaining -400 is the 20 rejected packets'
+    # worth of real cartons the machine still never scanned, which is not
+    # this field's job to explain (see the packet-side rejected_packets).
+    assert variance.good_cartons == 15_524
+    assert variance.machine_carton_variance == -400
+
+
+def test_waste_cartons_default_to_zero_so_existing_callers_are_unaffected():
+    variance = compute_variance(
+        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=2000, counted_cartons=100
+    )
+    assert variance.waste_cartons == 0
+    assert variance.good_cartons == variance.counted_cartons
+
+
+def test_waste_cartons_are_distinct_from_quality_rejected_packets():
+    # A rejected packet was real product in a real carton the line still
+    # built -- the carton count is right, only what was inside it is not.
+    # A waste carton was never real product at all. The two subtract from
+    # opposite sides and never touch each other's arithmetic.
+    variance = compute_variance(
+        tonnage=1,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=2000,
+        counted_cartons=100,
+        rejected_packets=20,
+        waste_cartons=8,
+    )
+    assert variance.good_packets == 1980
+    assert variance.good_cartons == 92
+    assert variance.carton_variance == -8
+    assert variance.packet_variance == -20
+
+
 # ---- turning a count back into a tonnage ----------------------------------
 
 
@@ -234,6 +301,37 @@ def test_a_sac_has_no_carton_tier_so_the_tally_leads():
     assert tonnage_from_count(
         net_weight_grams=4540, packets_per_carton=None, carton_quantity=0, packets_counted=1000
     ) == pytest.approx(4.54)
+
+
+def test_waste_cartons_do_not_become_finished_goods():
+    # 100 cartons counted, 8 empty/damaged: only 92 are real finished goods,
+    # 1840 packets' worth -- not 2000. Posting the raw count would overstate
+    # what actually moved into stock.
+    assert (
+        finished_quantity_from_count(
+            packets_per_carton=20, carton_quantity=100, packets_counted=0, waste_carton_quantity=8
+        )
+        == 1840
+    )
+    assert tonnage_from_count(
+        net_weight_grams=500,
+        packets_per_carton=20,
+        carton_quantity=100,
+        packets_counted=0,
+        waste_carton_quantity=8,
+    ) == pytest.approx(0.92)
+
+
+def test_waste_carton_quantity_cannot_drive_the_finished_count_negative():
+    # Defensive only -- validate_conditionnement_detail already refuses a
+    # waste_carton_quantity greater than carton_quantity before this is
+    # reached, but the arithmetic itself must not produce a negative count.
+    assert (
+        finished_quantity_from_count(
+            packets_per_carton=20, carton_quantity=5, packets_counted=0, waste_carton_quantity=8
+        )
+        == 0
+    )
 
 
 def test_an_uncounted_carton_falls_back_to_the_machine_tally():

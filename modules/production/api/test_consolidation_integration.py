@@ -190,11 +190,11 @@ def test_downtime_across_several_daily_reports_and_several_arrets_each(db, env, 
     every line, not just one figure per report."""
     _daily(
         db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=500,
-        downtime_lines=(DowntimeLine(motif="mixer jam", minutes=10), DowntimeLine(motif="power cut", minutes=5)),
+        downtime_lines=(DowntimeLine(motif="extruder_failure", minutes=10), DowntimeLine(motif="electrical_failure", minutes=5)),
     )
     _daily(
         db, env, of, date=datetime.date(2026, 9, 2), semolina_quantity=500,
-        downtime_lines=(DowntimeLine(motif="die change", minutes=20),),
+        downtime_lines=(DowntimeLine(motif="die_jam", minutes=20),),
     )
 
     result = _consolidate(db, of)
@@ -409,11 +409,11 @@ def test_time_is_summed_across_both_report_types(db, env, of):
     _daily(
         db, env, of, date=datetime.date(2026, 9, 1),
         semolina_quantity=1000, production_minutes=400,
-        downtime_lines=(DowntimeLine(motif="die change", minutes=20),),
+        downtime_lines=(DowntimeLine(motif="die_jam", minutes=20),),
     )
     _packing(
         db, env, of, date=datetime.date(2026, 9, 1),
-        packets_counted=900, production_minutes=380, downtime_minutes=15, downtime_reason="film jam",
+        packets_counted=900, production_minutes=380, downtime_minutes=15, downtime_reason="film_jam",
     )
 
     time = _consolidate(db, of)["time"]

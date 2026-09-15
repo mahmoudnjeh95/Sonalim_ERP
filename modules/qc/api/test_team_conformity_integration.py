@@ -116,3 +116,62 @@ def test_draft_quality_reports_are_excluded(db, env, of):
 def test_invalid_grain_is_rejected(db):
     with pytest.raises(ValueError):
         QualityReportService(db).team_conformity(tenant_id=TENANT, grain="fortnight")
+
+
+def _validated_quality_report_with_indices(
+    db, env, of, *, report_date, pre_dryer_index=None, humidity_percentage=None,
+    cooling_index=None, pf_index=None, sumo_index=None,
+):
+    packing = ConditionnementReportService(db).create_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
+        team="A", shift="morning",
+        detail=ConditionnementReportDetail(),
+    )
+    assert isinstance(packing, Ok), getattr(packing, "message", "")
+
+    service = QualityReportService(db)
+    created = service.create_report(
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
+        detail=QualityReportDetail(
+            pre_dryer_index=pre_dryer_index, humidity_percentage=humidity_percentage,
+            cooling_index=cooling_index, pf_index=pf_index, sumo_index=sumo_index,
+            conforming_cartons=1, non_conforming_cartons=0,
+        ),
+    )
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    report_id = created.value["report"].id
+    assert isinstance(service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id), Ok)
+    validated = service.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID()))
+    assert isinstance(validated, Ok), getattr(validated, "message", "")
+
+
+def test_index_trend_averages_within_a_period_and_ignores_nulls(db, env, of):
+    _validated_quality_report_with_indices(
+        db, env, of, report_date=datetime.date(2026, 9, 1),
+        pre_dryer_index=10, humidity_percentage=12.5, cooling_index=None, pf_index=None, sumo_index=None,
+    )
+    _validated_quality_report_with_indices(
+        db, env, of, report_date=datetime.date(2026, 9, 2),
+        pre_dryer_index=20, humidity_percentage=None, cooling_index=5, pf_index=None, sumo_index=None,
+    )
+    # A different week -- must land in its own bucket.
+    _validated_quality_report_with_indices(
+        db, env, of, report_date=datetime.date(2026, 9, 20),
+        pre_dryer_index=100, humidity_percentage=None, cooling_index=None, pf_index=None, sumo_index=None,
+    )
+
+    rows = QualityReportService(db).index_trend(tenant_id=TENANT, grain="week")
+
+    week1 = next(r for r in rows if r["report_count"] == 2)
+    assert week1["pre_dryer_index"] == 15, "average of 10 and 20"
+    assert week1["humidity_percentage"] == 12.5, "the single non-null value, not dragged toward zero by the other report's null"
+    assert week1["cooling_index"] == 5
+    assert week1["pf_index"] is None, "no report in the period recorded it"
+
+    week2 = next(r for r in rows if r["report_count"] == 1)
+    assert week2["pre_dryer_index"] == 100
+
+
+def test_index_trend_invalid_grain_is_rejected(db):
+    with pytest.raises(ValueError):
+        QualityReportService(db).index_trend(tenant_id=TENANT, grain="fortnight")

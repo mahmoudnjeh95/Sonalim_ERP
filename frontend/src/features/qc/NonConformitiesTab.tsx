@@ -9,7 +9,7 @@ import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
 import { listUoms } from "../warehouse/api";
-import { productUnit } from "../../lib/units";
+import { formatQuantity, productUnit } from "../../lib/units";
 import { NonConformityDetailDialog } from "./NonConformityDetailDialog";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
@@ -256,7 +256,11 @@ export function NonConformitiesTab() {
       key: "quantity",
       header: t("qc.nc.column.quantity"),
       defaultWidth: 120,
-      cell: (n) => <span className="tabular-nums text-muted-foreground">{n.quantity}</span>,
+      cell: (n) => (
+        <span className="tabular-nums text-muted-foreground">
+          {formatQuantity(n.quantity, productUnit(n.product_id, products, uoms))}
+        </span>
+      ),
       filterCell: {
         type: "range",
         min: columnFilters.range.quantity?.min ?? "",
@@ -429,7 +433,13 @@ export function NonConformitiesTab() {
                         )}
                       </div>
                       <div className="space-y-1.5">
-                        <Label htmlFor="nc_quantity">{t("qc.nc.field.quantity")}</Label>
+                        <Label htmlFor="nc_quantity">
+                          {t("qc.nc.field.quantity")}
+                          {(() => {
+                            const unit = productUnit(form.watch("product_id"), products, uoms);
+                            return unit ? ` (${unit})` : "";
+                          })()}
+                        </Label>
                         <Input id="nc_quantity" type="number" step="any" {...form.register("quantity")} />
                         {form.formState.errors.quantity && (
                           <p className="text-sm text-destructive">{form.formState.errors.quantity.message}</p>
@@ -524,7 +534,7 @@ export function NonConformitiesTab() {
                     <div key={n.id} className="flex items-center justify-between gap-2 text-sm">
                       <span className="font-medium">{n.reference}</span>
                       <span className="text-muted-foreground">
-                        {productName(n.product_id)} · {n.quantity}
+                        {productName(n.product_id)} · {formatQuantity(n.quantity, productUnit(n.product_id, products, uoms))}
                       </span>
                     </div>
                   ))}

@@ -128,3 +128,16 @@ export function signedMoveQuantity(move: StockMove): number {
 export function relatedRegrindBatchId(move: StockMove): string | null {
   return move.of_id ? null : relatedWorkOrderId(move);
 }
+
+/**
+ * The purchase-order receipt behind a goods-in movement, when there is one
+ * (`purchase_order_receipt:{receipt_id}`, set in confirm_receipt -- see
+ * modules/procurement/api/service.py). Lets the detail dialog resolve the
+ * receipt to its parent order and link straight to it.
+ */
+export function relatedPurchaseOrderReceiptId(move: StockMove): string | null {
+  const separatorIndex = move.reference.indexOf(":");
+  if (separatorIndex === -1) return null;
+  const kind = move.reference.slice(0, separatorIndex);
+  return kind === "purchase_order_receipt" ? move.reference.slice(separatorIndex + 1) : null;
+}

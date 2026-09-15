@@ -49,6 +49,7 @@ def _opportunity_response(opportunity: Opportunity) -> dict:
         "owner_id": opportunity.owner_id,
         "priority": opportunity.priority,
         "lost_reason": opportunity.lost_reason,
+        "created_at": opportunity.created_at,
     }
 
 

@@ -52,14 +52,19 @@ def env(db):
         (equipment, TENANT, work_center),
     )
 
-    film, carton, tape = (str(ULID()) for _ in range(3))
+    film, carton, scotch, ruban = (str(ULID()) for _ in range(4))
     packaging_location = str(ULID())
     db.execute(
         "INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'PACK', 'Packaging store')",
         (packaging_location, TENANT),
     )
     stock = StockService(db)
-    for product_id, sku in ((film, "TEST-FILM"), (carton, "TEST-CARTON"), (tape, "TEST-TAPE")):
+    for product_id, sku in (
+        (film, "TEST-FILM"),
+        (carton, "TEST-CARTON"),
+        (scotch, "TEST-SCOTCH"),
+        (ruban, "TEST-RUBAN"),
+    ):
         db.execute(
             "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, %s, %s, %s)",
             (product_id, TENANT, sku, sku, uom),
@@ -82,7 +87,8 @@ def env(db):
         "equipment": equipment,
         "film": film,
         "carton": carton,
-        "tape": tape,
+        "scotch": scotch,
+        "ruban": ruban,
         "packaging_location": packaging_location,
     }
 
@@ -106,7 +112,8 @@ def _report(db, env, of, **detail_kwargs):
     # A packing report that moves stock must name the products and stores involved.
     detail_kwargs.setdefault("film_product_id", env["film"])
     detail_kwargs.setdefault("carton_product_id", env["carton"])
-    detail_kwargs.setdefault("tape_product_id", env["tape"])
+    detail_kwargs.setdefault("scotch_product_id", env["scotch"])
+    detail_kwargs.setdefault("ruban_product_id", env["ruban"])
     detail_kwargs.setdefault("packaging_location_id", env["packaging_location"])
     detail_kwargs.setdefault("finished_goods_location_id", env["location"])
     result = ConditionnementReportService(db).create_report(
@@ -245,7 +252,8 @@ def test_validating_brings_the_finished_product_in_and_packaging_out(db, env, of
         packets_counted=800,
         film_quantity=40,
         carton_quantity=20,
-        tape_quantity=5,
+        scotch_quantity=5,
+        ruban_quantity=3,
     )
     reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
 
@@ -258,7 +266,10 @@ def test_validating_brings_the_finished_product_in_and_packaging_out(db, env, of
     assert _on_hand(db, TENANT, env["product"], env["location"]) == finished_before + 800
     assert _on_hand(db, TENANT, env["film"], env["packaging_location"]) == film_before - 40
     assert _on_hand(db, TENANT, env["carton"], env["packaging_location"]) == 10_000 - 20
-    assert _on_hand(db, TENANT, env["tape"], env["packaging_location"]) == 10_000 - 5
+    # Scotch and ruban are deducted independently -- the whole point of the split
+    # is that a shift using both in the same run has somewhere to put both figures.
+    assert _on_hand(db, TENANT, env["scotch"], env["packaging_location"]) == 10_000 - 5
+    assert _on_hand(db, TENANT, env["ruban"], env["packaging_location"]) == 10_000 - 3
 
 
 def test_a_cartoned_product_posts_the_carton_count_not_the_machine_tally(db, env, of):
@@ -391,9 +402,9 @@ def test_a_daily_service_will_not_edit_a_packing_report(db, env, of):
 
 
 def test_get_report_returns_the_packing_detail(db, env, of):
-    report = _report(db, env, of, finished_product_quantity=800, tape_quantity=5, machine_speed=42.5)
+    report = _report(db, env, of, finished_product_quantity=800, scotch_quantity=5, machine_speed=42.5)
     fetched = ProductionReportService(db).get_report(tenant_id=TENANT, report_id=report.id)
     assert fetched is not None
     assert isinstance(fetched["detail"], ConditionnementReportDetail)
-    assert fetched["detail"].tape_quantity == 5
+    assert fetched["detail"].scotch_quantity == 5
     assert fetched["detail"].machine_speed == 42.5

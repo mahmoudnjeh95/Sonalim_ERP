@@ -3,6 +3,7 @@ from __future__ import annotations
 import psycopg
 from ulid import ULID
 
+from core.api.service import CoreService
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.domain.sequences import next_sequence_value
@@ -61,6 +62,7 @@ class NonConformityService:
 
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
+        self._core = CoreService(connection)
 
     # ---- reads -----------------------------------------------------------
 
@@ -185,7 +187,7 @@ class NonConformityService:
         ]
 
     def disposition_summary(
-        self, *, tenant_id: str, date_from: str | None = None, date_to: str | None = None
+        self, *, tenant_id: str, of_id: str | None = None, date_from: str | None = None, date_to: str | None = None
     ) -> list[dict]:
         """Where rejected product actually ended up — recovered or scrapped.
 
@@ -195,9 +197,17 @@ class NonConformityService:
         would repeat the exact cross-unit mistake the waste ratio elsewhere in
         this codebase was built to avoid. Product-only keeps every summed row
         in one comparable unit, which is what makes a percentage of it honest.
+
+        `of_id` scopes this to one work order — the écart net panel on the OF
+        screen uses it to show what the undecided/settled split in
+        `get_rejected_quantity_for_of` actually turned into, instead of a
+        tenant-wide total that mixes in every other order.
         """
         clauses = ["d.tenant_id = %s", "d.component = 'product'"]
         params: list[object] = [tenant_id]
+        if of_id is not None:
+            clauses.append("nc.of_id = %s")
+            params.append(of_id)
         if date_from is not None:
             clauses.append("nc.raised_at >= %s")
             params.append(date_from)
@@ -207,15 +217,64 @@ class NonConformityService:
 
         rows = self._connection.execute(
             f"""
-            SELECT d.disposition, COALESCE(SUM(d.quantity), 0), count(*)
+            SELECT
+                d.disposition,
+                COALESCE(SUM(d.quantity), 0),
+                count(*),
+                SUM(d.quantity * p.net_weight_grams),
+                SUM(d.quantity) FILTER (WHERE p.net_weight_grams IS NULL)
             FROM qc.nc_dispositions d
             JOIN qc.non_conformities nc ON nc.id = d.non_conformity_id AND nc.tenant_id = d.tenant_id
+            JOIN core.products p ON p.id = nc.product_id
             WHERE {' AND '.join(clauses)}
             GROUP BY d.disposition
             """,
             params,
         ).fetchall()
-        return [{"disposition": disposition, "quantity": float(quantity), "count": int(count)} for disposition, quantity, count in rows]
+        # weight_kg is only reported when every contributing product has a
+        # known net_weight_grams -- averaging in an unweighed quantity would
+        # silently understate the total rather than admit it can't be computed.
+        return [
+            {
+                "disposition": disposition,
+                "quantity": float(quantity),
+                "count": int(count),
+                "weight_kg": float(weighted_grams) / 1000 if unweighed_quantity is None and weighted_grams is not None else None,
+            }
+            for disposition, quantity, count, weighted_grams, unweighed_quantity in rows
+        ]
+
+    def _quantity_from_quality_report(
+        self, *, tenant_id: str, quality_report_id: str, of_id: str, product_id: str
+    ) -> Result[float]:
+        """The piece quantity a quality report's rejection actually represents.
+
+        The rapport declares `non_conforming_cartons` -- a carton count -- but a
+        non-conformity's `quantity` is in the product's own stocked unit, which
+        the stock transfer and the packaging-variance ecart net both read as
+        pieces. Deriving it here, from the report and the product's own
+        `packets_per_carton`, means a caller can never reintroduce the bug of
+        posting a carton count straight through as a piece count -- it doesn't
+        get to choose the number at all once a quality report is attached.
+        """
+        row = self._connection.execute(
+            """
+            SELECT d.non_conforming_cartons
+            FROM qc.quality_report_details d
+            JOIN qc.quality_reports r ON r.id = d.report_id AND r.tenant_id = d.tenant_id
+            WHERE d.report_id = %s AND d.tenant_id = %s AND r.of_id = %s
+            """,
+            (quality_report_id, tenant_id, of_id),
+        ).fetchone()
+        if row is None:
+            return Err("QUALITY_REPORT_NOT_FOUND", f"no quality report {quality_report_id} found for OF {of_id}")
+        non_conforming_cartons = float(row[0])
+
+        product = self._core.get_product(tenant_id, product_id)
+        packets_per_carton = product.packets_per_carton if product else None
+        if packets_per_carton and packets_per_carton > 0:
+            return Ok(non_conforming_cartons * packets_per_carton)
+        return Ok(non_conforming_cartons)
 
     # ---- writes ----------------------------------------------------------
 
@@ -239,6 +298,23 @@ class NonConformityService:
         quality_report_id: str | None = None,
         description: str | None = None,
     ) -> Result[NonConformity]:
+        if not of_id.strip():
+            return Err("MISSING_OF", "a non-conformity must name the work order the product came from")
+        if not quarantine_location_id.strip():
+            return Err("MISSING_LOCATION", "a non-conformity must name the blocked location the product is held in")
+
+        # A quality-report-backed NC never trusts the caller's quantity -- see
+        # `_quantity_from_quality_report`. A manually raised one (no report
+        # attached) still takes the quantity the user typed directly, already
+        # in the product's own unit.
+        if quality_report_id:
+            derived = self._quantity_from_quality_report(
+                tenant_id=tenant_id, quality_report_id=quality_report_id, of_id=of_id, product_id=product_id
+            )
+            if isinstance(derived, Err):
+                return derived
+            quantity = derived.value
+
         validation = validate_non_conformity(
             product_id=product_id,
             quantity=quantity,
@@ -248,10 +324,6 @@ class NonConformityService:
         )
         if isinstance(validation, Err):
             return validation
-        if not of_id.strip():
-            return Err("MISSING_OF", "a non-conformity must name the work order the product came from")
-        if not quarantine_location_id.strip():
-            return Err("MISSING_LOCATION", "a non-conformity must name the blocked location the product is held in")
 
         non_conformity_id = str(ULID())
         reference = next_sequence_value(self._connection, tenant_id=tenant_id, name="qc.non_conformities", prefix="NC-")

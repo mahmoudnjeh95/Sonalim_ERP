@@ -53,6 +53,10 @@ export function archivePartner(token: string, partnerId: string) {
   return apiFetch<Partner>(`/core/partners/${partnerId}/archive`, { method: "POST", token });
 }
 
+export function activatePartner(token: string, partnerId: string) {
+  return apiFetch<Partner>(`/core/partners/${partnerId}/activate`, { method: "POST", token });
+}
+
 // --- Tags (specialties, sharing core.product_tags) -------------------------------------
 
 export interface PartnerTagLink {

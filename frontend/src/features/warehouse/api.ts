@@ -172,13 +172,19 @@ export interface Product {
   id: string;
   sku: string;
   name: string;
+  product_type: "PL" | "PC";
+  product_family: string | null;
   uom_id: string;
   net_weight_grams: number | null;
+  empty_packaging_weight_grams: number | null;
+  sachets_per_package: number | null;
   /**
    * Phase 9, decision 20. Null means the product has no carton line at all —
    * a 4.54 kg sac is its own selling unit — not that nobody filled it in.
    */
   packets_per_carton: number | null;
+  carton_weight_grams: number | null;
+  cartons_per_pallet: number | null;
   parent_product_id: string | null;
   is_sellable: boolean;
   is_purchasable: boolean;
@@ -196,6 +202,7 @@ export interface Product {
   accounting_code_sale_export: string | null;
   accounting_code_purchase: string | null;
   accounting_code_purchase_import: string | null;
+  tag_ids: string[];
 }
 
 export function listProducts(token: string) {
@@ -240,14 +247,48 @@ export function listUoms(token: string) {
 // this tab is the only current consumer -- see AnalysisTab.tsx.
 
 export interface ReceiptLineDetail {
+  receipt_id: string;
   product_id: string;
   uom_id: string;
   quantity: number;
   invoice_date: string | null;
   total_cost: number;
+  currency_code: string;
+  // total_cost converted to base_currency (XOF) as of invoice_date -- use this, not
+  // total_cost, whenever summing/averaging across rows: receipts can be in different
+  // currencies (local CFA vs. imported EUR/TRY) and total_cost alone isn't comparable.
+  total_cost_base: number;
+  base_currency: string;
+  origin_country: string | null;
+  is_import: boolean;
+  // "Majoration" alert: this row's cost/unit vs. this product+unit's average cost across
+  // every OTHER confirmed receipt. baseline/deviation are null when there's no other
+  // receipt yet to compare against (nothing flagged in that case).
+  cost_per_unit_base: number;
+  baseline_avg_cost_per_unit: number | null;
+  cost_deviation_pct: number | null;
+  is_cost_anomaly: boolean;
 }
 
 export function listConfirmedReceiptLineDetails(token: string) {
   return apiFetch<ReceiptLineDetail[]>("/procurement/receipt-lines", { token });
+}
+
+export interface CostSummaryRow {
+  product_id: string;
+  uom_id: string;
+  origin_country: string | null;
+  is_import: boolean;
+  total_quantity: number;
+  // Both already converted to base_currency (XOF) -- safe to compare/sort across rows
+  // regardless of which currency each underlying receipt was priced in.
+  average_cost_per_unit: number;
+  best_cost_per_unit: number;
+  receipt_count: number;
+  base_currency: string;
+}
+
+export function getCostSummary(token: string) {
+  return apiFetch<CostSummaryRow[]>("/procurement/cost-summary", { token });
 }
 

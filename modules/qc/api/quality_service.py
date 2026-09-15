@@ -291,6 +291,66 @@ class QualityReportService:
             for team, period, report_count, conforming, non_conforming in rows
         ]
 
+    def index_trend(
+        self,
+        *,
+        tenant_id: str,
+        grain: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """Average process indices from validated reports, bucketed by period.
+
+        Plant-wide rather than by team like team_conformity -- these are
+        leading process indicators (pre-dryer, humidity, cooling, PF, SUMO),
+        not a team ranking. AVG(...) ignores NULLs on its own, so a shift that
+        skipped one index doesn't drag the others toward zero.
+        """
+        if grain not in self.GRAINS:
+            raise ValueError(f"grain must be one of {self.GRAINS}")
+
+        clauses = ["qr.tenant_id = %s", "qr.status = 'validated'"]
+        params: list[object] = [grain, tenant_id]
+        if date_from is not None:
+            clauses.append("qr.report_date >= %s")
+            params.append(date_from)
+        if date_to is not None:
+            clauses.append("qr.report_date <= %s")
+            params.append(date_to)
+
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                date_trunc(%s, qr.report_date)::date AS period,
+                count(*) AS report_count,
+                AVG(d.pre_dryer_index),
+                AVG(d.humidity_percentage),
+                AVG(d.cooling_index),
+                AVG(d.pf_index),
+                AVG(d.sumo_index)
+            FROM qc.quality_reports qr
+            JOIN qc.quality_report_details d ON d.report_id = qr.id AND d.tenant_id = qr.tenant_id
+            WHERE {' AND '.join(clauses)}
+            GROUP BY period
+            ORDER BY period
+            """,
+            params,
+        ).fetchall()
+        return [
+            {
+                "period": period.isoformat(),
+                "report_count": int(report_count),
+                "pre_dryer_index": float(pre_dryer_index) if pre_dryer_index is not None else None,
+                "humidity_percentage": float(humidity_percentage) if humidity_percentage is not None else None,
+                "cooling_index": float(cooling_index) if cooling_index is not None else None,
+                "pf_index": float(pf_index) if pf_index is not None else None,
+                "sumo_index": float(sumo_index) if sumo_index is not None else None,
+            }
+            for (
+                period, report_count, pre_dryer_index, humidity_percentage, cooling_index, pf_index, sumo_index,
+            ) in rows
+        ]
+
     def list_reports(
         self, *, tenant_id: str, of_id: str | None = None, status: str | None = None
     ) -> list[QualityReport]:
@@ -694,6 +754,57 @@ class QualityReportService:
         result = transition_quality_report(report, "rejected")
         if isinstance(result, Err):
             return result
+
+        # Clean up any non-conformities linked to this report.
+        # They represent a rejected validation attempt and must not stay in quarantine.
+        # Only clean up if they are still in quarantined/raised status (not yet dispositioned).
+        non_conformities = self._connection.execute(
+            """
+            SELECT id, product_id, quantity, quarantine_location_id, source_location_id
+            FROM qc.non_conformities
+            WHERE tenant_id = %s AND quality_report_id = %s AND status IN ('raised', 'quarantined')
+            """,
+            (tenant_id, report_id),
+        ).fetchall()
+
+        for nc_id, product_id, quantity, quarantine_location_id, source_location_id in non_conformities:
+            # The hold was never warranted -- the report describing it was rejected --
+            # so the product goes back to where it was pulled from, not just off the books.
+            from modules.warehouse.api.service import StockService
+            released = StockService(self._connection).restore_from_quarantine(
+                tenant_id=tenant_id,
+                product_id=product_id,
+                quarantine_location_id=quarantine_location_id,
+                destination_location_id=source_location_id,
+                quantity=float(quantity),
+                correlation_id=f"quality_report_rejection:{report_id}",
+                reference=f"non_conformity:{nc_id}:rejection_cleanup",
+                actor_id=actor_id,
+                source_type="qc.non_conformity_rejection_cleanup",
+                source_id=nc_id,
+                of_id=report.of_id,
+            )
+            if isinstance(released, Err):
+                return released
+
+            # Delete the non-conformity record
+            self._connection.execute(
+                "DELETE FROM qc.nc_dispositions WHERE tenant_id = %s AND non_conformity_id = %s",
+                (tenant_id, nc_id),
+            )
+            self._connection.execute(
+                "DELETE FROM qc.non_conformities WHERE tenant_id = %s AND id = %s",
+                (tenant_id, nc_id),
+            )
+            record_audit(
+                self._connection,
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                action="non_conformity.deleted_by_report_rejection",
+                entity_type="non_conformity",
+                entity_id=nc_id,
+                payload={"quality_report_id": report_id, "quantity": float(quantity)},
+            )
 
         self._connection.execute(
             "UPDATE qc.quality_reports SET status = 'rejected', rejection_reason = %s, updated_at = NOW() WHERE id = %s",

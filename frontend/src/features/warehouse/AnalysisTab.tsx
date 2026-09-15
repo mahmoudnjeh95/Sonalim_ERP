@@ -22,7 +22,16 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { listConfirmedReceiptLineDetails, listProducts, listStock, listUoms, type Product } from "./api";
+import {
+  getCostSummary,
+  listConfirmedReceiptLineDetails,
+  listProducts,
+  listStock,
+  listUoms,
+  type CostSummaryRow,
+  type Product,
+  type ReceiptLineDetail,
+} from "./api";
 import { listPartners } from "../partners/api";
 import { createPurchaseOrder } from "../procurement/api";
 
@@ -35,6 +44,17 @@ interface DesignationRow {
   count: number;
 }
 
+interface BestCostRow extends CostSummaryRow {
+  name: string;
+  unitLabel: string;
+  isBestForProduct: boolean;
+}
+
+interface AnomalyRow extends ReceiptLineDetail {
+  name: string;
+  unitLabel: string;
+}
+
 const CHART_COLORS = {
   primary: "hsl(217 91% 45%)",
   primarySoft: "hsl(217 91% 88%)",
@@ -42,6 +62,7 @@ const CHART_COLORS = {
 };
 
 const RECEIPTS_QUERY_KEY = ["procurement", "receipt-lines"] as const;
+const COST_SUMMARY_QUERY_KEY = ["procurement", "cost-summary"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const STOCK_QUERY_KEY = ["warehouse", "stock"] as const;
@@ -65,6 +86,7 @@ export function AnalysisTab() {
   const queryClient = useQueryClient();
 
   const { data: allReceipts = [] } = useQuery({ queryKey: RECEIPTS_QUERY_KEY, queryFn: () => listConfirmedReceiptLineDetails(token) });
+  const { data: costSummary = [] } = useQuery({ queryKey: COST_SUMMARY_QUERY_KEY, queryFn: () => getCostSummary(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
   const { data: stockItems = [] } = useQuery({ queryKey: STOCK_QUERY_KEY, queryFn: () => listStock(token) });
@@ -142,7 +164,10 @@ export function AnalysisTab() {
     if (tons === null) continue;
     const bucket = byDesignation.get(receipt.product_id) ?? { totalTons: 0, totalCost: 0, count: 0 };
     bucket.totalTons += tons;
-    bucket.totalCost += receipt.total_cost;
+    // total_cost_base (not total_cost): receipts can be priced in different currencies
+    // (local CFA vs. imported EUR/TRY) -- summing their own-currency totals directly
+    // would silently add unlike amounts together.
+    bucket.totalCost += receipt.total_cost_base;
     bucket.count += 1;
     byDesignation.set(receipt.product_id, bucket);
   }
@@ -165,7 +190,7 @@ export function AnalysisTab() {
     const month = receipt.invoice_date.slice(0, 7);
     const bucket = byMonth.get(month) ?? { totalTons: 0, totalCost: 0 };
     bucket.totalTons += tons;
-    bucket.totalCost += receipt.total_cost;
+    bucket.totalCost += receipt.total_cost_base;
     byMonth.set(month, bucket);
   }
   const trendData = Array.from(byMonth.entries())
@@ -177,7 +202,7 @@ export function AnalysisTab() {
 
   const weightReceipts = receipts.filter((r) => tonsEquivalent(r) !== null);
   const totalTons = weightReceipts.reduce((sum, r) => sum + (tonsEquivalent(r) ?? 0), 0);
-  const totalSpend = weightReceipts.reduce((sum, r) => sum + r.total_cost, 0);
+  const totalSpend = weightReceipts.reduce((sum, r) => sum + r.total_cost_base, 0);
   const avgCostPerTon = totalTons > 0 ? totalSpend / totalTons : 0;
 
   const byDesignationColumns: ColumnDef<DesignationRow>[] = [
@@ -219,6 +244,152 @@ export function AnalysisTab() {
   ];
   const byDesignationTable = useTableColumns("warehouse.analysis.byDesignation", byDesignationColumns);
   const sortedDesignationRows = byDesignationTable.sortRows(designationRows);
+
+  // Best cost per material, split by origin/supplier and import-vs-local -- answers "what's
+  // the cheapest this semoule has landed at, and where from" (point 5 of the MP cost plan),
+  // never blending origins the way the designation table above intentionally does.
+  const bestCostByProduct = new Map<string, number>();
+  for (const row of costSummary) {
+    const current = bestCostByProduct.get(row.product_id);
+    if (current === undefined || row.best_cost_per_unit < current) {
+      bestCostByProduct.set(row.product_id, row.best_cost_per_unit);
+    }
+  }
+  const bestCostRows: BestCostRow[] = costSummary
+    .map((row) => ({
+      ...row,
+      name: productName(row.product_id),
+      unitLabel: uomCode(row.uom_id),
+      isBestForProduct: row.best_cost_per_unit === bestCostByProduct.get(row.product_id),
+    }))
+    .sort((a, b) => a.name.localeCompare(b.name) || a.best_cost_per_unit - b.best_cost_per_unit);
+
+  const bestCostColumns: ColumnDef<BestCostRow>[] = [
+    {
+      key: "name",
+      header: t("warehouse.analysis.bestCost.column.designation"),
+      defaultWidth: 200,
+      cell: (row) => <span className="font-medium">{row.name}</span>,
+      sortValue: (row) => row.name,
+    },
+    {
+      key: "origin",
+      header: t("warehouse.analysis.bestCost.column.origin"),
+      defaultWidth: 140,
+      cell: (row) => <span className="text-muted-foreground">{row.origin_country || "—"}</span>,
+      sortValue: (row) => row.origin_country ?? "",
+    },
+    {
+      key: "isImport",
+      header: t("warehouse.analysis.bestCost.column.type"),
+      defaultWidth: 110,
+      cell: (row) => (
+        <Badge variant={row.is_import ? "accent" : "default"}>
+          {row.is_import ? t("procurement.field.import") : t("procurement.field.local")}
+        </Badge>
+      ),
+      sortValue: (row) => (row.is_import ? 1 : 0),
+    },
+    {
+      key: "averageCostPerUnit",
+      header: t("warehouse.analysis.bestCost.column.average"),
+      defaultWidth: 150,
+      cell: (row) => (
+        <span className="tabular-nums text-muted-foreground">
+          {formatMoney(row.average_cost_per_unit)} / {row.unitLabel}
+        </span>
+      ),
+      sortValue: (row) => row.average_cost_per_unit,
+    },
+    {
+      key: "bestCostPerUnit",
+      header: t("warehouse.analysis.bestCost.column.best"),
+      defaultWidth: 160,
+      cell: (row) => (
+        <span className={`tabular-nums ${row.isBestForProduct ? "font-semibold text-success" : "text-muted-foreground"}`}>
+          {formatMoney(row.best_cost_per_unit)} / {row.unitLabel}
+          {row.isBestForProduct && <Badge variant="success" className="ml-2">{t("warehouse.analysis.bestCost.badge")}</Badge>}
+        </span>
+      ),
+      sortValue: (row) => row.best_cost_per_unit,
+    },
+    {
+      key: "receiptCount",
+      header: t("warehouse.analysis.column.receipts"),
+      defaultWidth: 110,
+      cell: (row) => <span className="tabular-nums text-muted-foreground">{row.receipt_count}</span>,
+      sortValue: (row) => row.receipt_count,
+    },
+  ];
+  const bestCostTable = useTableColumns("warehouse.analysis.bestCost", bestCostColumns);
+  const sortedBestCostRows = bestCostTable.sortRows(bestCostRows);
+
+  // "Majoration" alert -- the warning triangle from the BD MP tracking sheet. Flagged
+  // server-side (list_confirmed_receipt_line_details) against every OTHER confirmed
+  // receipt for the same product+unit, so this is just filtering + display.
+  const anomalyRows: AnomalyRow[] = receipts
+    .filter((r) => r.is_cost_anomaly)
+    .map((r) => ({ ...r, name: productName(r.product_id), unitLabel: uomCode(r.uom_id) }))
+    .sort((a, b) => (b.cost_deviation_pct ?? 0) - (a.cost_deviation_pct ?? 0));
+
+  const anomalyColumns: ColumnDef<AnomalyRow>[] = [
+    {
+      key: "invoice_date",
+      header: t("warehouse.analysis.anomaly.column.date"),
+      defaultWidth: 120,
+      cell: (row) => <span className="text-muted-foreground">{row.invoice_date ?? "—"}</span>,
+      sortValue: (row) => row.invoice_date,
+    },
+    {
+      key: "name",
+      header: t("warehouse.analysis.bestCost.column.designation"),
+      defaultWidth: 200,
+      cell: (row) => <span className="font-medium">{row.name}</span>,
+      sortValue: (row) => row.name,
+    },
+    {
+      key: "origin",
+      header: t("warehouse.analysis.bestCost.column.origin"),
+      defaultWidth: 140,
+      cell: (row) => <span className="text-muted-foreground">{row.origin_country || "—"}</span>,
+      sortValue: (row) => row.origin_country ?? "",
+    },
+    {
+      key: "costPerUnit",
+      header: t("warehouse.analysis.anomaly.column.cost"),
+      defaultWidth: 150,
+      cell: (row) => (
+        <span className="tabular-nums text-muted-foreground">
+          {formatMoney(row.cost_per_unit_base)} / {row.unitLabel}
+        </span>
+      ),
+      sortValue: (row) => row.cost_per_unit_base,
+    },
+    {
+      key: "baseline",
+      header: t("warehouse.analysis.anomaly.column.baseline"),
+      defaultWidth: 150,
+      cell: (row) => (
+        <span className="tabular-nums text-muted-foreground">
+          {row.baseline_avg_cost_per_unit != null ? `${formatMoney(row.baseline_avg_cost_per_unit)} / ${row.unitLabel}` : "—"}
+        </span>
+      ),
+      sortValue: (row) => row.baseline_avg_cost_per_unit ?? 0,
+    },
+    {
+      key: "deviation",
+      header: t("warehouse.analysis.anomaly.column.deviation"),
+      defaultWidth: 130,
+      cell: (row) => (
+        <Badge variant="warning" dot>
+          +{Math.round(row.cost_deviation_pct ?? 0)}%
+        </Badge>
+      ),
+      sortValue: (row) => row.cost_deviation_pct ?? 0,
+    },
+  ];
+  const anomalyTable = useTableColumns("warehouse.analysis.anomaly", anomalyColumns);
+  const sortedAnomalyRows = anomalyTable.sortRows(anomalyRows);
 
   const alertsSection = (
     <>
@@ -452,6 +623,113 @@ export function AnalysisTab() {
               </Table>
             </CardContent>
           </Card>
+
+          {bestCostRows.length > 0 && (
+            <Card>
+              <CardHeader>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-1.5">
+                      {t("warehouse.analysis.bestCost.title")}
+                      <HelpTooltip text={t("warehouse.analysis.bestCost.help")} />
+                    </CardTitle>
+                    <CardDescription>{t("warehouse.analysis.bestCost.description")}</CardDescription>
+                  </div>
+                  <ColumnVisibilityMenu
+                    columns={bestCostColumns}
+                    isVisible={bestCostTable.isVisible}
+                    onToggle={bestCostTable.toggleVisible}
+                    onReset={bestCostTable.resetAll}
+                  />
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table colWidths={bestCostTable.colWidths}>
+                  <TableHeader>
+                    <TableRow>
+                      {bestCostTable.visibleColumns.map((column) => (
+                        <ResizableTableHead
+                          key={column.key}
+                          width={bestCostTable.getWidth(column.key)}
+                          onResize={(width) => bestCostTable.setWidth(column.key, width)}
+                          className={column.headerClassName}
+                          sortDirection={bestCostTable.sortDirectionFor(column.key)}
+                          onSort={column.sortValue ? () => bestCostTable.toggleSort(column.key) : undefined}
+                        >
+                          {column.header}
+                        </ResizableTableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedBestCostRows.map((row) => (
+                      <TableRow key={`${row.product_id}-${row.uom_id}-${row.origin_country}-${row.is_import}`}>
+                        {bestCostTable.visibleColumns.map((column) => (
+                          <TableCell key={column.key} className={column.cellClassName}>
+                            {column.cell(row)}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          {anomalyRows.length > 0 && (
+            <Card className="border-warning/30">
+              <CardHeader>
+                <div className="flex flex-wrap items-center gap-3">
+                  <div>
+                    <CardTitle className="flex items-center gap-1.5">
+                      <AlertTriangle className="h-4 w-4 text-warning" />
+                      {t("warehouse.analysis.anomaly.title")}
+                      <HelpTooltip text={t("warehouse.analysis.anomaly.help")} />
+                    </CardTitle>
+                    <CardDescription>{t("warehouse.analysis.anomaly.description")}</CardDescription>
+                  </div>
+                  <ColumnVisibilityMenu
+                    columns={anomalyColumns}
+                    isVisible={anomalyTable.isVisible}
+                    onToggle={anomalyTable.toggleVisible}
+                    onReset={anomalyTable.resetAll}
+                  />
+                </div>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table colWidths={anomalyTable.colWidths}>
+                  <TableHeader>
+                    <TableRow>
+                      {anomalyTable.visibleColumns.map((column) => (
+                        <ResizableTableHead
+                          key={column.key}
+                          width={anomalyTable.getWidth(column.key)}
+                          onResize={(width) => anomalyTable.setWidth(column.key, width)}
+                          className={column.headerClassName}
+                          sortDirection={anomalyTable.sortDirectionFor(column.key)}
+                          onSort={column.sortValue ? () => anomalyTable.toggleSort(column.key) : undefined}
+                        >
+                          {column.header}
+                        </ResizableTableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {sortedAnomalyRows.map((row) => (
+                      <TableRow key={row.receipt_id}>
+                        {anomalyTable.visibleColumns.map((column) => (
+                          <TableCell key={column.key} className={column.cellClassName}>
+                            {column.cell(row)}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
         </>
       )}
     </div>

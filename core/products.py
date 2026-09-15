@@ -19,9 +19,15 @@ tags_router = APIRouter(prefix="/core/product-tags", tags=["core.product-tags"])
 class CreateProductRequest(BaseModel):
     sku: str
     name: str
+    product_type: str
+    product_family: str | None = None
     uom_id: str
     net_weight_grams: float | None = None
+    empty_packaging_weight_grams: float | None = None
+    sachets_per_package: float | None = None
     packets_per_carton: float | None = None
+    carton_weight_grams: float | None = None
+    cartons_per_pallet: float | None = None
     is_sellable: bool = True
     is_purchasable: bool = True
     lot_serial_tracking: str = "none"
@@ -43,9 +49,15 @@ class CreateProductRequest(BaseModel):
 class UpdateProductRequest(BaseModel):
     sku: str | None = None
     name: str | None = None
+    product_type: str | None = None
+    product_family: str | None = None
     uom_id: str | None = None
     net_weight_grams: float | None = None
+    empty_packaging_weight_grams: float | None = None
+    sachets_per_package: float | None = None
     packets_per_carton: float | None = None
+    carton_weight_grams: float | None = None
+    cartons_per_pallet: float | None = None
     is_sellable: bool | None = None
     is_purchasable: bool | None = None
     lot_serial_tracking: str | None = None
@@ -91,9 +103,15 @@ def _product_response(product: Product) -> dict:
         "id": product.id,
         "sku": product.sku,
         "name": product.name,
+        "product_type": product.product_type,
+        "product_family": product.product_family,
         "uom_id": product.uom_id,
         "net_weight_grams": product.net_weight_grams,
+        "empty_packaging_weight_grams": product.empty_packaging_weight_grams,
+        "sachets_per_package": product.sachets_per_package,
         "packets_per_carton": product.packets_per_carton,
+        "carton_weight_grams": product.carton_weight_grams,
+        "cartons_per_pallet": product.cartons_per_pallet,
         "parent_product_id": product.parent_product_id,
         "is_sellable": product.is_sellable,
         "is_purchasable": product.is_purchasable,
@@ -111,6 +129,7 @@ def _product_response(product: Product) -> dict:
         "accounting_code_sale_export": product.accounting_code_sale_export,
         "accounting_code_purchase": product.accounting_code_purchase,
         "accounting_code_purchase_import": product.accounting_code_purchase_import,
+        "tag_ids": list(product.tag_ids),
     }
 
 

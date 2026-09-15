@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
@@ -48,6 +48,7 @@ import {
 import {
   adminUpdateQualityReport,
   listQualityReports,
+  raiseNonConformity,
   rejectQualityReport,
   getQualityReport,
   validateQualityReport,
@@ -56,11 +57,12 @@ import {
 } from "../qc/api";
 
 import { UTILITY_UNITS, formatDuration, formatQuantity, productUnit } from "../../lib/units";
-import { listUoms } from "../warehouse/api";
+import { listLocations, listUoms } from "../warehouse/api";
 const PRODUCTION_QUERY_KEY = ["production", "reports", "pending"] as const;
 const QUALITY_QUERY_KEY = ["qc", "quality-reports", "pending"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
+const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 
 type Source = "daily" | "conditionnement" | "quality";
 type SourceFilter = "all" | Source;
@@ -498,6 +500,10 @@ function ReviewDialog({
     defect_details: "",
   });
   const [qualityEditReason, setQualityEditReason] = useState("");
+  const [raiseNc, setRaiseNc] = useState(true);
+  const [ncSourceLocationId, setNcSourceLocationId] = useState("");
+  const [ncQuarantineLocationId, setNcQuarantineLocationId] = useState("");
+  const [ncDefectType, setNcDefectType] = useState("");
 
   const isQuality = item.source === "quality";
 
@@ -516,6 +522,11 @@ function ReviewDialog({
     queryFn: () => listWorkCenters(token),
     enabled: !isQuality,
   });
+  const { data: locations = [] } = useQuery({
+    queryKey: LOCATIONS_QUERY_KEY,
+    queryFn: () => listLocations(token),
+    enabled: isQuality,
+  });
 
   // Only a daily report carrying rebroyat opens a regrind OF (decision 11), and
   // that OF runs on its own line — not necessarily the one that filed the
@@ -524,6 +535,15 @@ function ReviewDialog({
   const hasRebroyat =
     !isQuality && item.source === "daily" && Number((productionDetail?.detail as DailyReportDetail | undefined)?.regrind_quantity ?? 0) > 0;
   const effectiveRegrindWorkCenterId = regrindWorkCenterId || productionDetail?.work_center_id || "";
+
+  const canRaiseNc = isQuality && Number(qualityDetail?.detail?.non_conforming_cartons ?? 0) > 0;
+
+  // Initialize NC fields when rejecting a quality report with non-conforming cartons
+  useEffect(() => {
+    if (canRaiseNc && !ncDefectType) {
+      setNcDefectType(qualityDetail?.detail?.defect_details || "");
+    }
+  }, [canRaiseNc, qualityDetail?.detail?.defect_details, ncDefectType]);
 
   const validateMutation = useMutation({
     // The two services return different shapes; the queue only cares that it
@@ -561,11 +581,41 @@ function ReviewDialog({
     mutationFn: async (): Promise<void> => {
       if (isQuality) {
         await rejectQualityReport(token, item.id, rejectionReason);
+
+        // If this is a QC report with non-conforming cartons and user wants to raise NC
+        if (canRaiseNc && raiseNc && ncSourceLocationId && ncQuarantineLocationId) {
+          try {
+            await raiseNonConformity(token, {
+              of_id: item.ofId,
+              product_id: ofProductId!,
+              quantity: ncQuantity,
+              source_location_id: ncSourceLocationId,
+              quarantine_location_id: ncQuarantineLocationId,
+              defect_type: ncDefectType || "Non-conformity detected",
+              severity: "minor",
+              quality_report_id: item.id,
+              description: qualityDetail?.detail?.defect_details || undefined,
+              correlation_id: crypto.randomUUID(),
+            });
+          } catch (ncError) {
+            // Rejection succeeded, but NC creation failed — show warning but still finish
+            const errorMessage = ncError instanceof ApiError ? ncError.message : String(ncError);
+            toast.warning(t("production.validation.nc.partialError").replace("{message}", errorMessage));
+            queryClient.invalidateQueries({ queryKey: QUALITY_QUERY_KEY });
+            queryClient.invalidateQueries({ queryKey: ["warehouse", "stock"] });
+            queryClient.invalidateQueries({ queryKey: ["warehouse", "stock", "moves"] });
+            onDone();
+            return;
+          }
+        }
         return;
       }
       await rejectReport(token, item.id, rejectionReason);
     },
     onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: QUALITY_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "stock"] });
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "stock", "moves"] });
       toast.success(t("production.validation.rejected"));
       onDone();
     },
@@ -619,16 +669,27 @@ function ReviewDialog({
     },
   });
 
+  // Needed on the quality path too: raising an NC has to resolve the product's
+  // packets_per_carton to convert the rapport's carton count into the piece
+  // count the product is actually stocked and moved in.
   const { data: products = [] } = useQuery({
     queryKey: ["core", "products"],
     queryFn: () => listProducts(token),
-    enabled: !isQuality,
   });
   const { data: uoms = [] } = useQuery({
     queryKey: ["core", "uoms"],
     queryFn: () => listUoms(token),
-    enabled: !isQuality,
   });
+
+  // The quality rapport declares non-conforming stock in cartons, but an NC's
+  // `quantity` (and the stock transfer it drives) is in the product's own unit
+  // -- pieces for anything with a carton tier. Without this conversion, "1
+  // carton" of a 20-per-carton product was raised and quarantined as 1 piece.
+  const ncProduct = products.find((p) => p.id === ofProductId);
+  const ncPacketsPerCarton = ncProduct?.packets_per_carton && ncProduct.packets_per_carton > 0 ? ncProduct.packets_per_carton : null;
+  const ncCartonCount = Number(qualityDetail?.detail?.non_conforming_cartons ?? 0);
+  const ncQuantity = ncPacketsPerCarton ? ncCartonCount * ncPacketsPerCarton : ncCartonCount;
+  const ncProductUnit = productUnit(ofProductId, products, uoms);
 
   // Each figure is shown in the unit the warehouse will actually move it in.
   const daily = productionDetail?.detail as DailyReportDetail | undefined;
@@ -640,7 +701,8 @@ function ReviewDialog({
     regrindOutput: productUnit(daily?.regrind_product_id, products, uoms),
     film: productUnit(packing?.film_product_id, products, uoms),
     carton: productUnit(packing?.carton_product_id, products, uoms),
-    tape: productUnit(packing?.tape_product_id, products, uoms),
+    scotch: productUnit(packing?.scotch_product_id, products, uoms),
+    ruban: productUnit(packing?.ruban_product_id, products, uoms),
   };
 
   const { data: packingVariance } = useQuery({
@@ -665,7 +727,7 @@ function ReviewDialog({
   }));
 
   const figures = isQuality
-    ? qualityFigures(qualityDetail?.detail)
+    ? qualityFigures(qualityDetail?.detail, !ncPacketsPerCarton)
     : [...productionFigures(item.source, productionDetail?.detail, units, products, uoms), ...wasteFigures];
 
   return (
@@ -707,7 +769,8 @@ function ReviewDialog({
                 <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                   <div className="space-y-1.5">
                     <Label htmlFor="q_edit_conforming">
-                      {t("qc.quality.field.conforming")} ({t("qc.quality.unit.cartons")})
+                      {t(ncPacketsPerCarton ? "qc.quality.field.conforming" : "qc.quality.field.conformingSacs")} (
+                      {t(ncPacketsPerCarton ? "qc.quality.unit.cartons" : "qc.quality.unit.sacs")})
                     </Label>
                     <Input
                       id="q_edit_conforming"
@@ -719,7 +782,8 @@ function ReviewDialog({
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="q_edit_non_conforming">
-                      {t("qc.quality.field.nonConforming")} ({t("qc.quality.unit.cartons")})
+                      {t(ncPacketsPerCarton ? "qc.quality.field.nonConforming" : "qc.quality.field.nonConformingSacs")} (
+                      {t(ncPacketsPerCarton ? "qc.quality.unit.cartons" : "qc.quality.unit.sacs")})
                     </Label>
                     <Input
                       id="q_edit_non_conforming"
@@ -847,6 +911,79 @@ function ReviewDialog({
             />
           </div>
 
+          {canRaiseNc && (
+            <div className="space-y-3 rounded-lg border border-border p-3 bg-muted/30">
+              <div className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  id="nc_create"
+                  checked={raiseNc}
+                  onChange={(e) => setRaiseNc(e.target.checked)}
+                  className="h-4 w-4 rounded border border-border"
+                />
+                <Label htmlFor="nc_create" className="text-sm font-medium cursor-pointer">
+                  {t("production.validation.nc.create")}
+                </Label>
+              </div>
+
+              {raiseNc && (
+                <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">{t("production.validation.nc.field.product")}</p>
+                      <p className="font-medium">{ncProduct?.name ?? "—"}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">{t("production.validation.nc.field.quantity")}</p>
+                      <p className="font-medium">{formatQuantity(ncQuantity, ncProductUnit)}</p>
+                      {ncPacketsPerCarton && (
+                        <p className="text-xs text-muted-foreground">
+                          {t("production.validation.nc.field.cartonBreakdown")
+                            .replace("{cartons}", String(ncCartonCount))
+                            .replace("{perCarton}", String(ncPacketsPerCarton))}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="nc_defect_type">{t("production.validation.nc.field.defectType")}</Label>
+                    <Input
+                      id="nc_defect_type"
+                      value={ncDefectType}
+                      onChange={(e) => setNcDefectType(e.target.value)}
+                      placeholder="Packaging defect, contamination, etc."
+                    />
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="nc_source_location">{t("production.validation.nc.field.sourceLocation")}</Label>
+                    <Select value={ncSourceLocationId} onChange={(e) => setNcSourceLocationId(e.target.value)}>
+                      <option value="">— Choose a location —</option>
+                      {locations.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1.5">
+                    <Label htmlFor="nc_quarantine_location">{t("production.validation.nc.field.quarantineLocation")}</Label>
+                    <Select value={ncQuarantineLocationId} onChange={(e) => setNcQuarantineLocationId(e.target.value)}>
+                      <option value="">— Choose a location —</option>
+                      {locations.map((loc) => (
+                        <option key={loc.id} value={loc.id}>
+                          {loc.name}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div className="flex gap-2">
             <Button
               className="flex-1"
@@ -860,7 +997,11 @@ function ReviewDialog({
               className="flex-1"
               variant="outline"
               onClick={() => rejectMutation.mutate()}
-              disabled={rejectMutation.isPending || !rejectionReason.trim()}
+              disabled={
+                rejectMutation.isPending ||
+                !rejectionReason.trim() ||
+                (canRaiseNc && raiseNc && (!ncSourceLocationId || !ncQuarantineLocationId))
+              }
             >
               <XCircle className="h-4 w-4" />
               {rejectMutation.isPending ? t("common.saving") : t("production.validation.reject")}
@@ -897,7 +1038,8 @@ function productionFigures(
     regrindOutput: string | null;
     film: string | null;
     carton: string | null;
-    tape: string | null;
+    scotch: string | null;
+    ruban: string | null;
   },
   products: { id: string; name: string; uom_id: string }[],
   uoms: { id: string; code: string }[],
@@ -940,9 +1082,11 @@ function productionFigures(
     // Decision 24: cartons lead -- for a product with a carton tier, this is
     // what decides the finished-goods quantity, not the machine's tally beside it.
     { label: "production.conditionnement.field.carton", value: c.carton_quantity, unit: units.carton },
+    { label: "production.conditionnement.field.wasteCarton", value: c.waste_carton_quantity, unit: units.carton },
     { label: "production.conditionnement.field.packetsCounted", value: c.packets_counted, unit: units.of },
     { label: "production.conditionnement.field.film", value: c.film_quantity, unit: units.film },
-    { label: "production.conditionnement.field.tape", value: c.tape_quantity, unit: units.tape },
+    { label: "production.conditionnement.field.scotch", value: c.scotch_quantity, unit: units.scotch },
+    { label: "production.conditionnement.field.ruban", value: c.ruban_quantity, unit: units.ruban },
     { label: "production.conditionnement.field.lotNumber", value: c.lot_number ?? "—" },
     { label: "production.conditionnement.field.dlc", value: c.dlc_date ?? "—" },
     { label: "production.reports.field.productionMinutes", value: c.production_minutes, duration: true },
@@ -952,11 +1096,13 @@ function productionFigures(
 
 function qualityFigures(
   detail: { conforming_cartons: number; non_conforming_cartons: number; humidity_percentage: number | null; defect_details: string | null } | null | undefined,
+  isSac: boolean,
 ): ReviewFigure[] {
   if (!detail) return [];
+  const unit = isSac ? "sacs" : "cartons";
   return [
-    { label: "qc.quality.field.conforming", value: detail.conforming_cartons, unit: "cartons" },
-    { label: "qc.quality.field.nonConforming", value: detail.non_conforming_cartons, unit: "cartons" },
+    { label: isSac ? "qc.quality.field.conformingSacs" : "qc.quality.field.conforming", value: detail.conforming_cartons, unit },
+    { label: isSac ? "qc.quality.field.nonConformingSacs" : "qc.quality.field.nonConforming", value: detail.non_conforming_cartons, unit },
     { label: "qc.quality.field.humidity", value: detail.humidity_percentage ?? "—", unit: "%" },
     { label: "qc.quality.field.defectDetails", value: detail.defect_details ?? "—" },
   ];

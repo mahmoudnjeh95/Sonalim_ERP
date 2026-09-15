@@ -51,7 +51,7 @@ export function MachinePerformanceTab() {
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
-  const [grain, setGrain] = useState<PerformanceGrain>("week");
+  const [grain, setGrain] = useState<PerformanceGrain>("day");
   // A custom range overrides the grain's rolling default; picking a new grain
   // resets it, same as team performance.
   const [customRange, setCustomRange] = useState<{ from: string; to: string } | null>(null);

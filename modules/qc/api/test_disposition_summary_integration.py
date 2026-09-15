@@ -92,6 +92,21 @@ def test_summary_groups_by_disposition_and_sums_quantity(db, env, of):
     assert rows["dechet"]["count"] == 2
 
 
+def test_summary_reports_weight_kg_when_product_net_weight_is_known(db, env, of):
+    db.execute("UPDATE core.products SET net_weight_grams = 500 WHERE id = %s", (env["product"],))
+    _raise_and_disposition(db, env, of, quantity=20, disposition="dechet")
+
+    rows = {r["disposition"]: r for r in NonConformityService(db).disposition_summary(tenant_id=TENANT)}
+    assert rows["dechet"]["weight_kg"] == pytest.approx(10.0)
+
+
+def test_summary_omits_weight_kg_when_product_net_weight_is_unknown(db, env, of):
+    _raise_and_disposition(db, env, of, quantity=20, disposition="dechet")
+
+    rows = {r["disposition"]: r for r in NonConformityService(db).disposition_summary(tenant_id=TENANT)}
+    assert rows["dechet"]["weight_kg"] is None
+
+
 def test_packaging_components_are_excluded(db, env, of):
     service = NonConformityService(db)
     raised = service.raise_non_conformity(

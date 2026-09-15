@@ -1,8 +1,11 @@
 import { Link } from "react-router-dom";
+import { useQuery } from "@tanstack/react-query";
+import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { formatQuantity } from "../../lib/units";
 import {
   formatMoveReference,
+  relatedPurchaseOrderReceiptId,
   relatedRegrindBatchId,
   relatedWorkOrderId,
   signedMoveQuantity,
@@ -12,6 +15,7 @@ import {
 import { Badge } from "../ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../ui/dialog";
 import { useScrapTypeLabels } from "../../lib/scrapTypes";
+import { getPurchaseOrderReceipt } from "../../features/procurement/api";
 import type { StockMove } from "../../features/warehouse/api";
 import type { RegrindScrapInput } from "../../features/production/api";
 
@@ -54,6 +58,8 @@ export function StockMoveDetailDialog({
   regrindSources?: Record<string, RegrindScrapInput[]>;
   onClose: () => void;
 }) {
+  const { session } = useAuth();
+  const token = session!.token;
   const { t, language } = useI18n();
   const referenceKindLabels = useReferenceKindLabels();
   const scrapTypeLabels = useScrapTypeLabels();
@@ -63,6 +69,12 @@ export function StockMoveDetailDialog({
   const signedQuantity = signedMoveQuantity(move);
   const regrindBatchId = relatedRegrindBatchId(move);
   const sources = regrindBatchId ? regrindSources?.[regrindBatchId] : undefined;
+  const receiptId = relatedPurchaseOrderReceiptId(move);
+  const { data: receipt } = useQuery({
+    queryKey: ["procurement", "receipts", receiptId],
+    queryFn: () => getPurchaseOrderReceipt(token, receiptId!),
+    enabled: receiptId !== null,
+  });
 
   const rows: { label: string; value: React.ReactNode }[] = [
     { label: t("warehouse.stockHistory.column.when"), value: formatWhenFull(move.created_at, language) },
@@ -92,6 +104,18 @@ export function StockMoveDetailDialog({
             value: (
               <Link to={`/production/work-orders/${workOrder.id}`} className="text-primary hover:underline">
                 {workOrder.reference}
+              </Link>
+            ),
+          },
+        ]
+      : []),
+    ...(receipt
+      ? [
+          {
+            label: t("warehouse.stockHistory.detail.purchaseOrder"),
+            value: (
+              <Link to={`/procurement?order=${receipt.purchase_order_id}`} className="text-primary hover:underline">
+                {t("warehouse.stockHistory.detail.viewPurchaseOrder")}
               </Link>
             ),
           },

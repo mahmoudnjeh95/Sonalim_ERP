@@ -5,16 +5,20 @@ import { motion } from "framer-motion";
 import {
   AlertTriangle,
   Activity,
+  CalendarClock,
   ClipboardCheck,
+  Droplets,
   Factory,
   Gauge,
   Loader2,
   PackageCheck,
   Recycle,
+  Scale,
   Sparkles,
   Timer,
   TrendingDown,
   TrendingUp,
+  Users,
 } from "lucide-react";
 import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
 import { useAuth } from "../../lib/auth";
@@ -30,29 +34,37 @@ import { UnitBreakdownStat } from "../../components/patterns/UnitBreakdownStat";
 import { StatBreakdownPopover, type StatBreakdownRow } from "../../components/patterns/StatBreakdownPopover";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
-import { commonUnit, convertQuantity, formatQuantity, productUnit, totalsByUomCategory } from "../../lib/units";
+import { commonUnit, convertQuantity, formatQuantity, productUnit, totalsByUomCategory, UTILITY_UNITS } from "../../lib/units";
 import { listUoms } from "../warehouse/api";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { cn } from "../../lib/utils";
 import {
   getRecipeCorrelationInsight,
   getWorkOrderConsolidation,
+  listDowntimeBreakdown,
   listDowntimeReasons,
   listMachinePerformance,
   listMachines,
+  listPackagingVariance,
   listRecipeCorrelation,
+  listRecipeDrift,
+  listRegrindBatches,
   listReports,
   listTeamPerformance,
   listWorkOrders,
+  type DowntimeBreakdownRow,
   type Machine,
   type MachinePerformanceRow,
   type OfConsolidation,
+  type ProductPackagingVariance,
   type RecipeCorrelationRow,
+  type RegrindBatchSummary,
   type TeamPerformanceRow,
   type WasteCategory,
   type WorkOrder,
 } from "./api";
 import { listNonConformities } from "../qc/api";
+import { listLots, type Lot } from "../products/api";
 import { listProducts, listStock, type Product } from "../warehouse/api";
 
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
@@ -66,6 +78,10 @@ const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 // constantly is an alert nobody reads.
 const WASTE_RATIO_ALERT = 0.05;
 const DOWNTIME_RATIO_ALERT = 0.15;
+// A lot within two weeks of its DLC is worth watching; within three days is
+// worth acting on today.
+const DLC_WARNING_DAYS = 14;
+const DLC_URGENT_DAYS = 3;
 
 // The daily report's own waste stages, in the plant's form order — never
 // product/packaging, which is the packing report's and isn't semoule any more.
@@ -136,9 +152,17 @@ export function ProductionDashboardTab() {
     queryKey: ["production", "downtime-reasons", range.from, range.to],
     queryFn: () => listDowntimeReasons(token, { date_from: range.from, date_to: range.to }),
   });
+  const { data: downtimeBreakdown = [] } = useQuery({
+    queryKey: ["production", "downtime-breakdown", range.from, range.to],
+    queryFn: () => listDowntimeBreakdown(token, { date_from: range.from, date_to: range.to }),
+  });
   const { data: recipeCorrelation = [] } = useQuery({
     queryKey: ["production", "recipe-correlation"],
     queryFn: () => listRecipeCorrelation(token),
+  });
+  const { data: recipeDrift = [] } = useQuery({
+    queryKey: ["production", "recipe-drift", range.from, range.to],
+    queryFn: () => listRecipeDrift(token, { date_from: range.from, date_to: range.to }),
   });
   // Same grouping as team performance, keyed by machine instead of team — a
   // line can run more than one machine at once, so productivity has to be
@@ -150,6 +174,26 @@ export function ProductionDashboardTab() {
   const { data: machines = [] } = useQuery({
     queryKey: ["production", "machines"],
     queryFn: () => listMachines(token),
+  });
+  // Écart de conditionnement, plant-wide by product — the scale against the
+  // counter. Already computed by the backend for the OF/report drill-downs;
+  // this is the same figure folded across the dashboard's own date range.
+  const { data: packagingVariance = [] } = useQuery({
+    queryKey: ["production", "packaging-variance", range.from, range.to],
+    queryFn: () => listPackagingVariance(token, { date_from: range.from, date_to: range.to }),
+  });
+  // No date filter on the endpoint itself -- it returns every batch ever
+  // opened, so the dashboard buckets by created_at against its own range
+  // client-side (see buildRegrindSummary).
+  const { data: regrindBatches = [] } = useQuery({
+    queryKey: ["production", "regrind-batches"],
+    queryFn: () => listRegrindBatches(token),
+  });
+  // Every lot, tenant-wide -- no date filter on the endpoint (only
+  // product_id), so near-expiry is a client-side filter against today.
+  const { data: lots = [] } = useQuery({
+    queryKey: ["warehouse", "lots"],
+    queryFn: () => listLots(token),
   });
 
   // Consolidation is computed per OF and never stored, so the cockpit asks for
@@ -297,9 +341,18 @@ export function ProductionDashboardTab() {
   // looked like a very clean line. Items in another category (a count of
   // cartons against a weight of semoule) are left out rather than converted,
   // because no ratio between them exists.
-  const semolinaProductId = loadedConsolidations.find(
-    (c) => c.raw_material.semolina_product_id,
-  )?.raw_material.semolina_product_id;
+  //
+  // The anchor only needs to name *a* weight unit, not a specific quality —
+  // convertQuantity only checks that the categories agree. So an order that
+  // poured two qualities (semolina_product_id null, per _semolina_totals)
+  // still yields a usable anchor here: pick the single largest quality across
+  // every active order instead of the collapsed, possibly-null per-order id.
+  const semolinaProductId = loadedConsolidations
+    .flatMap((c) => c.raw_material.semolina_by_product)
+    .reduce<{ product_id: string; quantity: number } | null>(
+      (best, entry) => (best === null || entry.quantity > best.quantity ? entry : best),
+      null,
+    )?.product_id;
   const comparableWaste = semolinaProductId
     ? wasteEntries.reduce((total, entry) => {
         const converted = convertQuantity(entry.quantity, entry.product_id, semolinaProductId, products, uoms);
@@ -314,6 +367,42 @@ export function ProductionDashboardTab() {
   // alert can send the reader somewhere specific instead of a generic tab.
   const worstWaste = worstWasteOrder(loadedConsolidations, products, uoms);
   const worstDowntime = worstDowntimeOrder(loadedConsolidations);
+
+  // Utilities are recorded per shift but have no product to derive a unit
+  // from — they're fixed columns (see UTILITY_UNITS), so summing them needs
+  // no conversion. produced_quantity is always tonnes (decision 17), so
+  // dividing by it is already a true per-tonne figure.
+  const waterQuantity = sum(loadedConsolidations.map((c) => c.utilities.water_quantity));
+  const fuelQuantity = sum(loadedConsolidations.map((c) => c.utilities.fuel_quantity));
+  const electricityQuantity = sum(loadedConsolidations.map((c) => c.utilities.electricity_quantity));
+
+  // Écart de conditionnement, worst first — the same tolerance check the
+  // per-OF drill-down already computes, just never surfaced plant-wide.
+  const packagingAccuracyRows = buildPackagingAccuracyRows(packagingVariance as ProductPackagingVariance[], products);
+  const outOfTolerance = packagingAccuracyRows.filter((row) => row.withinTolerance === false).map((row) => row.label);
+
+  // Same team-performance rows the trend line and semoule-waste chart already
+  // fetch, folded per team instead of per period — "whose yield is it," not
+  // just "whose déchet is it."
+  const teamLeaderboard = buildTeamLeaderboard(
+    teamPerformance as TeamPerformanceRow[],
+    semolinaProductId,
+    products,
+    uoms,
+    t("production.dashboard.chart.semouleWaste.noTeam"),
+  );
+
+  // Rebroyat recovery: what a regrind batch actually gave back against what
+  // scrap went into it — distinct from the Quality dashboard's disposition
+  // chart, which tracks where *rejected* product ends up, not a batch's own
+  // input/output efficiency.
+  const regrindSummary = buildRegrindSummary(regrindBatches as RegrindBatchSummary[], range);
+
+  // Finished-goods lots approaching their DLC, soonest first -- independent
+  // of the dashboard's own date-range filter, since a lot doesn't stop being
+  // a risk just because it was produced outside the selected window.
+  const nearExpiryRows = buildNearExpiryRows(lots as Lot[], products, DLC_WARNING_DAYS);
+  const urgentExpiry = nearExpiryRows.filter((row) => row.daysRemaining <= DLC_URGENT_DAYS);
 
   // One point per week, every team folded together — the same conversion the
   // snapshot ratios above use, applied per period instead of once. Weeks with
@@ -333,6 +422,19 @@ export function ProductionDashboardTab() {
   // is carrying the line," downtime is a column here rather than the sort key.
   const machineSummary = buildMachineSummary(machinePerformance as MachinePerformanceRow[], machines);
 
+  // Same downtime-reasons rows as the plant-wide Pareto above, re-folded by
+  // team and by machine so the root cause is visible per dimension, not just
+  // plant-wide -- one fetch, two client-side slices.
+  const downtimeByTeam = buildDowntimeByTeam(
+    downtimeBreakdown as DowntimeBreakdownRow[],
+    t("production.dashboard.chart.semouleWaste.noTeam"),
+  );
+  const downtimeByMachine = buildDowntimeByMachine(
+    downtimeBreakdown as DowntimeBreakdownRow[],
+    machines,
+    t("production.dashboard.downtimeBreakdown.noMachine"),
+  );
+
   const alerts = buildAlerts({
     pendingCount: pendingReports.length,
     lowStock: lowStockProducts(stock, products),
@@ -341,6 +443,9 @@ export function ProductionDashboardTab() {
     downtimeRatio,
     worstDowntime,
     quarantined: nonConformities.filter((n) => n.status === "quarantined").length,
+    outOfTolerance,
+    urgentExpiryCount: urgentExpiry.length,
+    soonestExpiry: nearExpiryRows[0] ?? null,
   });
 
   if (loadingOrders) {
@@ -509,6 +614,78 @@ export function ProductionDashboardTab() {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
+            <Droplets className="h-4 w-4" />
+            {t("production.dashboard.utilities.title")}
+          </CardTitle>
+          <CardDescription>{t("production.dashboard.utilities.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {produced <= 0 ? (
+            <EmptyState
+              icon={<Droplets className="h-5 w-5" />}
+              title={t("production.dashboard.utilities.empty.title")}
+              description={t("production.dashboard.utilities.empty.description")}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <UtilityStat
+                label={t("production.dailyReports.field.water")}
+                perTonne={waterQuantity / produced}
+                unit={UTILITY_UNITS.water}
+              />
+              <UtilityStat
+                label={t("production.dailyReports.field.fuel")}
+                perTonne={fuelQuantity / produced}
+                unit={UTILITY_UNITS.fuel}
+              />
+              <UtilityStat
+                label={t("production.dailyReports.field.electricity")}
+                perTonne={electricityQuantity / produced}
+                unit={UTILITY_UNITS.electricity}
+              />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
+            <Recycle className="h-4 w-4" />
+            {t("production.dashboard.regrind.title")}
+          </CardTitle>
+          <CardDescription>{t("production.dashboard.regrind.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {regrindSummary.finishedCount === 0 ? (
+            <EmptyState
+              icon={<Recycle className="h-5 w-5" />}
+              title={t("production.dashboard.regrind.empty.title")}
+              description={t("production.dashboard.regrind.empty.description")}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+              <MiniStat
+                label={t("production.dashboard.regrind.yield")}
+                value={regrindSummary.yieldRatio !== null ? `${(regrindSummary.yieldRatio * 100).toFixed(1)}%` : "—"}
+              />
+              <MiniStat
+                label={t("production.regrind.stat.totalLoss")}
+                value={
+                  <>
+                    {formatQty(regrindSummary.lossTotal)} <span className="text-sm font-normal text-muted-foreground">KG</span>
+                  </>
+                }
+              />
+              <MiniStat label={t("production.dashboard.regrind.finishedBatches")} value={regrindSummary.finishedCount} />
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       <Card id="active-work-orders" className="scroll-mt-4">
         <CardHeader>
           <CardTitle>{t("production.dashboard.active.title")}</CardTitle>
@@ -595,6 +772,70 @@ export function ProductionDashboardTab() {
         </Card>
       )}
 
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
+            <Users className="h-4 w-4" />
+            {t("production.dashboard.teamPerformance.title")}
+          </CardTitle>
+          <CardDescription>{t("production.dashboard.teamPerformance.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {teamLeaderboard.length === 0 ? (
+            <EmptyState
+              icon={<Users className="h-5 w-5" />}
+              title={t("production.dashboard.teamPerformance.empty.title")}
+              description={t("production.dashboard.teamPerformance.empty.description")}
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("production.dashboard.teamPerformance.column.team")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.machinePerformance.column.reports")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.trend.yield")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.trend.waste")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.trend.downtime")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {teamLeaderboard.map((row) => (
+                  <TableRow key={row.team}>
+                    <TableCell className="font-medium">{row.team}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.reportCount}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.yieldPercent !== null ? `${row.yieldPercent}%` : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <span
+                        className={
+                          row.wastePercent !== null && row.wastePercent > WASTE_RATIO_ALERT * 100
+                            ? "text-destructive"
+                            : undefined
+                        }
+                      >
+                        {row.wastePercent !== null ? `${row.wastePercent}%` : "—"}
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <span
+                        className={
+                          row.downtimePercent !== null && row.downtimePercent > DOWNTIME_RATIO_ALERT * 100
+                            ? "text-destructive"
+                            : undefined
+                        }
+                      >
+                        {row.downtimePercent !== null ? `${row.downtimePercent}%` : "—"}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
       <Card id="team-waste-breakdown" className="scroll-mt-4">
         <CardHeader>
           <CardTitle className="flex items-center gap-1.5">
@@ -625,7 +866,7 @@ export function ProductionDashboardTab() {
                     tickLine={false}
                   />
                   <Tooltip
-                    formatter={(value) => formatQty(Number(value))}
+                    formatter={(value) => formatWasteStageQuantity(Number(value))}
                     contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
                   />
                   <Legend wrapperStyle={{ fontSize: 11 }} />
@@ -651,7 +892,7 @@ export function ProductionDashboardTab() {
                   >
                     <span className="font-medium">{row.team}</span>
                     <span className={cn("tabular-nums", row.netSemouleWaste > 0 ? "text-destructive" : "text-muted-foreground")}>
-                      {formatQty(row.netSemouleWaste)}
+                      {formatQty(row.netSemouleWaste)} <span className="text-xs font-normal text-muted-foreground">KG</span>
                     </span>
                   </div>
                 ))}
@@ -686,6 +927,65 @@ export function ProductionDashboardTab() {
                 <Bar dataKey="minutes" name={t("production.dashboard.chart.downtimeReasons.minutes")} fill="hsl(38 92% 42%)" radius={[0, 4, 4, 0]} />
               </BarChart>
             </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("production.dashboard.downtimeBreakdown.title")}</CardTitle>
+          <CardDescription>{t("production.dashboard.downtimeBreakdown.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {downtimeByMachine.length === 0 && downtimeByTeam.length === 0 ? (
+            <EmptyState
+              icon={<Timer className="h-5 w-5" />}
+              title={t("production.dashboard.chart.downtimeReasons.empty.title")}
+              description={t("production.dashboard.chart.downtimeReasons.empty.description")}
+            />
+          ) : (
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+              <div>
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {t("production.dashboard.downtimeBreakdown.byMachine")}
+                </p>
+                <div className="space-y-1.5">
+                  {downtimeByMachine.slice(0, 6).map((row) => (
+                    <div key={row.key} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{row.label}</p>
+                        {row.topReason && (
+                          <p className="truncate text-xs text-muted-foreground">
+                            {row.topReason} · {row.topReasonMinutes} {t("production.dashboard.chart.downtimeReasons.minutes").toLowerCase()}
+                          </p>
+                        )}
+                      </div>
+                      <span className="shrink-0 tabular-nums font-medium text-destructive">{row.totalMinutes}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  {t("production.dashboard.downtimeBreakdown.byTeam")}
+                </p>
+                <div className="space-y-1.5">
+                  {downtimeByTeam.slice(0, 6).map((row) => (
+                    <div key={row.key} className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2 text-sm">
+                      <div className="min-w-0">
+                        <p className="truncate font-medium">{row.label}</p>
+                        {row.topReason && (
+                          <p className="truncate text-xs text-muted-foreground">
+                            {row.topReason} · {row.topReasonMinutes} {t("production.dashboard.chart.downtimeReasons.minutes").toLowerCase()}
+                          </p>
+                        )}
+                      </div>
+                      <span className="shrink-0 tabular-nums font-medium text-destructive">{row.totalMinutes}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
@@ -730,6 +1030,182 @@ export function ProductionDashboardTab() {
           )}
         </CardContent>
       </Card>
+
+      <Card id="packaging-accuracy" className="scroll-mt-4">
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
+            <Scale className="h-4 w-4" />
+            {t("production.dashboard.packagingAccuracy.title")}
+          </CardTitle>
+          <CardDescription>{t("production.dashboard.packagingAccuracy.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {packagingAccuracyRows.length === 0 ? (
+            <EmptyState
+              icon={<Scale className="h-5 w-5" />}
+              title={t("production.dashboard.packagingAccuracy.empty.title")}
+              description={t("production.dashboard.packagingAccuracy.empty.description")}
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("production.dashboard.packagingAccuracy.column.product")}</TableHead>
+                  <TableHead className="text-right">{t("production.packagingVariance.field.expectedPackets")}</TableHead>
+                  <TableHead className="text-right">{t("production.packagingVariance.field.countedPackets")}</TableHead>
+                  <TableHead className="text-right">{t("production.packagingVariance.field.packetVariance")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.packagingAccuracy.column.status")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {packagingAccuracyRows.map((row) => (
+                  <TableRow key={row.productId}>
+                    <TableCell className="font-medium">{row.label}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {row.expectedPackets !== null ? formatQty(row.expectedPackets) : "—"}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{formatQty(row.countedPackets)}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {/* Colored by within_tolerance, not by sign: a small negative
+                          variance inside the tolerance band is expected, not a
+                          problem -- and rounding to a whole packet avoids an
+                          Intl.NumberFormat "-0" for a variance that rounds to zero. */}
+                      <span className={row.withinTolerance === false ? "text-destructive" : undefined}>
+                        {row.packetVariance !== null
+                          ? `${row.packetVariance > 0 ? "+" : ""}${formatQty(Math.round(row.packetVariance) || 0)}`
+                          : "—"}
+                      </span>
+                      {row.packetVarianceRatio !== null && (
+                        <span className="ml-1 text-xs text-muted-foreground">
+                          ({row.packetVarianceRatio > 0 ? "+" : ""}
+                          {(row.packetVarianceRatio * 100).toFixed(1)}%)
+                        </span>
+                      )}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {row.withinTolerance === null ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : (
+                        <Badge variant={row.withinTolerance ? "success" : "destructive"}>
+                          {t(
+                            row.withinTolerance
+                              ? "production.dashboard.packagingAccuracy.withinTolerance"
+                              : "production.dashboard.packagingAccuracy.outOfTolerance",
+                          )}
+                        </Badge>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-1.5">
+            <CalendarClock className="h-4 w-4" />
+            {t("production.dashboard.nearExpiry.title")}
+          </CardTitle>
+          <CardDescription>{t("production.dashboard.nearExpiry.description")}</CardDescription>
+        </CardHeader>
+        <CardContent>
+          {nearExpiryRows.length === 0 ? (
+            <EmptyState
+              icon={<CalendarClock className="h-5 w-5" />}
+              title={t("production.dashboard.nearExpiry.empty.title")}
+              description={t("production.dashboard.nearExpiry.empty.description")}
+            />
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("production.dashboard.nearExpiry.column.product")}</TableHead>
+                  <TableHead>{t("production.dashboard.nearExpiry.column.lot")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.nearExpiry.column.expiryDate")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.nearExpiry.column.daysRemaining")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {nearExpiryRows.map((row) => (
+                  <TableRow key={row.lotId}>
+                    <TableCell className="font-medium">{row.productLabel}</TableCell>
+                    <TableCell>{row.lotNumber}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {new Intl.DateTimeFormat(currentLocale()).format(new Date(row.expiryDate))}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <span className={row.daysRemaining <= DLC_URGENT_DAYS ? "text-destructive font-medium" : undefined}>
+                        {row.daysRemaining}
+                      </span>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {recipeDrift.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("production.dashboard.recipeDrift.title")}</CardTitle>
+            <CardDescription>{t("production.dashboard.recipeDrift.description")}</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>{t("production.dashboard.recipeDrift.column.recipe")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.recipeDrift.column.ofCount")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.recipeDrift.column.hardFindings")}</TableHead>
+                  <TableHead className="text-right">{t("production.dashboard.recipeDrift.column.softFindings")}</TableHead>
+                  <TableHead>{t("production.dashboard.recipeDrift.column.topFinding")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {recipeDrift.map((row) => (
+                  <TableRow key={row.recipe_id}>
+                    <TableCell className="font-medium">{row.recipe_id}</TableCell>
+                    <TableCell className="text-right tabular-nums">{row.of_count}</TableCell>
+                    <TableCell className={`text-right tabular-nums ${row.hard_finding_of_count > 0 ? "text-destructive font-medium" : ""}`}>
+                      {row.hard_finding_of_count}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums text-amber-600">{row.soft_finding_of_count}</TableCell>
+                    <TableCell className="text-sm">
+                      {row.top_finding_code ? (
+                        <span className="text-muted-foreground">
+                          {t(
+                            `production.recipeCheck.finding.${
+                              row.top_finding_code === "BELOW_MINIMUM"
+                                ? "belowMinimum"
+                                : row.top_finding_code === "ABOVE_MAXIMUM"
+                                  ? "aboveMaximum"
+                                  : row.top_finding_code === "COMPONENT_NOT_POURED"
+                                    ? "notPoured"
+                                    : row.top_finding_code === "NOT_IN_RECIPE"
+                                      ? "notInRecipe"
+                                      : row.top_finding_code === "NEGATIVE_QUANTITY"
+                                        ? "negative"
+                                        : "unknown"
+                            }`,
+                          )}{" "}
+                          ({row.top_finding_count}×)
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground text-xs">—</span>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -779,7 +1255,7 @@ function RecipeCorrelationSection({
   const token = session!.token;
 
   // User-triggered only -- never on mount or on a data refetch. Each call is a
-  // real request against the Gemini free tier's rate limit, and every viewer
+  // real request against the Groq free tier's rate limit, and every viewer
   // opening this dashboard must not silently spend it.
   const insightMutation = useMutation({
     mutationFn: () => getRecipeCorrelationInsight(token, language),
@@ -1013,6 +1489,32 @@ function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string;
   );
 }
 
+function MiniStat({ label, value }: { label: string; value: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-border p-3">
+      <p className="text-xs text-muted-foreground">{label}</p>
+      <p className="mt-1 text-lg font-semibold tabular-nums">{value}</p>
+    </div>
+  );
+}
+
+function UtilityStat({ label, perTonne, unit }: { label: string; perTonne: number; unit: string }) {
+  const { t } = useI18n();
+  return (
+    <MiniStat
+      label={label}
+      value={
+        <>
+          {formatQty(perTonne)}{" "}
+          <span className="text-sm font-normal text-muted-foreground">
+            {unit}/{t("production.dashboard.utilities.tonneAbbr")}
+          </span>
+        </>
+      }
+    />
+  );
+}
+
 function isoWeeksAgo(weeks: number): string {
   const date = new Date();
   date.setDate(date.getDate() - weeks * 7);
@@ -1158,6 +1660,232 @@ function buildMachineSummary(rows: MachinePerformanceRow[], machines: Machine[])
   return [...byMachine.values()].sort((a, b) => b.produced - a.produced);
 }
 
+interface DowntimeDimensionRow {
+  key: string;
+  label: string;
+  totalMinutes: number;
+  topReason: string | null;
+  topReasonMinutes: number;
+}
+
+/** The single biggest reason within one team's or machine's own minutes --
+ * "which motif is dragging this row down," not just its total. */
+function topDowntimeReasonRow(key: string, label: string, reasonMinutes: Map<string, number>): DowntimeDimensionRow {
+  const totalMinutes = [...reasonMinutes.values()].reduce((a, b) => a + b, 0);
+  const top = [...reasonMinutes.entries()].sort((a, b) => b[1] - a[1])[0];
+  return { key, label, totalMinutes, topReason: top?.[0] ?? null, topReasonMinutes: top?.[1] ?? 0 };
+}
+
+/** Same downtime-breakdown rows the plant-wide Pareto reads, re-folded by
+ * team -- worst team first, each with its own dominant reason called out. */
+function buildDowntimeByTeam(rows: DowntimeBreakdownRow[], noTeamLabel: string): DowntimeDimensionRow[] {
+  const byTeam = new Map<string, Map<string, number>>();
+  for (const row of rows) {
+    const team = row.team ?? noTeamLabel;
+    const reasons = byTeam.get(team) ?? new Map<string, number>();
+    reasons.set(row.reason, (reasons.get(row.reason) ?? 0) + row.minutes);
+    byTeam.set(team, reasons);
+  }
+  return [...byTeam.entries()]
+    .map(([team, reasons]) => topDowntimeReasonRow(team, team, reasons))
+    .sort((a, b) => b.totalMinutes - a.totalMinutes);
+}
+
+/** Same idea, keyed by machine -- equipment_id resolved to code/name via the
+ * machines list, same fallback-to-raw-id convention as buildMachineSummary. */
+function buildDowntimeByMachine(
+  rows: DowntimeBreakdownRow[],
+  machines: Machine[],
+  noMachineLabel: string,
+): DowntimeDimensionRow[] {
+  const NO_MACHINE_KEY = "__none__";
+  const byMachine = new Map<string, Map<string, number>>();
+  for (const row of rows) {
+    const key = row.equipment_id ?? NO_MACHINE_KEY;
+    const reasons = byMachine.get(key) ?? new Map<string, number>();
+    reasons.set(row.reason, (reasons.get(row.reason) ?? 0) + row.minutes);
+    byMachine.set(key, reasons);
+  }
+  return [...byMachine.entries()]
+    .map(([key, reasons]) => {
+      const machine = machines.find((m) => m.id === key);
+      const label = key === NO_MACHINE_KEY ? noMachineLabel : machine ? `${machine.code} — ${machine.name}` : key;
+      return topDowntimeReasonRow(key, label, reasons);
+    })
+    .sort((a, b) => b.totalMinutes - a.totalMinutes);
+}
+
+interface PackagingAccuracyRow {
+  productId: string;
+  label: string;
+  expectedPackets: number | null;
+  countedPackets: number;
+  packetVariance: number | null;
+  packetVarianceRatio: number | null;
+  withinTolerance: boolean | null;
+}
+
+/**
+ * Écart de conditionnement, plant-wide by product, worst mismatch first. Only
+ * products with an expected-packet figure are shown — without a net weight
+ * there is nothing to compare the count against (see PackagingVariance.missing).
+ */
+function buildPackagingAccuracyRows(rows: ProductPackagingVariance[], products: Product[]): PackagingAccuracyRow[] {
+  return rows
+    .filter((row) => row.expected_packets !== null)
+    .map((row) => ({
+      productId: row.product_id,
+      label: products.find((p) => p.id === row.product_id)?.name ?? row.product_id,
+      expectedPackets: row.expected_packets,
+      countedPackets: row.counted_packets,
+      packetVariance: row.packet_variance,
+      packetVarianceRatio: row.packet_variance_ratio,
+      withinTolerance: row.within_tolerance,
+    }))
+    .sort((a, b) => Math.abs(b.packetVarianceRatio ?? 0) - Math.abs(a.packetVarianceRatio ?? 0));
+}
+
+interface TeamLeaderboardRow {
+  team: string;
+  reportCount: number;
+  yieldPercent: number | null;
+  wastePercent: number | null;
+  downtimePercent: number | null;
+}
+
+/**
+ * Same team-performance rows the trend chart and semoule-waste chart already
+ * fetch, folded per team across the whole selected range instead of per
+ * period or by waste category alone — the ranking the plant floor actually
+ * asks for: whose yield, not just whose déchet. Best yield first.
+ */
+function buildTeamLeaderboard(
+  rows: TeamPerformanceRow[],
+  semolinaProductId: string | null | undefined,
+  products: Parameters<typeof convertQuantity>[3],
+  uoms: Parameters<typeof convertQuantity>[4],
+  noTeamLabel: string,
+): TeamLeaderboardRow[] {
+  const byTeam = new Map<
+    string,
+    {
+      team: string;
+      reportCount: number;
+      produced: number;
+      materialInput: number;
+      production: number;
+      downtime: number;
+      waste: { product_id: string; quantity: number }[];
+    }
+  >();
+  for (const row of rows) {
+    const team = row.team ?? noTeamLabel;
+    const entry = byTeam.get(team) ?? {
+      team,
+      reportCount: 0,
+      produced: 0,
+      materialInput: 0,
+      production: 0,
+      downtime: 0,
+      waste: [],
+    };
+    entry.reportCount += row.report_count;
+    entry.produced += row.produced_quantity;
+    entry.materialInput += row.material_input_quantity;
+    entry.production += row.production_minutes;
+    entry.downtime += row.downtime_minutes;
+    entry.waste.push(...row.waste_by_product);
+    byTeam.set(team, entry);
+  }
+  return [...byTeam.values()]
+    .map((entry): TeamLeaderboardRow => {
+      const comparableWaste = semolinaProductId
+        ? entry.waste.reduce((total, item) => {
+            const converted = convertQuantity(item.quantity, item.product_id, semolinaProductId, products, uoms);
+            return converted === null ? total : total + converted;
+          }, 0)
+        : null;
+      return {
+        team: entry.team,
+        reportCount: entry.reportCount,
+        yieldPercent: entry.materialInput > 0 ? Math.round((entry.produced / entry.materialInput) * 1000) / 10 : null,
+        wastePercent:
+          comparableWaste !== null && entry.materialInput > 0
+            ? Math.round((comparableWaste / entry.materialInput) * 1000) / 10
+            : null,
+        downtimePercent:
+          entry.production + entry.downtime > 0
+            ? Math.round((entry.downtime / (entry.production + entry.downtime)) * 1000) / 10
+            : null,
+      };
+    })
+    .sort((a, b) => (b.yieldPercent ?? -Infinity) - (a.yieldPercent ?? -Infinity));
+}
+
+interface RegrindSummary {
+  finishedCount: number;
+  pendingCount: number;
+  inputTotal: number;
+  outputTotal: number;
+  lossTotal: number;
+  yieldRatio: number | null;
+}
+
+/**
+ * listRegrindBatches has no date filter, so this buckets by created_at
+ * against the dashboard's own range -- same string-compare the rest of the
+ * cockpit uses ("YYYY-MM-DD" sorts lexicographically). Only finished batches
+ * (actual_output_quantity set) have a real yield; a batch still new or
+ * assigned has not been weighed back in yet.
+ */
+function buildRegrindSummary(batches: RegrindBatchSummary[], range: { from: string; to: string }): RegrindSummary {
+  const inRange = batches.filter((b) => {
+    const day = b.created_at.slice(0, 10);
+    return day >= range.from && day <= range.to;
+  });
+  const finished = inRange.filter((b) => b.actual_output_quantity !== null);
+  const inputTotal = sum(finished.map((b) => b.input_quantity_total));
+  const outputTotal = sum(finished.map((b) => b.actual_output_quantity as number));
+  const lossTotal = sum(finished.map((b) => b.loss_quantity ?? 0));
+  return {
+    finishedCount: finished.length,
+    pendingCount: inRange.length - finished.length,
+    inputTotal,
+    outputTotal,
+    lossTotal,
+    yieldRatio: inputTotal > 0 ? outputTotal / inputTotal : null,
+  };
+}
+
+interface NearExpiryRow {
+  lotId: string;
+  productLabel: string;
+  lotNumber: string;
+  expiryDate: string;
+  daysRemaining: number;
+}
+
+/**
+ * Active lots within `warningDays` of their DLC, soonest first. A negative
+ * daysRemaining means the lot is already past its date and still marked
+ * active -- worth surfacing rather than silently excluding, since that is
+ * itself a data-hygiene problem (it should have been dispositioned).
+ */
+function buildNearExpiryRows(lots: Lot[], products: Product[], warningDays: number): NearExpiryRow[] {
+  const todayMs = new Date(todayIso()).getTime();
+  return lots
+    .filter((lot): lot is Lot & { expiry_date: string } => lot.status === "active" && lot.expiry_date !== null)
+    .map((lot) => ({
+      lotId: lot.id,
+      productLabel: products.find((p) => p.id === lot.product_id)?.name ?? lot.product_id,
+      lotNumber: lot.lot_number,
+      expiryDate: lot.expiry_date,
+      daysRemaining: Math.round((new Date(lot.expiry_date).getTime() - todayMs) / 86_400_000),
+    }))
+    .filter((row) => row.daysRemaining <= warningDays)
+    .sort((a, b) => a.daysRemaining - b.daysRemaining);
+}
+
 // The dashboard's other quantities (tonnes produced, tonnes of semoule) run
 // into the thousands, so Math.round reads fine there. A team's net semoule
 // waste is routinely a small fraction of that unit and Math.round would
@@ -1165,6 +1893,17 @@ function buildMachineSummary(rows: MachinePerformanceRow[], machines: Machine[])
 // instead of rounding them away.
 function formatQty(amount: number): string {
   return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 2 }).format(amount);
+}
+
+// The per-stage waste bars are always raw kilos (see
+// TeamPerformanceRow.daily_waste_by_category) — deliberately never each
+// stage's own item unit, so stages stay comparable when stacked together
+// (a finished-goods item logged in kg must not out-size bulk semoule logged
+// in tonnes just because the raw numbers happen to look similar). A spill
+// under a tonne is easier to read in kg, matching how the plant itself talks
+// about a small spill; at or above a tonne it switches to tonnes.
+function formatWasteStageQuantity(kg: number): string {
+  return Math.abs(kg) < 1000 ? formatQuantity(kg, "kg") : formatQuantity(kg / 1000, "t");
 }
 
 function sum(values: number[]): number {
@@ -1207,7 +1946,12 @@ function worstWasteOrder(
 ): OrderRatio | null {
   let worst: OrderRatio | null = null;
   for (const c of consolidations) {
-    const semolinaProductId = c.raw_material.semolina_product_id;
+    // Largest quality poured on this order, same reasoning as the plant-wide
+    // ratio above — an order that mixed qualities (semolina_product_id null)
+    // still has a usable anchor unit, it just isn't a single named product.
+    const semolinaProductId = c.raw_material.semolina_by_product.reduce<
+      { product_id: string; quantity: number } | null
+    >((best, entry) => (best === null || entry.quantity > best.quantity ? entry : best), null)?.product_id;
     if (!semolinaProductId || c.raw_material.semolina_quantity <= 0) continue;
     const comparableWaste = c.waste.by_product.reduce((total, entry) => {
       const converted = convertQuantity(entry.quantity, entry.product_id, semolinaProductId, products, uoms);
@@ -1243,6 +1987,9 @@ function buildAlerts({
   downtimeRatio,
   worstDowntime,
   quarantined,
+  outOfTolerance,
+  urgentExpiryCount,
+  soonestExpiry,
 }: {
   pendingCount: number;
   lowStock: string[];
@@ -1251,6 +1998,9 @@ function buildAlerts({
   downtimeRatio: number | null;
   worstDowntime: OrderRatio | null;
   quarantined: number;
+  outOfTolerance: string[];
+  urgentExpiryCount: number;
+  soonestExpiry: NearExpiryRow | null;
 }): Alert[] {
   const alerts: Alert[] = [];
 
@@ -1304,6 +2054,26 @@ function buildAlerts({
       titleKey: "production.dashboard.alert.quarantined",
       detail: String(quarantined),
       to: "/quality?tab=non-conformities",
+    });
+  }
+  if (outOfTolerance.length > 0) {
+    alerts.push({
+      code: "packaging-variance",
+      tone: "warning",
+      titleKey: "production.dashboard.alert.packagingVariance",
+      detail: outOfTolerance.slice(0, 4).join(", "),
+      to: "#packaging-accuracy",
+    });
+  }
+  if (urgentExpiryCount > 0) {
+    alerts.push({
+      code: "near-expiry",
+      tone: "destructive",
+      titleKey: "production.dashboard.alert.nearExpiry",
+      detail: soonestExpiry
+        ? `${urgentExpiryCount} — ${soonestExpiry.productLabel} (${soonestExpiry.lotNumber})`
+        : String(urgentExpiryCount),
+      to: "/products?tab=lots-serials",
     });
   }
   return alerts;

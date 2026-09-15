@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
+from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.result import Err
 from core.tenancy import TenantContext, require_permission
@@ -19,6 +20,12 @@ from modules.production.api.recipe_correlation_insight_service import (
 from modules.production.api import ia_assistant_service
 from modules.production.api.team_performance_service import GRAINS, TeamPerformanceService
 from modules.production.api.machine_performance_service import MachinePerformanceService
+from modules.production.api.consumption_report_service import CATEGORIES, ConsumptionReportService
+from modules.production.api.consumption_report_export import build_consumption_workbook
+from modules.production.api.daily_recap_export import build_daily_recap_workbook, fetch_period_rows, resolve_period
+from modules.production.api.production_analytics_service import build_analytics_payload
+from modules.production.api.report_period_service import list_validated_report_dates
+from modules.procurement.api.service import PurchaseOrderService
 from modules.maintenance.api.equipment_service import EquipmentService
 from modules.production.domain.resource_type import ResourceType
 from modules.production.domain.product_classification import ProductClassification
@@ -420,21 +427,31 @@ class ConditionnementDetailRequest(BaseModel):
     packets_counted: float = 0
     film_quantity: float = 0
     carton_quantity: float = 0
-    tape_quantity: float = 0
+    # Part of carton_quantity that held no sellable product (empty/damaged
+    # cartons). See ConditionnementReportDetail.waste_carton_quantity.
+    waste_carton_quantity: float = 0
+    tape_quantity: float = 0  # deprecated, superseded by scotch_quantity/ruban_quantity
+    scotch_quantity: float = 0
+    ruban_quantity: float = 0
     machine_speed: float | None = None
     production_minutes: int = 0
     downtime_minutes: int = 0
     downtime_reason: str | None = None
+    downtime_note: str | None = None
     lot_number: str | None = None
     dlc_date: datetime.date | None = None
     film_product_id: str | None = None
     carton_product_id: str | None = None
-    tape_product_id: str | None = None
+    tape_product_id: str | None = None  # deprecated
+    scotch_product_id: str | None = None
+    ruban_product_id: str | None = None
     # Which fournisseur each packaging item came from -- informational only, see
     # ConditionnementReportDetail.film_supplier_id.
     film_supplier_id: str | None = None
     carton_supplier_id: str | None = None
-    tape_supplier_id: str | None = None
+    tape_supplier_id: str | None = None  # deprecated
+    scotch_supplier_id: str | None = None
+    ruban_supplier_id: str | None = None
     packaging_location_id: str | None = None
     finished_goods_location_id: str | None = None
     # The daily report whose output this run packaged. Optional -- see the
@@ -641,7 +658,7 @@ def send_ia_assistant_message(
     body: SendIaAssistantMessageRequest,
     tenant: TenantContext = Depends(require_permission("production.use_ia_assistant")),
 ) -> dict:
-    """Runs the Gemini tool-calling loop and persists the exchange. Never a bare
+    """Runs the Groq tool-calling loop and persists the exchange. Never a bare
     500: a missing key/network failure surfaces as 503 (available: false upstream
     in the UI), a day's quota hit as 429 -- both are expected operating states for
     a free-tier assistant, not bugs."""
@@ -1436,6 +1453,23 @@ def list_recipes(
     return [_serialize_recipe(recipe) for recipe in recipes]
 
 
+@router.get("/recipes/drift-summary")
+def list_recipe_drift_summary(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> list[dict]:
+    """How often each recipe's OFs trip a hard or soft recipe-check finding.
+
+    Registered before /recipes/{recipe_id} -- "drift-summary" would otherwise
+    match that path param.
+    """
+    with get_connection() as connection:
+        return RecipeCheckService(connection).list_recipe_drift(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to
+        )
+
+
 @router.get("/recipes/{recipe_id}")
 def get_recipe(
     recipe_id: str, tenant: TenantContext = Depends(require_permission("production.view_recipes"))
@@ -1862,6 +1896,148 @@ def list_downtime_reasons(
         )
 
 
+@router.get("/reports/downtime-breakdown")
+def list_downtime_breakdown(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """Minutes lost per reason, team and machine, from validated reports."""
+    with get_connection() as connection:
+        return TeamPerformanceService(connection).list_downtime_breakdown(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to
+        )
+
+
+def _validate_consumption_category(category: str | None) -> None:
+    if category is not None and category not in CATEGORIES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"code": "INVALID_CATEGORY", "message": f"category must be one of {CATEGORIES}"},
+        )
+
+
+@router.get("/reports/consumption-by-supplier")
+def list_consumption_by_supplier(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """Monthly film/carton/scotch/ruban/gasoil/fuel consumption, grouped by
+    category, month, PC/PL and fournisseur -- see ConsumptionReportService."""
+    _validate_consumption_category(category)
+    with get_connection() as connection:
+        return ConsumptionReportService(connection).list_monthly_consumption_by_supplier(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to, category=category
+        )
+
+
+@router.get("/reports/consumption-by-supplier/export")
+def export_consumption_by_supplier(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> Response:
+    """Same data as list_consumption_by_supplier, laid out as the .xlsx workbook
+    that replaces the plant's hand-built monthly spreadsheets."""
+    _validate_consumption_category(category)
+    with get_connection() as connection:
+        rows = ConsumptionReportService(connection).list_monthly_consumption_by_supplier(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to, category=category
+        )
+        core_service = CoreService(connection)
+        product_names = {p.id: p.name for p in core_service.list_products(tenant.tenant_id)}
+        supplier_names = {p.id: p.name for p in core_service.list_partners(tenant_id=tenant.tenant_id)}
+
+    content = build_consumption_workbook(rows, product_names=product_names, supplier_names=supplier_names)
+    filename = f"consommation-{date_from or 'debut'}-{date_to or 'fin'}.xlsx"
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.get("/reports/daily-recap/export")
+def export_daily_recap(
+    date: str = Query(...),
+    period: str = Query(default="day"),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> Response:
+    """The plant's monthly "Sonali rapport général" workbook, scoped to a day,
+    an ISO week or a calendar month (see `period`, anchored on `date`):
+    produit fini, consommation MP/film/carton/rub&scotch/gasoil/fuel, coût
+    unitaire, achats MP/film/carton, charges fixes (manual) and the blended
+    coût de production/tonne -- see daily_recap_export.py. For week/month,
+    every validated-production day in the range also gets its own
+    "CP <date>" sheet, and the period-total "Coût de production" sheet's
+    charges term sums to what those days' sheets show together."""
+    if period not in ("day", "week", "month"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": "INVALID_PERIOD", "message": "period must be one of 'day', 'week', 'month'"})
+
+    date_from, date_to, period_phrase, period_days = resolve_period(period, date)
+
+    with get_connection() as connection:
+        receipt_lines = PurchaseOrderService(connection).list_confirmed_receipt_line_details(tenant_id=tenant.tenant_id)
+        mp_rows, packaging_rows, finished_goods_rows = fetch_period_rows(
+            connection, tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to, receipt_lines=receipt_lines
+        )
+
+        core_service = CoreService(connection)
+        product_names = {p.id: p.name for p in core_service.list_products(tenant.tenant_id)}
+        supplier_names = {p.id: p.name for p in core_service.list_partners(tenant_id=tenant.tenant_id)}
+
+        daily_breakdowns = []
+        if period != "day":
+            days_with_data = list_validated_report_dates(connection, tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to)
+            for day in days_with_data:
+                day_mp_rows, day_packaging_rows, day_finished_goods_rows = fetch_period_rows(
+                    connection, tenant_id=tenant.tenant_id, date_from=day, date_to=day, receipt_lines=receipt_lines
+                )
+                daily_breakdowns.append({
+                    "date": day, "mp_rows": day_mp_rows, "packaging_rows": day_packaging_rows,
+                    "finished_goods_rows": day_finished_goods_rows,
+                })
+
+    mp_product_ids = {r["product_id"] for r in mp_rows if r["product_id"]}
+    film_product_ids = {r["product_id"] for r in packaging_rows if r["category"] == "film" and r["product_id"]}
+    carton_product_ids = {r["product_id"] for r in packaging_rows if r["category"] == "carton" and r["product_id"]}
+
+    content = build_daily_recap_workbook(
+        period_phrase=period_phrase, period_days=period_days,
+        mp_rows=mp_rows, packaging_rows=packaging_rows, finished_goods_rows=finished_goods_rows,
+        receipt_lines=receipt_lines, mp_product_ids=mp_product_ids, film_product_ids=film_product_ids,
+        carton_product_ids=carton_product_ids, product_names=product_names, supplier_names=supplier_names,
+        daily_breakdowns=daily_breakdowns,
+    )
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="recap-{period}-{date_from}-{date_to}.xlsx"'},
+    )
+
+
+@router.get("/reports/daily-recap/analytics")
+def get_daily_recap_analytics(
+    date: str = Query(...),
+    period: str = Query(default="day"),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """The always-on charts/tables view behind the Production recap tab: the
+    selected period's own MP/emballage cost and tonnage, a trailing trend of
+    the same shape (30 days / 12 weeks / 12 months depending on `period`),
+    and purchase-cost anomalies -- see production_analytics_service.py.
+    Unlike /reports/daily-recap/export, this never includes fixed charges
+    (those stay hand-entered in the exported workbook only)."""
+    if period not in ("day", "week", "month"):
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": "INVALID_PERIOD", "message": "period must be one of 'day', 'week', 'month'"})
+
+    with get_connection() as connection:
+        return build_analytics_payload(connection, tenant_id=tenant.tenant_id, period=period, date=date)
+
+
 @router.get("/reports/{report_id}")
 def get_report(
     report_id: str, tenant: TenantContext = Depends(require_permission("production.view_reports"))
@@ -2192,19 +2368,27 @@ def _serialize_conditionnement_detail(detail: ConditionnementReportDetail) -> di
         "packets_counted": detail.packets_counted,
         "film_quantity": detail.film_quantity,
         "carton_quantity": detail.carton_quantity,
+        "waste_carton_quantity": detail.waste_carton_quantity,
         "tape_quantity": detail.tape_quantity,
+        "scotch_quantity": detail.scotch_quantity,
+        "ruban_quantity": detail.ruban_quantity,
         "machine_speed": detail.machine_speed,
         "production_minutes": detail.production_minutes,
         "downtime_minutes": detail.downtime_minutes,
         "downtime_reason": detail.downtime_reason,
+        "downtime_note": detail.downtime_note,
         "lot_number": detail.lot_number,
         "dlc_date": detail.dlc_date.isoformat() if detail.dlc_date is not None else None,
         "film_product_id": detail.film_product_id,
         "carton_product_id": detail.carton_product_id,
         "tape_product_id": detail.tape_product_id,
+        "scotch_product_id": detail.scotch_product_id,
+        "ruban_product_id": detail.ruban_product_id,
         "film_supplier_id": detail.film_supplier_id,
         "carton_supplier_id": detail.carton_supplier_id,
         "tape_supplier_id": detail.tape_supplier_id,
+        "scotch_supplier_id": detail.scotch_supplier_id,
+        "ruban_supplier_id": detail.ruban_supplier_id,
         "packaging_location_id": detail.packaging_location_id,
         "finished_goods_location_id": detail.finished_goods_location_id,
         "daily_report_id": detail.daily_report_id,

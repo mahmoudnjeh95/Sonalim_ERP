@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import datetime
 
 import psycopg
@@ -29,9 +30,11 @@ from core.domain.partner import (
     validate_partner_tag_link,
 )
 from core.domain.result import Err, Ok, Result
+from core.events.outbox import publish_event
 
 _PRODUCT_COLUMNS = """
-    id, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, parent_product_id, is_sellable, is_purchasable,
+    id, tenant_id, sku, name, product_type, product_family, uom_id, net_weight_grams, empty_packaging_weight_grams, sachets_per_package,
+    packets_per_carton, carton_weight_grams, cartons_per_pallet, parent_product_id, is_sellable, is_purchasable,
     lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
     internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
     accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import
@@ -40,9 +43,15 @@ _PRODUCT_COLUMNS = """
 _PRODUCT_EDITABLE_FIELDS = (
     "sku",
     "name",
+    "product_type",
+    "product_family",
     "uom_id",
     "net_weight_grams",
+    "empty_packaging_weight_grams",
+    "sachets_per_package",
     "packets_per_carton",
+    "carton_weight_grams",
+    "cartons_per_pallet",
     "is_sellable",
     "is_purchasable",
     "lot_serial_tracking",
@@ -64,7 +73,8 @@ _PRODUCT_EDITABLE_FIELDS = (
 
 def _row_to_product(row: tuple) -> Product:
     (
-        pid, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, parent_product_id, is_sellable, is_purchasable,
+        pid, tenant_id, sku, name, product_type, product_family, uom_id, net_weight_grams, empty_packaging_weight_grams, sachets_per_package,
+        packets_per_carton, carton_weight_grams, cartons_per_pallet, parent_product_id, is_sellable, is_purchasable,
         lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
         internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
         accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import,
@@ -74,9 +84,15 @@ def _row_to_product(row: tuple) -> Product:
         tenant_id=tenant_id,
         sku=sku,
         name=name,
+        product_type=product_type,
+        product_family=product_family,
         uom_id=uom_id,
         net_weight_grams=float(net_weight_grams) if net_weight_grams is not None else None,
+        empty_packaging_weight_grams=float(empty_packaging_weight_grams) if empty_packaging_weight_grams is not None else None,
+        sachets_per_package=float(sachets_per_package) if sachets_per_package is not None else None,
         packets_per_carton=float(packets_per_carton) if packets_per_carton is not None else None,
+        carton_weight_grams=float(carton_weight_grams) if carton_weight_grams is not None else None,
+        cartons_per_pallet=float(cartons_per_pallet) if cartons_per_pallet is not None else None,
         parent_product_id=parent_product_id,
         is_sellable=is_sellable,
         is_purchasable=is_purchasable,
@@ -108,7 +124,23 @@ class CoreService:
             f"SELECT {_PRODUCT_COLUMNS} FROM core.products WHERE tenant_id = %s ORDER BY name",
             (tenant_id,),
         ).fetchall()
-        return [_row_to_product(row) for row in rows]
+        products = [_row_to_product(row) for row in rows]
+
+        # One extra query for the whole tenant rather than one per product: a
+        # screen that needs "which products are tagged Film/Carton/Ruban" (e.g.
+        # to filter a packaging picker) would otherwise be an N+1.
+        tag_rows = self._connection.execute(
+            "SELECT product_id, tag_id FROM core.product_tag_links WHERE product_id = ANY(%s)",
+            ([p.id for p in products],),
+        ).fetchall()
+        tag_ids_by_product: dict[str, list[str]] = {}
+        for product_id, tag_id in tag_rows:
+            tag_ids_by_product.setdefault(product_id, []).append(tag_id)
+
+        return [
+            dataclasses.replace(product, tag_ids=tuple(tag_ids_by_product.get(product.id, ())))
+            for product in products
+        ]
 
     def get_product(self, tenant_id: str, product_id: str) -> Product | None:
         row = self._connection.execute(
@@ -124,9 +156,15 @@ class CoreService:
         actor_id: str,
         sku: str,
         name: str,
+        product_type: str,
         uom_id: str,
+        product_family: str | None = None,
         net_weight_grams: float | None = None,
+        empty_packaging_weight_grams: float | None = None,
+        sachets_per_package: float | None = None,
         packets_per_carton: float | None = None,
+        carton_weight_grams: float | None = None,
+        cartons_per_pallet: float | None = None,
         is_sellable: bool = True,
         is_purchasable: bool = True,
         lot_serial_tracking: str = "none",
@@ -147,9 +185,14 @@ class CoreService:
         validation = validate_new_product(
             sku=sku,
             name=name,
+            product_type=product_type,
             uom_id=uom_id,
             net_weight_grams=net_weight_grams,
+            empty_packaging_weight_grams=empty_packaging_weight_grams,
+            sachets_per_package=sachets_per_package,
             packets_per_carton=packets_per_carton,
+            carton_weight_grams=carton_weight_grams,
+            cartons_per_pallet=cartons_per_pallet,
             lot_serial_tracking=lot_serial_tracking,
             expiry_date_policy=expiry_date_policy,
             selling_price=selling_price,
@@ -170,15 +213,17 @@ class CoreService:
         self._connection.execute(
             """
             INSERT INTO core.products (
-                id, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, is_sellable, is_purchasable,
+                id, tenant_id, sku, name, product_type, product_family, uom_id, net_weight_grams, empty_packaging_weight_grams, sachets_per_package,
+                packets_per_carton, carton_weight_grams, cartons_per_pallet, is_sellable, is_purchasable,
                 lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
                 internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
                 accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
-                product_id, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton, is_sellable, is_purchasable,
+                product_id, tenant_id, sku, name, product_type, product_family, uom_id, net_weight_grams, empty_packaging_weight_grams, sachets_per_package,
+                packets_per_carton, carton_weight_grams, cartons_per_pallet, is_sellable, is_purchasable,
                 lot_serial_tracking, expiry_date_policy, description, default_location_id, stock_alert_threshold,
                 internal_note, selling_price, min_selling_price, purchase_price, tax_rate, accounting_code_sale,
                 accounting_code_sale_export, accounting_code_purchase, accounting_code_purchase_import,
@@ -192,6 +237,14 @@ class CoreService:
             entity_type="product",
             entity_id=product_id,
             payload={"sku": sku, "name": name, "uom_id": uom_id},
+        )
+        publish_event(
+            self._connection,
+            event_type="core.product.created",
+            producer="core",
+            tenant_id=tenant_id,
+            correlation_id=str(ULID()),
+            payload={"product_id": product_id, "sku": sku, "is_sellable": is_sellable},
         )
         return Ok(self.get_product(tenant_id, product_id))
 
@@ -208,9 +261,14 @@ class CoreService:
         validation = validate_new_product(
             sku=merged["sku"],
             name=merged["name"],
+            product_type=merged["product_type"],
             uom_id=merged["uom_id"],
             net_weight_grams=merged["net_weight_grams"],
+            empty_packaging_weight_grams=merged["empty_packaging_weight_grams"],
+            sachets_per_package=merged["sachets_per_package"],
             packets_per_carton=merged["packets_per_carton"],
+            carton_weight_grams=merged["carton_weight_grams"],
+            cartons_per_pallet=merged["cartons_per_pallet"],
             lot_serial_tracking=merged["lot_serial_tracking"],
             expiry_date_policy=merged["expiry_date_policy"],
             selling_price=merged["selling_price"],
@@ -340,7 +398,15 @@ class CoreService:
         if not attribute_value_ids:
             return Err("INVALID_VARIANT", "a variant needs at least one attribute value")
 
-        result = self.create_product(tenant_id=tenant_id, actor_id=actor_id, sku=sku, name=name, uom_id=parent.uom_id)
+        result = self.create_product(
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            sku=sku,
+            name=name,
+            product_type=parent.product_type,
+            product_family=parent.product_family,
+            uom_id=parent.uom_id,
+        )
         if isinstance(result, Err):
             return result
         variant = result.value
@@ -616,6 +682,35 @@ class CoreService:
             tenant_id=tenant_id,
             actor_id=actor_id,
             action="partner.archived",
+            entity_type="partner",
+            entity_id=partner_id,
+            payload={"name": partner.name},
+        )
+        return result
+
+    def activate_partner(self, *, tenant_id: str, actor_id: str, partner_id: str) -> Result[Partner]:
+        row = self._connection.execute(
+            """
+            SELECT id, tenant_id, name, kind, industry, website, phone, email, status
+            FROM core.partners
+            WHERE id = %s AND tenant_id = %s FOR UPDATE
+            """,
+            (partner_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"partner {partner_id} not found")
+
+        partner = Partner(*row)
+        result = transition_partner(partner, "active")
+        if isinstance(result, Err):
+            return result
+
+        self._connection.execute("UPDATE core.partners SET status = 'active' WHERE id = %s", (partner_id,))
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="partner.activated",
             entity_type="partner",
             entity_id=partner_id,
             payload={"name": partner.name},

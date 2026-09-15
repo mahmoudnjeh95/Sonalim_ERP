@@ -1,4 +1,4 @@
-"""The production floor's "Assistance IA" chat: a Gemini conversation grounded in
+"""The production floor's "Assistance IA" chat: a Groq (Llama) conversation grounded in
 this tenant's own production statistics via function-calling, never free-form.
 
 The model never sees raw data up front. Each turn it chooses from a small set of
@@ -28,13 +28,16 @@ import psycopg
 from psycopg.types.json import Jsonb
 from ulid import ULID
 
+from core.api.service import CoreService
 from modules.maintenance.api.equipment_service import EquipmentService
 from modules.production.api.machine_performance_service import MachinePerformanceService
+from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.api.team_performance_service import TeamPerformanceService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
+from modules.warehouse.api.service import StockService
 
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-GEMINI_API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 REQUEST_TIMEOUT_SECONDS = 20
 
 # Below this many underlying shifts/reports, a "statistic" is just those few
@@ -44,7 +47,7 @@ REQUEST_TIMEOUT_SECONDS = 20
 MIN_ROWS_FOR_TOOL_RESULT = 10
 
 # A chat invites rapid-fire messages in a way the single-button insight card
-# never did; each user turn can itself cost several Gemini calls (one per
+# never did; each user turn can itself cost several Groq calls (one per
 # tool-call round trip), so the cap is on turns, not raw API calls. Rolling
 # 24h window rather than a calendar day -- simpler, no timezone-of-day edge case.
 MAX_MESSAGES_PER_USER_PER_DAY = 30
@@ -70,8 +73,9 @@ class IaAssistantNotFound(Exception):
 SYSTEM_INSTRUCTION_TEMPLATE = (
     "You are a plant-floor production assistant inside a pasta factory's ERP system. "
     "You answer questions about production statistics -- yield (rendement), water "
-    "dosage, team performance, machine performance and downtime -- using ONLY the "
-    "tools provided; never invent a number. Yield above 100% is expected and normal "
+    "dosage, team performance, machine performance and downtime -- and about current "
+    "finished-goods stock (stock PF) -- using ONLY the tools provided; never invent a "
+    "number. Yield above 100% is expected and normal "
     "here (dosed water adds mass but is not in the yield denominator), so do not "
     "flag a high yield as an anomaly on its own.\n"
     "If a tool reports it does not have enough matching data for the requested "
@@ -95,11 +99,11 @@ TOOL_DECLARATIONS = [
             "about yield, rendement, water dosage or semolina flow rate."
         ),
         "parameters": {
-            "type": "OBJECT",
+            "type": "object",
             "properties": {
-                "date_from": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
-                "date_to": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
-                "team": {"type": "STRING", "description": "Exact team name to filter to. Omit for all teams."},
+                "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
+                "date_to": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
+                "team": {"type": "string", "description": "Exact team name to filter to. Omit for all teams."},
             },
         },
     },
@@ -111,11 +115,11 @@ TOOL_DECLARATIONS = [
             "or evaluating team output, waste or downtime."
         ),
         "parameters": {
-            "type": "OBJECT",
+            "type": "object",
             "properties": {
-                "date_from": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
-                "date_to": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
-                "team": {"type": "STRING", "description": "Exact team name to filter to. Omit for all teams."},
+                "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
+                "date_to": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
+                "team": {"type": "string", "description": "Exact team name to filter to. Omit for all teams."},
             },
         },
     },
@@ -126,10 +130,10 @@ TOOL_DECLARATIONS = [
             "questions about which machine ran well or lost time."
         ),
         "parameters": {
-            "type": "OBJECT",
+            "type": "object",
             "properties": {
-                "date_from": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
-                "date_to": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
+                "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
+                "date_to": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
             },
         },
     },
@@ -137,10 +141,29 @@ TOOL_DECLARATIONS = [
         "name": "get_downtime_reasons",
         "description": "Minutes of stoppage per stated reason, across validated shifts. Use for questions about why the line stopped.",
         "parameters": {
-            "type": "OBJECT",
+            "type": "object",
             "properties": {
-                "date_from": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
-                "date_to": {"type": "STRING", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
+                "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
+                "date_to": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive upper bound. Omit for no upper bound."},
+            },
+        },
+    },
+    {
+        "name": "get_finished_goods_stock",
+        "description": (
+            "Current finished-goods stock (stock PF) right now, per product: quantity on "
+            "hand, reserved, available (on hand minus reserved) and still in production, "
+            "in that product's own unit. A live snapshot, not a period total -- ignore "
+            "date_from/date_to for this one. Use for any question about how much of a "
+            "finished product is in stock, available to ship, or reserved."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "product_name": {
+                    "type": "string",
+                    "description": "Partial or full product name to filter to (case-insensitive substring match). Omit for every finished good.",
+                },
             },
         },
     },
@@ -302,73 +325,128 @@ def _tool_get_downtime_reasons(connection: psycopg.Connection, tenant_id: str, a
     return {"available": True, "report_count": sum(r["report_count"] for r in rows), "by_reason": rows}
 
 
+def _tool_get_finished_goods_stock(connection: psycopg.Connection, tenant_id: str, args: dict) -> dict:
+    name_filter = (args.get("product_name") or "").strip().lower()
+
+    finished_good_ids = {
+        c.product_id for c in ProductClassificationService(connection).list_classifications(tenant_id, category="finished_good")
+    }
+    if not finished_good_ids:
+        return {"available": False, "reason": "no product is classified as a finished good yet"}
+
+    core = CoreService(connection)
+    product_by_id = {p.id: p for p in core.list_products(tenant_id)}
+
+    # Summed across locations -- "how much X do we have" means the plant total,
+    # not a per-warehouse breakdown the model was never asked for.
+    totals: dict[str, dict] = {}
+    for item in StockService(connection).list_stock_items(tenant_id):
+        if item.product_id not in finished_good_ids:
+            continue
+        product = product_by_id.get(item.product_id)
+        name = product.name if product else "unidentified product"
+        if name_filter and name_filter not in name.lower():
+            continue
+        bucket = totals.setdefault(name, {"on_hand": 0.0, "reserved": 0.0, "in_production": 0.0, "product_id": item.product_id})
+        bucket["on_hand"] += item.quantity_on_hand
+        bucket["reserved"] += item.quantity_reserved
+        bucket["in_production"] += item.quantity_in_production
+
+    if not totals:
+        return {"available": False, "reason": "no matching finished-goods stock found"}
+
+    by_product = []
+    for name, b in sorted(totals.items(), key=lambda kv: -kv[1]["on_hand"]):
+        uom = core.get_product_uom(tenant_id, b["product_id"])
+        by_product.append(
+            {
+                "product": name,
+                "quantity_on_hand": round(b["on_hand"], 1),
+                "quantity_reserved": round(b["reserved"], 1),
+                "quantity_available": round(b["on_hand"] - b["reserved"], 1),
+                "quantity_in_production": round(b["in_production"], 1),
+                "unit": (uom.symbol or uom.code) if uom else None,
+            }
+        )
+    return {"available": True, "product_count": len(by_product), "by_product": by_product}
+
+
 _TOOL_HANDLERS = {
     "get_yield_and_water_stats": _tool_get_yield_and_water_stats,
     "get_team_performance": _tool_get_team_performance,
     "get_machine_performance": _tool_get_machine_performance,
     "get_downtime_reasons": _tool_get_downtime_reasons,
+    "get_finished_goods_stock": _tool_get_finished_goods_stock,
 }
 
+# OpenAI-style tool wrapper (Groq's chat-completions API is OpenAI-compatible)
+# around the same TOOL_DECLARATIONS used to build the handler table above.
+_TOOLS = [{"type": "function", "function": declaration} for declaration in TOOL_DECLARATIONS]
 
-def _call_gemini(api_key: str, contents: list[dict], *, language: str) -> dict:
-    url = GEMINI_API_URL_TEMPLATE.format(model=GEMINI_MODEL)
+
+def _call_groq(api_key: str, messages: list[dict]) -> dict:
     body = json.dumps(
         {
-            "contents": contents,
-            "tools": [{"functionDeclarations": TOOL_DECLARATIONS}],
-            "systemInstruction": {"parts": [{"text": SYSTEM_INSTRUCTION_TEMPLATE.format(language=language)}]},
-            "generationConfig": {
-                "temperature": 0.2,
-                "maxOutputTokens": 1024,
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
+            "model": GROQ_MODEL,
+            "messages": messages,
+            "tools": _TOOLS,
+            "temperature": 0.2,
+            "max_tokens": 1024,
         }
     ).encode("utf-8")
     request = urllib.request.Request(
-        f"{url}?key={api_key}", data=body, headers={"Content-Type": "application/json"}, method="POST"
+        GROQ_API_URL,
+        data=body,
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
+        method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             return json.loads(response.read())
     except (urllib.error.URLError, TimeoutError) as exc:
-        raise IaAssistantUnavailable(f"Gemini request failed: {exc}") from exc
+        raise IaAssistantUnavailable(f"Groq request failed: {exc}") from exc
 
 
 def _run_turn(
     connection: psycopg.Connection, *, tenant_id: str, api_key: str, history: list[dict], user_text: str, language: str
 ) -> tuple[str, list[dict]]:
-    contents = [*history, {"role": "user", "parts": [{"text": user_text}]}]
+    messages = [
+        {"role": "system", "content": SYSTEM_INSTRUCTION_TEMPLATE.format(language=language)},
+        *history,
+        {"role": "user", "content": user_text},
+    ]
     tool_trace: list[dict] = []
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        payload = _call_gemini(api_key, contents, language=language)
+        payload = _call_groq(api_key, messages)
         try:
-            parts = payload["candidates"][0]["content"]["parts"]
+            message = payload["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
-            raise IaAssistantUnavailable(f"unexpected Gemini response shape: {payload}") from exc
+            raise IaAssistantUnavailable(f"unexpected Groq response shape: {payload}") from exc
 
-        function_calls = [p["functionCall"] for p in parts if "functionCall" in p]
-        if not function_calls:
-            text = "".join(p.get("text", "") for p in parts).strip()
+        tool_calls = message.get("tool_calls") or []
+        if not tool_calls:
+            text = (message.get("content") or "").strip()
             if not text:
                 raise IaAssistantUnavailable(f"empty response: {payload}")
             return text, tool_trace
 
-        contents.append({"role": "model", "parts": parts})
-        response_parts = []
-        for call in function_calls:
-            name = call.get("name")
-            args = call.get("args") or {}
+        messages.append(message)
+        for call in tool_calls:
+            name = call["function"]["name"]
+            try:
+                args = json.loads(call["function"].get("arguments") or "{}")
+            except json.JSONDecodeError:
+                args = {}
             handler = _TOOL_HANDLERS.get(name)
             result = handler(connection, tenant_id, args) if handler is not None else {"available": False, "reason": f"unknown tool {name}"}
             tool_trace.append({"name": name, "args": args, "result": result})
-            response_parts.append({"functionResponse": {"name": name, "response": result}})
-        contents.append({"role": "function", "parts": response_parts})
+            messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps(result)})
 
     raise IaAssistantUnavailable("could not settle on an answer within the tool-call budget")
 
 
-def _load_history_for_gemini(connection: psycopg.Connection, *, tenant_id: str, conversation_id: str) -> list[dict]:
+def _load_history_for_groq(connection: psycopg.Connection, *, tenant_id: str, conversation_id: str) -> list[dict]:
     """Only final user/assistant turns are replayed -- not each turn's own tool
     calls, which the model re-derives fresh each time it needs them. Keeps stored
     history compact and never replays a tool-call transcript against a system
@@ -381,7 +459,7 @@ def _load_history_for_gemini(connection: psycopg.Connection, *, tenant_id: str, 
         """,
         (tenant_id, conversation_id),
     ).fetchall()
-    return [{"role": "model" if role == "assistant" else "user", "parts": [{"text": content}]} for role, content in rows]
+    return [{"role": role, "content": content} for role, content in rows]
 
 
 def _require_owned_conversation(connection: psycopg.Connection, *, tenant_id: str, user_id: str, conversation_id: str) -> None:
@@ -496,11 +574,11 @@ def send_message(
     if _count_recent_user_messages(connection, tenant_id=tenant_id, user_id=user_id) >= MAX_MESSAGES_PER_USER_PER_DAY:
         raise IaAssistantRateLimited(f"{MAX_MESSAGES_PER_USER_PER_DAY} messages/day reached for this user")
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        raise IaAssistantUnavailable("GEMINI_API_KEY is not configured")
+        raise IaAssistantUnavailable("GROQ_API_KEY is not configured")
 
-    history = _load_history_for_gemini(connection, tenant_id=tenant_id, conversation_id=conversation_id)
+    history = _load_history_for_groq(connection, tenant_id=tenant_id, conversation_id=conversation_id)
     language = "French" if locale == "fr" else "English"
     answer_text, tool_trace = _run_turn(
         connection, tenant_id=tenant_id, api_key=api_key, history=history, user_text=user_text, language=language

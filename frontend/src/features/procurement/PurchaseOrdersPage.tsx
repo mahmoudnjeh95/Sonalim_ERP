@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm, useWatch, type UseFormRegisterReturn, type UseFormReturn } from "react-hook-form";
+import { Controller, useFieldArray, useForm, useWatch, type UseFormRegisterReturn, type UseFormReturn } from "react-hook-form";
 import { useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, ClipboardList, History, Package, PackageCheck, Pencil, Plus, ShieldCheck, Ship, Sparkles, Trash2, XCircle } from "lucide-react";
@@ -10,6 +11,7 @@ import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
+import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
@@ -105,6 +107,7 @@ const newOrderSchema = z.object({
   order_date: z.string().optional(),
   expected_date: z.string().optional(),
   notes: z.string().optional(),
+  is_import: z.boolean().default(false),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
 });
 type NewOrderForm = z.infer<typeof newOrderSchema>;
@@ -115,6 +118,7 @@ const editOrderSchema = z.object({
   order_date: z.string().optional(),
   expected_date: z.string().optional(),
   notes: z.string().optional(),
+  is_import: z.boolean().default(false),
 });
 type EditOrderForm = z.infer<typeof editOrderSchema>;
 
@@ -153,6 +157,7 @@ const receiveSchema = z.object({
   transit_fee: z.coerce.number().min(0).default(0),
   transport_fee: z.coerce.number().min(0).default(0),
   customs_duty: z.coerce.number().min(0).default(0),
+  handling_fee: z.coerce.number().min(0).default(0),
   lines: z.array(receiptLineSchema),
 });
 type ReceiveForm = z.infer<typeof receiveSchema>;
@@ -194,6 +199,18 @@ export function PurchaseOrdersPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [historyId, setHistoryId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [searchParams] = useSearchParams();
+
+  // Deep link from a stock move's "View purchase order" link (StockMoveDetailDialog) --
+  // ?order=<id> opens that order's receipt history directly. Deliberately doesn't strip
+  // the param back out: under React 18 StrictMode, a mount-time effect that both reads
+  // and clears a param breaks (the dev-only double-invoke's first "throwaway" pass
+  // consumes it via setSearchParams before the real, kept pass ever reads it) -- leaving
+  // it in place keeps this correct and matches how other apps treat a modal-in-URL param.
+  useEffect(() => {
+    const orderParam = searchParams.get("order");
+    if (orderParam) setHistoryId(orderParam);
+  }, [searchParams]);
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: [...QUERY_KEY, statusFilter],
@@ -255,7 +272,7 @@ export function PurchaseOrdersPage() {
     formState: { errors },
   } = useForm<NewOrderForm>({
     resolver: zodResolver(newOrderSchema),
-    defaultValues: { supplier_id: "", order_date: "", expected_date: "", notes: "", lines: [] },
+    defaultValues: { supplier_id: "", order_date: "", expected_date: "", notes: "", is_import: false, lines: [] },
   });
   const { fields: lineFields, append: appendLine, remove: removeLine } = useFieldArray({ control, name: "lines" });
   const watchedLines = useWatch({ control, name: "lines" }) ?? [];
@@ -282,6 +299,7 @@ export function PurchaseOrdersPage() {
         order_date: input.order_date || undefined,
         expected_date: input.expected_date || undefined,
         notes: input.notes || undefined,
+        is_import: input.is_import,
         lines: input.lines.map((line) => ({
           product_id: line.product_id,
           uom_id: line.uom_id,
@@ -292,7 +310,7 @@ export function PurchaseOrdersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      reset({ supplier_id: "", order_date: "", expected_date: "", notes: "", lines: [] });
+      reset({ supplier_id: "", order_date: "", expected_date: "", notes: "", is_import: false, lines: [] });
       toast.success(t("procurement.created"));
     },
     onError: (error) => {
@@ -307,7 +325,8 @@ export function PurchaseOrdersPage() {
   });
 
   const quickAddMutation = useMutation({
-    mutationFn: (input: QuickAddProductForm) => createProduct(token, { ...input, is_sellable: false, is_purchasable: true }),
+    mutationFn: (input: QuickAddProductForm) =>
+      createProduct(token, { ...input, product_type: "PL", is_sellable: false, is_purchasable: true }),
     onSuccess: (product) => {
       queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY });
       if (quickAddLineIndex !== null) {
@@ -350,6 +369,7 @@ export function PurchaseOrdersPage() {
       order_date: order.order_date ?? "",
       expected_date: order.expected_date ?? "",
       notes: order.notes ?? "",
+      is_import: order.is_import,
     });
   }
 
@@ -362,6 +382,7 @@ export function PurchaseOrdersPage() {
         order_date: input.order_date || undefined,
         expected_date: input.expected_date || undefined,
         notes: input.notes || undefined,
+        is_import: input.is_import,
       },
     });
   }
@@ -401,6 +422,7 @@ export function PurchaseOrdersPage() {
       transit_fee: 0,
       transport_fee: 0,
       customs_duty: 0,
+      handling_fee: 0,
       lines: [],
     },
   });
@@ -410,6 +432,11 @@ export function PurchaseOrdersPage() {
       const lines: CreateReceiptLineInput[] = input.lines
         .filter((line) => line.quantity > 0)
         .map((line) => ({ purchase_order_line_id: line.purchase_order_line_id, quantity: line.quantity, lot_number: line.lot_number || undefined }));
+      // Import-only fees are hidden in the form for a non-import order, but the shared
+      // receiveForm instance can still carry a stale value left over from a previous
+      // order's dialog -- zero them here rather than trusting the hidden inputs, so the
+      // backend's validate_receipt_fees rule is never tripped by leftover form state.
+      const isImport = orders.find((o) => o.id === orderId)?.is_import ?? false;
       return receiveAndConfirm(token, orderId, {
         location_id: input.location_id,
         currency_code: input.currency_code,
@@ -420,11 +447,12 @@ export function PurchaseOrdersPage() {
         transport_company_name: input.transport_company_name || undefined,
         driver_name: input.driver_name || undefined,
         base_cost: input.base_cost,
-        license_fee: input.license_fee,
-        insurance_fee: input.insurance_fee,
-        transit_fee: input.transit_fee,
+        license_fee: isImport ? input.license_fee : 0,
+        insurance_fee: isImport ? input.insurance_fee : 0,
+        transit_fee: isImport ? input.transit_fee : 0,
         transport_fee: input.transport_fee,
-        customs_duty: input.customs_duty,
+        customs_duty: isImport ? input.customs_duty : 0,
+        handling_fee: input.handling_fee,
         lines,
       });
     },
@@ -482,6 +510,17 @@ export function PurchaseOrdersPage() {
         placeholder: t("procurement.column.currency"),
       },
       sortValue: (order) => order.currency_code,
+    },
+    {
+      key: "is_import",
+      header: t("procurement.column.isImport"),
+      defaultWidth: 110,
+      cell: (order) => (
+        <Badge variant={order.is_import ? "accent" : "default"}>
+          {order.is_import ? t("procurement.field.import") : t("procurement.field.local")}
+        </Badge>
+      ),
+      sortValue: (order) => (order.is_import ? 1 : 0),
     },
     {
       key: "status",
@@ -720,6 +759,17 @@ export function PurchaseOrdersPage() {
                     <Label htmlFor="expected_date">{t("procurement.field.expectedDate")}</Label>
                     <Input id="expected_date" type="date" {...register("expected_date")} />
                   </div>
+                </div>
+                <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2.5">
+                  <Controller
+                    control={control}
+                    name="is_import"
+                    render={({ field }) => <Checkbox id="is_import" checked={field.value} onCheckedChange={field.onChange} />}
+                  />
+                  <Label htmlFor="is_import" className="cursor-pointer font-normal">
+                    {t("procurement.field.isImport")}
+                  </Label>
+                  <HelpTooltip text={t("procurement.help.isImport")} />
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="notes">{t("procurement.field.notes")}</Label>
@@ -1030,6 +1080,19 @@ function OrderActions({
                   <Label htmlFor={`edit_expected_date_${order.id}`}>{t("procurement.field.expectedDate")}</Label>
                   <Input id={`edit_expected_date_${order.id}`} type="date" {...editForm.register("expected_date")} />
                 </div>
+                <div className="flex items-center gap-2 rounded-md border border-border px-3 py-2.5">
+                  <Controller
+                    control={editForm.control}
+                    name="is_import"
+                    render={({ field }) => (
+                      <Checkbox id={`edit_is_import_${order.id}`} checked={field.value} onCheckedChange={field.onChange} />
+                    )}
+                  />
+                  <Label htmlFor={`edit_is_import_${order.id}`} className="cursor-pointer font-normal">
+                    {t("procurement.field.isImport")}
+                  </Label>
+                  <HelpTooltip text={t("procurement.help.isImport")} />
+                </div>
                 <div className="space-y-1.5">
                   <Label htmlFor={`edit_notes_${order.id}`}>{t("procurement.field.notes")}</Label>
                   <Input id={`edit_notes_${order.id}`} {...editForm.register("notes")} />
@@ -1179,36 +1242,49 @@ function OrderActions({
                         <Input id={`receive_base_cost_${order.id}`} type="number" step="any" {...receiveForm.register("base_cost")} />
                       </div>
                       <div className="space-y-1">
-                        <Label htmlFor={`receive_license_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
-                          {t("procurement.field.licenseFee")}
-                        </Label>
-                        <Input id={`receive_license_fee_${order.id}`} type="number" step="any" {...receiveForm.register("license_fee")} />
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor={`receive_insurance_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
-                          {t("procurement.field.insuranceFee")}
-                        </Label>
-                        <Input id={`receive_insurance_fee_${order.id}`} type="number" step="any" {...receiveForm.register("insurance_fee")} />
-                      </div>
-                      <div className="space-y-1">
-                        <Label htmlFor={`receive_transit_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
-                          {t("procurement.field.transitFee")}
-                        </Label>
-                        <Input id={`receive_transit_fee_${order.id}`} type="number" step="any" {...receiveForm.register("transit_fee")} />
-                      </div>
-                      <div className="space-y-1">
                         <Label htmlFor={`receive_transport_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
                           {t("procurement.field.transportFee")}
                         </Label>
                         <Input id={`receive_transport_fee_${order.id}`} type="number" step="any" {...receiveForm.register("transport_fee")} />
                       </div>
                       <div className="space-y-1">
-                        <Label htmlFor={`receive_customs_duty_${order.id}`} className="text-xs font-normal text-muted-foreground">
-                          {t("procurement.field.customsDuty")}
+                        <Label htmlFor={`receive_handling_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                          {t("procurement.field.handlingFee")}
                         </Label>
-                        <Input id={`receive_customs_duty_${order.id}`} type="number" step="any" {...receiveForm.register("customs_duty")} />
+                        <Input id={`receive_handling_fee_${order.id}`} type="number" step="any" {...receiveForm.register("handling_fee")} />
                       </div>
+                      {order.is_import && (
+                        <>
+                          <div className="space-y-1">
+                            <Label htmlFor={`receive_license_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                              {t("procurement.field.licenseFee")}
+                            </Label>
+                            <Input id={`receive_license_fee_${order.id}`} type="number" step="any" {...receiveForm.register("license_fee")} />
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor={`receive_insurance_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                              {t("procurement.field.insuranceFee")}
+                            </Label>
+                            <Input id={`receive_insurance_fee_${order.id}`} type="number" step="any" {...receiveForm.register("insurance_fee")} />
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor={`receive_transit_fee_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                              {t("procurement.field.transitFee")}
+                            </Label>
+                            <Input id={`receive_transit_fee_${order.id}`} type="number" step="any" {...receiveForm.register("transit_fee")} />
+                          </div>
+                          <div className="space-y-1">
+                            <Label htmlFor={`receive_customs_duty_${order.id}`} className="text-xs font-normal text-muted-foreground">
+                              {t("procurement.field.customsDuty")}
+                            </Label>
+                            <Input id={`receive_customs_duty_${order.id}`} type="number" step="any" {...receiveForm.register("customs_duty")} />
+                          </div>
+                        </>
+                      )}
                     </div>
+                    {!order.is_import && (
+                      <p className="text-xs text-muted-foreground">{t("procurement.help.localOrderFees")}</p>
+                    )}
                   </div>
 
                   <div className="space-y-2 rounded-lg border border-border p-3">
@@ -1304,18 +1380,62 @@ function ReceiptHistoryCard({
             {receipt.invoice_date ?? "—"} · {receipt.carrier ?? "—"}
             {(receipt.transport_company_name || receipt.driver_name) &&
               ` · ${[receipt.transport_company_name, receipt.driver_name].filter(Boolean).join(" / ")}`}{" "}
-            · {receipt.total_cost.toLocaleString(currentLocale())} {t("procurement.receipt.totalCostSuffix")}
+            · {receipt.total_cost.toLocaleString(currentLocale(), { maximumFractionDigits: 0 })} {receipt.currency_code}{" "}
+            {t("procurement.receipt.totalCostSuffix")}
           </span>
         </div>
+        {(() => {
+          // Every fee that made up this receipt's total_cost -- base goods cost plus
+          // whichever landed-cost fees applied (import-only ones are simply 0 on a
+          // local order's receipt, see receiveMutation in this same file, so filtering
+          // to non-zero amounts naturally adapts without needing the order's is_import
+          // flag here). Without this, the header's one total_cost figure hid exactly
+          // the "why is this shipment so expensive" breakdown (transit, douane/customs,
+          // license, insurance...) the receiving team needs to see at a glance.
+          const costEntries = [
+            { key: "base", label: t("procurement.field.baseCost"), amount: receipt.base_cost },
+            { key: "transport", label: t("procurement.field.transportFee"), amount: receipt.transport_fee },
+            { key: "handling", label: t("procurement.field.handlingFee"), amount: receipt.handling_fee },
+            { key: "customs", label: t("procurement.field.customsDuty"), amount: receipt.customs_duty },
+            { key: "license", label: t("procurement.field.licenseFee"), amount: receipt.license_fee },
+            { key: "insurance", label: t("procurement.field.insuranceFee"), amount: receipt.insurance_fee },
+            { key: "transit", label: t("procurement.field.transitFee"), amount: receipt.transit_fee },
+          ].filter((entry) => entry.amount > 0);
+          if (costEntries.length === 0) return null;
+          return (
+            <div className="rounded-md border border-border/60 bg-muted/30 p-2.5">
+              <p className="mb-1.5 text-xs font-medium text-muted-foreground">
+                {t("procurement.field.landedCost")} ({receipt.currency_code})
+              </p>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 sm:grid-cols-3">
+                {costEntries.map((entry) => (
+                  <div key={entry.key} className="flex items-baseline justify-between gap-2 text-sm">
+                    <dt className="text-muted-foreground">{entry.label}</dt>
+                    <dd className="tabular-nums font-medium">
+                      {entry.amount.toLocaleString(currentLocale(), { maximumFractionDigits: 0 })}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          );
+        })()}
         <ul className="space-y-1 text-sm">
           {receiptLines.map((line) => (
-            <li key={line.id} className="flex justify-between text-muted-foreground">
+            <li key={line.id} className="flex items-start justify-between gap-3 text-muted-foreground">
               <span>
                 {lineLabel(line.purchase_order_line_id)}
                 {line.lot_number ? ` · ${t("procurement.field.lotNumber")}: ${line.lot_number}` : ""}
               </span>
-              <span className="tabular-nums">
-                {line.quantity} {lineUom(line.purchase_order_line_id)}
+              <span className="shrink-0 text-right">
+                <div className="tabular-nums">
+                  {line.quantity} {lineUom(line.purchase_order_line_id)}
+                </div>
+                <div className="text-xs tabular-nums text-muted-foreground/70">
+                  {t("procurement.field.unitPrice")}:{" "}
+                  {line.cost_per_unit.toLocaleString(currentLocale(), { maximumFractionDigits: 0 })} {receipt.currency_code}/
+                  {lineUom(line.purchase_order_line_id)}
+                </div>
               </span>
             </li>
           ))}

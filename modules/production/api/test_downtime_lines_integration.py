@@ -116,12 +116,12 @@ def _read(db, report_id):
 def test_a_downtime_line_is_stored_and_read_back_whole(db, env, of):
     report = _draft(
         db, env, of,
-        downtime_lines=(DowntimeLine(motif="die change", minutes=20, note="filière 3"),),
+        downtime_lines=(DowntimeLine(motif="die_jam", minutes=20, note="filière 3"),),
     )
     detail = _read(db, report.id)["detail"]
     assert len(detail.downtime_lines) == 1
     line = detail.downtime_lines[0]
-    assert (line.motif, line.minutes, line.note) == ("die change", 20, "filière 3")
+    assert (line.motif, line.minutes, line.note) == ("die_jam", 20, "filière 3")
 
 
 def test_several_motifs_on_the_same_report_are_all_kept(db, env, of):
@@ -130,12 +130,15 @@ def test_several_motifs_on_the_same_report_are_all_kept(db, env, of):
     report = _draft(
         db, env, of,
         downtime_lines=(
-            DowntimeLine(motif="mixer jam", minutes=20),
-            DowntimeLine(motif="power cut", minutes=15),
+            DowntimeLine(motif="extruder_failure", minutes=20),
+            DowntimeLine(motif="electrical_failure", minutes=15),
         ),
     )
     detail = _read(db, report.id)["detail"]
-    assert {(line.motif, line.minutes) for line in detail.downtime_lines} == {("mixer jam", 20), ("power cut", 15)}
+    assert {(line.motif, line.minutes) for line in detail.downtime_lines} == {
+        ("extruder_failure", 20),
+        ("electrical_failure", 15),
+    }
     assert downtime_total_minutes(detail.downtime_lines) == 35
 
 
@@ -143,13 +146,13 @@ def test_the_order_the_shift_entered_them_in_is_kept(db, env, of):
     report = _draft(
         db, env, of,
         downtime_lines=(
-            DowntimeLine(motif="first", minutes=5),
-            DowntimeLine(motif="second", minutes=10),
-            DowntimeLine(motif="third", minutes=15),
+            DowntimeLine(motif="extruder_failure", minutes=5),
+            DowntimeLine(motif="electrical_failure", minutes=10),
+            DowntimeLine(motif="team_break", minutes=15),
         ),
     )
     detail = _read(db, report.id)["detail"]
-    assert [line.motif for line in detail.downtime_lines] == ["first", "second", "third"]
+    assert [line.motif for line in detail.downtime_lines] == ["extruder_failure", "electrical_failure", "team_break"]
 
 
 def test_editing_a_draft_replaces_the_whole_list(db, env, of):
@@ -157,8 +160,8 @@ def test_editing_a_draft_replaces_the_whole_list(db, env, of):
     report = _draft(
         db, env, of,
         downtime_lines=(
-            DowntimeLine(motif="mixer jam", minutes=20),
-            DowntimeLine(motif="power cut", minutes=15),
+            DowntimeLine(motif="extruder_failure", minutes=20),
+            DowntimeLine(motif="electrical_failure", minutes=15),
         ),
     )
     updated = ProductionReportService(db).update_daily_draft(
@@ -166,12 +169,12 @@ def test_editing_a_draft_replaces_the_whole_list(db, env, of):
         detail=DailyReportDetail(
             semolina_lines=(SemolinaLine(product_id=env["product"], quantity=500, location_id=env["location"]),),
             raw_material_location_id=env["location"],
-            downtime_lines=(DowntimeLine(motif="die change", minutes=9),),
+            downtime_lines=(DowntimeLine(motif="die_jam", minutes=9),),
         ),
     )
     assert isinstance(updated, Ok), getattr(updated, "message", "")
     detail = _read(db, report.id)["detail"]
-    assert [(line.motif, line.minutes) for line in detail.downtime_lines] == [("die change", 9)]
+    assert [(line.motif, line.minutes) for line in detail.downtime_lines] == [("die_jam", 9)]
 
 
 def test_blank_rows_are_not_stored(db, env, of):
@@ -180,7 +183,7 @@ def test_blank_rows_are_not_stored(db, env, of):
     report = _draft(
         db, env, of,
         downtime_lines=(
-            DowntimeLine(motif="mixer jam", minutes=20),
+            DowntimeLine(motif="extruder_failure", minutes=20),
             DowntimeLine(minutes=0),
         ),
     )
@@ -226,7 +229,7 @@ def test_a_negative_duration_is_refused_at_creation(db, env, of):
 
 
 def test_correcting_a_validated_report_rewrites_its_downtime_list(db, env, of):
-    report = _draft(db, env, of, downtime_lines=(DowntimeLine(motif="mixer jam", minutes=20),))
+    report = _draft(db, env, of, downtime_lines=(DowntimeLine(motif="extruder_failure", minutes=20),))
     _validate(db, env, report.id)
 
     corrected = ProductionReportService(db).correct_validated_report(
@@ -235,8 +238,8 @@ def test_correcting_a_validated_report_rewrites_its_downtime_list(db, env, of):
             semolina_lines=(SemolinaLine(product_id=env["product"], quantity=500, location_id=env["location"]),),
             raw_material_location_id=env["location"],
             downtime_lines=(
-                DowntimeLine(motif="mixer jam", minutes=25),
-                DowntimeLine(motif="power cut", minutes=10),
+                DowntimeLine(motif="extruder_failure", minutes=25),
+                DowntimeLine(motif="electrical_failure", minutes=10),
             ),
         ),
         reason="the stoppage log was re-checked",
@@ -247,7 +250,7 @@ def test_correcting_a_validated_report_rewrites_its_downtime_list(db, env, of):
 
 
 def test_deleting_a_report_takes_its_downtime_list_with_it(db, env, of):
-    report = _draft(db, env, of, downtime_lines=(DowntimeLine(motif="mixer jam", minutes=20),))
+    report = _draft(db, env, of, downtime_lines=(DowntimeLine(motif="extruder_failure", minutes=20),))
     result = ProductionReportService(db).delete_report(
         tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="entered against the wrong OF"
     )
@@ -261,7 +264,7 @@ def test_deleting_a_report_takes_its_downtime_list_with_it(db, env, of):
 def test_the_deletion_audit_records_the_downtime_that_was_there(db, env, of):
     """The rows are gone afterwards, so the audit entry is the only account of
     what the report said — including its arrêts."""
-    report = _draft(db, env, of, downtime_lines=(DowntimeLine(motif="mixer jam", minutes=20),))
+    report = _draft(db, env, of, downtime_lines=(DowntimeLine(motif="extruder_failure", minutes=20),))
     ProductionReportService(db).delete_report(
         tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="duplicate"
     )
@@ -273,5 +276,5 @@ def test_the_deletion_audit_records_the_downtime_that_was_there(db, env, of):
         (report.id,),
     ).fetchone()[0]
     assert payload["detail"]["downtime_lines"] == [
-        {"motif": "mixer jam", "minutes": 20, "note": None, "line_order": 0}
+        {"motif": "extruder_failure", "minutes": 20, "note": None, "line_order": 0}
     ]

@@ -35,7 +35,9 @@ export function StatCard({
   decimals,
 }: {
   label: string;
-  value: number;
+  /** null renders "—" instead of an animated figure — use for a value that can't be
+   * computed yet (e.g. incomplete cost data), never coerce that case to 0. */
+  value: number | null;
   icon: ReactNode;
   accent?: "primary" | "success" | "warning" | "accent" | "destructive";
   prefix?: string;
@@ -60,12 +62,14 @@ export function StatCard({
       </div>
       <div>
         <p className="text-2xl font-semibold tabular-nums tracking-tight">
-          {prefix}
-          <AnimatedNumber value={value} decimals={decimals} />
-          {unit && (
-            <span className="ml-1 text-base font-medium text-muted-foreground">
-              {pluralizeUnit(unit, value)}
-            </span>
+          {value === null ? (
+            "—"
+          ) : (
+            <>
+              {prefix}
+              <AnimatedNumber value={value} decimals={decimals} />
+              {unit && <span className="ml-1 text-base font-medium text-muted-foreground">{pluralizeUnit(unit, value)}</span>}
+            </>
           )}
         </p>
         <p className="text-xs text-muted-foreground">{label}</p>

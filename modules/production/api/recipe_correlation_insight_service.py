@@ -1,16 +1,15 @@
 """A one-sentence, plain-language reading of the recipe-correlation figures.
 
-Deliberately thin: this calls out to the Gemini API rather than reading any
+Deliberately thin: this calls out to the Groq API rather than reading any
 new data itself -- `list_recipe_correlation`'s rows are the only input. Kept
 as its own module (not folded into `WorkOrderYieldService`) because it has a
 different failure mode than the rest of that service: a missing API key, a
 network error or an exhausted quota must all fall back to "no insight right
 now", never a 500 that takes the whole dashboard card down with it.
 
-Only aggregates cross the wire to Google, never the raw rows: no OF
+Only aggregates cross the wire to Groq, never the raw rows: no OF
 reference, no product or team name, no per-shift date. The user chose the
-free API tier for this, which per Google's terms may see prompts reviewed to
-improve their products -- rounded plant-wide statistics carry a lot less than
+free API tier for this -- rounded plant-wide statistics carry a lot less than
 a named OF's exact figures, and there is nothing here an insight needs that
 the aggregate doesn't already say.
 """
@@ -21,12 +20,9 @@ import os
 import urllib.error
 import urllib.request
 
-# The "-latest" alias, not a pinned version: a pinned model (e.g. gemini-2.5-flash)
-# gets retired from new API keys with no warning here, and this one sentence isn't
-# worth a maintenance treadmill to keep pointed at whatever Google currently
-# recommends. Override via GEMINI_MODEL if a specific version is ever needed.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-flash-latest")
-GEMINI_API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+# Override via GROQ_MODEL if a different Llama size/version is ever needed.
+GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 REQUEST_TIMEOUT_SECONDS = 10
 
 # Below this, min/max/avg over a handful of shifts is noise dressed up as a
@@ -46,12 +42,12 @@ def summarize_recipe_correlation(rows: list[dict], *, locale: str) -> str:
             f"only {len(rows)} row(s), need at least {MIN_ROWS_FOR_INSIGHT}"
         )
 
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.environ.get("GROQ_API_KEY")
     if not api_key:
-        raise RecipeCorrelationInsightUnavailable("GEMINI_API_KEY is not configured")
+        raise RecipeCorrelationInsightUnavailable("GROQ_API_KEY is not configured")
 
     prompt = _build_prompt(_aggregate(rows), locale=locale)
-    return _call_gemini(api_key, prompt)
+    return _call_groq(api_key, prompt)
 
 
 def _aggregate(rows: list[dict]) -> dict:
@@ -112,36 +108,28 @@ def _build_prompt(stats: dict, *, locale: str) -> str:
     )
 
 
-def _call_gemini(api_key: str, prompt: str) -> str:
-    url = GEMINI_API_URL_TEMPLATE.format(model=GEMINI_MODEL)
+def _call_groq(api_key: str, prompt: str) -> str:
     body = json.dumps(
         {
-            "contents": [{"parts": [{"text": prompt}]}],
-            "generationConfig": {
-                "temperature": 0.2,
-                # This model spends part of its budget on hidden "thinking" tokens
-                # before the visible answer -- observed burning 194/200 tokens on
-                # thinking alone and returning a MAX_TOKENS-truncated one-word
-                # answer. thinkingBudget 0 cuts most (not all) of that; the
-                # generous ceiling below is the actual guard against truncation.
-                "maxOutputTokens": 1024,
-                "thinkingConfig": {"thinkingBudget": 0},
-            },
+            "model": GROQ_MODEL,
+            "messages": [{"role": "user", "content": prompt}],
+            "temperature": 0.2,
+            "max_tokens": 200,
         }
     ).encode("utf-8")
     request = urllib.request.Request(
-        f"{url}?key={api_key}",
+        GROQ_API_URL,
         data=body,
-        headers={"Content-Type": "application/json"},
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         method="POST",
     )
     try:
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
             payload = json.loads(response.read())
     except (urllib.error.URLError, TimeoutError) as exc:
-        raise RecipeCorrelationInsightUnavailable(f"Gemini request failed: {exc}") from exc
+        raise RecipeCorrelationInsightUnavailable(f"Groq request failed: {exc}") from exc
 
     try:
-        return payload["candidates"][0]["content"]["parts"][0]["text"].strip()
+        return payload["choices"][0]["message"]["content"].strip()
     except (KeyError, IndexError, TypeError) as exc:
-        raise RecipeCorrelationInsightUnavailable(f"unexpected Gemini response shape: {payload}") from exc
+        raise RecipeCorrelationInsightUnavailable(f"unexpected Groq response shape: {payload}") from exc

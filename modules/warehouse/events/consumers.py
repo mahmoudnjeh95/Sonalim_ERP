@@ -8,6 +8,8 @@ from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.service import StockService
 
 CONSUMER_NAME = "warehouse.purchase_order_receipt_confirmed"
+PRODUCT_CREATED_CONSUMER_NAME = "warehouse.product_created"
+FINISHED_GOODS_LOCATION_CODE = "produits-finis"
 
 
 def _handle_purchase_order_receipt_confirmed(connection: psycopg.Connection, envelope: dict) -> None:
@@ -46,4 +48,36 @@ def _handle_purchase_order_receipt_confirmed(connection: psycopg.Connection, env
                 raise RuntimeError(f"failed to post lot stock for purchase order receipt {receipt_id}: {lot_result.message}")
 
 
+def _handle_product_created(connection: psycopg.Connection, envelope: dict) -> None:
+    """A new sellable product needs a home in finished-goods stock from day one,
+    at 0, so it shows up in Entrepôt Produits Finis instead of being invisible
+    until its first production movement. Raw materials/packaging (is_sellable
+    False) don't belong in a finished-goods location, so they're skipped."""
+    payload = envelope["payload"]
+    tenant_id = envelope["tenant_id"]
+    if not payload["is_sellable"]:
+        return
+
+    location_row = connection.execute(
+        "SELECT id FROM warehouse.locations WHERE tenant_id = %s AND code = %s",
+        (tenant_id, FINISHED_GOODS_LOCATION_CODE),
+    ).fetchone()
+    if location_row is None:
+        raise RuntimeError(
+            f"tenant {tenant_id!r} has no {FINISHED_GOODS_LOCATION_CODE!r} warehouse location to add product "
+            f"{payload['product_id']!r} to"
+        )
+    location_id = location_row[0]
+
+    connection.execute(
+        """
+        INSERT INTO warehouse.stock_items (tenant_id, location_id, product_id, quantity_on_hand, quantity_reserved)
+        VALUES (%s, %s, %s, 0, 0)
+        ON CONFLICT (tenant_id, location_id, product_id) DO NOTHING
+        """,
+        (tenant_id, location_id, payload["product_id"]),
+    )
+
+
 register(CONSUMER_NAME, "procurement.purchase_order_receipt.confirmed", _handle_purchase_order_receipt_confirmed)
+register(PRODUCT_CREATED_CONSUMER_NAME, "core.product.created", _handle_product_created)

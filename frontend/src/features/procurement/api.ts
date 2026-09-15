@@ -18,6 +18,7 @@ export interface PurchaseOrder {
   expected_date: string | null;
   currency_code: string | null;
   notes: string | null;
+  is_import: boolean;
 }
 
 export interface PurchaseOrderLine {
@@ -47,6 +48,7 @@ export interface CreatePurchaseOrderInput {
   order_date?: string;
   expected_date?: string;
   notes?: string;
+  is_import?: boolean;
 }
 
 export function listPurchaseOrders(token: string, status?: PurchaseOrderStatus) {
@@ -68,6 +70,7 @@ export interface UpdatePurchaseOrderInput {
   expected_date?: string;
   currency_code?: string;
   notes?: string;
+  is_import?: boolean;
 }
 
 // Gated by procurement.admin_purchase_orders — a distinct, elevated permission from the
@@ -108,6 +111,7 @@ export interface CreateReceiptInput {
   transit_fee?: number;
   transport_fee?: number;
   customs_duty?: number;
+  handling_fee?: number;
 }
 
 export interface PurchaseOrderReceipt {
@@ -128,6 +132,7 @@ export interface PurchaseOrderReceipt {
   transit_fee: number;
   transport_fee: number;
   customs_duty: number;
+  handling_fee: number;
   total_cost: number;
   confirmed_at: string | null;
 }
@@ -157,6 +162,11 @@ export function listPurchaseOrderReceipts(token: string, orderId: string) {
   return apiFetch<PurchaseOrderReceipt[]>(`/procurement/purchase-orders/${orderId}/receipts`, { token });
 }
 
+/** Resolves a stock move's `purchase_order_receipt:{id}` reference back to its order. */
+export function getPurchaseOrderReceipt(token: string, receiptId: string) {
+  return apiFetch<PurchaseOrderReceipt>(`/procurement/receipts/${receiptId}`, { token });
+}
+
 export interface PurchaseOrderReceiptLine {
   id: string;
   purchase_order_receipt_id: string;
@@ -182,4 +192,38 @@ export function listLastPrices(token: string, supplierId: string, productIds: st
   const params = new URLSearchParams({ supplier_id: supplierId });
   productIds.forEach((productId) => params.append("product_ids", productId));
   return apiFetch<LastPrice[]>(`/procurement/last-prices?${params.toString()}`, { token });
+}
+
+/** Every recorded order price for one product, oldest to newest, converted to
+ * CFA at the rate in effect on each order's own date -- the trend behind the
+ * single latest figure listLastPrices returns. */
+export interface PriceHistoryPoint {
+  order_id: string;
+  supplier_id: string | null;
+  order_date: string | null;
+  quantity_ordered: number;
+  unit_price: number;
+  unit_price_currency: string;
+  /** Null only when no exchange rate exists to convert unit_price_currency as of order_date. */
+  unit_price_cfa: number | null;
+}
+
+export function listPriceHistory(token: string, productId: string, supplierId?: string) {
+  const params = new URLSearchParams({ product_id: productId });
+  if (supplierId) params.set("supplier_id", supplierId);
+  return apiFetch<PriceHistoryPoint[]>(`/procurement/price-history?${params.toString()}`, { token });
+}
+
+/** Ranks every supplier ever ordered from by how often they held the lowest
+ * recorded price across products -- the aggregate view behind price
+ * history's per-product best-supplier highlight. */
+export interface SupplierLeaderboardEntry {
+  supplier_id: string;
+  products_supplied: number;
+  total_orders: number;
+  best_price_count: number;
+}
+
+export function listSupplierLeaderboard(token: string) {
+  return apiFetch<SupplierLeaderboardEntry[]>("/procurement/supplier-leaderboard", { token });
 }

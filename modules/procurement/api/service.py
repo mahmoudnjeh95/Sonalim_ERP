@@ -7,6 +7,7 @@ from ulid import ULID
 
 from core.api.service import CoreService
 from core.audit import record_audit
+from core.domain.exchange_rate import BASE_CURRENCY
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.procurement.domain.entities import (
@@ -16,17 +17,19 @@ from modules.procurement.domain.entities import (
     PurchaseOrderReceipt,
     PurchaseOrderReceiptLine,
     apply_receipt_to_line,
+    compute_cost_anomaly,
     compute_landed_cost,
     confirm_purchase_order_receipt,
     receive_against_order,
     transition_purchase_order,
     validate_new_purchase_order,
     validate_new_purchase_order_line,
+    validate_receipt_fees,
 )
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.service import StockService
 
-_ORDER_COLUMNS = "id, tenant_id, supplier_id, status, order_date, expected_date, currency_code, notes"
+_ORDER_COLUMNS = "id, tenant_id, supplier_id, status, order_date, expected_date, currency_code, notes, is_import"
 _LINE_COLUMNS = (
     "id, tenant_id, purchase_order_id, product_id, uom_id, quantity_ordered, quantity_received, "
     "status, unit_price, unit_price_currency"
@@ -34,13 +37,13 @@ _LINE_COLUMNS = (
 _RECEIPT_COLUMNS = (
     "id, tenant_id, purchase_order_id, location_id, status, currency_code, invoice_number, invoice_date, origin_country, "
     "carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee, "
-    "customs_duty, total_cost, confirmed_at"
+    "customs_duty, handling_fee, total_cost, confirmed_at"
 )
 _RECEIPT_LINE_COLUMNS = "id, tenant_id, purchase_order_receipt_id, purchase_order_line_id, quantity, lot_number, cost_per_unit"
 
 
 def _row_to_order(row: tuple) -> PurchaseOrder:
-    rid, tenant_id, supplier_id, status, order_date, expected_date, currency_code, notes = row
+    rid, tenant_id, supplier_id, status, order_date, expected_date, currency_code, notes, is_import = row
     return PurchaseOrder(
         id=rid,
         tenant_id=tenant_id,
@@ -50,6 +53,7 @@ def _row_to_order(row: tuple) -> PurchaseOrder:
         expected_date=expected_date.isoformat() if expected_date else None,
         currency_code=currency_code,
         notes=notes,
+        is_import=is_import,
     )
 
 
@@ -73,7 +77,7 @@ def _row_to_receipt(row: tuple) -> PurchaseOrderReceipt:
     (
         rid, tenant_id, purchase_order_id, location_id, status, currency_code, invoice_number, invoice_date, origin_country,
         carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee,
-        customs_duty, total_cost, confirmed_at,
+        customs_duty, handling_fee, total_cost, confirmed_at,
     ) = row
     return PurchaseOrderReceipt(
         id=rid,
@@ -94,6 +98,7 @@ def _row_to_receipt(row: tuple) -> PurchaseOrderReceipt:
         transit_fee=float(transit_fee),
         transport_fee=float(transport_fee),
         customs_duty=float(customs_duty),
+        handling_fee=float(handling_fee),
         total_cost=float(total_cost),
         confirmed_at=confirmed_at.isoformat() if confirmed_at else None,
     )
@@ -148,6 +153,7 @@ class PurchaseOrderService:
         order_date: datetime.date | None = None,
         expected_date: datetime.date | None = None,
         notes: str | None = None,
+        is_import: bool = False,
     ) -> Result[PurchaseOrder]:
         header_validation = validate_new_purchase_order(currency_code=currency_code)
         if isinstance(header_validation, Err):
@@ -168,10 +174,10 @@ class PurchaseOrderService:
         self._connection.execute(
             """
             INSERT INTO procurement.purchase_orders
-                (id, tenant_id, supplier_id, status, order_date, expected_date, currency_code, notes)
-            VALUES (%s, %s, %s, 'draft', %s, %s, %s, %s)
+                (id, tenant_id, supplier_id, status, order_date, expected_date, currency_code, notes, is_import)
+            VALUES (%s, %s, %s, 'draft', %s, %s, %s, %s, %s)
             """,
-            (order_id, tenant_id, supplier_id, order_date, expected_date, currency_code, notes),
+            (order_id, tenant_id, supplier_id, order_date, expected_date, currency_code, notes, is_import),
         )
         for line in lines:
             self._connection.execute(
@@ -254,6 +260,111 @@ class PurchaseOrderService:
             )
             for r in rows
         ]
+
+    def list_price_history(
+        self, *, tenant_id: str, product_id: str, supplier_id: str | None = None
+    ) -> list[dict]:
+        """Every purchase-order price on record for this product, oldest to
+        newest -- the trend a single LastPrice can't show. Each line is also
+        converted to BASE_CURRENCY (XOF) using the exchange rate in effect on
+        its own order date, the same honest-or-unpriced convention
+        ConsumptionReportService uses (see CoreService.get_exchange_rate) --
+        never today's rate applied retroactively to an old order."""
+        clauses = ["pol.tenant_id = %s", "pol.product_id = %s"]
+        params: list[object] = [tenant_id, product_id]
+        if supplier_id is not None:
+            clauses.append("po.supplier_id = %s")
+            params.append(supplier_id)
+        rows = self._connection.execute(
+            f"""
+            SELECT po.id, po.supplier_id, po.order_date, pol.unit_price, pol.unit_price_currency, pol.quantity_ordered
+            FROM procurement.purchase_order_lines pol
+            JOIN procurement.purchase_orders po ON po.id = pol.purchase_order_id AND po.tenant_id = pol.tenant_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY po.order_date NULLS LAST, pol.created_at
+            """,
+            params,
+        ).fetchall()
+
+        core_service = CoreService(self._connection)
+        rate_cache: dict[tuple[str, str], float | None] = {}
+        history: list[dict] = []
+        for order_id, order_supplier_id, order_date, unit_price, currency, quantity in rows:
+            as_of = order_date or datetime.date.today()
+            rate_key = (currency, as_of.isoformat())
+            if rate_key not in rate_cache:
+                exchange_rate = core_service.get_exchange_rate(tenant_id=tenant_id, currency_code=currency, as_of_date=as_of)
+                rate_cache[rate_key] = exchange_rate.rate_to_base if exchange_rate else None
+            rate = rate_cache[rate_key]
+            history.append(
+                {
+                    "order_id": order_id,
+                    "supplier_id": order_supplier_id,
+                    "order_date": order_date.isoformat() if order_date else None,
+                    "quantity_ordered": float(quantity),
+                    "unit_price": float(unit_price),
+                    "unit_price_currency": currency,
+                    "unit_price_cfa": float(unit_price) * rate if rate is not None else None,
+                }
+            )
+        return history
+
+    def list_supplier_leaderboard(self, *, tenant_id: str) -> list[dict]:
+        """Ranks every supplier ever ordered from by how often they held the
+        lowest recorded CFA price on a product -- the aggregate view behind
+        list_price_history's per-product best-supplier highlight. Ties for a
+        product's lowest price keep whichever supplier's order came first,
+        matching list_price_history's own chronological ordering."""
+        rows = self._connection.execute(
+            """
+            SELECT pol.product_id, po.supplier_id, po.order_date, pol.unit_price, pol.unit_price_currency
+            FROM procurement.purchase_order_lines pol
+            JOIN procurement.purchase_orders po ON po.id = pol.purchase_order_id AND po.tenant_id = pol.tenant_id
+            WHERE pol.tenant_id = %s AND po.supplier_id IS NOT NULL
+            ORDER BY pol.product_id, po.order_date NULLS LAST, pol.created_at
+            """,
+            (tenant_id,),
+        ).fetchall()
+
+        core_service = CoreService(self._connection)
+        rate_cache: dict[tuple[str, str], float | None] = {}
+        best_by_product: dict[str, tuple[str, float]] = {}
+        orders_by_supplier: dict[str, int] = {}
+        products_by_supplier: dict[str, set[str]] = {}
+
+        for product_id, supplier_id, order_date, unit_price, currency in rows:
+            orders_by_supplier[supplier_id] = orders_by_supplier.get(supplier_id, 0) + 1
+            products_by_supplier.setdefault(supplier_id, set()).add(product_id)
+
+            as_of = order_date or datetime.date.today()
+            rate_key = (currency, as_of.isoformat())
+            if rate_key not in rate_cache:
+                exchange_rate = core_service.get_exchange_rate(tenant_id=tenant_id, currency_code=currency, as_of_date=as_of)
+                rate_cache[rate_key] = exchange_rate.rate_to_base if exchange_rate else None
+            rate = rate_cache[rate_key]
+            if rate is None:
+                continue
+            price_cfa = float(unit_price) * rate
+
+            current_best = best_by_product.get(product_id)
+            if current_best is None or price_cfa < current_best[1]:
+                best_by_product[product_id] = (supplier_id, price_cfa)
+
+        best_price_wins: dict[str, int] = {}
+        for winning_supplier_id, _ in best_by_product.values():
+            best_price_wins[winning_supplier_id] = best_price_wins.get(winning_supplier_id, 0) + 1
+
+        leaderboard = [
+            {
+                "supplier_id": supplier_id,
+                "products_supplied": len(products_by_supplier[supplier_id]),
+                "total_orders": orders_by_supplier[supplier_id],
+                "best_price_count": best_price_wins.get(supplier_id, 0),
+            }
+            for supplier_id in orders_by_supplier
+        ]
+        leaderboard.sort(key=lambda row: (-row["best_price_count"], -row["products_supplied"]))
+        return leaderboard
 
     def add_line(
         self,
@@ -355,6 +466,7 @@ class PurchaseOrderService:
         expected_date: datetime.date | None = None,
         currency_code: str | None = None,
         notes: str | None = None,
+        is_import: bool | None = None,
     ) -> Result[PurchaseOrder]:
         """Direct edit of header fields, gated by procurement.admin_purchase_orders. Allowed
         regardless of the order's current status -- the elevated permission is what limits
@@ -372,14 +484,15 @@ class PurchaseOrderService:
         merged_order_date = order_date if order_date is not None else current.order_date
         merged_expected_date = expected_date if expected_date is not None else current.expected_date
         merged_notes = notes if notes is not None else current.notes
+        merged_is_import = is_import if is_import is not None else current.is_import
 
         self._connection.execute(
             """
             UPDATE procurement.purchase_orders
-            SET supplier_id = %s, order_date = %s, expected_date = %s, currency_code = %s, notes = %s
+            SET supplier_id = %s, order_date = %s, expected_date = %s, currency_code = %s, notes = %s, is_import = %s
             WHERE id = %s AND tenant_id = %s
             """,
-            (merged_supplier, merged_order_date, merged_expected_date, merged_currency, merged_notes, order_id, tenant_id),
+            (merged_supplier, merged_order_date, merged_expected_date, merged_currency, merged_notes, merged_is_import, order_id, tenant_id),
         )
         record_audit(
             self._connection,
@@ -421,6 +534,7 @@ class PurchaseOrderService:
         transit_fee: float = 0,
         transport_fee: float = 0,
         customs_duty: float = 0,
+        handling_fee: float = 0,
     ) -> Result[PurchaseOrderReceipt]:
         """Drafts a goods-receipt event covering one or more lines of one order. No stock or
         line quantities are touched yet -- that only happens on confirm_receipt, so a draft
@@ -438,6 +552,16 @@ class PurchaseOrderService:
             if line["quantity"] <= 0:
                 return Err("INVALID_QUANTITY", "received quantity must be positive")
 
+        fee_validation = validate_receipt_fees(
+            is_import=order.is_import,
+            license_fee=license_fee,
+            insurance_fee=insurance_fee,
+            transit_fee=transit_fee,
+            customs_duty=customs_duty,
+        )
+        if isinstance(fee_validation, Err):
+            return fee_validation
+
         total_quantity = sum(line["quantity"] for line in lines)
         cost_result = compute_landed_cost(
             base_cost=base_cost,
@@ -446,6 +570,7 @@ class PurchaseOrderService:
             transit_fee=transit_fee,
             transport_fee=transport_fee,
             customs_duty=customs_duty,
+            handling_fee=handling_fee,
             quantity=total_quantity,
         )
         if isinstance(cost_result, Err):
@@ -458,13 +583,13 @@ class PurchaseOrderService:
             INSERT INTO procurement.purchase_order_receipts
                 (id, tenant_id, purchase_order_id, location_id, status, currency_code, invoice_number, invoice_date, origin_country,
                  carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee,
-                 customs_duty, total_cost)
-            VALUES (%s, %s, %s, %s, 'draft', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 customs_duty, handling_fee, total_cost)
+            VALUES (%s, %s, %s, %s, 'draft', %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 receipt_id, tenant_id, purchase_order_id, location_id, currency_code, invoice_number, invoice_date, origin_country,
                 carrier, transport_company_name, driver_name, base_cost, license_fee, insurance_fee, transit_fee, transport_fee,
-                customs_duty, total_cost,
+                customs_duty, handling_fee, total_cost,
             ),
         )
         for line in lines:
@@ -501,6 +626,16 @@ class PurchaseOrderService:
             params,
         ).fetchall()
         return [_row_to_receipt(row) for row in rows]
+
+    def get_receipt(self, *, tenant_id: str, receipt_id: str) -> PurchaseOrderReceipt | None:
+        """Looks up one receipt by id, carrying its `purchase_order_id` -- how a stock
+        move's `purchase_order_receipt:{receipt_id}` reference resolves back to the order
+        it came from (see StockMoveDetailDialog's "View purchase order" link)."""
+        row = self._connection.execute(
+            f"SELECT {_RECEIPT_COLUMNS} FROM procurement.purchase_order_receipts WHERE id = %s AND tenant_id = %s",
+            (receipt_id, tenant_id),
+        ).fetchone()
+        return _row_to_receipt(row) if row else None
 
     def list_receipt_lines(self, *, tenant_id: str, purchase_order_receipt_id: str) -> list[PurchaseOrderReceiptLine]:
         rows = self._connection.execute(
@@ -667,58 +802,143 @@ class PurchaseOrderService:
         self._connection.execute("UPDATE events.outbox SET sent_at = NOW() WHERE event_id = %s", (event_id,))
         return Ok(updated_order)
 
+    def _base_currency_rate(self, *, tenant_id: str, currency_code: str, as_of: datetime.date | None, cache: dict) -> float:
+        """Rate to multiply an amount in `currency_code` by to get it in BASE_CURRENCY
+        (XOF), as of the given date -- this is what lets a CFA receipt from Mali and a EUR
+        receipt from Turkiye/Spain be summed or compared at all (point 4 of the MP cost
+        plan). Falls back to 1.0 (no conversion) when no rate has been recorded rather than
+        dropping the row, since an unconverted number still beats a missing one -- callers
+        needing to know this happened should check core.exchange-rates coverage directly."""
+        if currency_code == BASE_CURRENCY:
+            return 1.0
+        effective_date = as_of or datetime.date.today()
+        key = (currency_code, effective_date)
+        if key not in cache:
+            core_service = CoreService(self._connection)
+            rate = core_service.get_exchange_rate(tenant_id=tenant_id, currency_code=currency_code, as_of_date=effective_date)
+            cache[key] = rate.rate_to_base if rate else None
+        return cache[key] if cache[key] is not None else 1.0
+
     def list_confirmed_receipt_line_details(self, *, tenant_id: str) -> list[dict]:
         """Flat, one-row-per-receipt-line view of every confirmed goods receipt, for
         product-level cost/trend analysis. cost_per_unit * quantity is this line's own
         share of its shipment's total landed cost -- a receipt spanning multiple products
         splits its freight/customs/insurance costs proportionally across their quantities,
         so this is the right granularity for a per-product report (unlike the receipt's own
-        total_cost, which covers every line on it)."""
+        total_cost, which covers every line on it). total_cost_base converts that amount to
+        BASE_CURRENCY so mixed-currency sourcing (local CFA vs. imported EUR/TRY) can be
+        summed and trended together -- total_cost (the receipt's own currency) is kept
+        alongside it for transparency.
+
+        Also flags cost anomalies (the "Majoration" warning in the BD MP tracking sheet):
+        each row's cost_per_unit_base is compared against that product+unit's weighted
+        average cost across every *other* confirmed receipt -- a receipt priced >15% above
+        that baseline is_cost_anomaly=True. Requires at least one other receipt for the same
+        (product_id, uom_id) to have a baseline at all."""
         rows = self._connection.execute(
             """
-            SELECT l.product_id, l.uom_id, rl.quantity, r.invoice_date, rl.quantity * rl.cost_per_unit
+            SELECT r.id, l.product_id, l.uom_id, rl.quantity, r.invoice_date, rl.quantity * rl.cost_per_unit,
+                   r.currency_code, r.origin_country, po.is_import, po.supplier_id
             FROM procurement.purchase_order_receipt_lines rl
             JOIN procurement.purchase_order_receipts r ON r.id = rl.purchase_order_receipt_id AND r.tenant_id = rl.tenant_id
             JOIN procurement.purchase_order_lines l ON l.id = rl.purchase_order_line_id AND l.tenant_id = rl.tenant_id
+            JOIN procurement.purchase_orders po ON po.id = r.purchase_order_id AND po.tenant_id = r.tenant_id
             WHERE rl.tenant_id = %s AND r.status = 'confirmed'
             ORDER BY r.invoice_date
             """,
             (tenant_id,),
         ).fetchall()
+
+        rate_cache: dict = {}
+        decorated = []
+        for receipt_id, product_id, uom_id, quantity, invoice_date, total_cost, currency_code, origin_country, is_import, supplier_id in rows:
+            rate = self._base_currency_rate(tenant_id=tenant_id, currency_code=currency_code, as_of=invoice_date, cache=rate_cache)
+            decorated.append(
+                {
+                    "receipt_id": receipt_id,
+                    "product_id": product_id,
+                    "uom_id": uom_id,
+                    "quantity": float(quantity),
+                    "invoice_date": invoice_date.isoformat() if invoice_date else None,
+                    "total_cost": float(total_cost),
+                    "currency_code": currency_code,
+                    "total_cost_base": float(total_cost) * rate,
+                    "base_currency": BASE_CURRENCY,
+                    "origin_country": origin_country,
+                    "is_import": is_import,
+                    "supplier_id": supplier_id,
+                }
+            )
+
+        # (product_id, uom_id) -> running totals, to derive each row's "every OTHER receipt"
+        # baseline by subtracting its own contribution back out.
+        totals: dict[tuple[str, str], dict] = {}
+        for row in decorated:
+            key = (row["product_id"], row["uom_id"])
+            bucket = totals.setdefault(key, {"quantity": 0.0, "cost_base": 0.0})
+            bucket["quantity"] += row["quantity"]
+            bucket["cost_base"] += row["total_cost_base"]
+
+        for row in decorated:
+            cost_per_unit_base = row["total_cost_base"] / row["quantity"] if row["quantity"] else 0.0
+            bucket = totals[(row["product_id"], row["uom_id"])]
+            baseline_quantity = bucket["quantity"] - row["quantity"]
+            baseline_avg = (bucket["cost_base"] - row["total_cost_base"]) / baseline_quantity if baseline_quantity > 0 else None
+            deviation_pct, is_anomaly = compute_cost_anomaly(cost_per_unit=cost_per_unit_base, baseline_avg_cost_per_unit=baseline_avg)
+            row["cost_per_unit_base"] = cost_per_unit_base
+            row["baseline_avg_cost_per_unit"] = baseline_avg
+            row["cost_deviation_pct"] = deviation_pct
+            row["is_cost_anomaly"] = is_anomaly
+
+        return decorated
+
+    def cost_summary(self, *, tenant_id: str) -> list[dict]:
+        """Per (material, unit, origin, import-vs-local) landed cost, converted to
+        BASE_CURRENCY so a Mali CFA receipt and a Turkiye EUR receipt for the same semoule
+        are actually comparable -- averaging raw cost_per_unit across currencies was
+        meaningless. Grouping includes uom_id too: a product ordered in tons on one order
+        and kg on another must not have those cost_per_unit values blended, or the average
+        is off by the unit ratio. Reports both the average and the best (lowest) cost/unit
+        seen in the group, at line granularity, so "what's the cheapest this material has
+        ever landed at" (point 5 of the MP cost plan) is answerable directly from this
+        endpoint."""
+        rows = self._connection.execute(
+            """
+            SELECT l.product_id, l.uom_id, r.origin_country, po.is_import, rl.quantity, rl.cost_per_unit,
+                   r.currency_code, r.invoice_date, r.id
+            FROM procurement.purchase_order_receipt_lines rl
+            JOIN procurement.purchase_order_receipts r ON r.id = rl.purchase_order_receipt_id AND r.tenant_id = rl.tenant_id
+            JOIN procurement.purchase_order_lines l ON l.id = rl.purchase_order_line_id AND l.tenant_id = rl.tenant_id
+            JOIN procurement.purchase_orders po ON po.id = r.purchase_order_id AND po.tenant_id = r.tenant_id
+            WHERE rl.tenant_id = %s AND r.status = 'confirmed'
+            """,
+            (tenant_id,),
+        ).fetchall()
+
+        rate_cache: dict = {}
+        groups: dict[tuple[str, str, str | None, bool], dict] = {}
+        for product_id, uom_id, origin_country, is_import, quantity, cost_per_unit, currency_code, invoice_date, receipt_id in rows:
+            rate = self._base_currency_rate(tenant_id=tenant_id, currency_code=currency_code, as_of=invoice_date, cache=rate_cache)
+            cost_per_unit_base = float(cost_per_unit) * rate
+            key = (product_id, uom_id, origin_country, is_import)
+            bucket = groups.setdefault(key, {"total_quantity": 0.0, "total_cost_base": 0.0, "best_cost_per_unit": None, "receipt_ids": set()})
+            bucket["total_quantity"] += float(quantity)
+            bucket["total_cost_base"] += float(quantity) * cost_per_unit_base
+            if bucket["best_cost_per_unit"] is None or cost_per_unit_base < bucket["best_cost_per_unit"]:
+                bucket["best_cost_per_unit"] = cost_per_unit_base
+            bucket["receipt_ids"].add(receipt_id)
+
         return [
             {
                 "product_id": product_id,
                 "uom_id": uom_id,
-                "quantity": float(quantity),
-                "invoice_date": invoice_date.isoformat() if invoice_date else None,
-                "total_cost": float(total_cost),
-            }
-            for product_id, uom_id, quantity, invoice_date, total_cost in rows
-        ]
-
-    def cost_summary(self, *, tenant_id: str) -> list[dict]:
-        rows = self._connection.execute(
-            """
-            SELECT l.product_id, r.origin_country,
-                   SUM(rl.quantity),
-                   AVG(rl.cost_per_unit),
-                   COUNT(DISTINCT r.id)
-            FROM procurement.purchase_order_receipt_lines rl
-            JOIN procurement.purchase_order_receipts r ON r.id = rl.purchase_order_receipt_id AND r.tenant_id = rl.tenant_id
-            JOIN procurement.purchase_order_lines l ON l.id = rl.purchase_order_line_id AND l.tenant_id = rl.tenant_id
-            WHERE rl.tenant_id = %s AND r.status = 'confirmed'
-            GROUP BY l.product_id, r.origin_country
-            ORDER BY l.product_id, r.origin_country
-            """,
-            (tenant_id,),
-        ).fetchall()
-        return [
-            {
-                "product_id": product_id,
                 "origin_country": origin_country,
-                "total_quantity": float(total_quantity),
-                "average_cost_per_unit": float(average_cost_per_unit),
-                "receipt_count": receipt_count,
+                "is_import": is_import,
+                "total_quantity": bucket["total_quantity"],
+                "average_cost_per_unit": bucket["total_cost_base"] / bucket["total_quantity"] if bucket["total_quantity"] else 0.0,
+                "best_cost_per_unit": bucket["best_cost_per_unit"],
+                "receipt_count": len(bucket["receipt_ids"]),
+                "base_currency": BASE_CURRENCY,
             }
-            for product_id, origin_country, total_quantity, average_cost_per_unit, receipt_count in rows
+            for (product_id, uom_id, origin_country, is_import), bucket in sorted(groups.items(), key=lambda kv: (kv[0][0], kv[0][2] or ""))
         ]

@@ -22,8 +22,74 @@ import {
 
 const CONVERSATIONS_QUERY_KEY = ["production", "ia-assistant", "conversations"] as const;
 
+// One group per thing the assistant can actually ground an answer in -- Production
+// maps to the four production tools, Stock PF to get_finished_goods_stock (see
+// TOOL_DECLARATIONS in ia_assistant_service.py). Grouped by domain rather than one
+// flat list so a supervisor can scan straight to the kind of question they have.
+const SUGGESTION_GROUPS: { title: TranslationKey; prompts: TranslationKey[] }[] = [
+  {
+    title: "production.iaAssistant.suggestions.production",
+    prompts: [
+      "production.iaAssistant.suggestions.production.yieldWater",
+      "production.iaAssistant.suggestions.production.teamComparison",
+      "production.iaAssistant.suggestions.production.machinePerformance",
+      "production.iaAssistant.suggestions.production.downtimeReasons",
+      "production.iaAssistant.suggestions.production.improveYield",
+    ],
+  },
+  {
+    title: "production.iaAssistant.suggestions.stockPf",
+    prompts: [
+      "production.iaAssistant.suggestions.stockPf.overview",
+      "production.iaAssistant.suggestions.stockPf.available",
+      "production.iaAssistant.suggestions.stockPf.reserved",
+      "production.iaAssistant.suggestions.stockPf.lookup",
+    ],
+  },
+];
+
 function conversationLabel(conversation: IaAssistantConversation): string {
   return conversation.title || new Date(conversation.updated_at).toLocaleString();
+}
+
+function SuggestionsPanel({
+  t,
+  onPick,
+  disabled,
+}: {
+  t: (key: TranslationKey) => string;
+  onPick: (prompt: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <Card className="h-fit">
+      <CardContent className="space-y-4 p-3">
+        <p className="flex items-center gap-1.5 px-1 text-xs font-medium text-foreground">
+          <Sparkles className="h-3.5 w-3.5" />
+          {t("production.iaAssistant.suggestions.title")}
+        </p>
+        {SUGGESTION_GROUPS.map((group) => (
+          <div key={group.title} className="space-y-1">
+            <p className="px-1 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">{t(group.title)}</p>
+            <ul className="space-y-0.5">
+              {group.prompts.map((key) => (
+                <li key={key}>
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onPick(t(key))}
+                    className="w-full rounded-md px-2 py-1.5 text-left text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-primary disabled:pointer-events-none disabled:opacity-50"
+                  >
+                    {t(key)}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+      </CardContent>
+    </Card>
+  );
 }
 
 export function IaAssistantTab() {
@@ -134,7 +200,7 @@ export function IaAssistantTab() {
   return (
     <div className="space-y-6">
       <PageHeader t={t} />
-      <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }} className="grid grid-cols-1 gap-4 lg:grid-cols-[260px_1fr]">
+      <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }} className="grid grid-cols-1 gap-4 lg:grid-cols-[220px_1fr_240px]">
       <Card className="h-fit">
         <CardContent className="space-y-2 p-3">
           <Button variant="outline" size="sm" className="w-full justify-start" onClick={handleNewConversation} disabled={createMutation.isPending}>
@@ -187,12 +253,6 @@ export function IaAssistantTab() {
                 icon={<Sparkles className="h-5 w-5" />}
                 title={t("production.iaAssistant.empty.title")}
                 description={t("production.iaAssistant.empty.description")}
-                action={
-                  <Button size="sm" onClick={() => handleSend(t("production.iaAssistant.suggestPrompt"))}>
-                    <Sparkles className="h-3.5 w-3.5" />
-                    {t("production.iaAssistant.suggestAction")}
-                  </Button>
-                }
               />
             ) : loadingMessages ? (
               <div className="space-y-3">
@@ -204,12 +264,6 @@ export function IaAssistantTab() {
                 icon={<Sparkles className="h-5 w-5" />}
                 title={t("production.iaAssistant.empty.title")}
                 description={t("production.iaAssistant.empty.description")}
-                action={
-                  <Button size="sm" onClick={() => handleSend(t("production.iaAssistant.suggestPrompt"))}>
-                    <Sparkles className="h-3.5 w-3.5" />
-                    {t("production.iaAssistant.suggestAction")}
-                  </Button>
-                }
               />
             ) : (
               <div className="space-y-3">
@@ -269,6 +323,8 @@ export function IaAssistantTab() {
           </form>
         </CardContent>
       </Card>
+
+      <SuggestionsPanel t={t} onPick={handleSend} disabled={sendMutation.isPending} />
       </motion.div>
     </div>
   );

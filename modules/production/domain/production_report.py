@@ -70,6 +70,41 @@ WASTE_CATEGORIES_BY_REPORT_TYPE = {
 }
 
 
+DOWNTIME_MOTIFS = (
+    "format_change",
+    "cleaning_extruder",
+    "cleaning_dryer",
+    "scheduled_maintenance",
+    "team_break",
+    "end_of_production",
+    "extruder_failure",
+    "die_jam",
+    "dryer_failure",
+    "cutter_failure",
+    "packaging_failure",
+    "film_jam",
+    "conveyor_failure",
+    "electrical_failure",
+    "pneumatic_failure",
+    "steam_failure",
+    "semolina_shortage",
+    "water_shortage",
+    "dough_nonconformity",
+    "qc_hold",
+    "packaging_supply_shortage",
+    "operator_shortage",
+    "work_order_missing",
+    "security_incident",
+    "product_evacuation_pending",
+    "other",
+)
+
+DOWNTIME_MOTIFS_BY_REPORT_TYPE = {
+    "daily": DOWNTIME_MOTIFS,
+    "conditionnement": DOWNTIME_MOTIFS,
+}
+
+
 @dataclass(frozen=True)
 class WasteLine:
     """One kind of waste on one report.
@@ -203,26 +238,46 @@ class ConditionnementReportDetail:
     packets_counted: float = 0
     film_quantity: float = 0
     carton_quantity: float = 0
+    # The part of carton_quantity that never held sellable product -- empty or
+    # damaged cartons the line still built and counted, but did not fill. Kept
+    # apart from the waste_lines list (a category/product/quantity/note record
+    # of *consumed items*) because this is a subset of an existing count, not a
+    # separate consumption: the carton blanks were already deducted through
+    # carton_quantity itself. Subtracted from carton_quantity everywhere that
+    # count feeds finished-goods stock or the packaging ecart, so a report that
+    # says "8 of these were empty" is not also read back as 8 lost packets.
+    waste_carton_quantity: float = 0
+    # Deprecated: superseded by scotch_quantity/ruban_quantity, which split what
+    # this single field used to conflate (see the migration 0039 comment and the
+    # SCOTCH/RUBAN tag split in scripts/fix_packaging_product_tags_and_family.py).
+    # No longer written by the frontend; kept only so old rows still read back.
     tape_quantity: float = 0
+    scotch_quantity: float = 0
+    ruban_quantity: float = 0
     machine_speed: float | None = None
     production_minutes: int = 0
     downtime_minutes: int = 0
     downtime_reason: str | None = None
+    downtime_note: str | None = None
     lot_number: str | None = None
     dlc_date: datetime.date | None = None
     # Which packaging products these figures consume, and the stores involved. The
     # finished product is the OF's own product and is deliberately not repeated.
     film_product_id: str | None = None
     carton_product_id: str | None = None
-    tape_product_id: str | None = None
+    tape_product_id: str | None = None  # deprecated, see tape_quantity
+    scotch_product_id: str | None = None
+    ruban_product_id: str | None = None
     # Which fournisseur each packaging item came from. Informational only, like
-    # fuel/gasoil_supplier_id on the daily report: film, carton and ruban can each
-    # come from more than one supplier, and stock itself does not split by
-    # supplier, so this is the report's own record of who delivered the batch
+    # fuel/gasoil_supplier_id on the daily report: film, carton, scotch and ruban
+    # can each come from more than one supplier, and stock itself does not split
+    # by supplier, so this is the report's own record of who delivered the batch
     # actually consumed rather than a stock lot reference.
     film_supplier_id: str | None = None
     carton_supplier_id: str | None = None
-    tape_supplier_id: str | None = None
+    tape_supplier_id: str | None = None  # deprecated, see tape_quantity
+    scotch_supplier_id: str | None = None
+    ruban_supplier_id: str | None = None
     packaging_location_id: str | None = None
     finished_goods_location_id: str | None = None
     # The daily report whose output this run packaged. Always optional: a team
@@ -297,18 +352,30 @@ def validate_waste_lines(lines: tuple[WasteLine, ...], *, report_type: str) -> R
     return Ok(None)
 
 
-def validate_downtime_lines(lines: tuple[DowntimeLine, ...]) -> Result[None]:
+def validate_downtime_lines(lines: tuple[DowntimeLine, ...], *, report_type: str = "daily") -> Result[None]:
     """Check a report's arrêt list.
 
     Each line keeps the same strictness the single field used to have: a
     stoppage of zero minutes is not a stoppage, and one with minutes but no
-    motif cannot be judged by whoever reads the report later.
+    motif cannot be judged by whoever reads the report later. The motif must
+    be one of the allowed values for this report type — free text is rejected
+    to enforce consistency across shifts and avoid typos splitting one reason
+    across multiple spellings.
     """
+    allowed = DOWNTIME_MOTIFS_BY_REPORT_TYPE.get(report_type)
+    if allowed is None:
+        return Err("INVALID_REPORT_TYPE", f"report_type must be one of {sorted(VALID_REPORT_TYPES)}")
+
     for line in lines:
         if line.minutes < 0:
             return Err("INVALID_DURATION", "a downtime line cannot have negative minutes")
         if line.minutes > 0 and not (line.motif or "").strip():
             return Err("MISSING_DOWNTIME_REASON", "a downtime line needs a motif when it records minutes")
+        if line.motif and line.motif not in allowed:
+            return Err(
+                "INVALID_DOWNTIME_MOTIF",
+                f"motif must be one of {sorted(allowed)}, got {line.motif!r}",
+            )
     return Ok(None)
 
 
@@ -354,7 +421,7 @@ def validate_daily_detail(detail: DailyReportDetail) -> Result[None]:
         # A shift crossing midnight is real, but it is entered as two reports —
         # one per report_date — so within one report the end never precedes the start.
         return Err("INVALID_TIME_RANGE", "end_time cannot be before start_time")
-    downtime_check = validate_downtime_lines(detail.downtime_lines)
+    downtime_check = validate_downtime_lines(detail.downtime_lines, report_type="daily")
     if isinstance(downtime_check, Err):
         return downtime_check
     semolina_check = validate_semolina_lines(detail.semolina_lines)
@@ -368,7 +435,9 @@ CONDITIONNEMENT_QUANTITY_FIELDS = (
     "packets_counted",
     "film_quantity",
     "carton_quantity",
-    "tape_quantity",
+    "waste_carton_quantity",
+    "scotch_quantity",
+    "ruban_quantity",
 )
 
 
@@ -382,6 +451,10 @@ def validate_conditionnement_detail(detail: ConditionnementReportDetail) -> Resu
     for field in CONDITIONNEMENT_QUANTITY_FIELDS:
         if getattr(detail, field) < 0:
             return Err("INVALID_QUANTITY", f"{field} cannot be negative")
+    if detail.waste_carton_quantity > detail.carton_quantity:
+        return Err(
+            "INVALID_QUANTITY", "waste_carton_quantity cannot exceed carton_quantity -- it is a subset of it"
+        )
     if detail.machine_speed is not None and detail.machine_speed < 0:
         return Err("INVALID_QUANTITY", "machine_speed cannot be negative")
     if detail.production_minutes < 0:
@@ -390,6 +463,12 @@ def validate_conditionnement_detail(detail: ConditionnementReportDetail) -> Resu
         return Err("INVALID_DURATION", "downtime_minutes cannot be negative")
     if detail.downtime_minutes > 0 and not (detail.downtime_reason or "").strip():
         return Err("MISSING_DOWNTIME_REASON", "a downtime reason is required when downtime minutes are recorded")
+    allowed_motifs = DOWNTIME_MOTIFS_BY_REPORT_TYPE.get("conditionnement", ())
+    if detail.downtime_reason and detail.downtime_reason not in allowed_motifs:
+        return Err(
+            "INVALID_DOWNTIME_MOTIF",
+            f"motif must be one of {sorted(allowed_motifs)}, got {detail.downtime_reason!r}",
+        )
 
     has_lot = bool((detail.lot_number or "").strip())
     if has_lot != (detail.dlc_date is not None):
@@ -445,7 +524,8 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
     for quantity_field, product_field, label in (
         ("film_quantity", "film_product_id", "film"),
         ("carton_quantity", "carton_product_id", "carton"),
-        ("tape_quantity", "tape_product_id", "tape"),
+        ("scotch_quantity", "scotch_product_id", "scotch"),
+        ("ruban_quantity", "ruban_product_id", "ruban"),
     ):
         if getattr(detail, quantity_field) > 0:
             if not (getattr(detail, product_field) or "").strip():

@@ -1,10 +1,13 @@
 import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Cog, Users } from "lucide-react";
+import { Cog, FileSpreadsheet, PackageSearch, TrendingUp, Users } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
 import { TeamPerformanceTab } from "./TeamPerformanceTab";
 import { MachinePerformanceTab } from "./MachinePerformanceTab";
+import { ConsumptionReportTab } from "./ConsumptionReportTab";
+import { ProductionRecapExportTab } from "./ProductionRecapExportTab";
+import { PriceHistoryTab } from "./PriceHistoryTab";
 
 // Cross-module KPIs — anything that reads more than one module's data to answer
 // one question (here: production's reports and qc's quality reports, by team)
@@ -13,9 +16,24 @@ import { MachinePerformanceTab } from "./MachinePerformanceTab";
 // Machine performance is single-module (production only), but sits beside team
 // performance rather than inside a Production tab because it answers the same
 // kind of cross-cutting "who/what is producing well" question, at a different grain.
+// Consumption-by-supplier reads production's report tables *and* procurement's
+// order history (for costing), so it belongs here for the same reason.
 const TABS = [
   { value: "team-performance", labelKey: "analytics.tabs.teamPerformance", icon: Users, Component: TeamPerformanceTab },
   { value: "machine-performance", labelKey: "analytics.tabs.machinePerformance", icon: Cog, Component: MachinePerformanceTab },
+  {
+    value: "consumption-report",
+    labelKey: "analytics.tabs.consumptionReport",
+    icon: PackageSearch,
+    Component: ConsumptionReportTab,
+  },
+  {
+    value: "production-recap",
+    labelKey: "analytics.tabs.productionRecap",
+    icon: FileSpreadsheet,
+    Component: ProductionRecapExportTab,
+  },
+  { value: "price-history", labelKey: "analytics.tabs.priceHistory", icon: TrendingUp, Component: PriceHistoryTab },
 ] as const;
 
 type TabValue = (typeof TABS)[number]["value"];

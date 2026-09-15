@@ -215,6 +215,25 @@ def list_quality_team_performance(
         )
 
 
+@router.get("/quality-reports/index-trend")
+def list_quality_index_trend(
+    grain: str = Query(default="week"),
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("qc.view_quality_reports")),
+) -> list[dict]:
+    """Average process indices from validated reports, bucketed by period."""
+    if grain not in QualityReportService.GRAINS:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"code": "INVALID_GRAIN", "message": f"grain must be one of {QualityReportService.GRAINS}"},
+        )
+    with get_connection() as connection:
+        return QualityReportService(connection).index_trend(
+            tenant_id=tenant.tenant_id, grain=grain, date_from=date_from, date_to=date_to
+        )
+
+
 @router.get("/quality-reports/{report_id}")
 def get_quality_report(
     report_id: str, tenant: TenantContext = Depends(require_permission("qc.view_quality_reports"))
@@ -491,6 +510,7 @@ def list_non_conformities(
 
 @router.get("/non-conformities/disposition-summary")
 def get_disposition_summary(
+    of_id: str | None = Query(default=None),
     date_from: str | None = Query(default=None),
     date_to: str | None = Query(default=None),
     tenant: TenantContext = Depends(require_permission("qc.view_non_conformities")),
@@ -498,7 +518,7 @@ def get_disposition_summary(
     """Where rejected product ended up — regrind, déchet, rework, back to stock."""
     with get_connection() as connection:
         return NonConformityService(connection).disposition_summary(
-            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to
+            tenant_id=tenant.tenant_id, of_id=of_id, date_from=date_from, date_to=date_to
         )
 
 

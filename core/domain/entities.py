@@ -66,6 +66,7 @@ def validate_quantity_for_uom(quantity: float, uom: UnitOfMeasure) -> Result[Non
 
 LOT_SERIAL_TRACKING_MODES = {"none", "lot", "serial"}
 EXPIRY_DATE_POLICIES = {"none", "sell_by", "eat_by"}
+PRODUCT_TYPES = {"PL", "PC"}
 
 
 @dataclass(frozen=True)
@@ -74,12 +75,18 @@ class Product:
     tenant_id: str
     sku: str
     name: str
+    product_type: str
     uom_id: str
+    product_family: str | None = None
     net_weight_grams: float | None = None
+    empty_packaging_weight_grams: float | None = None
+    sachets_per_package: float | None = None
     # Phase 9, decision 20. Nullable because some finished goods have no carton
     # at all -- a 4.54 kg sac is its own selling unit -- so NULL means "no carton
     # line", not "not filled in yet".
     packets_per_carton: float | None = None
+    carton_weight_grams: float | None = None
+    cartons_per_pallet: float | None = None
     parent_product_id: str | None = None
     is_sellable: bool = True
     is_purchasable: bool = True
@@ -97,15 +104,24 @@ class Product:
     accounting_code_sale_export: str | None = None
     accounting_code_purchase: str | None = None
     accounting_code_purchase_import: str | None = None
+    # Populated only by list_products (a single aggregate query for the whole
+    # tenant) -- other lookups (get_product, create/update) leave this empty
+    # rather than paying for a per-product tag query they don't need.
+    tag_ids: tuple[str, ...] = ()
 
 
 def validate_new_product(
     *,
     sku: str,
     name: str,
+    product_type: str,
     uom_id: str,
     net_weight_grams: float | None = None,
+    empty_packaging_weight_grams: float | None = None,
+    sachets_per_package: float | None = None,
     packets_per_carton: float | None = None,
+    carton_weight_grams: float | None = None,
+    cartons_per_pallet: float | None = None,
     lot_serial_tracking: str = "none",
     expiry_date_policy: str = "none",
     selling_price: float = 0,
@@ -117,12 +133,22 @@ def validate_new_product(
         return Err("INVALID_SKU", "sku is required")
     if not name.strip():
         return Err("INVALID_NAME", "name is required")
+    if product_type not in PRODUCT_TYPES:
+        return Err("INVALID_PRODUCT_TYPE", f"product_type must be one of {sorted(PRODUCT_TYPES)}")
     if not uom_id.strip():
         return Err("INVALID_UOM", "uom_id is required")
     if net_weight_grams is not None and net_weight_grams <= 0:
         return Err("INVALID_WEIGHT", "net_weight_grams must be positive")
+    if empty_packaging_weight_grams is not None and empty_packaging_weight_grams <= 0:
+        return Err("INVALID_WEIGHT", "empty_packaging_weight_grams must be positive")
+    if sachets_per_package is not None and sachets_per_package <= 0:
+        return Err("INVALID_QUANTITY", "sachets_per_package must be positive")
     if packets_per_carton is not None and packets_per_carton <= 0:
         return Err("INVALID_PACKETS_PER_CARTON", "packets_per_carton must be positive")
+    if carton_weight_grams is not None and carton_weight_grams <= 0:
+        return Err("INVALID_WEIGHT", "carton_weight_grams must be positive")
+    if cartons_per_pallet is not None and cartons_per_pallet <= 0:
+        return Err("INVALID_QUANTITY", "cartons_per_pallet must be positive")
     if lot_serial_tracking not in LOT_SERIAL_TRACKING_MODES:
         return Err("INVALID_LOT_SERIAL_TRACKING", f"lot_serial_tracking must be one of {sorted(LOT_SERIAL_TRACKING_MODES)}")
     if expiry_date_policy not in EXPIRY_DATE_POLICIES:

@@ -38,6 +38,7 @@ class CreatePurchaseOrderRequest(BaseModel):
     order_date: datetime.date | None = None
     expected_date: datetime.date | None = None
     notes: str | None = None
+    is_import: bool = False
 
 
 class AddPurchaseOrderLineRequest(BaseModel):
@@ -54,6 +55,7 @@ class UpdatePurchaseOrderRequest(BaseModel):
     expected_date: datetime.date | None = None
     currency_code: str | None = None
     notes: str | None = None
+    is_import: bool | None = None
 
 
 class ReceiptLineRequest(BaseModel):
@@ -78,6 +80,7 @@ class CreateReceiptRequest(BaseModel):
     transit_fee: float = 0
     transport_fee: float = 0
     customs_duty: float = 0
+    handling_fee: float = 0
 
 
 class ConfirmReceiptRequest(BaseModel):
@@ -93,6 +96,7 @@ def _order_response(order: PurchaseOrder) -> dict:
         "expected_date": order.expected_date,
         "currency_code": order.currency_code,
         "notes": order.notes,
+        "is_import": order.is_import,
     }
 
 
@@ -129,6 +133,7 @@ def _receipt_response(receipt: PurchaseOrderReceipt) -> dict:
         "transit_fee": receipt.transit_fee,
         "transport_fee": receipt.transport_fee,
         "customs_duty": receipt.customs_duty,
+        "handling_fee": receipt.handling_fee,
         "total_cost": receipt.total_cost,
         "confirmed_at": receipt.confirmed_at,
     }
@@ -175,6 +180,7 @@ def create_purchase_order(
             order_date=body.order_date,
             expected_date=body.expected_date,
             notes=body.notes,
+            is_import=body.is_import,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -302,6 +308,7 @@ def update_purchase_order(
             expected_date=body.expected_date,
             currency_code=body.currency_code,
             notes=body.notes,
+            is_import=body.is_import,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -340,6 +347,7 @@ def create_purchase_order_receipt(
             transit_fee=body.transit_fee,
             transport_fee=body.transport_fee,
             customs_duty=body.customs_duty,
+            handling_fee=body.handling_fee,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -356,6 +364,18 @@ def list_purchase_order_receipts(
         service = PurchaseOrderService(connection)
         receipts = service.list_receipts(tenant_id=tenant.tenant_id, purchase_order_id=order_id)
     return [_receipt_response(receipt) for receipt in receipts]
+
+
+@router.get("/receipts/{receipt_id}")
+def get_purchase_order_receipt(
+    receipt_id: str, tenant: TenantContext = Depends(require_permission("procurement.view_purchase_orders"))
+) -> dict:
+    with get_connection() as connection:
+        service = PurchaseOrderService(connection)
+        receipt = service.get_receipt(tenant_id=tenant.tenant_id, receipt_id=receipt_id)
+        if receipt is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"purchase order receipt {receipt_id} not found"})
+    return _receipt_response(receipt)
 
 
 @router.get("/receipts/{receipt_id}/lines")
@@ -411,6 +431,31 @@ def list_last_prices(
         }
         for price in prices
     ]
+
+
+@router.get("/price-history")
+def list_price_history(
+    product_id: str,
+    supplier_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("procurement.view_purchase_orders")),
+) -> list[dict]:
+    """Every recorded purchase-order price for one product, oldest to newest,
+    converted to CFA -- the price *trend*, unlike /last-prices' single latest figure."""
+    with get_connection() as connection:
+        service = PurchaseOrderService(connection)
+        return service.list_price_history(tenant_id=tenant.tenant_id, product_id=product_id, supplier_id=supplier_id)
+
+
+@router.get("/supplier-leaderboard")
+def get_supplier_leaderboard(
+    tenant: TenantContext = Depends(require_permission("procurement.view_purchase_orders")),
+) -> list[dict]:
+    """Ranks every supplier ever ordered from by how often they held the lowest
+    recorded price across products -- the aggregate view behind price
+    history's per-product best-supplier highlight."""
+    with get_connection() as connection:
+        service = PurchaseOrderService(connection)
+        return service.list_supplier_leaderboard(tenant_id=tenant.tenant_id)
 
 
 @router.get("/receipt-lines")

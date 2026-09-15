@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import { motion } from "framer-motion";
@@ -32,7 +33,9 @@ import {
   getPreCloseCheck,
   getWorkOrderConsolidation,
   getWorkOrderPackagingVariance,
+  listMolds,
   listProducts,
+  listRegrindDefaults,
   listReports,
   listWorkOrders,
   resumeWorkOrder,
@@ -40,8 +43,19 @@ import {
   suspendWorkOrder,
   type ProductionReport,
 } from "./api";
-import { listNonConformities, listQualityReports } from "../qc/api";
-import { listUoms } from "../warehouse/api";
+import { DailyReportDialog } from "./DailyReportsTab";
+import { PackingReportDialog } from "./ConditionnementTab";
+import {
+  getDispositionSummary,
+  listNonConformities,
+  listQualityReports,
+  type NonConformity,
+  type QualityReport,
+} from "../qc/api";
+import { QualityReportDialog } from "../qc/QualityReportsTab";
+import { NonConformityDetailDialog } from "../qc/NonConformityDetailDialog";
+import { listLocations, listUoms } from "../warehouse/api";
+import { listPartners } from "../partners/api";
 import { UTILITY_UNITS, formatDuration, formatQuantity, productUnit } from "../../lib/units";
 
 export function WorkOrderDetailsPage() {
@@ -83,6 +97,11 @@ export function WorkOrderDetailsPage() {
     queryFn: () => listNonConformities(token, { of_id: workOrderId }),
     enabled: Boolean(workOrderId),
   });
+  const { data: dispositionSummary } = useQuery({
+    queryKey: ["qc", "disposition-summary", "of", workOrderId],
+    queryFn: () => getDispositionSummary(token, { of_id: workOrderId }),
+    enabled: Boolean(workOrderId),
+  });
   const { data: products = [] } = useQuery({
     queryKey: ["core", "products"],
     queryFn: () => listProducts(token),
@@ -93,6 +112,26 @@ export function WorkOrderDetailsPage() {
     queryFn: () => getPreCloseCheck(token, workOrderId),
     enabled: Boolean(workOrderId),
   });
+
+  // Reference data a report's own detail dialog needs — fetched here (rather
+  // than only inside the tabs that list reports) so a report opened from this
+  // page renders the same dialog in place, instead of navigating off to the
+  // Production or Quality tab and losing this view.
+  const { data: locations = [] } = useQuery({ queryKey: ["warehouse", "locations"], queryFn: () => listLocations(token) });
+  const { data: molds = [] } = useQuery({ queryKey: ["production", "molds"], queryFn: () => listMolds(token) });
+  const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
+  const suppliers = partners.filter((p) => p.kind === "supplier" || p.kind === "both");
+  const { data: regrindDefaults = [] } = useQuery({
+    queryKey: ["production", "regrind-defaults"],
+    queryFn: () => listRegrindDefaults(token),
+  });
+  const regrindOutputProductId = regrindDefaults.find((d) => d.input_product_id === null)?.output_product_id ?? null;
+
+  const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
+  const [openQualityReport, setOpenQualityReport] = useState<QualityReport | null>(null);
+  const [openNc, setOpenNc] = useState<NonConformity | null>(null);
+  const orderProduct = order ? products.find((p) => p.id === order.product_id) : undefined;
+  const packetsPerCarton = orderProduct?.packets_per_carton && orderProduct.packets_per_carton > 0 ? orderProduct.packets_per_carton : null;
 
   function invalidate() {
     for (const key of [
@@ -183,7 +222,8 @@ export function WorkOrderDetailsPage() {
   const regrindUom = productUnit(consolidation?.raw_material.regrind_input_product_id, products, uoms);
   const filmUom = productUnit(consolidation?.packaging.film_product_id, products, uoms);
   const cartonUom = productUnit(consolidation?.packaging.carton_product_id, products, uoms);
-  const tapeUom = productUnit(consolidation?.packaging.tape_product_id, products, uoms);
+  const scotchUom = productUnit(consolidation?.packaging.scotch_product_id, products, uoms);
+  const rubanUom = productUnit(consolidation?.packaging.ruban_product_id, products, uoms);
   const regrindWasteUom = productUnit(consolidation?.waste.regrind.product_id, products, uoms);
   const productName = (id: string | null) =>
     (id && products.find((p) => p.id === id)?.name) || t("production.waste.unknownItem");
@@ -358,7 +398,7 @@ export function WorkOrderDetailsPage() {
             <CardTitle>{t("production.ofDetails.packagingVariance.title")}</CardTitle>
           </CardHeader>
           <CardContent className="space-y-2">
-            <PackagingVariancePanel variance={packagingVariance} net />
+            <PackagingVariancePanel variance={packagingVariance} net dispositionSummary={dispositionSummary} />
             {packagingVariance.parameters_varied && (
               <p className="text-xs text-muted-foreground">
                 {t("production.packagingVariance.parametersVaried")}
@@ -398,9 +438,19 @@ export function WorkOrderDetailsPage() {
               unit: cartonUom,
             },
             {
-              label: t("production.conditionnement.field.tape"),
-              value: consolidation?.packaging.tape_quantity,
-              unit: tapeUom,
+              label: t("production.conditionnement.field.wasteCarton"),
+              value: consolidation?.packaging.waste_carton_quantity,
+              unit: cartonUom,
+            },
+            {
+              label: t("production.conditionnement.field.scotch"),
+              value: consolidation?.packaging.scotch_quantity,
+              unit: scotchUom,
+            },
+            {
+              label: t("production.conditionnement.field.ruban"),
+              value: consolidation?.packaging.ruban_quantity,
+              unit: rubanUom,
             },
           ]}
         />
@@ -459,13 +509,13 @@ export function WorkOrderDetailsPage() {
               />
             ) : (
               reports.map((report: ProductionReport) => (
-                // The tab the report lives on, with the report opened. Reading a
-                // shift's figures from the OF should not mean hunting for the row
-                // again on another screen.
-                <Link
+                // Opens right here rather than navigating to the Production
+                // tab, so closing it leaves the user on this OF's page.
+                <button
                   key={report.id}
-                  to={`/production?tab=${report.report_type === "daily" ? "daily-reports" : "conditionnement"}&report=${report.id}`}
-                  className="flex items-center gap-3 rounded-lg border border-border p-3 transition-colors hover:border-primary/30 hover:bg-muted/40"
+                  type="button"
+                  onClick={() => setOpenReport(report)}
+                  className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/40"
                 >
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -481,7 +531,7 @@ export function WorkOrderDetailsPage() {
                     </div>
                   </div>
                   <StatusBadge status={report.status} />
-                </Link>
+                </button>
               ))
             )}
             {reports.length > 0 && (
@@ -523,29 +573,41 @@ export function WorkOrderDetailsPage() {
             ) : (
               <div className="space-y-2">
                 {qualityReports.map((report) => (
-                  <Link
+                  <button
                     key={report.id}
-                    to={`/quality?tab=reports&report=${report.id}`}
-                    className="flex items-center gap-3 rounded-lg border border-border p-3 transition-colors hover:border-primary/30 hover:bg-muted/40"
+                    type="button"
+                    onClick={() => setOpenQualityReport(report)}
+                    className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/40"
                   >
                     <FlaskConical className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 text-sm">{report.report_date}</span>
+                    {report.revision > 1 && (
+                      <span className="flex items-center gap-1">
+                        <Badge variant="outline" className="text-xs">
+                          {t("production.ofDetails.quality.revisionLabel")} {report.revision}
+                        </Badge>
+                        <HelpTooltip text={t("production.ofDetails.quality.revisionHint")} />
+                      </span>
+                    )}
                     <StatusBadge status={report.status} />
-                  </Link>
+                  </button>
                 ))}
                 {nonConformities.map((nc) => (
-                  <Link
+                  <button
                     key={nc.id}
-                    to={`/quality?tab=non-conformities&nc=${nc.id}`}
-                    className="flex items-center gap-3 rounded-lg border border-border p-3 transition-colors hover:border-destructive/30 hover:bg-muted/40"
+                    type="button"
+                    onClick={() => setOpenNc(nc)}
+                    className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-destructive/30 hover:bg-muted/40"
                   >
                     <AlertTriangle className="h-4 w-4 shrink-0 text-destructive" />
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium">{nc.reference}</p>
-                      <p className="truncate text-xs text-muted-foreground">{nc.defect_type}</p>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {nc.defect_type} · {formatQuantity(nc.quantity)}
+                      </p>
                     </div>
                     <StatusBadge status={nc.status} />
-                  </Link>
+                  </button>
                 ))}
               </div>
             )}
@@ -556,6 +618,58 @@ export function WorkOrderDetailsPage() {
           </CardContent>
         </Card>
       </div>
+
+      {openReport &&
+        (openReport.report_type === "daily" ? (
+          <DailyReportDialog
+            key={openReport.id}
+            report={openReport}
+            reference={order.reference}
+            products={products}
+            locations={locations}
+            uoms={uoms}
+            workOrders={workOrders}
+            molds={molds}
+            regrindOutputProductId={regrindOutputProductId}
+            suppliers={suppliers}
+            onClose={() => setOpenReport(null)}
+          />
+        ) : (
+          <PackingReportDialog
+            key={openReport.id}
+            report={openReport}
+            reference={order.reference}
+            finishedProductId={order.product_id ?? undefined}
+            orderType={order.product_type}
+            products={products}
+            locations={locations}
+            uoms={uoms}
+            suppliers={suppliers}
+            onClose={() => setOpenReport(null)}
+          />
+        ))}
+
+      {openQualityReport && (
+        <QualityReportDialog
+          key={openQualityReport.id}
+          report={openQualityReport}
+          reference={order.reference}
+          packetsPerCarton={packetsPerCarton}
+          productId={order.product_id ?? undefined}
+          onClose={() => setOpenQualityReport(null)}
+        />
+      )}
+
+      {openNc && (
+        <NonConformityDetailDialog
+          nonConformity={openNc}
+          ofReference={order.reference}
+          products={products}
+          uoms={uoms}
+          locations={locations}
+          onClose={() => setOpenNc(null)}
+        />
+      )}
     </div>
   );
 }
@@ -602,8 +716,8 @@ function ConsolidationCard({
           </div>
         ) : null}
         <dl className="space-y-1.5">
-          {rows.map((row) => (
-            <div key={row.label} className="flex items-baseline justify-between gap-3">
+          {rows.map((row, index) => (
+            <div key={`${row.label}-${index}`} className="flex items-baseline justify-between gap-3">
               <dt className="flex items-center gap-1 text-sm text-muted-foreground">
                 {row.label}
                 {row.hint && <HelpTooltip text={row.hint} />}

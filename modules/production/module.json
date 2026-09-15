@@ -1,8 +1,8 @@
 {
   "name": "production",
-  "version": "0.10.0",
+  "version": "0.12.0",
   "depends": ["core"],
-  "optional_depends": ["warehouse", "qc", "maintenance"],
+  "optional_depends": ["warehouse", "qc", "maintenance", "procurement"],
   "provides_api": [
     "WorkOrderService",
     "ProductClassificationService",
@@ -19,7 +19,8 @@
     "PackagingVarianceService",
     "PackagingTolerancePolicyService",
     "TeamPerformanceService",
-    "MachinePerformanceService"
+    "MachinePerformanceService",
+    "ConsumptionReportService"
   ],
   "publishes_events": [
     "production.work_order.closed",

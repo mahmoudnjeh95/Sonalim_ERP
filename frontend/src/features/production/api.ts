@@ -1,4 +1,4 @@
-import { apiFetch } from "../../lib/api";
+import { apiFetch, ApiError } from "../../lib/api";
 
 // --- Products & units of measure -----------------------------------------
 
@@ -9,6 +9,13 @@ export interface Product {
   uom_id: string;
   net_weight_grams: number | null;
   packets_per_carton: number | null;
+  product_type: "PL" | "PC";
+  // Free-text; for a packaging product it marks a PC/PL-specific variant,
+  // null meaning it's generic and fits either (see the packaging-tag fix
+  // script for how this is populated).
+  product_family: string | null;
+  is_sellable: boolean;
+  tag_ids: string[];
 }
 
 export interface CreateProductInput {
@@ -683,7 +690,14 @@ export interface TeamPerformanceRow {
   production_minutes: number;
   downtime_minutes: number;
   waste_by_product: { product_id: string; quantity: number }[];
-  /** Semoule-side déchet only (daily report categories), by stage — where it came from. */
+  /**
+   * Semoule-side déchet only (daily report categories), by stage — where it
+   * came from. Always raw kilos (the form's own basis), never each stage's
+   * own item unit: `finished_product_conditioning` is usually logged against
+   * a finished-good item stocked in kg while the other five stages use bulk
+   * semoule stocked in tonnes, so converting each to its own unit would make
+   * stages look wildly different sizes once stacked/compared side by side.
+   */
   daily_waste_by_category: Partial<Record<WasteCategory, number>>;
   /** What the team declared as rebroyat over the same reports — recovered, not lost. */
   regrind_quantity: number;
@@ -743,6 +757,160 @@ export function listDowntimeReasons(token: string, params: { date_from?: string;
   return apiFetch<DowntimeReasonRow[]>(`/production/reports/downtime-reasons${suffix}`, { token });
 }
 
+// --- Consumption by supplier ---------------------------------------------
+//
+// Film/carton/scotch/ruban (from conditionnement reports) and gasoil/fuel
+// (from daily reports), grouped by category/month/PC-PL/fournisseur — the
+// report that replaces the plant's hand-built monthly spreadsheets. Ids
+// (product_id/supplier_id) are resolved to names client-side, same as every
+// other screen in this app.
+
+export type ConsumptionCategory = "film" | "carton" | "scotch" | "ruban" | "gasoil" | "fuel";
+
+export interface ConsumptionRow {
+  category: ConsumptionCategory;
+  month: string;
+  pc_pl: string | null;
+  product_id: string | null;
+  supplier_id: string | null;
+  quantity: number;
+  unit_price: number | null;
+  unit_price_currency: string | null;
+  cost: number | null;
+  /** False when no procurement order history exists for this supplier+product to cost it from. */
+  priced: boolean;
+}
+
+function consumptionQuery(params: { date_from?: string; date_to?: string; category?: ConsumptionCategory }) {
+  const query = new URLSearchParams();
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  if (params.category) query.set("category", params.category);
+  return query;
+}
+
+export function listConsumptionBySupplier(
+  token: string,
+  params: { date_from?: string; date_to?: string; category?: ConsumptionCategory } = {},
+) {
+  const query = consumptionQuery(params);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<ConsumptionRow[]>(`/production/reports/consumption-by-supplier${suffix}`, { token });
+}
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
+/** Downloads the same data as an .xlsx workbook laid out like the original
+ * spreadsheets — bypasses apiFetch since that always parses JSON. */
+export async function exportConsumptionBySupplier(
+  token: string,
+  params: { date_from?: string; date_to?: string; category?: ConsumptionCategory } = {},
+): Promise<Blob> {
+  const query = consumptionQuery(params);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(`${API_BASE_URL}/production/reports/consumption-by-supplier/export${suffix}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, "EXPORT_FAILED", response.statusText);
+  }
+  return response.blob();
+}
+
+export type ProductionRecapPeriod = "day" | "week" | "month";
+
+/** The full plant recap workbook (produit fini, consommations, coûts
+ * unitaires, achats, charges and coût de production) for one day, ISO week
+ * or calendar month anchored on `date` — see daily_recap_export.py. */
+export async function exportProductionRecap(
+  token: string,
+  params: { date: string; period: ProductionRecapPeriod },
+): Promise<Blob> {
+  const query = new URLSearchParams({ date: params.date, period: params.period });
+  const response = await fetch(`${API_BASE_URL}/production/reports/daily-recap/export?${query.toString()}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!response.ok) {
+    throw new ApiError(response.status, "EXPORT_FAILED", response.statusText);
+  }
+  return response.blob();
+}
+
+// --- Production recap analytics (always-on charts/tables) ----------------
+//
+// The JSON twin of the recap export above, for the dashboard that renders
+// inline instead of downloading -- see production_analytics_service.py.
+// Fixed charges (Salaire, Amortissement, Impôts, ...) are deliberately
+// absent here: they only exist once someone types them into the exported
+// workbook, so "variable_cost"/"cost_per_tonne" below means MP + emballage
+// only, never the export's full charges-included figure.
+
+export interface ProductionCostBreakdownEntry {
+  category: string;
+  cost: number;
+}
+
+export interface ProductionPeriodPoint {
+  date_from: string;
+  date_to: string;
+  label: string;
+  tonnage: number;
+  mp_cost: number | null;
+  packaging_cost: number | null;
+  /** null when mp_cost or packaging_cost is null (a row this period has no price yet) --
+   * never coerced to 0, since that would understate the true cost. */
+  variable_cost: number | null;
+  cost_per_tonne: number | null;
+  cartons: number;
+  packets: number;
+  cost_breakdown: ProductionCostBreakdownEntry[];
+}
+
+export interface ProductionCostAnomaly {
+  receipt_id: string;
+  product_id: string | null;
+  supplier_id: string | null;
+  invoice_date: string | null;
+  quantity: number;
+  cost_per_unit_base: number;
+  baseline_avg_cost_per_unit: number | null;
+  cost_deviation_pct: number | null;
+  is_cost_anomaly: boolean;
+}
+
+export interface ProductionAnalytics {
+  period: ProductionRecapPeriod;
+  period_phrase: string;
+  date_from: string;
+  date_to: string;
+  current: ProductionPeriodPoint;
+  trend: ProductionPeriodPoint[];
+  anomalies: ProductionCostAnomaly[];
+}
+
+export function getProductionAnalytics(token: string, params: { date: string; period: ProductionRecapPeriod }) {
+  const query = new URLSearchParams({ date: params.date, period: params.period });
+  return apiFetch<ProductionAnalytics>(`/production/reports/daily-recap/analytics?${query.toString()}`, { token });
+}
+
+/** Full granularity (reason x team x machine) -- a caller re-aggregates by
+ * whichever dimension it needs, rather than one endpoint per slice. */
+export interface DowntimeBreakdownRow {
+  reason: string;
+  team: string | null;
+  equipment_id: string | null;
+  minutes: number;
+  report_count: number;
+}
+
+export function listDowntimeBreakdown(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<DowntimeBreakdownRow[]>(`/production/reports/downtime-breakdown${suffix}`, { token });
+}
+
 // --- Recipe correlation ------------------------------------------------------
 //
 // Each shift's water dosage and flow rate against its own OF's yield —
@@ -773,7 +941,7 @@ export interface RecipeCorrelationInsight {
   text: string | null;
 }
 
-/** Generated on demand (never on page load) -- each call is a real Gemini request against the free tier's quota. */
+/** Generated on demand (never on page load) -- each call is a real Groq request against the free tier's quota. */
 export function getRecipeCorrelationInsight(token: string, locale: string) {
   return apiFetch<RecipeCorrelationInsight>(
     `/production/work-orders/recipe-correlation/insight?locale=${encodeURIComponent(locale)}`,
@@ -788,7 +956,7 @@ export function getWorkOrderYield(token: string, workOrderId: string) {
 // --- IA assistant ------------------------------------------------------------
 //
 // A per-user chat grounded in this tenant's own production stats via
-// server-side Gemini function-calling -- the assistant only ever states a
+// server-side Groq function-calling -- the assistant only ever states a
 // number after fetching it through a whitelisted, already-aggregated tool, and
 // only once at least 10 shifts/reports back it (see MIN_ROWS_FOR_TOOL_RESULT in
 // ia_assistant_service.py). Conversations are private: nobody else, including
@@ -875,9 +1043,13 @@ export interface OfConsolidation {
     film_quantity: number;
     film_product_id: string | null;
     carton_quantity: number;
+    /** Part of carton_quantity above that held no product — see ConditionnementReportDetail.waste_carton_quantity. */
+    waste_carton_quantity: number;
     carton_product_id: string | null;
-    tape_quantity: number;
-    tape_product_id: string | null;
+    scotch_quantity: number;
+    scotch_product_id: string | null;
+    ruban_quantity: number;
+    ruban_product_id: string | null;
   };
   utilities: { water_quantity: number; fuel_quantity: number; electricity_quantity: number };
   waste: {
@@ -942,6 +1114,28 @@ export interface RecipeCheck {
 
 export function getWorkOrderRecipeCheck(token: string, workOrderId: string) {
   return apiFetch<RecipeCheck>(`/production/work-orders/${workOrderId}/recipe-check`, { token });
+}
+
+/** Same recipe-check finding, aggregated across every recipe-linked OF in
+ * range -- how often a recipe trips a finding in practice, not one OF at a
+ * time. `top_finding_component_id` is null only when a recipe had no
+ * findings at all in range. */
+export interface RecipeDriftRow {
+  recipe_id: string;
+  of_count: number;
+  hard_finding_of_count: number;
+  soft_finding_of_count: number;
+  top_finding_code: RecipeFinding["code"] | null;
+  top_finding_component_id: string | null;
+  top_finding_count: number;
+}
+
+export function listRecipeDrift(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<RecipeDriftRow[]>(`/production/recipes/drift-summary${suffix}`, { token });
 }
 
 export function getRecipeYieldSummary(token: string, recipeId: string) {
@@ -1078,21 +1272,38 @@ export interface ConditionnementReportDetail {
   packets_counted: number;
   film_quantity: number;
   carton_quantity: number;
+  /**
+   * Part of carton_quantity that held no sellable product — empty or damaged
+   * cartons the line still built and counted, but never filled. Subtracted
+   * from carton_quantity wherever that count feeds finished-goods stock or
+   * the packaging écart, so it is never read back as unaccounted product.
+   */
+  waste_carton_quantity: number;
+  /** @deprecated superseded by scotch_quantity/ruban_quantity */
   tape_quantity: number;
+  scotch_quantity: number;
+  ruban_quantity: number;
   machine_speed: number | null;
   production_minutes: number;
   downtime_minutes: number;
   downtime_reason: string | null;
+  downtime_note: string | null;
   lot_number: string | null;
   dlc_date: string | null;
   film_product_id: string | null;
   carton_product_id: string | null;
+  /** @deprecated superseded by scotch_product_id/ruban_product_id */
   tape_product_id: string | null;
+  scotch_product_id: string | null;
+  ruban_product_id: string | null;
   // Which fournisseur each packaging item came from — informational only, since
-  // more than one supplier can deliver film, carton or ruban.
+  // more than one supplier can deliver film, carton, scotch or ruban.
   film_supplier_id: string | null;
   carton_supplier_id: string | null;
+  /** @deprecated superseded by scotch_supplier_id/ruban_supplier_id */
   tape_supplier_id: string | null;
+  scotch_supplier_id: string | null;
+  ruban_supplier_id: string | null;
   packaging_location_id: string | null;
   // The finished product itself is the OF's product and is not restated here.
   finished_goods_location_id: string | null;
@@ -1347,14 +1558,23 @@ export interface PackagingVariance {
   /** The part of that still awaiting a disposition — shown so an open case does not read as a loss. */
   undecided_packets: number;
   good_packets: number;
+  /**
+   * Cartons the line counted that never held product — empty or damaged,
+   * still swept into `counted_cartons`. Distinct from `rejected_packets`: a
+   * rejected packet was real product in a real carton the line still built;
+   * a waste carton was never real product at all.
+   */
+  waste_cartons: number;
+  good_cartons: number;
   /** actual − expected, so short reads negative. */
   packet_variance: number | null;
   packet_variance_ratio: number | null;
+  /** Judged against `good_cartons` (counted less `waste_cartons`), never the raw physical tally. */
   carton_variance: number | null;
   carton_variance_ratio: number | null;
   /**
    * The machine's own tally against what the floor physically boxed:
-   * `counted_packets - (counted_cartons * packets_per_carton)`. Independent of
+   * `counted_packets - (good_cartons * packets_per_carton)`. Independent of
    * the weight-based figures above — this catches an HMI miscount or a carton
    * closed short even when the scale is right. `null` for a product with no
    * carton tier (a sac counted directly).

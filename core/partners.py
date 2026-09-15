@@ -147,6 +147,19 @@ def archive_partner(partner_id: str, tenant: TenantContext = Depends(require_per
     return partner_response(result.value)
 
 
+@router.post("/{partner_id}/activate")
+def activate_partner(partner_id: str, tenant: TenantContext = Depends(require_permission("core.manage_partners"))) -> dict:
+    with get_connection() as connection:
+        service = CoreService(connection)
+        result = service.activate_partner(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, partner_id=partner_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return partner_response(result.value)
+
+
 @router.get("/{partner_id}/tags")
 def list_partner_tags(partner_id: str, tenant: TenantContext = Depends(require_permission("core.view_partners"))) -> list[dict]:
     with get_connection() as connection:

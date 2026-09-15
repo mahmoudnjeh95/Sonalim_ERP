@@ -2,12 +2,15 @@ import datetime
 
 from core.domain.result import Err, Ok
 from modules.production.domain.production_report import (
+    ConditionnementReportDetail,
     DailyReportDetail,
     DowntimeLine,
     ProductionReport,
     SemolinaLine,
     downtime_total_minutes,
     transition_report,
+    validate_conditionnement_detail,
+    validate_conditionnement_stock_targets,
     validate_daily_detail,
     validate_downtime_lines,
     validate_report_header,
@@ -59,6 +62,51 @@ def test_validated_is_terminal():
         assert isinstance(transition_report(_report("validated"), target), Err)
 
 
+def test_scotch_quantity_requires_a_product():
+    # Scotch and ruban were split out of the old single "tape" figure -- each
+    # needs its own product just like film/carton already do.
+    detail = ConditionnementReportDetail(scotch_quantity=5, packaging_location_id="loc1")
+    result = validate_conditionnement_stock_targets(detail)
+    assert isinstance(result, Err)
+    assert result.code == "MISSING_STOCK_TARGET"
+
+
+def test_ruban_quantity_requires_a_product():
+    detail = ConditionnementReportDetail(ruban_quantity=200, packaging_location_id="loc1")
+    result = validate_conditionnement_stock_targets(detail)
+    assert isinstance(result, Err)
+    assert result.code == "MISSING_STOCK_TARGET"
+
+
+def test_scotch_and_ruban_can_both_be_recorded_on_one_report():
+    # The whole point of the split: a shift using both in the same run no
+    # longer has to squeeze them into a single figure.
+    detail = ConditionnementReportDetail(
+        scotch_quantity=5,
+        scotch_product_id="scotch-1",
+        ruban_quantity=200,
+        ruban_product_id="ruban-tb200",
+        packaging_location_id="loc1",
+    )
+    assert isinstance(validate_conditionnement_stock_targets(detail), Ok)
+
+
+def test_waste_carton_quantity_cannot_exceed_carton_quantity():
+    # It is a subset of the physical carton tally, not a separate consumption --
+    # more waste cartons than cartons counted describes an impossible report.
+    detail = ConditionnementReportDetail(carton_quantity=10, waste_carton_quantity=11)
+    result = validate_conditionnement_detail(detail)
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_QUANTITY"
+
+
+def test_waste_carton_quantity_equal_to_carton_quantity_is_allowed():
+    # A whole run of empty/damaged cartons and nothing sellable is a legitimate,
+    # if unfortunate, report.
+    detail = ConditionnementReportDetail(carton_quantity=10, waste_carton_quantity=10)
+    assert isinstance(validate_conditionnement_detail(detail), Ok)
+
+
 def test_transition_keeps_the_revision():
     result = transition_report(_report("draft", revision=3), "submitted")
     assert isinstance(result, Ok)
@@ -97,7 +145,7 @@ def test_downtime_requires_a_reason():
     assert result.code == "MISSING_DOWNTIME_REASON"
 
     with_reason = validate_daily_detail(
-        DailyReportDetail(downtime_lines=(DowntimeLine(minutes=45, motif="press jam"),))
+        DailyReportDetail(downtime_lines=(DowntimeLine(minutes=45, motif="extruder_failure"),))
     )
     assert isinstance(with_reason, Ok)
 
@@ -112,8 +160,8 @@ def test_multiple_downtime_lines_with_different_motifs_are_all_valid():
     """The whole point of the list: a shift that stopped for two different
     reasons records both, rather than folding one into the other."""
     lines = (
-        DowntimeLine(motif="mixer jam", minutes=20),
-        DowntimeLine(motif="power cut", minutes=15),
+        DowntimeLine(motif="extruder_failure", minutes=20),
+        DowntimeLine(motif="electrical_failure", minutes=15),
     )
     assert isinstance(validate_downtime_lines(lines), Ok)
     assert isinstance(validate_daily_detail(DailyReportDetail(downtime_lines=lines)), Ok)

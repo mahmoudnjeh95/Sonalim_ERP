@@ -97,7 +97,7 @@ def _recipe(db, env, *lines) -> str:
     return recipe_id
 
 
-def _of(db, env, *, recipe_id=None, poured_inputs=None):
+def _of(db, env, *, recipe_id=None, poured_inputs=None, start_date=None):
     created = WorkOrderService(db).create_work_order(
         tenant_id=TENANT,
         actor_id=env["actor"],
@@ -107,6 +107,7 @@ def _of(db, env, *, recipe_id=None, poured_inputs=None):
         recipe_id=recipe_id,
         poured_inputs=poured_inputs or [],
         poured_inputs_location_id=env["location"] if poured_inputs else None,
+        start_date=start_date,
     )
     assert isinstance(created, Ok), getattr(created, "message", "")
     return created.value
@@ -310,3 +311,47 @@ def test_a_mix_far_outside_a_hard_limit_still_files_and_validates(db, env):
 
     check = _check(db, of)
     assert check["hard_finding_count"] >= 1, "and the drift is still reported"
+
+
+# --- drift summary, aggregated across OFs ------------------------------------
+
+
+def test_drift_summary_aggregates_hard_and_soft_ofs_by_recipe(db, env):
+    recipe = _recipe(db, env, (env["semoule"], 85, 95, True), (env["rebroyat"], 5, 15, False))
+    clean = _of(db, env, recipe_id=recipe)
+    _daily(
+        db, env, clean, date=datetime.date(2026, 9, 1),
+        semolina_quantity=900, regrind_input_quantity=100, regrind_input_product_id=env["rebroyat"],
+    )
+    drifted = _of(db, env, recipe_id=recipe)
+    _daily(
+        db, env, drifted, date=datetime.date(2026, 9, 2),
+        semolina_quantity=500, regrind_input_quantity=500, regrind_input_product_id=env["rebroyat"],
+    )
+
+    rows = RecipeCheckService(db).list_recipe_drift(tenant_id=TENANT)
+    row = next(r for r in rows if r["recipe_id"] == recipe)
+    assert row["of_count"] == 2
+    assert row["hard_finding_of_count"] == 1, "the drifted OF trips semoule's hard limit"
+    assert row["soft_finding_of_count"] == 0, "an OF with a hard finding counts as hard, not also soft"
+    assert row["top_finding_count"] == 1
+
+
+def test_drift_summary_excludes_ofs_with_no_recipe(db, env):
+    of = _of(db, env)
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
+
+    rows = RecipeCheckService(db).list_recipe_drift(tenant_id=TENANT)
+    assert rows == []
+
+
+def test_drift_summary_is_filtered_by_start_date(db, env):
+    recipe = _recipe(db, env, (env["semoule"], 85, 95, True))
+    in_range = _of(db, env, recipe_id=recipe, start_date=datetime.date(2026, 9, 5))
+    _daily(db, env, in_range, date=datetime.date(2026, 9, 5), semolina_quantity=1000)
+    out_of_range = _of(db, env, recipe_id=recipe, start_date=datetime.date(2026, 1, 1))
+    _daily(db, env, out_of_range, date=datetime.date(2026, 1, 1), semolina_quantity=1000)
+
+    rows = RecipeCheckService(db).list_recipe_drift(tenant_id=TENANT, date_from="2026-09-01", date_to="2026-09-30")
+    row = next(r for r in rows if r["recipe_id"] == recipe)
+    assert row["of_count"] == 1

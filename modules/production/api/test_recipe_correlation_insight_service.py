@@ -2,7 +2,7 @@
 
 `_aggregate`/`_build_prompt` are pinned as pure functions; `summarize_recipe_correlation`'s
 error paths (no rows, no key, network failure, a malformed response) are pinned by
-faking `urllib.request.urlopen`, since a live Gemini call has no place in a test suite
+faking `urllib.request.urlopen`, since a live Groq call has no place in a test suite
 that must stay green offline.
 """
 from __future__ import annotations
@@ -85,7 +85,7 @@ def test_summarize_raises_when_no_rows():
 
 
 def test_summarize_raises_when_too_few_rows(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
 
     def _fail_if_called(*args, **kwargs):
         raise AssertionError("should not reach the network below the row-count floor")
@@ -98,7 +98,7 @@ def test_summarize_raises_when_too_few_rows(monkeypatch):
 
 
 def test_summarize_raises_when_api_key_missing(monkeypatch):
-    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    monkeypatch.delenv("GROQ_API_KEY", raising=False)
     with pytest.raises(RecipeCorrelationInsightUnavailable):
         summarize_recipe_correlation(MANY_ROWS, locale="en")
 
@@ -118,28 +118,28 @@ class _FakeResponse:
 
 
 def test_summarize_returns_text_on_success(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     monkeypatch.setattr(
         "modules.production.api.recipe_correlation_insight_service.urllib.request.urlopen",
         lambda *a, **k: _FakeResponse(
-            {"candidates": [{"content": {"parts": [{"text": " Yield stayed near 100%. "}]}}]}
+            {"choices": [{"message": {"role": "assistant", "content": " Yield stayed near 100%. "}}]}
         ),
     )
     assert summarize_recipe_correlation(MANY_ROWS, locale="en") == "Yield stayed near 100%."
 
 
-def test_summarize_raises_when_gemini_response_shape_is_unexpected(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+def test_summarize_raises_when_groq_response_shape_is_unexpected(monkeypatch):
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     monkeypatch.setattr(
         "modules.production.api.recipe_correlation_insight_service.urllib.request.urlopen",
-        lambda *a, **k: _FakeResponse({"candidates": []}),
+        lambda *a, **k: _FakeResponse({"choices": []}),
     )
     with pytest.raises(RecipeCorrelationInsightUnavailable):
         summarize_recipe_correlation(MANY_ROWS, locale="en")
 
 
 def test_summarize_raises_on_network_error(monkeypatch):
-    monkeypatch.setenv("GEMINI_API_KEY", "test-key")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
 
     def _raise(*args, **kwargs):
         raise urllib.error.URLError("no route to host")

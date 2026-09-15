@@ -4,8 +4,15 @@ import type { ExpiryDatePolicy, LotSerialTracking, Product } from "../warehouse/
 export interface CreateProductInput {
   sku: string;
   name: string;
+  product_type: "PL" | "PC";
+  product_family?: string;
   uom_id: string;
   net_weight_grams?: number;
+  empty_packaging_weight_grams?: number;
+  sachets_per_package?: number;
+  packets_per_carton?: number;
+  carton_weight_grams?: number;
+  cartons_per_pallet?: number;
   is_sellable?: boolean;
   is_purchasable?: boolean;
   lot_serial_tracking?: LotSerialTracking;

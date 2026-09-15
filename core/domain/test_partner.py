@@ -22,8 +22,14 @@ def test_active_partner_can_be_archived():
     assert result.value.status == "archived"
 
 
-def test_archived_partner_cannot_be_reactivated():
+def test_archived_partner_can_be_reactivated():
     result = transition_partner(_partner("archived"), "active")
+    assert isinstance(result, Ok)
+    assert result.value.status == "active"
+
+
+def test_active_partner_cannot_be_reactivated():
+    result = transition_partner(_partner("active"), "active")
     assert isinstance(result, Err)
     assert result.code == "INVALID_TRANSITION"
 

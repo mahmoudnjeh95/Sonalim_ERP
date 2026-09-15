@@ -67,6 +67,7 @@ def _validated_report(
     downtime_reason=None, water_percentage=0, semolina_flow_rate=0, downtime_lines=None,
     waste_lines=(), regrind_quantity=0, recipe_id=None,
     semolina_product_id=None, regrind_input_quantity=0, regrind_input_product_id=None,
+    equipment_id=None,
 ):
     orders = WorkOrderService(db)
     created = orders.create_work_order(
@@ -92,7 +93,7 @@ def _validated_report(
         else (
             (
                 DowntimeLine(
-                    motif=downtime_reason or ("test downtime" if downtime_minutes else None),
+                    motif=downtime_reason or ("other" if downtime_minutes else None),
                     minutes=downtime_minutes,
                 ),
             )
@@ -109,7 +110,7 @@ def _validated_report(
     )
     created_report = reports.create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=order.id, report_date=report_date,
-        team=team, shift="morning", equipment_id=env["equipment"], detail=detail,
+        team=team, shift="morning", equipment_id=equipment_id or env["equipment"], detail=detail,
     )
     assert isinstance(created_report, Ok), getattr(created_report, "message", "")
     report_id = created_report.value["report"].id
@@ -173,11 +174,18 @@ def test_net_semoule_waste_is_daily_waste_net_of_declared_regrind(db, env):
     assert row["net_semoule_waste"] == 15.0
 
 
-def test_daily_waste_in_kg_is_restated_against_a_tonne_product(db, env):
-    """Same fix as OF consolidation's `_waste_totals`: a daily report's déchet
-    is always weighed in kg on the form (WasteLinesField's fixedUnit), even
-    for an item normally stocked by the tonne. `net_semoule_waste` must still
-    net against the form's own kilos, not the converted tonnes.
+def test_daily_waste_by_category_is_not_restated_against_the_item_unit(db, env):
+    """The bug this closed: `daily_waste_by_category` used to restate each
+    stage into its own item's unit of measure (same idea as `waste_by_product`
+    below) — fine for a single figure read in isolation, but `finished_product_
+    conditioning` is routinely logged against a finished-good item stocked in
+    kg while the other five stages use bulk semoule stocked in tonnes. Once the
+    production dashboard's semoule-waste chart stacks and compares stages side
+    by side, a 12 kg category rendered as a *bigger* bar than a 12 000 kg one,
+    because 12 (kg) and 12 (tonnes-of-12000kg) look identical on a shared axis.
+    `daily_waste_by_category` must stay in raw kilos — the form's own basis,
+    same as `net_semoule_waste` — so stages stay comparable regardless of which
+    item each one happens to be logged against.
     """
     tonne_uom, tonne_product = str(ULID()), str(ULID())
     db.execute(
@@ -193,17 +201,25 @@ def test_daily_waste_in_kg_is_restated_against_a_tonne_product(db, env):
     _validated_report(
         db, env, team="A", report_date=datetime.date(2026, 9, 1),
         semolina_quantity=500, production_minutes=100, downtime_minutes=0,
-        waste_lines=(WasteLine(category="press", product_id=tonne_product, quantity=300),),
+        waste_lines=(
+            WasteLine(category="press", product_id=tonne_product, quantity=12_000),
+            WasteLine(category="finished_product_conditioning", product_id=env["product"], quantity=12),
+        ),
     )
 
     rows = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="week")
     row = next(r for r in rows if r["team"] == "A")
 
-    assert row["daily_waste_by_category"]["press"] == pytest.approx(0.3)
+    # 12 000 kg of press waste stays visibly 1000x the 12 kg of finished-
+    # product waste, not collapsed to the same "12" by a per-item conversion.
+    assert row["daily_waste_by_category"]["press"] == 12_000.0
+    assert row["daily_waste_by_category"]["finished_product_conditioning"] == 12.0
     by_product = {entry["product_id"]: entry["quantity"] for entry in row["waste_by_product"]}
-    assert by_product[tonne_product] == pytest.approx(0.3)
-    # Netted against the form's own 300 kg, not the converted 0.3 t.
-    assert row["net_semoule_waste"] == 300
+    # waste_by_product is unaffected -- it's still keyed one row per product,
+    # so restating a single product's own figure into its own unit there is
+    # unambiguous (no stacking, nothing to compare it against).
+    assert by_product[tonne_product] == pytest.approx(12.0)
+    assert row["net_semoule_waste"] == 12_012.0
 
 
 def test_material_input_restates_regrind_input_against_the_semoule_unit(db, env):
@@ -282,15 +298,15 @@ def test_invalid_grain_is_rejected(db):
 def test_downtime_reasons_are_summed_across_reports(db, env):
     _validated_report(
         db, env, team="A", report_date=datetime.date(2026, 9, 1),
-        semolina_quantity=100, production_minutes=400, downtime_minutes=20, downtime_reason="mixer jam",
+        semolina_quantity=100, production_minutes=400, downtime_minutes=20, downtime_reason="extruder_failure",
     )
     _validated_report(
         db, env, team="B", report_date=datetime.date(2026, 9, 2),
-        semolina_quantity=100, production_minutes=400, downtime_minutes=15, downtime_reason="mixer jam",
+        semolina_quantity=100, production_minutes=400, downtime_minutes=15, downtime_reason="extruder_failure",
     )
     _validated_report(
         db, env, team="A", report_date=datetime.date(2026, 9, 3),
-        semolina_quantity=100, production_minutes=400, downtime_minutes=5, downtime_reason="power cut",
+        semolina_quantity=100, production_minutes=400, downtime_minutes=5, downtime_reason="electrical_failure",
     )
     # No downtime at all: must not show up as a reason of its own.
     _validated_report(
@@ -299,12 +315,12 @@ def test_downtime_reasons_are_summed_across_reports(db, env):
     )
 
     rows = {r["reason"]: r for r in TeamPerformanceService(db).list_downtime_reasons(tenant_id=TENANT)}
-    assert rows["mixer jam"]["minutes"] == 35
-    assert rows["mixer jam"]["report_count"] == 2
-    assert rows["power cut"]["minutes"] == 5
+    assert rows["extruder_failure"]["minutes"] == 35
+    assert rows["extruder_failure"]["report_count"] == 2
+    assert rows["electrical_failure"]["minutes"] == 5
     # Worst offender first.
     ordered = TeamPerformanceService(db).list_downtime_reasons(tenant_id=TENANT)
-    assert ordered[0]["reason"] == "mixer jam"
+    assert ordered[0]["reason"] == "extruder_failure"
 
 
 def test_one_report_can_contribute_more_than_one_reason(db, env):
@@ -314,18 +330,44 @@ def test_one_report_can_contribute_more_than_one_reason(db, env):
         db, env, team="A", report_date=datetime.date(2026, 9, 5),
         semolina_quantity=100, production_minutes=400, downtime_minutes=0,
         downtime_lines=(
-            DowntimeLine(motif="mixer jam", minutes=12),
-            DowntimeLine(motif="power cut", minutes=8),
+            DowntimeLine(motif="extruder_failure", minutes=12),
+            DowntimeLine(motif="electrical_failure", minutes=8),
         ),
     )
 
     rows = {r["reason"]: r for r in TeamPerformanceService(db).list_downtime_reasons(tenant_id=TENANT)}
-    assert rows["mixer jam"]["minutes"] == 12
-    assert rows["power cut"]["minutes"] == 8
+    assert rows["extruder_failure"]["minutes"] == 12
+    assert rows["electrical_failure"]["minutes"] == 8
 
     performance = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="day")
     row = next(r for r in performance if r["team"] == "A" and r["period"] == "2026-09-05")
     assert row["downtime_minutes"] == 20, "both stoppages count toward the team's total"
+
+
+def test_downtime_breakdown_carries_team_and_machine_per_row(db, env):
+    equipment_2 = str(ULID())
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'TP-EQ-2', 'Test machine 2')",
+        (equipment_2, TENANT, env["work_center"]),
+    )
+    _validated_report(
+        db, env, team="A", report_date=datetime.date(2026, 9, 10),
+        semolina_quantity=100, production_minutes=400, downtime_minutes=20, downtime_reason="extruder_failure",
+    )
+    _validated_report(
+        db, env, team="B", report_date=datetime.date(2026, 9, 11),
+        semolina_quantity=100, production_minutes=400, downtime_minutes=10, downtime_reason="electrical_failure",
+        equipment_id=equipment_2,
+    )
+
+    rows = TeamPerformanceService(db).list_downtime_breakdown(tenant_id=TENANT)
+    team_a_row = next(r for r in rows if r["team"] == "A" and r["reason"] == "extruder_failure")
+    assert team_a_row["equipment_id"] == env["equipment"]
+    assert team_a_row["minutes"] == 20
+
+    team_b_row = next(r for r in rows if r["team"] == "B" and r["reason"] == "electrical_failure")
+    assert team_b_row["equipment_id"] == equipment_2
+    assert team_b_row["minutes"] == 10
 
 
 def test_recipe_correlation_pairs_shift_inputs_with_the_ofs_yield(db, env):

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -50,10 +50,13 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { GroupHeaderRow } from "../../components/patterns/GroupHeaderRow";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { groupRows, type GroupSpec } from "../../lib/groupRows";
 import { ReportDetailDialog, type FigureRow } from "./ReportDetailDialog";
+import { OfConsolidationHint } from "./OfConsolidationHint";
 import {
   correctDailyReport,
   correctValidatedDailyReport,
@@ -66,6 +69,7 @@ import {
   listRegrindDefaults,
   listReports,
   listWorkOrders,
+  reviseReport,
   submitReport,
   updateDailyReport,
   type DailyReportDetail,
@@ -75,7 +79,7 @@ import {
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners, type Partner } from "../partners/api";
-import { UTILITY_UNITS, productUnit } from "../../lib/units";
+import { UTILITY_UNITS, productUnit, totalsByUomCategory } from "../../lib/units";
 
 // A shift's daily report. Semolina is the one figure here that leaves stock when
 // a supervisor validates it, which is why the form insists on naming the product
@@ -157,6 +161,7 @@ const MACHINES_QUERY_KEY = ["production", "machines", "all"] as const;
 const REGRIND_DEFAULTS_QUERY_KEY = ["production", "regrind-defaults"] as const;
 
 type StatusFilter = "all" | ReportStatus;
+type GroupByOption = "none" | "of" | "team" | "shift";
 
 const EMPTY_DETAIL = {
   semolina_lines: [] as SemolinaLineForm[],
@@ -193,15 +198,24 @@ export function DailyReportsTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  // Grouped by work order by default, matching the other report lists — it's
+  // what makes every report for one OF findable at a glance.
+  const [groupBy, setGroupBy] = useState<GroupByOption>("of");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  // Only the first group starts open; re-collapse the rest each time the
+  // grouping changes rather than only on first mount.
+  const collapseInitializedFor = useRef<GroupByOption | null>(null);
   const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
   const [openMode, setOpenMode] = useState<"view" | "edit" | "history" | "delete">("view");
+  const [autoResubmit, setAutoResubmit] = useState(false);
   // Which report is open lives in the URL as well as in state, so the OF
   // details page can link straight to one instead of landing on the list.
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedId = searchParams.get("report");
-  function openReportAt(report: ProductionReport, mode: "view" | "edit" | "history" | "delete") {
+  function openReportAt(report: ProductionReport, mode: "view" | "edit" | "history" | "delete", options?: { autoResubmit?: boolean }) {
     setOpenReport(report);
     setOpenMode(mode);
+    setAutoResubmit(options?.autoResubmit ?? false);
   }
 
   const { data: reports = [], isLoading } = useQuery({
@@ -284,6 +298,18 @@ export function DailyReportsTab() {
     },
     onError: (error) => {
       toast.error(t("production.reports.submitError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
+  });
+
+  const reviseMutation = useMutation({
+    mutationFn: (reportId: string) => reviseReport(token, reportId),
+    onSuccess: (revised) => {
+      openReportAt(revised, "edit", { autoResubmit: true });
+    },
+    onError: (error) => {
+      toast.error(t("production.reports.resubmitError"), {
         description: error instanceof ApiError ? error.message : undefined,
       });
     },
@@ -410,12 +436,40 @@ export function DailyReportsTab() {
           onOpenReport={(mode) => openReportAt(r, mode)}
           onSubmitReport={() => submitMutation.mutate(r.id)}
           isSubmitting={submitMutation.isPending && submitMutation.variables === r.id}
+          onReviseReport={() => reviseMutation.mutate(r.id)}
+          isResubmitting={reviseMutation.isPending && reviseMutation.variables === r.id}
         />
       ),
     },
   ];
   const table = useTableColumns("production.dailyReports", columns);
   const sortedReports = table.sortRows(visible);
+
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  const groupSpec: GroupSpec<ProductionReport> | undefined =
+    groupBy === "none"
+      ? undefined
+      : groupBy === "of"
+        ? { key: "of", label: t("production.reports.groupBy.of"), getGroupKey: (r) => r.of_id, getGroupLabel: (r) => referenceOf(r.of_id) }
+        : groupBy === "team"
+          ? { key: "team", label: t("production.reports.groupBy.team"), getGroupKey: (r) => r.team ?? "", getGroupLabel: (r) => r.team || t("common.none") }
+          : { key: "shift", label: t("production.reports.groupBy.shift"), getGroupKey: (r) => r.shift ?? "", getGroupLabel: (r) => r.shift || t("common.none") };
+  const rowGroups = groupRows(sortedReports, groupSpec);
+
+  useEffect(() => {
+    if (groupBy === "none" || rowGroups.length === 0) return;
+    if (collapseInitializedFor.current === groupBy) return;
+    collapseInitializedFor.current = groupBy;
+    setCollapsedGroups(new Set(rowGroups.slice(1).map((g) => g.key)));
+  }, [groupBy, rowGroups]);
 
   return (
     <div className="space-y-6">
@@ -453,6 +507,19 @@ export function DailyReportsTab() {
               value={statusFilter}
               onChange={setStatusFilter}
             />
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{t("production.reports.groupBy.label")}:</span>
+              <FilterTabs
+                options={[
+                  { value: "none", label: t("production.reports.groupBy.none") },
+                  { value: "of", label: t("production.reports.groupBy.of") },
+                  { value: "team", label: t("production.reports.groupBy.team") },
+                  { value: "shift", label: t("production.reports.groupBy.shift") },
+                ]}
+                value={groupBy}
+                onChange={setGroupBy}
+              />
+            </div>
             {columnFilters.isActive && (
               <Button size="sm" variant="ghost" onClick={columnFilters.reset}>
                 {t("common.clearFilters")}
@@ -521,6 +588,8 @@ export function DailyReportsTab() {
                       </div>
                     </div>
 
+                    <OfConsolidationHint workOrderId={form.watch("of_id") || undefined} />
+
                     <DailyDetailFields
                       form={form}
                       products={products}
@@ -574,29 +643,50 @@ export function DailyReportsTab() {
               </TableHeader>
               <TableBody>
                 <AnimatePresence initial={false}>
-                  {sortedReports.map((report) => (
-                    <motion.tr
-                      key={report.id}
-                      layout
-                      initial={{ opacity: 0 }}
-                      animate={{ opacity: 1 }}
-                      exit={{ opacity: 0 }}
-                      className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                      onClick={() => openReportAt(report, "view")}
-                    >
-                      {table.visibleColumns.map((column) => (
-                        <TableCell
-                          key={column.key}
-                          className={column.cellClassName}
-                          // The action column has its own buttons; a click there
-                          // should not also open the report behind them.
-                          onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
-                        >
-                          {column.cell(report)}
-                        </TableCell>
-                      ))}
-                    </motion.tr>
-                  ))}
+                  {rowGroups.flatMap((group) => {
+                    const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
+                    const rows: ReactNode[] = [];
+                    if (groupSpec) {
+                      rows.push(
+                        <GroupHeaderRow
+                          key={`group-${group.key}`}
+                          label={group.label}
+                          count={group.rows.length}
+                          collapsed={collapsed}
+                          onToggle={() => toggleGroup(group.key)}
+                          colSpan={table.visibleColumns.length}
+                        />,
+                      );
+                    }
+                    if (!collapsed) {
+                      for (const report of group.rows) {
+                        rows.push(
+                          <motion.tr
+                            key={report.id}
+                            layout
+                            initial={{ opacity: 0 }}
+                            animate={{ opacity: 1 }}
+                            exit={{ opacity: 0 }}
+                            className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
+                            onClick={() => openReportAt(report, "view")}
+                          >
+                            {table.visibleColumns.map((column) => (
+                              <TableCell
+                                key={column.key}
+                                className={column.cellClassName}
+                                // The action column has its own buttons; a click there
+                                // should not also open the report behind them.
+                                onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
+                              >
+                                {column.cell(report)}
+                              </TableCell>
+                            ))}
+                          </motion.tr>,
+                        );
+                      }
+                    }
+                    return rows;
+                  })}
                 </AnimatePresence>
               </TableBody>
             </Table>
@@ -620,9 +710,11 @@ export function DailyReportsTab() {
           regrindOutputProductId={regrindOutputProductId}
           suppliers={suppliers}
           initialMode={openMode}
+          autoResubmit={autoResubmit}
           onClose={() => {
             setOpenReport(null);
             setOpenMode("view");
+            setAutoResubmit(false);
             // Drop the deep link too, or closing reopens it next render.
             if (linkedId) {
               const next = new URLSearchParams(searchParams);
@@ -641,7 +733,7 @@ export function DailyReportsTab() {
  * the team's to edit, a submitted one is corrected by a validator, and a
  * validated one reverses and re-posts its stock when changed or deleted.
  */
-function DailyReportDialog({
+export function DailyReportDialog({
   report,
   reference,
   products,
@@ -652,18 +744,20 @@ function DailyReportDialog({
   regrindOutputProductId,
   suppliers,
   initialMode,
+  autoResubmit,
   onClose,
 }: {
   report: ProductionReport;
   reference: string;
   products: { id: string; name: string; uom_id: string }[];
   locations: { id: string; name: string }[];
-  uoms: { id: string; code: string }[];
+  uoms: { id: string; code: string; category: string; ratio_to_base: number }[];
   workOrders: { id: string; product_id: string | null; product_type: string | null }[];
   molds: Mold[];
   regrindOutputProductId: string | null;
   suppliers: Partner[];
   initialMode?: "view" | "edit" | "history" | "delete";
+  autoResubmit?: boolean;
   onClose: () => void;
 }) {
   const { session } = useAuth();
@@ -712,22 +806,30 @@ function DailyReportDialog({
   }
 
   const saveMutation = useMutation({
-    mutationFn: ({ input, force }: { input: CreateForm; force?: boolean }) => {
+    mutationFn: async ({ input, force }: { input: CreateForm; force?: boolean }) => {
+      let updated: ProductionReport;
       if (report.status === "validated") {
-        return correctValidatedDailyReport(token, report.id, toDetail(input), reason, force);
+        updated = await correctValidatedDailyReport(token, report.id, toDetail(input), reason, force);
+      } else if (report.status === "submitted") {
+        updated = await correctDailyReport(token, report.id, toDetail(input), reason);
+      } else {
+        updated = await updateDailyReport(token, report.id, toDetail(input));
       }
-      if (report.status === "submitted") {
-        return correctDailyReport(token, report.id, toDetail(input), reason);
+
+      // If this is a resubmit flow, chain a submit call after save succeeds
+      if (autoResubmit) {
+        await submitReport(token, report.id);
       }
-      return updateDailyReport(token, report.id, toDetail(input));
+
+      return updated;
     },
     onSuccess: () => {
       invalidate();
-      toast.success(t("production.reports.updated"));
+      toast.success(autoResubmit ? t("production.reports.resubmitted") : t("production.reports.updated"));
       onClose();
     },
     onError: (error) => {
-      toast.error(t("production.reports.updateError"), {
+      toast.error(autoResubmit ? t("production.reports.resubmitError") : t("production.reports.updateError"), {
         description: error instanceof ApiError ? error.message : undefined,
       });
     },
@@ -983,7 +1085,7 @@ function DailyDetailFields({
   form: ReturnType<typeof useForm<CreateForm>>;
   products: { id: string; name: string; uom_id: string }[];
   locations: { id: string; name: string }[];
-  uoms: { id: string; code: string }[];
+  uoms: { id: string; code: string; category: string; ratio_to_base: number }[];
   workOrders: { id: string; product_id: string | null; product_type: string | null }[];
   molds: Mold[];
   /** The tenant's one rebroyat product (production.regrind_defaults, input_product_id IS NULL). */
@@ -1017,25 +1119,54 @@ function DailyDetailFields({
   const orderProductType = workOrders.find((o) => o.id === form.watch("of_id"))?.product_type;
   const moldsForOrder = molds.filter((m) => !orderProductType || m.type === orderProductType);
 
+  // "Produit rebroyat" and semoule "Qualité" pick from the same MP product
+  // list as everything else on this form, which also holds packaging
+  // (carton, film, scotch) and finished goods -- neither picker should ever
+  // land on one of those. Name-matching keeps this working even for tenants
+  // whose product_classifications rows are incomplete (regrindOutputProductId
+  // itself, e.g., has none): every rebroyat product's name says so, so
+  // "rebroyat" in the name is excluded from the semoule list to keep it from
+  // also matching "Rebroyat Semoule".
+  const regrindInputProducts = products.filter(
+    (p) => p.id === regrindOutputProductId || /rebroyat/i.test(p.name),
+  );
+  const semouleProducts = products.filter((p) => /semoule/i.test(p.name) && !/rebroyat/i.test(p.name));
+
   // The plant doses water as a percentage of what actually goes into the mix:
   // the semoule poured plus any rebroyat poured back in alongside it. So the
   // percentage is the real input, and water_quantity (still what consolidation
   // and the cockpit read) is kept in sync from it here rather than typed
-  // twice -- and is read-only below, since it is entirely derived. Summed
-  // across every quality poured: unlike a waste line's item, every semoule
-  // line is the same commodity by weight, so adding them is meaningful.
+  // twice -- and is read-only below, since it is entirely derived.
+  //
+  // Semoule and rebroyat are not necessarily stocked in the same unit --
+  // semoule is poured in tonnes here, rebroyat versé in kg -- so raw
+  // quantities can't just be added; each is converted to the weight
+  // category's base unit (kg) via its own product's ratio_to_base first.
+  // Water is metered in litres, and the plant treats 1 kg of dosed water as
+  // 1 L, so that kg total is used directly against the percentage.
   const watchedSemolinaLines = form.watch("semolina_lines");
-  const totalSemoule = (watchedSemolinaLines ?? []).reduce((sum, line) => sum + (Number(line.quantity) || 0), 0);
   const watchedRegrindInput = form.watch("regrind_input_quantity");
+  const watchedRegrindInputProductId = form.watch("regrind_input_product_id");
   const watchedWaterPercentage = form.watch("water_percentage");
+  const { totals: mixedInputTotals } = totalsByUomCategory(
+    [
+      ...(watchedSemolinaLines ?? []).map((line) => ({
+        product_id: line.product_id || null,
+        quantity: Number(line.quantity) || 0,
+      })),
+      { product_id: watchedRegrindInputProductId || null, quantity: Number(watchedRegrindInput) || 0 },
+    ],
+    products,
+    uoms,
+  );
+  const mixedInputKg = mixedInputTotals.find((total) => total.unit === "kg")?.value ?? 0;
   useEffect(() => {
-    const mixedInput = totalSemoule + (Number(watchedRegrindInput) || 0);
-    const computed = Math.round(((watchedWaterPercentage / 100) * mixedInput + Number.EPSILON) * 100) / 100;
+    const computed = Math.round(((watchedWaterPercentage / 100) * mixedInputKg + Number.EPSILON) * 100) / 100;
     form.setValue("water_quantity", computed);
     // form.setValue is stable across renders; watching it would refire on
     // every keystroke elsewhere in the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [watchedWaterPercentage, totalSemoule, watchedRegrindInput]);
+  }, [watchedWaterPercentage, mixedInputKg]);
   return (
     <div className="space-y-3">
       <section className="space-y-2">
@@ -1088,7 +1219,7 @@ function DailyDetailFields({
             </Label>
             <Select id="regrind_input_product_id" {...form.register("regrind_input_product_id")}>
               <option value="">—</option>
-              {products.map((p) => (
+              {regrindInputProducts.map((p) => (
                 <option key={p.id} value={p.id}>
                   {p.name}
                 </option>
@@ -1102,7 +1233,7 @@ function DailyDetailFields({
             {t("production.dailyReports.field.semolina")}
             <HelpTooltip text={t("production.semolina.help")} />
           </Label>
-          <SemolinaLinesField form={form} name="semolina_lines" products={products} locations={locations} uoms={uoms} />
+          <SemolinaLinesField form={form} name="semolina_lines" products={semouleProducts} locations={locations} uoms={uoms} />
         </div>
 
         <div className="max-w-xs space-y-1.5">
@@ -1345,11 +1476,15 @@ function ReportRowActions({
   onOpenReport,
   onSubmitReport,
   isSubmitting,
+  onReviseReport,
+  isResubmitting,
 }: {
   report: ProductionReport;
   onOpenReport: (mode: "edit" | "history" | "delete") => void;
   onSubmitReport: () => void;
   isSubmitting: boolean;
+  onReviseReport: () => void;
+  isResubmitting: boolean;
 }) {
   const { t } = useI18n();
 
@@ -1365,6 +1500,12 @@ function ReportRowActions({
         <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
           <Send className="h-3.5 w-3.5" />
           {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
+        </Button>
+      )}
+      {report.status === "rejected" && (
+        <Button size="sm" variant="outline" onClick={onReviseReport} disabled={isResubmitting}>
+          <Send className="h-3.5 w-3.5" />
+          {isResubmitting ? t("production.reports.resubmitting") : t("production.reports.resubmit")}
         </Button>
       )}
       <Button

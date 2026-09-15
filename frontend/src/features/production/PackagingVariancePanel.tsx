@@ -4,6 +4,7 @@ import { cn } from "../../lib/utils";
 import { formatQuantity } from "../../lib/units";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import type { PackagingVariance } from "./api";
+import type { DispositionSummaryRow } from "../qc/api";
 
 /**
  * The écart between what a tonnage should have packed and what the line counted.
@@ -21,10 +22,19 @@ export function PackagingVariancePanel({
   variance,
   /** Whether quality's subtraction is included. Never label a gross figure as net. */
   net = false,
+  /**
+   * This OF's product-component dispositions (déchet, rebroyat, retouche,
+   * retour en stock). Purely explanatory: `rejected_packets` already reflects
+   * the settled quantity the moment it is dispositioned (decision 21), so
+   * this never changes the figures above it — it only says what became of
+   * them, which the raw total can't show on its own.
+   */
+  dispositionSummary,
   className,
 }: {
   variance: PackagingVariance;
   net?: boolean;
+  dispositionSummary?: DispositionSummaryRow[];
   className?: string;
 }) {
   const { t } = useI18n();
@@ -130,6 +140,15 @@ export function PackagingVariancePanel({
                 <Figure
                   label={t("production.packagingVariance.field.cartonVariance")}
                   value={formatQuantity(variance.carton_variance)}
+                  // Judged against good_cartons already (waste_cartons netted out
+                  // backend-side), so this reads as real, unexplained product.
+                  hint={
+                    variance.waste_cartons > 0
+                      ? `${t("production.packagingVariance.field.wasteCartonsPrefix")} ${formatQuantity(
+                          variance.waste_cartons,
+                        )} ${t("production.packagingVariance.field.wasteCartonsSuffix")}`
+                      : undefined
+                  }
                 />
               </>
             )}
@@ -158,7 +177,13 @@ export function PackagingVariancePanel({
             label={t("production.packagingVariance.field.machineCartonVariance")}
             value={formatQuantity(variance.machine_carton_variance)}
             emphasis={machineOk ? "success" : machineShort ? "destructive" : "warning"}
-            hint={t("production.packagingVariance.field.machineCartonVarianceHint")}
+            hint={
+              variance.waste_cartons > 0
+                ? `${t("production.packagingVariance.field.machineCartonVarianceHint")} ${t(
+                    "production.packagingVariance.field.wasteCartonsExcludedSuffix",
+                  )}`
+                : t("production.packagingVariance.field.machineCartonVarianceHint")
+            }
           />
         )}
 
@@ -175,6 +200,25 @@ export function PackagingVariancePanel({
                 : undefined
             }
           />
+        )}
+
+        {net && dispositionSummary && dispositionSummary.some((row) => row.quantity > 0) && (
+          <div className="col-span-2 sm:col-span-4">
+            <p className="text-xs text-muted-foreground">
+              {t("production.packagingVariance.field.dispositionLabel")}
+            </p>
+            <p className="text-sm font-medium tabular-nums">
+              {dispositionSummary
+                .filter((row) => row.quantity > 0)
+                .map(
+                  (row) =>
+                    `${t(`qc.nc.disposition.${row.disposition}` as Parameters<typeof t>[0])} : ${formatQuantity(
+                      row.quantity,
+                    )}`,
+                )
+                .join(" · ")}
+            </p>
+          </div>
         )}
       </div>
 
