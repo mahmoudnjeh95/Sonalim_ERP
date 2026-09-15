@@ -1,10 +1,10 @@
 {
   "name": "crm",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "depends": ["core"],
   "optional_depends": [],
   "provides_api": ["LeadService", "OpportunityService", "ActivityService", "ContactService", "CrmDashboardService"],
-  "publishes_events": ["crm.lead.qualified", "crm.lead.converted"],
+  "publishes_events": ["crm.lead.qualified", "crm.lead.converted", "crm.opportunity.won", "crm.opportunity.lost"],
   "subscribes_events": [],
   "migrations_path": "./migrations",
   "permissions": [
@@ -16,8 +16,10 @@
     "crm.admin_opportunities",
     "crm.view_activities",
     "crm.manage_activities",
+    "crm.admin_activities",
     "crm.view_contacts",
     "crm.manage_contacts",
+    "crm.admin_contacts",
     "crm.view_dashboard"
   ]
 }

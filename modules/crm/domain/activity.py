@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from core.domain.result import Err, Ok, Result
 
-VALID_KINDS = {"comment", "task", "call"}
+VALID_KINDS = {"comment", "task", "call", "meeting"}
 VALID_SUBJECT_TYPES = {"lead", "partner", "opportunity"}
 
 

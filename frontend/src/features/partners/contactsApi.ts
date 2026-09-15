@@ -29,3 +29,16 @@ export function listContacts(token: string, partnerId?: string) {
 export function createContact(token: string, input: CreateContactInput) {
   return apiFetch<Contact>("/crm/contacts", { method: "POST", token, body: input });
 }
+
+export interface UpdateContactInput {
+  first_name?: string;
+  last_name?: string;
+  job_title?: string;
+  email?: string;
+  phone?: string;
+  is_primary?: boolean;
+}
+
+export function updateContact(token: string, contactId: string, input: UpdateContactInput) {
+  return apiFetch<Contact>(`/crm/contacts/${contactId}`, { method: "PATCH", token, body: input });
+}

@@ -24,6 +24,19 @@ def _err_status(code: str) -> int:
     return status.HTTP_404_NOT_FOUND if code == "NOT_FOUND" else status.HTTP_409_CONFLICT
 
 
+def _lead_response(lead) -> dict:
+    return {
+        "id": lead.id,
+        "contact_name": lead.contact_name,
+        "email": lead.email,
+        "status": lead.status,
+        "source": lead.source,
+        "owner_id": lead.owner_id,
+        "priority": lead.priority,
+        "disqualify_reason": lead.disqualify_reason,
+    }
+
+
 def _opportunity_response(opportunity: Opportunity) -> dict:
     return {
         "id": opportunity.id,
@@ -32,6 +45,10 @@ def _opportunity_response(opportunity: Opportunity) -> dict:
         "stage": opportunity.stage,
         "amount": opportunity.amount,
         "expected_close_date": opportunity.expected_close_date,
+        "probability": opportunity.probability,
+        "owner_id": opportunity.owner_id,
+        "priority": opportunity.priority,
+        "lost_reason": opportunity.lost_reason,
     }
 
 
@@ -53,19 +70,31 @@ def _activity_response(activity: Activity) -> dict:
 class CreateLeadRequest(BaseModel):
     contact_name: str
     email: str
+    source: str | None = None
+    owner_id: str | None = None
+    priority: str = "medium"
 
 
 class UpdateLeadRequest(BaseModel):
     contact_name: str | None = None
     email: str | None = None
+    source: str | None = None
+    owner_id: str | None = None
+    priority: str | None = None
 
 
 class QualifyLeadRequest(BaseModel):
     correlation_id: str
 
 
+class DisqualifyLeadRequest(BaseModel):
+    reason: str
+    correlation_id: str
+
+
 class ConvertLeadRequest(BaseModel):
     correlation_id: str
+    existing_partner_id: str | None = None
 
 
 class CreateContactRequest(BaseModel):
@@ -76,6 +105,15 @@ class CreateContactRequest(BaseModel):
     email: str | None = None
     phone: str | None = None
     is_primary: bool = False
+
+
+class UpdateContactRequest(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    job_title: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    is_primary: bool | None = None
 
 
 @router.post("/contacts", status_code=status.HTTP_201_CREATED)
@@ -104,13 +142,34 @@ def list_contacts(
         return ContactService(connection).list_contacts(tenant_id=tenant.tenant_id, partner_id=partner_id)
 
 
+@router.patch("/contacts/{contact_id}")
+def update_contact(
+    contact_id: str, body: UpdateContactRequest, tenant: TenantContext = Depends(require_permission("crm.admin_contacts"))
+) -> dict:
+    with get_connection() as connection:
+        result = ContactService(connection).update_contact(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contact_id=contact_id,
+            first_name=body.first_name, last_name=body.last_name, job_title=body.job_title,
+            email=body.email, phone=body.phone, is_primary=body.is_primary,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return result.value
+
+
 @router.post("/leads", status_code=status.HTTP_201_CREATED)
 def create_lead(body: CreateLeadRequest, tenant: TenantContext = Depends(require_permission("crm.manage_leads"))) -> dict:
     with get_connection() as connection:
         service = LeadService(connection)
-        lead = service.create_lead(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contact_name=body.contact_name, email=body.email)
+        lead = service.create_lead(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contact_name=body.contact_name, email=body.email,
+            source=body.source, owner_id=body.owner_id, priority=body.priority,
+        )
         connection.commit()
-    return {"id": lead.id, "status": lead.status}
+    return _lead_response(lead)
 
 
 @router.get("/leads")
@@ -118,10 +177,7 @@ def list_leads(tenant: TenantContext = Depends(require_permission("crm.view_lead
     with get_connection() as connection:
         service = LeadService(connection)
         leads = service.list_leads(tenant_id=tenant.tenant_id)
-    return [
-        {"id": lead.id, "contact_name": lead.contact_name, "email": lead.email, "status": lead.status}
-        for lead in leads
-    ]
+    return [_lead_response(lead) for lead in leads]
 
 
 @router.patch("/leads/{lead_id}")
@@ -131,13 +187,14 @@ def update_lead(
     with get_connection() as connection:
         service = LeadService(connection)
         result = service.update_lead(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, lead_id=lead_id, contact_name=body.contact_name, email=body.email
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, lead_id=lead_id, contact_name=body.contact_name,
+            email=body.email, source=body.source, owner_id=body.owner_id, priority=body.priority,
         )
         if isinstance(result, Err):
             connection.rollback()
             raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
         connection.commit()
-    return {"id": result.value.id, "contact_name": result.value.contact_name, "email": result.value.email, "status": result.value.status}
+    return _lead_response(result.value)
 
 
 @router.post("/leads/{lead_id}/qualify")
@@ -153,7 +210,25 @@ def qualify_lead(
             connection.rollback()
             raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
         connection.commit()
-    return {"id": result.value.id, "status": result.value.status}
+    return _lead_response(result.value)
+
+
+@router.post("/leads/{lead_id}/disqualify")
+def disqualify_lead(
+    lead_id: str, body: DisqualifyLeadRequest, tenant: TenantContext = Depends(require_permission("crm.manage_leads"))
+) -> dict:
+    with get_connection() as connection:
+        service = LeadService(connection)
+        result = service.disqualify_lead(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, lead_id=lead_id, reason=body.reason,
+            correlation_id=body.correlation_id,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code == "EMPTY_REASON" else _err_status(result.code)
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return _lead_response(result.value)
 
 
 @router.post("/leads/{lead_id}/convert")
@@ -163,7 +238,8 @@ def convert_lead(
     with get_connection() as connection:
         service = LeadService(connection)
         result = service.convert_lead(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, lead_id=lead_id, correlation_id=body.correlation_id
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, lead_id=lead_id, correlation_id=body.correlation_id,
+            existing_partner_id=body.existing_partner_id,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -185,10 +261,15 @@ class CreateOpportunityRequest(BaseModel):
     name: str
     amount: float = 0
     expected_close_date: datetime.date | None = None
+    probability: int | None = None
+    owner_id: str | None = None
+    priority: str = "medium"
 
 
 class TransitionOpportunityRequest(BaseModel):
     stage: str
+    lost_reason: str | None = None
+    correlation_id: str | None = None
 
 
 class UpdateOpportunityRequest(BaseModel):
@@ -196,6 +277,9 @@ class UpdateOpportunityRequest(BaseModel):
     name: str | None = None
     amount: float | None = None
     expected_close_date: datetime.date | None = None
+    probability: int | None = None
+    owner_id: str | None = None
+    priority: str | None = None
 
 
 @router.post("/opportunities", status_code=status.HTTP_201_CREATED)
@@ -211,6 +295,9 @@ def create_opportunity(
             name=body.name,
             amount=body.amount,
             expected_close_date=body.expected_close_date,
+            probability=body.probability,
+            owner_id=body.owner_id,
+            priority=body.priority,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -245,6 +332,9 @@ def update_opportunity(
             name=body.name,
             amount=body.amount,
             expected_close_date=body.expected_close_date,
+            probability=body.probability,
+            owner_id=body.owner_id,
+            priority=body.priority,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -263,11 +353,17 @@ def transition_opportunity(
     with get_connection() as connection:
         service = OpportunityService(connection)
         result = service.transition_stage(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, opportunity_id=opportunity_id, new_stage=body.stage
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            opportunity_id=opportunity_id,
+            new_stage=body.stage,
+            lost_reason=body.lost_reason,
+            correlation_id=body.correlation_id,
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code == "EMPTY_REASON" else _err_status(result.code)
+            raise HTTPException(code, {"code": result.code, "message": result.message})
         connection.commit()
     return _opportunity_response(result.value)
 
@@ -280,6 +376,11 @@ class CreateActivityRequest(BaseModel):
     subject_type: str
     subject_id: str
     note: str
+    due_at: datetime.datetime | None = None
+
+
+class UpdateActivityRequest(BaseModel):
+    note: str | None = None
     due_at: datetime.datetime | None = None
 
 
@@ -318,6 +419,23 @@ def list_activities(
             tenant_id=tenant.tenant_id, subject_type=subject_type, subject_id=subject_id, limit=limit
         )
     return [_activity_response(activity) for activity in activities]
+
+
+@router.patch("/activities/{activity_id}")
+def update_activity(
+    activity_id: str, body: UpdateActivityRequest, tenant: TenantContext = Depends(require_permission("crm.admin_activities"))
+) -> dict:
+    with get_connection() as connection:
+        service = ActivityService(connection)
+        result = service.update_activity(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, activity_id=activity_id, note=body.note, due_at=body.due_at
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code == "EMPTY_NOTE" else _err_status(result.code)
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return _activity_response(result.value)
 
 
 @router.post("/activities/{activity_id}/complete")

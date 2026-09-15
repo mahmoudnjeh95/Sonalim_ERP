@@ -13,6 +13,7 @@ type Status =
   | "new"
   | "qualified"
   | "converted"
+  | "disqualified"
   | "prospecting"
   | "qualification"
   | "proposal"
@@ -48,6 +49,7 @@ const STATUS_VARIANT: Record<Status, BadgeProps["variant"]> = {
   new: "default",
   qualified: "primary",
   converted: "success",
+  disqualified: "destructive",
   prospecting: "default",
   qualification: "primary",
   proposal: "accent",

@@ -185,10 +185,17 @@ export function CrmDashboardPage() {
             {t("crm.dashboard.help.forecastLabel")}
             <HelpTooltip text={t("crm.dashboard.help.forecast")} />
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <StatCard
               label={t("crm.dashboard.stat.forecast")}
               value={Math.round(data.forecast.amount)}
+              icon={<Target className="h-5 w-5" />}
+              accent="primary"
+              prefix="$"
+            />
+            <StatCard
+              label={t("crm.dashboard.stat.forecastWeighted")}
+              value={Math.round(data.forecast_weighted.amount)}
               icon={<Target className="h-5 w-5" />}
               accent="primary"
               prefix="$"

@@ -91,6 +91,57 @@ class ActivityService:
             for r in rows
         ]
 
+    def update_activity(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        activity_id: str,
+        note: str | None = None,
+        due_at: datetime.datetime | None = None,
+    ) -> Result[Activity]:
+        row = self._connection.execute(
+            """
+            SELECT id, kind, subject_type, subject_id, note, due_at, completed_at FROM crm.activities
+            WHERE id = %s AND tenant_id = %s FOR UPDATE
+            """,
+            (activity_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"activity {activity_id} not found")
+        if row[6] is not None:
+            return Err("ALREADY_COMPLETED", f"activity {activity_id} is already completed and cannot be edited")
+
+        updated_note = note if note is not None else row[4]
+        if not updated_note.strip():
+            return Err("EMPTY_NOTE", "note is required")
+        updated_due_at = due_at if due_at is not None else row[5]
+
+        self._connection.execute(
+            "UPDATE crm.activities SET note = %s, due_at = %s WHERE id = %s",
+            (updated_note, updated_due_at, activity_id),
+        )
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="activity.updated",
+            entity_type="activity",
+            entity_id=activity_id,
+            payload={"note": updated_note, "due_at": updated_due_at.isoformat() if updated_due_at else None},
+        )
+        return Ok(
+            Activity(
+                id=row[0],
+                kind=row[1],
+                subject_type=row[2],
+                subject_id=row[3],
+                note=updated_note,
+                due_at=updated_due_at.isoformat() if updated_due_at else None,
+                completed_at=None,
+            )
+        )
+
     def complete_activity(self, *, tenant_id: str, actor_id: str, activity_id: str) -> Result[Activity]:
         row = self._connection.execute(
             """

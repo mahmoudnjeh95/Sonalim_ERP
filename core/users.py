@@ -7,7 +7,7 @@ from pydantic import BaseModel
 from core.audit import record_audit
 from core.db import get_connection
 from core.permissions_registry import permission_catalog
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, require_session
 
 router = APIRouter(prefix="/core", tags=["core.users"])
 
@@ -28,6 +28,12 @@ class UserSummary(BaseModel):
     roles: list[RoleRef]
 
 
+class UserDirectoryEntry(BaseModel):
+    id: str
+    email: str
+    full_name: str | None
+
+
 class GrantPermissionRequest(BaseModel):
     permission: str
 
@@ -41,6 +47,22 @@ def list_permission_catalog(
     tenant: TenantContext = Depends(require_permission(MANAGE_PERMISSIONS)),
 ) -> list[dict[str, str]]:
     return permission_catalog()
+
+
+@router.get("/users/directory", response_model=list[UserDirectoryEntry])
+def list_user_directory(tenant: TenantContext = Depends(require_session)) -> list[UserDirectoryEntry]:
+    """Minimal per-tenant user list for assignment pickers (e.g. CRM lead/opportunity owners).
+
+    Deliberately gated by require_session only, not a manage_* permission: seeing a
+    colleague's name/email to assign work to them is not privileged the way
+    core.manage_permissions is.
+    """
+    with get_connection() as connection:
+        rows = connection.execute(
+            "SELECT id, email, full_name FROM core.users WHERE tenant_id = %s ORDER BY email",
+            (tenant.tenant_id,),
+        ).fetchall()
+    return [UserDirectoryEntry(id=row[0], email=row[1], full_name=row[2]) for row in rows]
 
 
 @router.get("/users", response_model=list[UserSummary])

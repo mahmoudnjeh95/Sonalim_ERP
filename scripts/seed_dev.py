@@ -9,6 +9,7 @@ from ulid import ULID
 from core.auth import hash_password
 from core.db import get_connection
 from core.permissions_registry import ADMINISTRATOR_ROLE_CODE, ensure_default_roles
+from modules.crm.domain.opportunity import DEFAULT_PROBABILITY_BY_STAGE
 
 DEMO_TENANT_ID = "demo"
 
@@ -168,6 +169,152 @@ def seed() -> None:
                 """,
                 (str(ULID()), DEMO_TENANT_ID, code, name),
             )
+
+        # --- CRM demo data -----------------------------------------------
+        # Reuses the HR demo employees above as CRM owners so "assigned to"
+        # feels like a real person, not a placeholder id.
+        owner_id_by_name: dict[str, str] = {}
+        for full_name, email in [("Amina Diallo", "amina.diallo@sonalim.local"), ("Ibrahim Keita", "ibrahim.keita@sonalim.local")]:
+            connection.execute(
+                """
+                INSERT INTO core.users (id, tenant_id, email, password_hash, full_name)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (email) DO UPDATE SET full_name = EXCLUDED.full_name
+                """,
+                (str(ULID()), DEMO_TENANT_ID, email, hash_password("demo1234"), full_name),
+            )
+            owner_user_id = connection.execute("SELECT id FROM core.users WHERE email = %s", (email,)).fetchone()[0]
+            owner_id_by_name[full_name] = owner_user_id
+            connection.execute(
+                "INSERT INTO core.user_roles (user_id, role_id) VALUES (%s, %s) ON CONFLICT (user_id, role_id) DO NOTHING",
+                (owner_user_id, role_ids["crm"]),
+            )
+        amina_id = owner_id_by_name["Amina Diallo"]
+        ibrahim_id = owner_id_by_name["Ibrahim Keita"]
+
+        new_accounts = [
+            ("Global Foods Distribution", "customer", "purchasing@globalfoods.example"),
+            ("Mediterra Retail Group", "customer", "orders@mediterra.example"),
+        ]
+        for name, kind, email in new_accounts:
+            connection.execute(
+                """
+                INSERT INTO core.partners (id, tenant_id, name, kind, email)
+                VALUES (%s, %s, %s, %s, %s)
+                ON CONFLICT (tenant_id, name) DO NOTHING
+                """,
+                (str(ULID()), DEMO_TENANT_ID, name, kind, email),
+            )
+        partner_id_by_name = {
+            name: connection.execute(
+                "SELECT id FROM core.partners WHERE tenant_id = %s AND name = %s", (DEMO_TENANT_ID, name)
+            ).fetchone()[0]
+            for name in ["Acme Corp", "Global Foods Distribution", "Mediterra Retail Group"]
+        }
+
+        demo_contacts = [
+            ("Global Foods Distribution", "Nadia", "Haddad", "Purchasing Manager", "nadia.haddad@globalfoods.example", True),
+            ("Global Foods Distribution", "Karim", "Belhadj", "Buyer", "karim.belhadj@globalfoods.example", False),
+            ("Mediterra Retail Group", "Sophie", "Laurent", "Category Manager", "sophie.laurent@mediterra.example", True),
+            ("Mediterra Retail Group", "Youssef", "Amrani", "Store Operations", "youssef.amrani@mediterra.example", False),
+        ]
+        for account_name, first_name, last_name, job_title, email, is_primary in demo_contacts:
+            partner_id = partner_id_by_name[account_name]
+            connection.execute(
+                """
+                INSERT INTO crm.contacts (id, tenant_id, partner_id, first_name, last_name, job_title, email, is_primary)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (SELECT 1 FROM crm.contacts WHERE tenant_id = %s AND partner_id = %s AND email = %s)
+                """,
+                (str(ULID()), DEMO_TENANT_ID, partner_id, first_name, last_name, job_title, email, is_primary,
+                 DEMO_TENANT_ID, partner_id, email),
+            )
+
+        demo_leads = [
+            ("Rania Ben Salah", "rania.bensalah@newbakery.example", "new", "website", amina_id, "medium", None),
+            ("Tarek Fassi", "tarek.fassi@freshmart.example", "new", "trade_show", ibrahim_id, "high", None),
+            ("Leila Mansour", "leila.mansour@cornerstore.example", "qualified", "referral", amina_id, "medium", None),
+            ("Hamid Ouali", "hamid.ouali@quickstop.example", "converted", "cold_call", ibrahim_id, "low", None),
+            ("Sami Trabelsi", "sami.trabelsi@budgetgoods.example", "disqualified", "social_media", amina_id, "low", "Budget too small for minimum order"),
+        ]
+        for contact_name, email, lead_status, source, owner_id, priority, disqualify_reason in demo_leads:
+            connection.execute(
+                """
+                INSERT INTO crm.leads (id, tenant_id, contact_name, email, status, source, owner_id, priority, disqualify_reason)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (SELECT 1 FROM crm.leads WHERE tenant_id = %s AND email = %s)
+                """,
+                (str(ULID()), DEMO_TENANT_ID, contact_name, email, lead_status, source, owner_id, priority, disqualify_reason,
+                 DEMO_TENANT_ID, email),
+            )
+
+        today = datetime.date.today()
+        demo_opportunities = [
+            ("Acme Corp", "Acme Q4 pasta restock", "won", 8500, amina_id, "medium", today - datetime.timedelta(days=10), None),
+            ("Acme Corp", "Acme new product line", "negotiation", 4200, amina_id, "high", today + datetime.timedelta(days=3), None),
+            ("Global Foods Distribution", "Global Foods bulk semoule contract", "proposal", 15000, ibrahim_id, "high", today + datetime.timedelta(days=20), None),
+            ("Global Foods Distribution", "Global Foods trial order", "qualification", 2500, ibrahim_id, "medium", today - datetime.timedelta(days=2), None),
+            ("Mediterra Retail Group", "Mediterra shelf program", "prospecting", 6000, amina_id, "low", today + datetime.timedelta(days=45), None),
+            ("Mediterra Retail Group", "Mediterra Q1 promo", "lost", 3000, ibrahim_id, "medium", today - datetime.timedelta(days=15), "Lost to a competitor"),
+        ]
+        for account_name, name, stage, amount, owner_id, priority, close_date, lost_reason in demo_opportunities:
+            partner_id = partner_id_by_name[account_name]
+            connection.execute(
+                """
+                INSERT INTO crm.opportunities
+                    (id, tenant_id, partner_id, name, stage, amount, expected_close_date, probability, owner_id, priority, lost_reason)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (SELECT 1 FROM crm.opportunities WHERE tenant_id = %s AND partner_id = %s AND name = %s)
+                """,
+                (str(ULID()), DEMO_TENANT_ID, partner_id, name, stage, amount, close_date,
+                 DEFAULT_PROBABILITY_BY_STAGE[stage], owner_id, priority, lost_reason,
+                 DEMO_TENANT_ID, partner_id, name),
+            )
+        opportunity_id_by_name = {
+            name: connection.execute(
+                "SELECT id FROM crm.opportunities WHERE tenant_id = %s AND name = %s", (DEMO_TENANT_ID, name)
+            ).fetchone()[0]
+            for _, name, *_ in demo_opportunities
+        }
+        lead_id_by_email = {
+            email: connection.execute(
+                "SELECT id FROM crm.leads WHERE tenant_id = %s AND email = %s", (DEMO_TENANT_ID, email)
+            ).fetchone()[0]
+            for _, email, *_ in demo_leads
+        }
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        demo_activities = [
+            ("call", "lead", lead_id_by_email["rania.bensalah@newbakery.example"],
+             "Introductory call, interested in retail packs", now - datetime.timedelta(days=2), True),
+            ("task", "lead", lead_id_by_email["tarek.fassi@freshmart.example"],
+             "Send product catalog and price list", now + datetime.timedelta(days=1), False),
+            ("meeting", "opportunity", opportunity_id_by_name["Global Foods bulk semoule contract"],
+             "On-site tasting and contract review", now + datetime.timedelta(days=5), False),
+            ("call", "opportunity", opportunity_id_by_name["Acme new product line"],
+             "Negotiated pricing for new SKU", now - datetime.timedelta(days=1), True),
+            ("comment", "partner", partner_id_by_name["Acme Corp"],
+             "Long-standing customer, prioritize support tickets", now - datetime.timedelta(days=20), True),
+            ("task", "opportunity", opportunity_id_by_name["Global Foods trial order"],
+             "Follow up on trial order feedback", now - datetime.timedelta(days=3), False),
+            ("meeting", "partner", partner_id_by_name["Mediterra Retail Group"],
+             "Quarterly business review", now + datetime.timedelta(days=10), False),
+            ("comment", "lead", lead_id_by_email["leila.mansour@cornerstore.example"],
+             "Requested samples before qualifying further", now - datetime.timedelta(days=1), False),
+        ]
+        for kind, subject_type, subject_id, note, due_at, completed in demo_activities:
+            connection.execute(
+                """
+                INSERT INTO crm.activities (id, tenant_id, kind, subject_type, subject_id, note, due_at, completed_at)
+                SELECT %s, %s, %s, %s, %s, %s, %s, %s
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM crm.activities WHERE tenant_id = %s AND subject_type = %s AND subject_id = %s AND note = %s
+                )
+                """,
+                (str(ULID()), DEMO_TENANT_ID, kind, subject_type, subject_id, note, due_at, now if completed else None,
+                 DEMO_TENANT_ID, subject_type, subject_id, note),
+            )
+
         connection.commit()
 
     print("Seeded demo tenant. Login with demo@sonalim-erp.local / demo1234")

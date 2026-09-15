@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { ArrowLeft, Mail, Phone, Plus, Tag as TagIcon, UserRound } from "lucide-react";
+import { ArrowLeft, Mail, Pencil, Phone, Plus, Tag as TagIcon, UserRound } from "lucide-react";
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
@@ -13,21 +13,26 @@ import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
+import { ActivityKindBadge } from "../../components/patterns/ActivityKindBadge";
 import { listOpportunities } from "../crm/opportunities/api";
 import { listActivities } from "../crm/activities/api";
 import { listOrders } from "../sales/api";
 import { listInvoices } from "../finance/api";
-import { createContact, listContacts, type Contact } from "./contactsApi";
+import { createContact, listContacts, updateContact, type Contact } from "./contactsApi";
 import { listProductTags, createProductTag, type ProductTag } from "../products/api";
 import { getPartner, listTagsForPartner, setPartnerTags, updatePartnerTagLink, type PartnerTagLink } from "./api";
+
+const EMPTY_CONTACT_FORM = { first_name: "", last_name: "", job_title: "", email: "", phone: "", is_primary: false };
 
 export function PartnerDetailsPage() {
   const { partnerId } = useParams();
   const { session } = useAuth();
+  const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
-  const [form, setForm] = useState({ first_name: "", last_name: "", job_title: "", email: "", phone: "", is_primary: false });
+  const [editingContact, setEditingContact] = useState<Contact | null>(null);
+  const [form, setForm] = useState(EMPTY_CONTACT_FORM);
   const queryKey = ["core", "partner", partnerId] as const;
   const { data: partner, isLoading } = useQuery({ queryKey, queryFn: () => getPartner(token, partnerId!) });
   const { data: contacts = [] } = useQuery({ queryKey: [...queryKey, "contacts"], queryFn: () => listContacts(token, partnerId!) });
@@ -35,21 +40,241 @@ export function PartnerDetailsPage() {
   const { data: activities = [] } = useQuery({ queryKey: [...queryKey, "activities"], queryFn: () => listActivities(token).then((items) => items.filter((item) => item.subject_type === "partner" && item.subject_id === partnerId)) });
   const { data: orders = [] } = useQuery({ queryKey: [...queryKey, "orders"], queryFn: () => listOrders(token).then((items) => items.filter((item) => item.partner_id === partnerId)) });
   const { data: invoices = [] } = useQuery({ queryKey: [...queryKey, "invoices"], queryFn: () => listInvoices(token).then((items) => items.filter((item) => item.partner_id === partnerId)) });
+
   const contactMutation = useMutation({
     mutationFn: () => createContact(token, { partner_id: partnerId!, ...form }),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: [...queryKey, "contacts"] }); setDialogOpen(false); setForm({ first_name: "", last_name: "", job_title: "", email: "", phone: "", is_primary: false }); toast.success("Contact added"); },
-    onError: (error) => toast.error("Could not add contact", { description: error instanceof ApiError ? error.message : undefined }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [...queryKey, "contacts"] });
+      setDialogOpen(false);
+      setForm(EMPTY_CONTACT_FORM);
+      toast.success(t("partners.details.contactAdded"));
+    },
+    onError: (error) => toast.error(t("partners.details.contactAddError"), { description: error instanceof ApiError ? error.message : undefined }),
   });
 
-  if (isLoading || !partner) return <p className="text-sm text-muted-foreground">Loading account...</p>;
-  return <div className="space-y-6">
-    <div className="flex items-start gap-3"><Button variant="ghost" size="sm" asChild><Link to="/crm/partners"><ArrowLeft className="h-4 w-4" />Accounts</Link></Button><div><h1 className="text-xl font-semibold tracking-tight">{partner.name}</h1><p className="text-sm text-muted-foreground">Third-party account  ·  {partner.kind}</p></div></div>
-    <div className="grid gap-4 md:grid-cols-3"><Card><CardHeader><CardTitle>Account details</CardTitle></CardHeader><CardContent className="space-y-2 text-sm">{partner.industry && <p>Industry: {partner.industry}</p>}{partner.email && <p className="flex items-center gap-2"><Mail className="h-4 w-4" />{partner.email}</p>}{partner.phone && <p className="flex items-center gap-2"><Phone className="h-4 w-4" />{partner.phone}</p>}<StatusBadge status={partner.status} /></CardContent></Card><Card><CardHeader><CardTitle>Commercial summary</CardTitle></CardHeader><CardContent className="grid grid-cols-3 gap-2 text-center text-sm"><div><strong className="block text-xl">{opportunities.length}</strong>Deals</div><div><strong className="block text-xl">{orders.length}</strong>Orders</div><div><strong className="block text-xl">{invoices.length}</strong>Invoices</div></CardContent></Card><Card><CardHeader><CardTitle>Open pipeline</CardTitle></CardHeader><CardContent className="text-2xl font-semibold">{new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(opportunities.filter((o) => !["won", "lost"].includes(o.stage)).reduce((sum, o) => sum + o.amount, 0))}</CardContent></Card></div>
-    <div className="grid gap-4 lg:grid-cols-2"><Card><CardHeader className="flex-row items-center justify-between space-y-0"><CardTitle>Contacts</CardTitle><Dialog open={dialogOpen} onOpenChange={setDialogOpen}><DialogTrigger asChild><Button size="sm"><Plus className="h-4 w-4" />Add contact</Button></DialogTrigger><DialogContent><DialogHeader><DialogTitle>Add contact</DialogTitle><DialogDescription>Add a person connected to this account.</DialogDescription></DialogHeader><form className="space-y-3" onSubmit={(event) => { event.preventDefault(); contactMutation.mutate(); }}><div className="grid grid-cols-2 gap-3"><div><Label htmlFor="first-name">First name</Label><Input id="first-name" required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} /></div><div><Label htmlFor="last-name">Last name</Label><Input id="last-name" required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} /></div></div><Input placeholder="Job title" value={form.job_title} onChange={(e) => setForm({ ...form, job_title: e.target.value })} /><Input type="email" placeholder="Email" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} /><Input placeholder="Phone" value={form.phone} onChange={(e) => setForm({ ...form, phone: e.target.value })} /><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.is_primary} onChange={(e) => setForm({ ...form, is_primary: e.target.checked })} />Primary contact</label><Button type="submit" disabled={contactMutation.isPending}>Add contact</Button></form></DialogContent></Dialog></CardHeader><CardContent className="space-y-3">{contacts.length === 0 ? <p className="text-sm text-muted-foreground">No contacts yet.</p> : contacts.map((contact) => <ContactRow key={contact.id} contact={contact} />)}</CardContent></Card>
-    <Card><CardHeader><CardTitle>Recent account activity</CardTitle></CardHeader><CardContent className="space-y-3">{activities.length === 0 ? <p className="text-sm text-muted-foreground">No activities logged.</p> : activities.slice(0, 6).map((activity) => <div key={activity.id} className="border-b pb-2 text-sm last:border-0"><StatusBadge status={activity.kind} /> <span className="ml-2">{activity.note}</span></div>)}</CardContent></Card></div>
-    {(partner.kind === "supplier" || partner.kind === "both") && <PartnerTagsCard partnerId={partnerId!} />}
-    <div className="grid gap-4 lg:grid-cols-3"><RecordList title="Opportunities" records={opportunities.map((item) => `${item.name} · ${item.stage} · $${item.amount}`)} /><RecordList title="Sales orders" records={orders.map((item) => `${item.id} · ${item.status} · $${item.total_amount}`)} /><RecordList title="Invoices" records={invoices.map((item) => `${item.id} · ${item.status} · ${item.amount} ${item.currency}`)} /></div>
-  </div>;
+  const updateContactMutation = useMutation({
+    mutationFn: () => updateContact(token, editingContact!.id, form),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [...queryKey, "contacts"] });
+      setDialogOpen(false);
+      setEditingContact(null);
+      setForm(EMPTY_CONTACT_FORM);
+      toast.success(t("partners.details.contactUpdated"));
+    },
+    onError: (error) => toast.error(t("partners.details.contactUpdateError"), { description: error instanceof ApiError ? error.message : undefined }),
+  });
+
+  function openAddDialog() {
+    setEditingContact(null);
+    setForm(EMPTY_CONTACT_FORM);
+    setDialogOpen(true);
+  }
+
+  function openEditDialog(contact: Contact) {
+    setEditingContact(contact);
+    setForm({
+      first_name: contact.first_name,
+      last_name: contact.last_name,
+      job_title: contact.job_title ?? "",
+      email: contact.email ?? "",
+      phone: contact.phone ?? "",
+      is_primary: contact.is_primary,
+    });
+    setDialogOpen(true);
+  }
+
+  if (isLoading || !partner) return <p className="text-sm text-muted-foreground">{t("partners.details.loading")}</p>;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-start gap-3">
+        <Button variant="ghost" size="sm" asChild>
+          <Link to="/crm/partners">
+            <ArrowLeft className="h-4 w-4" />
+            {t("partners.details.back")}
+          </Link>
+        </Button>
+        <div>
+          <h1 className="text-xl font-semibold tracking-tight">{partner.name}</h1>
+          <p className="text-sm text-muted-foreground">
+            {t("partners.details.subtitle")} · {t(`partners.kind.${partner.kind}` as Parameters<typeof t>[0])}
+          </p>
+        </div>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("partners.details.accountDetails")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2 text-sm">
+            {partner.industry && <p>{t("partners.details.industry")}: {partner.industry}</p>}
+            {partner.email && (
+              <p className="flex items-center gap-2">
+                <Mail className="h-4 w-4" />
+                {partner.email}
+              </p>
+            )}
+            {partner.phone && (
+              <p className="flex items-center gap-2">
+                <Phone className="h-4 w-4" />
+                {partner.phone}
+              </p>
+            )}
+            <StatusBadge status={partner.status} />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("partners.details.commercialSummary")}</CardTitle>
+          </CardHeader>
+          <CardContent className="grid grid-cols-3 gap-2 text-center text-sm">
+            <div>
+              <strong className="block text-xl">{opportunities.length}</strong>
+              {t("partners.details.deals")}
+            </div>
+            <div>
+              <strong className="block text-xl">{orders.length}</strong>
+              {t("partners.details.orders")}
+            </div>
+            <div>
+              <strong className="block text-xl">{invoices.length}</strong>
+              {t("partners.details.invoices")}
+            </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("partners.details.openPipeline")}</CardTitle>
+          </CardHeader>
+          <CardContent className="text-2xl font-semibold">
+            {new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(
+              opportunities.filter((o) => !["won", "lost"].includes(o.stage)).reduce((sum, o) => sum + o.amount, 0),
+            )}
+          </CardContent>
+        </Card>
+      </div>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card>
+          <CardHeader className="flex-row items-center justify-between space-y-0">
+            <CardTitle>{t("partners.details.contacts")}</CardTitle>
+            <Dialog
+              open={dialogOpen}
+              onOpenChange={(open) => {
+                setDialogOpen(open);
+                if (!open) setEditingContact(null);
+              }}
+            >
+              <DialogTrigger asChild>
+                <Button size="sm" onClick={openAddDialog}>
+                  <Plus className="h-4 w-4" />
+                  {t("partners.details.addContact")}
+                </Button>
+              </DialogTrigger>
+              <DialogContent>
+                <DialogHeader>
+                  <DialogTitle>{editingContact ? t("partners.details.dialog.editTitle") : t("partners.details.dialog.addTitle")}</DialogTitle>
+                  <DialogDescription>
+                    {editingContact ? t("partners.details.dialog.editDescription") : t("partners.details.dialog.addDescription")}
+                  </DialogDescription>
+                </DialogHeader>
+                <form
+                  className="space-y-3"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (editingContact) updateContactMutation.mutate();
+                    else contactMutation.mutate();
+                  }}
+                >
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <Label htmlFor="first-name">{t("partners.details.field.firstName")}</Label>
+                      <Input id="first-name" required value={form.first_name} onChange={(e) => setForm({ ...form, first_name: e.target.value })} />
+                    </div>
+                    <div>
+                      <Label htmlFor="last-name">{t("partners.details.field.lastName")}</Label>
+                      <Input id="last-name" required value={form.last_name} onChange={(e) => setForm({ ...form, last_name: e.target.value })} />
+                    </div>
+                  </div>
+                  <Input
+                    placeholder={t("partners.details.field.jobTitle")}
+                    value={form.job_title}
+                    onChange={(e) => setForm({ ...form, job_title: e.target.value })}
+                  />
+                  <Input
+                    type="email"
+                    placeholder={t("partners.details.field.email")}
+                    value={form.email}
+                    onChange={(e) => setForm({ ...form, email: e.target.value })}
+                  />
+                  <Input
+                    placeholder={t("partners.details.field.phone")}
+                    value={form.phone}
+                    onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  />
+                  <label className="flex items-center gap-2 text-sm">
+                    <input type="checkbox" checked={form.is_primary} onChange={(e) => setForm({ ...form, is_primary: e.target.checked })} />
+                    {t("partners.details.field.primaryContact")}
+                  </label>
+                  <Button type="submit" disabled={editingContact ? updateContactMutation.isPending : contactMutation.isPending}>
+                    {editingContact
+                      ? updateContactMutation.isPending
+                        ? t("partners.details.saving")
+                        : t("partners.details.updateContact")
+                      : contactMutation.isPending
+                        ? t("partners.details.saving")
+                        : t("partners.details.saveContact")}
+                  </Button>
+                </form>
+              </DialogContent>
+            </Dialog>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {contacts.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("partners.details.noContacts")}</p>
+            ) : (
+              contacts.map((contact) => <ContactRow key={contact.id} contact={contact} onEdit={() => openEditDialog(contact)} />)
+            )}
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("partners.details.recentActivity")}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {activities.length === 0 ? (
+              <p className="text-sm text-muted-foreground">{t("partners.details.noActivities")}</p>
+            ) : (
+              activities.slice(0, 6).map((activity) => (
+                <div key={activity.id} className="border-b pb-2 text-sm last:border-0">
+                  <ActivityKindBadge kind={activity.kind} /> <span className="ml-2">{activity.note}</span>
+                </div>
+              ))
+            )}
+          </CardContent>
+        </Card>
+      </div>
+      {(partner.kind === "supplier" || partner.kind === "both") && <PartnerTagsCard partnerId={partnerId!} />}
+      <div className="grid gap-4 lg:grid-cols-3">
+        <RecordList
+          title={t("partners.details.opportunities")}
+          emptyLabel={t("partners.details.none")}
+          records={opportunities.map((item) => `${item.name} · ${item.stage} · $${item.amount}`)}
+        />
+        <RecordList
+          title={t("partners.details.salesOrders")}
+          emptyLabel={t("partners.details.none")}
+          records={orders.map((item) => `${item.id} · ${item.status} · $${item.total_amount}`)}
+        />
+        <RecordList
+          title={t("partners.details.invoices")}
+          emptyLabel={t("partners.details.none")}
+          records={invoices.map((item) => `${item.id} · ${item.status} · ${item.amount} ${item.currency}`)}
+        />
+      </div>
+    </div>
+  );
 }
 
 function PartnerTagsCard({ partnerId }: { partnerId: string }) {
@@ -199,5 +424,46 @@ function PartnerTagLinkRow({
   );
 }
 
-function ContactRow({ contact }: { contact: Contact }) { return <div className="flex items-center gap-3 border-b pb-3 last:border-0"><UserRound className="h-8 w-8 rounded-full bg-muted p-1.5 text-muted-foreground" /><div className="min-w-0 text-sm"><p className="font-medium">{contact.first_name} {contact.last_name}{contact.is_primary && <span className="ml-2 text-xs text-primary">Primary</span>}</p><p className="text-muted-foreground">{contact.job_title || "Contact"}{contact.email ? ` · ${contact.email}` : ""}</p></div></div>; }
-function RecordList({ title, records }: { title: string; records: string[] }) { return <Card><CardHeader><CardTitle>{title}</CardTitle></CardHeader><CardContent className="space-y-2 text-sm">{records.length ? records.map((record) => <p key={record} className="border-b pb-2 last:border-0">{record}</p>) : <p className="text-muted-foreground">None yet.</p>}</CardContent></Card>; }
+function ContactRow({ contact, onEdit }: { contact: Contact; onEdit: () => void }) {
+  const { t } = useI18n();
+  return (
+    <div className="flex items-center gap-3 border-b pb-3 last:border-0">
+      <UserRound className="h-8 w-8 rounded-full bg-muted p-1.5 text-muted-foreground" />
+      <div className="min-w-0 flex-1 text-sm">
+        <p className="font-medium">
+          {contact.first_name} {contact.last_name}
+          {contact.is_primary && <span className="ml-2 text-xs text-primary">{t("partners.details.primary")}</span>}
+        </p>
+        <p className="text-muted-foreground">
+          {contact.job_title || t("partners.details.contactFallback")}
+          {contact.email ? ` · ${contact.email}` : ""}
+        </p>
+      </div>
+      <Button size="sm" variant="ghost" onClick={onEdit}>
+        <Pencil className="h-3.5 w-3.5" />
+        {t("partners.details.edit")}
+      </Button>
+    </div>
+  );
+}
+
+function RecordList({ title, records, emptyLabel }: { title: string; records: string[]; emptyLabel: string }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>{title}</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2 text-sm">
+        {records.length ? (
+          records.map((record) => (
+            <p key={record} className="border-b pb-2 last:border-0">
+              {record}
+            </p>
+          ))
+        ) : (
+          <p className="text-muted-foreground">{emptyLabel}</p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}

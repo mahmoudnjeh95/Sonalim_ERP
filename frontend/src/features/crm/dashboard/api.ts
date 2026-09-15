@@ -25,6 +25,7 @@ export interface CrmDashboard {
   won_amount: number;
   pipeline_by_stage: Record<string, StageBucket>;
   forecast: CountAmount;
+  forecast_weighted: CountAmount;
   due_this_week: CountAmount;
   overdue: CountAmount;
   opportunities_by_month: {

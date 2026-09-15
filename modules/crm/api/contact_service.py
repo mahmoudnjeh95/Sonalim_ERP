@@ -54,6 +54,46 @@ class ContactService:
         row = (contact_id, partner_id, first_name, last_name, job_title, email, phone, is_primary)
         return Ok(self._response(row))
 
+    def update_contact(
+        self, *, tenant_id: str, actor_id: str, contact_id: str, first_name: str | None = None,
+        last_name: str | None = None, job_title: str | None = None, email: str | None = None,
+        phone: str | None = None, is_primary: bool | None = None,
+    ) -> Result[dict]:
+        row = self._connection.execute(
+            """
+            SELECT id, partner_id, first_name, last_name, job_title, email, phone, is_primary
+            FROM crm.contacts WHERE id = %s AND tenant_id = %s FOR UPDATE
+            """,
+            (contact_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"contact {contact_id} not found")
+
+        current = self._response(row)
+        updated = {
+            "first_name": first_name if first_name is not None else current["first_name"],
+            "last_name": last_name if last_name is not None else current["last_name"],
+            "job_title": job_title if job_title is not None else current["job_title"],
+            "email": email if email is not None else current["email"],
+            "phone": phone if phone is not None else current["phone"],
+            "is_primary": is_primary if is_primary is not None else current["is_primary"],
+        }
+        try:
+            self._connection.execute(
+                """
+                UPDATE crm.contacts SET first_name = %s, last_name = %s, job_title = %s, email = %s, phone = %s, is_primary = %s
+                WHERE id = %s AND tenant_id = %s
+                """,
+                (updated["first_name"], updated["last_name"], updated["job_title"], updated["email"],
+                 updated["phone"], updated["is_primary"], contact_id, tenant_id),
+            )
+        except psycopg.errors.UniqueViolation:
+            return Err("PRIMARY_CONTACT_EXISTS", "this account already has a primary contact")
+        record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="contact.updated",
+                     entity_type="contact", entity_id=contact_id, payload=updated)
+        return Ok(self._response((contact_id, current["partner_id"], updated["first_name"], updated["last_name"],
+                                   updated["job_title"], updated["email"], updated["phone"], updated["is_primary"])))
+
     @staticmethod
     def _response(row) -> dict:
         return {

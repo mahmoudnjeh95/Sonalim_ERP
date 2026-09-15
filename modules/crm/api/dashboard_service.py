@@ -38,6 +38,14 @@ class CrmDashboardService:
             (tenant_id,),
         ).fetchone()
 
+        forecast_weighted = self._connection.execute(
+            """
+            SELECT COUNT(*), COALESCE(SUM(amount * probability / 100.0), 0) FROM crm.opportunities
+            WHERE tenant_id = %s AND stage NOT IN ('won', 'lost')
+            """,
+            (tenant_id,),
+        ).fetchone()
+
         due_this_week = self._connection.execute(
             """
             SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM crm.opportunities
@@ -119,6 +127,7 @@ class CrmDashboardService:
             "won_amount": float(won_amount),
             "pipeline_by_stage": pipeline_by_stage,
             "forecast": {"count": forecast[0], "amount": float(forecast[1])},
+            "forecast_weighted": {"count": forecast_weighted[0], "amount": float(forecast_weighted[1])},
             "due_this_week": {"count": due_this_week[0], "amount": float(due_this_week[1])},
             "overdue": {"count": overdue[0], "amount": float(overdue[1])},
             "opportunities_by_month": opportunities_by_month,
