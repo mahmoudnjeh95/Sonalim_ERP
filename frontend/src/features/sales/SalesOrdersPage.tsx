@@ -36,7 +36,8 @@ import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners } from "../partners/api";
-import { listProducts, listClassifications } from "../production/api";
+import { listProducts } from "../production/api";
+import { listProductTags } from "../products/api";
 import { confirmOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
 
 const lineSchema = z.object({
@@ -56,7 +57,7 @@ const QUERY_KEY = ["sales", "orders"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
-const CLASSIFICATIONS_QUERY_KEY = ["production", "product-classifications"] as const;
+const PRODUCT_TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
@@ -78,24 +79,18 @@ export function SalesOrdersPage() {
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
   const { data: allProducts = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
-  const { data: classifications = [] } = useQuery({ queryKey: CLASSIFICATIONS_QUERY_KEY, queryFn: () => listClassifications(token) });
+  const { data: productTags = [] } = useQuery({ queryKey: PRODUCT_TAGS_QUERY_KEY, queryFn: () => listProductTags(token) });
   const products = allProducts.filter((product) => product.is_sellable);
 
-  // Classifications are keyed by whatever product_id they were saved under —
-  // sku for older rows, the product's real id for ones set through the
-  // classifications screen — so both forms are indexed (see the same pattern
-  // in FinishedGoodsAnalysisTab). Only "sac" is called out; every other
-  // finished good ships in a carton, so that's the default.
-  const packagingFormatByProductId = new Map<string, string | null>();
-  for (const c of classifications) {
-    packagingFormatByProductId.set(c.product_id, c.packaging_format);
-    const product = products.find((p) => p.sku === c.product_id);
-    if (product) packagingFormatByProductId.set(product.id, c.packaging_format);
-  }
-  const packagingWord = (productId: string | null | undefined) =>
-    productId && packagingFormatByProductId.get(productId) === "sac"
-      ? t("production.classifications.packagingFormat.sac")
-      : t("production.classifications.packagingFormat.carton");
+  // "Sold by sac" is marked with the "sac" product tag (Products > Étiquettes),
+  // the same tag pickers use for CARTON/FILM/SCOTCH — not a separate field.
+  // Anything without that tag ships in a carton, so that's the default.
+  const sacTagId = productTags.find((tag) => tag.name.trim().toLowerCase() === "sac")?.id;
+  const packagingWord = (productId: string | null | undefined) => {
+    const product = productId ? products.find((p) => p.id === productId) : undefined;
+    const isSac = !!sacTagId && !!product?.tag_ids?.includes(sacTagId);
+    return isSac ? t("production.classifications.packagingFormat.sac") : t("production.classifications.packagingFormat.carton");
+  };
   const customers = partners.filter((p) => p.kind === "customer" || p.kind === "both");
   const activeCustomers = customers.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
@@ -371,14 +366,19 @@ export function SalesOrdersPage() {
                         transition={{ duration: 0.18 }}
                         className="flex items-start gap-2"
                       >
-                        <Select {...register(`lines.${index}.product_id` as const)}>
-                          <option value="">{t("sales.field.productId")}</option>
-                          {products.map((product) => (
-                            <option key={product.id} value={product.id}>
-                              {product.name}
-                            </option>
-                          ))}
-                        </Select>
+                        <div className="flex-1 space-y-1">
+                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
+                            {t("sales.field.productId")}
+                          </span>
+                          <Select {...register(`lines.${index}.product_id` as const)}>
+                            <option value="">{t("sales.field.productId")}</option>
+                            {products.map((product) => (
+                              <option key={product.id} value={product.id}>
+                                {product.name}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
                         <div className="w-24 space-y-1">
                           <span className="block text-xs font-medium text-foreground">
                             {t("sales.field.qty")} ({packagingWord(watch(`lines.${index}.product_id`))})
@@ -389,23 +389,32 @@ export function SalesOrdersPage() {
                             {...register(`lines.${index}.quantity` as const)}
                           />
                         </div>
-                        <Input
-                          type="number"
-                          step="any"
-                          className="w-24"
-                          placeholder={t("sales.field.unitPrice")}
-                          {...register(`lines.${index}.unit_price` as const)}
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          disabled={fields.length === 1}
-                          onClick={() => remove(index)}
-                          aria-label={t("sales.removeLine")}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="w-24 space-y-1">
+                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
+                            {t("sales.field.unitPrice")}
+                          </span>
+                          <Input
+                            type="number"
+                            step="any"
+                            placeholder={t("sales.field.unitPrice")}
+                            {...register(`lines.${index}.unit_price` as const)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
+                            &nbsp;
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={fields.length === 1}
+                            onClick={() => remove(index)}
+                            aria-label={t("sales.removeLine")}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </motion.div>
                     ))}
                   </AnimatePresence>
@@ -485,14 +494,19 @@ export function SalesOrdersPage() {
                         transition={{ duration: 0.18 }}
                         className="flex items-start gap-2"
                       >
-                        <Select {...registerEdit(`lines.${index}.product_id` as const)}>
-                          <option value="">{t("sales.field.productId")}</option>
-                          {products.map((product) => (
-                            <option key={product.id} value={product.id}>
-                              {product.name}
-                            </option>
-                          ))}
-                        </Select>
+                        <div className="flex-1 space-y-1">
+                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
+                            {t("sales.field.productId")}
+                          </span>
+                          <Select {...registerEdit(`lines.${index}.product_id` as const)}>
+                            <option value="">{t("sales.field.productId")}</option>
+                            {products.map((product) => (
+                              <option key={product.id} value={product.id}>
+                                {product.name}
+                              </option>
+                            ))}
+                          </Select>
+                        </div>
                         <div className="w-24 space-y-1">
                           <span className="block text-xs font-medium text-foreground">
                             {t("sales.field.qty")} ({packagingWord(watchEdit(`lines.${index}.product_id`))})
@@ -503,23 +517,32 @@ export function SalesOrdersPage() {
                             {...registerEdit(`lines.${index}.quantity` as const)}
                           />
                         </div>
-                        <Input
-                          type="number"
-                          step="any"
-                          className="w-24"
-                          placeholder={t("sales.field.unitPrice")}
-                          {...registerEdit(`lines.${index}.unit_price` as const)}
-                        />
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          disabled={editFields.length === 1}
-                          onClick={() => removeEditLine(index)}
-                          aria-label={t("sales.removeLine")}
-                        >
-                          <Trash2 className="h-3.5 w-3.5" />
-                        </Button>
+                        <div className="w-24 space-y-1">
+                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
+                            {t("sales.field.unitPrice")}
+                          </span>
+                          <Input
+                            type="number"
+                            step="any"
+                            placeholder={t("sales.field.unitPrice")}
+                            {...registerEdit(`lines.${index}.unit_price` as const)}
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
+                            &nbsp;
+                          </span>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            disabled={editFields.length === 1}
+                            onClick={() => removeEditLine(index)}
+                            aria-label={t("sales.removeLine")}
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </Button>
+                        </div>
                       </motion.div>
                     ))}
                   </AnimatePresence>
