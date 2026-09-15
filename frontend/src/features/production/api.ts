@@ -60,7 +60,7 @@ export function listUoms(token: string) {
 // --- Product classification ---------------------------------------------
 
 export type ProductCategory = "raw_material" | "semi_finished" | "packaging_component" | "finished_good";
-export type PackagingFormat = "packet" | "carton";
+export type PackagingFormat = "packet" | "carton" | "sac";
 
 export interface ProductClassification {
   product_id: string;

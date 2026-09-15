@@ -11,7 +11,7 @@
 | `production.report.rejected` | 1.0 | production | — | `report_id`, `of_id`, `report_type`, `reason` |
 | `crm.lead.qualified` | 1.0 | crm | — | `lead_id`, `email` |
 | `crm.lead.converted` | 1.0 | crm | — | `lead_id`, `partner_id`, `opportunity_id` |
-| `crm.opportunity.won` | 1.0 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount` |
+| `crm.opportunity.won` | 1.1 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount`, `sales_order_id` — a draft sales order is created synchronously in the same transaction as the win, so `sales_order_id` is always populated |
 | `crm.opportunity.lost` | 1.0 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount` |
 | `sales.order.confirmed` | 1.0 | sales | finance | `order_id`, `partner_id`, `total_amount`, `currency` |
 | `finance.invoice.issued` | 1.0 | finance | — | `invoice_id`, `partner_id`, `amount`, `currency` |

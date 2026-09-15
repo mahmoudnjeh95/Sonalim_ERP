@@ -15,7 +15,8 @@ from modules.crm.api.dashboard_service import CrmDashboardService
 from modules.crm.api.lead_service import LeadService
 from modules.crm.api.opportunity_service import OpportunityService
 from modules.crm.domain.activity import Activity
-from modules.crm.domain.opportunity import Opportunity
+from modules.crm.domain.opportunity import Opportunity, WonLine
+from modules.warehouse.api.location_service import LocationService
 
 router = APIRouter(prefix="/crm", tags=["crm"])
 
@@ -50,6 +51,7 @@ def _opportunity_response(opportunity: Opportunity) -> dict:
         "priority": opportunity.priority,
         "lost_reason": opportunity.lost_reason,
         "created_at": opportunity.created_at,
+        "sales_order_id": opportunity.sales_order_id,
     }
 
 
@@ -267,9 +269,17 @@ class CreateOpportunityRequest(BaseModel):
     priority: str = "medium"
 
 
+class WonLineRequest(BaseModel):
+    product_id: str
+    quantity: float
+
+
 class TransitionOpportunityRequest(BaseModel):
     stage: str
     lost_reason: str | None = None
+    won_lines: list[WonLineRequest] | None = None
+    won_location_id: str | None = None
+    requested_ship_date: datetime.date | None = None
     correlation_id: str | None = None
 
 
@@ -351,6 +361,11 @@ def transition_opportunity(
     body: TransitionOpportunityRequest,
     tenant: TenantContext = Depends(require_permission("crm.manage_opportunities")),
 ) -> dict:
+    won_lines = (
+        [WonLine(product_id=line.product_id, quantity=line.quantity) for line in body.won_lines]
+        if body.won_lines is not None
+        else None
+    )
     with get_connection() as connection:
         service = OpportunityService(connection)
         result = service.transition_stage(
@@ -359,14 +374,34 @@ def transition_opportunity(
             opportunity_id=opportunity_id,
             new_stage=body.stage,
             lost_reason=body.lost_reason,
+            won_lines=won_lines,
+            won_location_id=body.won_location_id,
+            requested_ship_date=body.requested_ship_date,
             correlation_id=body.correlation_id,
         )
         if isinstance(result, Err):
             connection.rollback()
-            code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code == "EMPTY_REASON" else _err_status(result.code)
+            validation_codes = {"EMPTY_REASON", "EMPTY_LINES", "INVALID_QUANTITY", "MISSING_LOCATION"}
+            code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code in validation_codes else _err_status(result.code)
             raise HTTPException(code, {"code": result.code, "message": result.message})
         connection.commit()
     return _opportunity_response(result.value)
+
+
+@router.get("/locations")
+def list_locations_for_opportunities(
+    tenant: TenantContext = Depends(require_permission("crm.manage_opportunities")),
+) -> list[dict]:
+    # Own permission gate (crm.manage_opportunities), not warehouse.view_moves: a sales
+    # rep filling the won-deal dialog needs a location picker without needing warehouse
+    # access. Same pattern as sales calling StockService directly on order confirmation.
+    with get_connection() as connection:
+        service = LocationService(connection)
+        locations = service.list_locations(tenant_id=tenant.tenant_id)
+    return [
+        {"id": location.id, "code": location.code, "name": location.name, "is_blocked": location.is_blocked}
+        for location in locations
+    ]
 
 
 # --- Activities --------------------------------------------------------------

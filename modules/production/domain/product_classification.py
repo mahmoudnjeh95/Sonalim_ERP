@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from core.domain.result import Err, Ok, Result
 
 VALID_CATEGORIES = {"raw_material", "semi_finished", "packaging_component", "finished_good"}
-VALID_PACKAGING_FORMATS = {"packet", "carton"}
+VALID_PACKAGING_FORMATS = {"packet", "carton", "sac"}
 
 
 @dataclass(frozen=True)

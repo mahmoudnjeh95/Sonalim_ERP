@@ -1,9 +1,10 @@
 import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Beaker, Boxes, ClipboardCheck, ClipboardList, Disc3, Factory, LayoutDashboard, NotebookPen, PackageCheck, Recycle, Settings, Tag } from "lucide-react";
+import { Beaker, Boxes, ClipboardCheck, ClipboardList, Disc3, Factory, LayoutDashboard, Lightbulb, NotebookPen, PackageCheck, Recycle, Settings, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
 import { WorkOrdersTab } from "./WorkOrdersTab";
+import { PlanningTab } from "./PlanningTab";
 import { PackagingBomsTab } from "./PackagingBomsTab";
 import { ProductClassificationsTab } from "./ProductClassificationsTab";
 import { WorkCentersTab } from "./WorkCentersTab";
@@ -19,6 +20,7 @@ import { ProductionSettingsTab } from "./ProductionSettingsTab";
 const TABS = [
   { value: "dashboard", labelKey: "production.tabs.dashboard", icon: LayoutDashboard, Component: ProductionDashboardTab },
   { value: "work-orders", labelKey: "production.tabs.workOrders", icon: ClipboardList, Component: WorkOrdersTab },
+  { value: "planning", labelKey: "production.tabs.planning", icon: Lightbulb, Component: PlanningTab },
   { value: "daily-reports", labelKey: "production.tabs.dailyReports", icon: NotebookPen, Component: DailyReportsTab },
   { value: "conditionnement", labelKey: "production.tabs.conditionnement", icon: PackageCheck, Component: ConditionnementTab },
   { value: "validation", labelKey: "production.tabs.validation", icon: ClipboardCheck, Component: ValidationCenterTab },

@@ -75,8 +75,9 @@ export function SalesOrdersPage() {
   const { data: orders = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listOrders(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: allProducts = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
+  const products = allProducts.filter((product) => product.is_sellable);
   const customers = partners.filter((p) => p.kind === "customer" || p.kind === "both");
   const activeCustomers = customers.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
@@ -360,17 +361,18 @@ export function SalesOrdersPage() {
                             </option>
                           ))}
                         </Select>
-                        <Input
-                          type="number"
-                          step={productRequiresIntegerQuantity(watch(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
-                          className="w-20"
-                          placeholder={
-                            productUnit(watch(`lines.${index}.product_id`), products, uoms)
+                        <div className="w-24 space-y-1">
+                          <span className="block text-xs font-medium text-foreground">
+                            {productUnit(watch(`lines.${index}.product_id`), products, uoms)
                               ? `${t("sales.field.qty")} (${productUnit(watch(`lines.${index}.product_id`), products, uoms)})`
-                              : t("sales.field.qty")
-                          }
-                          {...register(`lines.${index}.quantity` as const)}
-                        />
+                              : t("sales.field.qty")}
+                          </span>
+                          <Input
+                            type="number"
+                            step={productRequiresIntegerQuantity(watch(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
+                            {...register(`lines.${index}.quantity` as const)}
+                          />
+                        </div>
                         <Input
                           type="number"
                           step="any"
@@ -475,17 +477,18 @@ export function SalesOrdersPage() {
                             </option>
                           ))}
                         </Select>
-                        <Input
-                          type="number"
-                          step={productRequiresIntegerQuantity(watchEdit(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
-                          className="w-20"
-                          placeholder={
-                            productUnit(watchEdit(`lines.${index}.product_id`), products, uoms)
+                        <div className="w-24 space-y-1">
+                          <span className="block text-xs font-medium text-foreground">
+                            {productUnit(watchEdit(`lines.${index}.product_id`), products, uoms)
                               ? `${t("sales.field.qty")} (${productUnit(watchEdit(`lines.${index}.product_id`), products, uoms)})`
-                              : t("sales.field.qty")
-                          }
-                          {...registerEdit(`lines.${index}.quantity` as const)}
-                        />
+                              : t("sales.field.qty")}
+                          </span>
+                          <Input
+                            type="number"
+                            step={productRequiresIntegerQuantity(watchEdit(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
+                            {...registerEdit(`lines.${index}.quantity` as const)}
+                          />
+                        </div>
                         <Input
                           type="number"
                           step="any"

@@ -24,6 +24,11 @@ def test_validate_classification_accepts_packaging_format_on_finished_good():
     assert isinstance(result, Ok)
 
 
+def test_validate_classification_accepts_sac_packaging_format_on_finished_good():
+    result = validate_classification("finished_good", False, packaging_format="sac")
+    assert isinstance(result, Ok)
+
+
 def test_validate_classification_rejects_packaging_format_on_non_finished_good():
     result = validate_classification("raw_material", False, packaging_format="packet")
     assert isinstance(result, Err)

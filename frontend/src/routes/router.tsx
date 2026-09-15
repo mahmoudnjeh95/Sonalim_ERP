@@ -1,8 +1,9 @@
 import { lazy, Suspense } from "react";
-import { createBrowserRouter, Navigate, Outlet } from "react-router-dom";
+import { createBrowserRouter, Navigate, Outlet, type RouteObject } from "react-router-dom";
 import { useAuth } from "../lib/auth";
 import { AppLayout } from "./AppLayout";
 import { LoginPage } from "./LoginPage";
+import { RouteErrorBoundary } from "./RouteErrorBoundary";
 import { LeadsPage } from "../features/crm/leads/LeadsPage";
 import { PartnersPage } from "../features/partners/PartnersPage";
 import { PartnerDetailsPage } from "../features/partners/PartnerDetailsPage";
@@ -46,44 +47,56 @@ function ProtectedRoute() {
   );
 }
 
-export const router = createBrowserRouter([
-  { path: "/login", element: <LoginPage /> },
+// Every protected leaf route gets the same errorElement so a crash on one
+// page unmounts inside AppLayout's <Outlet /> (sidebar/nav stay usable)
+// instead of taking down the whole app with react-router's default screen.
+const protectedChildren: RouteObject[] = [
+  { path: "/", element: <Navigate to="/crm" replace /> },
   {
-    element: <ProtectedRoute />,
+    path: "/crm",
+    element: (
+      <Suspense fallback={null}>
+        <CrmDashboardPage />
+      </Suspense>
+    ),
+  },
+  { path: "/crm/leads", element: <LeadsPage /> },
+  { path: "/crm/partners", element: <PartnersPage /> },
+  { path: "/crm/partners/:partnerId", element: <PartnerDetailsPage /> },
+  { path: "/crm/opportunities", element: <OpportunitiesPage /> },
+  { path: "/crm/pipeline", element: <PipelinePage /> },
+  { path: "/crm/activities", element: <ActivitiesPage /> },
+  { path: "/production", element: <ProductionPage /> },
+  { path: "/production/ia-assistant", element: <IaAssistantTab /> },
+  { path: "/production/work-orders/:workOrderId", element: <WorkOrderDetailsPage /> },
+  { path: "/quality", element: <QualityPage /> },
+  { path: "/analytics", element: <AnalyticsPage /> },
+  { path: "/maintenance", element: <MaintenancePage /> },
+  { path: "/warehouse", element: <WarehousePage /> },
+  { path: "/products", element: <ProductsPage /> },
+  { path: "/inventories", element: <InventoriesPage /> },
+  { path: "/shipments", element: <ShipmentsPage /> },
+  { path: "/procurement", element: <PurchaseOrdersPage /> },
+  { path: "/sales", element: <SalesOrdersPage /> },
+  { path: "/finance", element: <FinanceInvoicesPage /> },
+  { path: "/admin/users", element: <UsersPage /> },
+  { path: "/admin/roles", element: <RolesPage /> },
+  { path: "/admin/activity-log", element: <ActivityLogPage /> },
+  { path: "/settings", element: <SettingsPage /> },
+  { path: "/hr", element: <HrPage /> },
+].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
+
+export const router = createBrowserRouter([
+  {
+    // Catches errors thrown outside any leaf (e.g. in ProtectedRoute/AppLayout
+    // itself) and unmatched paths (404s), as a last-resort fallback.
+    errorElement: <RouteErrorBoundary />,
     children: [
-      { path: "/", element: <Navigate to="/crm" replace /> },
+      { path: "/login", element: <LoginPage /> },
       {
-        path: "/crm",
-        element: (
-          <Suspense fallback={null}>
-            <CrmDashboardPage />
-          </Suspense>
-        ),
+        element: <ProtectedRoute />,
+        children: protectedChildren,
       },
-      { path: "/crm/leads", element: <LeadsPage /> },
-      { path: "/crm/partners", element: <PartnersPage /> },
-      { path: "/crm/partners/:partnerId", element: <PartnerDetailsPage /> },
-      { path: "/crm/opportunities", element: <OpportunitiesPage /> },
-      { path: "/crm/pipeline", element: <PipelinePage /> },
-      { path: "/crm/activities", element: <ActivitiesPage /> },
-      { path: "/production", element: <ProductionPage /> },
-      { path: "/production/ia-assistant", element: <IaAssistantTab /> },
-      { path: "/production/work-orders/:workOrderId", element: <WorkOrderDetailsPage /> },
-      { path: "/quality", element: <QualityPage /> },
-      { path: "/analytics", element: <AnalyticsPage /> },
-      { path: "/maintenance", element: <MaintenancePage /> },
-      { path: "/warehouse", element: <WarehousePage /> },
-      { path: "/products", element: <ProductsPage /> },
-      { path: "/inventories", element: <InventoriesPage /> },
-      { path: "/shipments", element: <ShipmentsPage /> },
-      { path: "/procurement", element: <PurchaseOrdersPage /> },
-      { path: "/sales", element: <SalesOrdersPage /> },
-      { path: "/finance", element: <FinanceInvoicesPage /> },
-      { path: "/admin/users", element: <UsersPage /> },
-      { path: "/admin/roles", element: <RolesPage /> },
-      { path: "/admin/activity-log", element: <ActivityLogPage /> },
-      { path: "/settings", element: <SettingsPage /> },
-      { path: "/hr", element: <HrPage /> },
     ],
   },
 ]);

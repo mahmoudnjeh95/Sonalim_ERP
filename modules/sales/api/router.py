@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
@@ -22,6 +24,7 @@ class CreateOrderRequest(BaseModel):
     partner_id: str
     location_id: str
     lines: list[OrderLineRequest]
+    requested_ship_date: datetime.date | None = None
 
 
 class ConfirmOrderRequest(BaseModel):
@@ -32,6 +35,7 @@ class UpdateOrderRequest(BaseModel):
     partner_id: str | None = None
     location_id: str | None = None
     lines: list[OrderLineRequest] | None = None
+    requested_ship_date: datetime.date | None = None
 
 
 def _serialize_order(order) -> dict:
@@ -41,6 +45,8 @@ def _serialize_order(order) -> dict:
         "location_id": order.location_id,
         "status": order.status,
         "total_amount": order.total_amount,
+        "requested_ship_date": order.requested_ship_date.isoformat() if order.requested_ship_date else None,
+        "opportunity_id": order.opportunity_id,
         "lines": [
             {"product_id": line.product_id, "quantity": line.quantity, "unit_price": line.unit_price}
             for line in order.lines
@@ -72,6 +78,7 @@ def create_order(
             partner_id=body.partner_id,
             location_id=body.location_id,
             lines=lines,
+            requested_ship_date=body.requested_ship_date,
         )
         connection.commit()
     return _serialize_order(order)
@@ -97,6 +104,7 @@ def update_order(
             partner_id=body.partner_id,
             location_id=body.location_id,
             lines=lines,
+            requested_ship_date=body.requested_ship_date,
         )
         if isinstance(result, Err):
             connection.rollback()

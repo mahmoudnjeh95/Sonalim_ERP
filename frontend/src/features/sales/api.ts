@@ -14,6 +14,8 @@ export interface SalesOrder {
   location_id: string;
   status: SalesOrderStatus;
   total_amount: number;
+  requested_ship_date: string | null;
+  opportunity_id: string | null;
   lines: OrderLine[];
 }
 
@@ -21,12 +23,14 @@ export interface CreateOrderInput {
   partner_id: string;
   location_id: string;
   lines: OrderLine[];
+  requested_ship_date?: string;
 }
 
 export interface UpdateOrderInput {
   partner_id?: string;
   location_id?: string;
   lines?: OrderLine[];
+  requested_ship_date?: string;
 }
 
 export function listOrders(token: string) {

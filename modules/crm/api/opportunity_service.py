@@ -11,13 +11,17 @@ from core.events.outbox import publish_event
 from modules.crm.domain.opportunity import (
     DEFAULT_PROBABILITY_BY_STAGE,
     Opportunity,
+    WonLine,
     transition_opportunity,
     validate_amount,
     validate_lost_reason,
+    validate_won_lines,
 )
+from modules.sales.api.service import SalesOrderService
+from modules.sales.domain.entities import OrderLine
 
 _OPPORTUNITY_COLUMNS = (
-    "id, partner_id, name, stage, amount, expected_close_date, probability, owner_id, priority, lost_reason, created_at"
+    "id, partner_id, name, stage, amount, expected_close_date, probability, owner_id, priority, lost_reason, created_at, sales_order_id"
 )
 
 
@@ -34,6 +38,7 @@ def _opportunity_from_row(row) -> Opportunity:
         priority=row[8],
         lost_reason=row[9],
         created_at=row[10].isoformat() if row[10] else None,
+        sales_order_id=row[11],
     )
 
 
@@ -126,6 +131,7 @@ class OpportunityService:
             priority=priority if priority is not None else current.priority,
             lost_reason=current.lost_reason,
             created_at=current.created_at,
+            sales_order_id=current.sales_order_id,
         )
         validation = validate_amount(updated.amount)
         if isinstance(validation, Err):
@@ -177,6 +183,9 @@ class OpportunityService:
         opportunity_id: str,
         new_stage: str,
         lost_reason: str | None = None,
+        won_lines: list[WonLine] | None = None,
+        won_location_id: str | None = None,
+        requested_ship_date: datetime.date | None = None,
         correlation_id: str | None = None,
     ) -> Result[Opportunity]:
         row = self._connection.execute(
@@ -191,33 +200,61 @@ class OpportunityService:
             reason_validation = validate_lost_reason(lost_reason)
             if isinstance(reason_validation, Err):
                 return reason_validation
+        if new_stage == "won":
+            lines_validation = validate_won_lines(won_lines)
+            if isinstance(lines_validation, Err):
+                return lines_validation
+            if not won_location_id:
+                return Err("MISSING_LOCATION", "a location is required to mark an opportunity won")
 
         result = transition_opportunity(opportunity, new_stage)
         if isinstance(result, Err):
             return result
 
         resolved_lost_reason = lost_reason if new_stage == "lost" else opportunity.lost_reason
+
+        resolved_sales_order_id = opportunity.sales_order_id
+        if new_stage == "won":
+            # Direct in-process call (same transaction), not an event: the opportunity
+            # can't be marked won without the order that represents what was actually
+            # sold, so this needs the immediate result, exactly like SalesOrderService
+            # calling StockService synchronously on confirm.
+            sales_order = SalesOrderService(self._connection).create_order(
+                tenant_id=tenant_id,
+                actor_id=actor_id,
+                partner_id=opportunity.partner_id,
+                location_id=won_location_id,
+                lines=[OrderLine(product_id=line.product_id, quantity=line.quantity, unit_price=0.0) for line in won_lines],
+                requested_ship_date=requested_ship_date,
+                opportunity_id=opportunity_id,
+            )
+            resolved_sales_order_id = sales_order.id
+
         result = Ok(
             Opportunity(
                 id=result.value.id, partner_id=result.value.partner_id, name=result.value.name, stage=result.value.stage,
                 amount=result.value.amount, expected_close_date=result.value.expected_close_date,
                 probability=result.value.probability, owner_id=result.value.owner_id, priority=result.value.priority,
                 lost_reason=resolved_lost_reason, created_at=result.value.created_at,
+                sales_order_id=resolved_sales_order_id,
             )
         )
 
         self._connection.execute(
-            "UPDATE crm.opportunities SET stage = %s, probability = %s, lost_reason = %s WHERE id = %s",
-            (new_stage, result.value.probability, resolved_lost_reason, opportunity_id),
+            "UPDATE crm.opportunities SET stage = %s, probability = %s, lost_reason = %s, sales_order_id = %s WHERE id = %s",
+            (new_stage, result.value.probability, resolved_lost_reason, resolved_sales_order_id, opportunity_id),
         )
         if new_stage in ("won", "lost") and correlation_id is not None:
+            payload = {"opportunity_id": opportunity_id, "partner_id": opportunity.partner_id, "name": opportunity.name, "amount": opportunity.amount}
+            if new_stage == "won":
+                payload["sales_order_id"] = resolved_sales_order_id
             publish_event(
                 self._connection,
                 event_type=f"crm.opportunity.{new_stage}",
                 producer="crm",
                 tenant_id=tenant_id,
                 correlation_id=correlation_id,
-                payload={"opportunity_id": opportunity_id, "partner_id": opportunity.partner_id, "name": opportunity.name, "amount": opportunity.amount},
+                payload=payload,
             )
         record_audit(
             self._connection,
@@ -226,6 +263,11 @@ class OpportunityService:
             action="opportunity.stage_changed",
             entity_type="opportunity",
             entity_id=opportunity_id,
-            payload={"from_stage": opportunity.stage, "to_stage": new_stage, "lost_reason": resolved_lost_reason},
+            payload={
+                "from_stage": opportunity.stage,
+                "to_stage": new_stage,
+                "lost_reason": resolved_lost_reason,
+                "sales_order_id": resolved_sales_order_id,
+            },
         )
         return result

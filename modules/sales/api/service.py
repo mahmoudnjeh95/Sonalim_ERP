@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 import psycopg
 from ulid import ULID
 
@@ -15,12 +17,23 @@ class SalesOrderService:
         self._connection = connection
 
     def create_order(
-        self, *, tenant_id: str, actor_id: str, partner_id: str, location_id: str, lines: list[OrderLine]
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        partner_id: str,
+        location_id: str,
+        lines: list[OrderLine],
+        requested_ship_date: datetime.date | None = None,
+        opportunity_id: str | None = None,
     ) -> SalesOrder:
         order_id = str(ULID())
         self._connection.execute(
-            "INSERT INTO sales.orders (id, tenant_id, partner_id, location_id, status) VALUES (%s, %s, %s, %s, 'draft')",
-            (order_id, tenant_id, partner_id, location_id),
+            """
+            INSERT INTO sales.orders (id, tenant_id, partner_id, location_id, status, requested_ship_date, opportunity_id)
+            VALUES (%s, %s, %s, %s, 'draft', %s, %s)
+            """,
+            (order_id, tenant_id, partner_id, location_id, requested_ship_date, opportunity_id),
         )
         for line in lines:
             self._connection.execute(
@@ -37,24 +50,38 @@ class SalesOrderService:
             action="sales_order.created",
             entity_type="sales_order",
             entity_id=order_id,
-            payload={"partner_id": partner_id, "line_count": len(lines)},
+            payload={"partner_id": partner_id, "line_count": len(lines), "opportunity_id": opportunity_id},
         )
-        return SalesOrder(id=order_id, partner_id=partner_id, location_id=location_id, status="draft", lines=tuple(lines))
+        return SalesOrder(
+            id=order_id,
+            partner_id=partner_id,
+            location_id=location_id,
+            status="draft",
+            lines=tuple(lines),
+            requested_ship_date=requested_ship_date,
+            opportunity_id=opportunity_id,
+        )
 
     def list_orders(self, tenant_id: str, status: str | None = None) -> list[SalesOrder]:
         if status is not None:
             rows = self._connection.execute(
-                "SELECT id, partner_id, location_id, status FROM sales.orders WHERE tenant_id = %s AND status = %s ORDER BY id DESC",
+                """
+                SELECT id, partner_id, location_id, status, requested_ship_date, opportunity_id
+                FROM sales.orders WHERE tenant_id = %s AND status = %s ORDER BY id DESC
+                """,
                 (tenant_id, status),
             ).fetchall()
         else:
             rows = self._connection.execute(
-                "SELECT id, partner_id, location_id, status FROM sales.orders WHERE tenant_id = %s ORDER BY id DESC",
+                """
+                SELECT id, partner_id, location_id, status, requested_ship_date, opportunity_id
+                FROM sales.orders WHERE tenant_id = %s ORDER BY id DESC
+                """,
                 (tenant_id,),
             ).fetchall()
 
         orders = []
-        for order_id, partner_id, location_id, order_status in rows:
+        for order_id, partner_id, location_id, order_status, requested_ship_date, opportunity_id in rows:
             line_rows = self._connection.execute(
                 "SELECT product_id, quantity, unit_price FROM sales.order_lines WHERE order_id = %s",
                 (order_id,),
@@ -63,7 +90,17 @@ class SalesOrderService:
                 OrderLine(product_id=product_id, quantity=float(quantity), unit_price=float(unit_price))
                 for product_id, quantity, unit_price in line_rows
             )
-            orders.append(SalesOrder(id=order_id, partner_id=partner_id, location_id=location_id, status=order_status, lines=lines))
+            orders.append(
+                SalesOrder(
+                    id=order_id,
+                    partner_id=partner_id,
+                    location_id=location_id,
+                    status=order_status,
+                    lines=lines,
+                    requested_ship_date=requested_ship_date,
+                    opportunity_id=opportunity_id,
+                )
+            )
         return orders
 
     def admin_update_order(
@@ -75,14 +112,18 @@ class SalesOrderService:
         partner_id: str | None = None,
         location_id: str | None = None,
         lines: list[OrderLine] | None = None,
+        requested_ship_date: datetime.date | None = None,
     ) -> Result[SalesOrder]:
         row = self._connection.execute(
-            "SELECT partner_id, location_id, status FROM sales.orders WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            """
+            SELECT partner_id, location_id, status, requested_ship_date, opportunity_id
+            FROM sales.orders WHERE id = %s AND tenant_id = %s FOR UPDATE
+            """,
             (order_id, tenant_id),
         ).fetchone()
         if row is None:
             return Err("NOT_FOUND", f"order {order_id} not found")
-        current_partner_id, current_location_id, status = row
+        current_partner_id, current_location_id, status, current_requested_ship_date, opportunity_id = row
 
         line_rows = self._connection.execute(
             "SELECT product_id, quantity, unit_price FROM sales.order_lines WHERE order_id = %s", (order_id,)
@@ -95,10 +136,11 @@ class SalesOrderService:
         updated_partner_id = partner_id if partner_id is not None else current_partner_id
         updated_location_id = location_id if location_id is not None else current_location_id
         updated_lines = tuple(lines) if lines is not None else current_lines
+        updated_requested_ship_date = requested_ship_date if requested_ship_date is not None else current_requested_ship_date
 
         self._connection.execute(
-            "UPDATE sales.orders SET partner_id = %s, location_id = %s WHERE id = %s AND tenant_id = %s",
-            (updated_partner_id, updated_location_id, order_id, tenant_id),
+            "UPDATE sales.orders SET partner_id = %s, location_id = %s, requested_ship_date = %s WHERE id = %s AND tenant_id = %s",
+            (updated_partner_id, updated_location_id, updated_requested_ship_date, order_id, tenant_id),
         )
         if lines is not None:
             self._connection.execute("DELETE FROM sales.order_lines WHERE order_id = %s", (order_id,))
@@ -119,16 +161,29 @@ class SalesOrderService:
             entity_id=order_id,
             payload={"partner_id": updated_partner_id, "location_id": updated_location_id, "line_count": len(updated_lines)},
         )
-        return Ok(SalesOrder(id=order_id, partner_id=updated_partner_id, location_id=updated_location_id, status=status, lines=updated_lines))
+        return Ok(
+            SalesOrder(
+                id=order_id,
+                partner_id=updated_partner_id,
+                location_id=updated_location_id,
+                status=status,
+                lines=updated_lines,
+                requested_ship_date=updated_requested_ship_date,
+                opportunity_id=opportunity_id,
+            )
+        )
 
     def confirm_order(self, *, tenant_id: str, actor_id: str, order_id: str, correlation_id: str) -> Result[SalesOrder]:
         row = self._connection.execute(
-            "SELECT partner_id, location_id, status FROM sales.orders WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            """
+            SELECT partner_id, location_id, status, requested_ship_date, opportunity_id
+            FROM sales.orders WHERE id = %s AND tenant_id = %s FOR UPDATE
+            """,
             (order_id, tenant_id),
         ).fetchone()
         if row is None:
             return Err("NOT_FOUND", f"order {order_id} not found")
-        partner_id, location_id, status = row
+        partner_id, location_id, status, requested_ship_date, opportunity_id = row
 
         line_rows = self._connection.execute(
             "SELECT product_id, quantity, unit_price FROM sales.order_lines WHERE order_id = %s",
@@ -138,7 +193,15 @@ class SalesOrderService:
             OrderLine(product_id=product_id, quantity=float(quantity), unit_price=float(unit_price))
             for product_id, quantity, unit_price in line_rows
         )
-        order = SalesOrder(id=order_id, partner_id=partner_id, location_id=location_id, status=status, lines=lines)
+        order = SalesOrder(
+            id=order_id,
+            partner_id=partner_id,
+            location_id=location_id,
+            status=status,
+            lines=lines,
+            requested_ship_date=requested_ship_date,
+            opportunity_id=opportunity_id,
+        )
 
         result = confirm(order)
         if isinstance(result, Err):

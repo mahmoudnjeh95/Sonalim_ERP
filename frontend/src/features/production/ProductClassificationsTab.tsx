@@ -46,7 +46,7 @@ import { Badge } from "../../components/ui/badge";
 const CATEGORY_VALUES: ProductCategory[] = ["raw_material", "semi_finished", "packaging_component", "finished_good"];
 type CategoryFilter = "all" | ProductCategory;
 
-const PACKAGING_FORMAT_VALUES: PackagingFormat[] = ["packet", "carton"];
+const PACKAGING_FORMAT_VALUES: PackagingFormat[] = ["packet", "carton", "sac"];
 
 const formSchema = z
   .object({
@@ -54,7 +54,7 @@ const formSchema = z
     category: z.enum(["raw_material", "semi_finished", "packaging_component", "finished_good"]),
     is_regrind: z.boolean(),
     is_water: z.boolean(),
-    packaging_format: z.enum(["packet", "carton"]).optional(),
+    packaging_format: z.enum(["packet", "carton", "sac"]).optional(),
   })
   .refine((data) => !(data.is_regrind && data.is_water), {
     message: "A product cannot be both regrind and water/humidity",
@@ -83,6 +83,7 @@ export function ProductClassificationsTab() {
   const PACKAGING_FORMAT_LABEL: Record<PackagingFormat, string> = {
     packet: t("production.classifications.packagingFormat.packet"),
     carton: t("production.classifications.packagingFormat.carton"),
+    sac: t("production.classifications.packagingFormat.sac"),
   };
 
   const { data: classifications = [], isLoading } = useQuery({

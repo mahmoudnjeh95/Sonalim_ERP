@@ -25,6 +25,7 @@ import { listPartners } from "../../partners/api";
 import { listOpportunities, NEXT_STAGES, transitionOpportunity, type Opportunity } from "./api";
 import { OpportunityFormDialog } from "./OpportunityFormDialog";
 import { MarkLostDialog } from "./MarkLostDialog";
+import { MarkWonDialog } from "./MarkWonDialog";
 
 const OPPORTUNITIES_QUERY_KEY = ["crm", "opportunities"] as const;
 const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
@@ -46,6 +47,7 @@ export function OpportunitiesPage() {
   const [stageFilter, setStageFilter] = useState<StageFilter>("all");
   const [mineOnly, setMineOnly] = useState(false);
   const [losingOpportunity, setLosingOpportunity] = useState<Opportunity | null>(null);
+  const [winningOpportunity, setWinningOpportunity] = useState<Opportunity | null>(null);
 
   const {
     data: opportunities = [],
@@ -217,7 +219,11 @@ export function OpportunitiesPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => transitionMutation.mutate({ id: opportunity.id, stage: advanceStage })}
+                onClick={() =>
+                  advanceStage === "won"
+                    ? setWinningOpportunity(opportunity)
+                    : transitionMutation.mutate({ id: opportunity.id, stage: advanceStage })
+                }
                 disabled={isUpdating}
               >
                 {advanceStage === "won" ? <Trophy className="h-3.5 w-3.5" /> : <ArrowRightCircle className="h-3.5 w-3.5" />}
@@ -372,6 +378,7 @@ export function OpportunitiesPage() {
         opportunity={editingOpportunity}
       />
       <MarkLostDialog opportunity={losingOpportunity} onOpenChange={(open) => !open && setLosingOpportunity(null)} />
+      <MarkWonDialog opportunity={winningOpportunity} onOpenChange={(open) => !open && setWinningOpportunity(null)} />
     </div>
   );
 }

@@ -108,7 +108,10 @@ export function FinishedGoodsAnalysisTab() {
   let hasUnclassifiedFinishedGood = false;
   for (const c of classifications) {
     if (c.category !== "finished_good") continue;
-    const unit: PackagingUnit = c.packaging_format ?? "other";
+    // Sac is a real classification but isn't tracked as its own bucket on this
+    // packet-vs-carton dashboard, so it counts toward "other" here rather than
+    // toward the unclassified hint (which is only about products with no format set).
+    const unit: PackagingUnit = c.packaging_format === "packet" || c.packaging_format === "carton" ? c.packaging_format : "other";
     if (!c.packaging_format) hasUnclassifiedFinishedGood = true;
     packagingUnit.set(c.product_id, unit);
     const product = products.find((p) => p.sku === c.product_id);

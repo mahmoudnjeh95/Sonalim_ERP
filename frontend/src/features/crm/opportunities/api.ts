@@ -15,6 +15,19 @@ export interface Opportunity {
   priority: Priority;
   lost_reason: string | null;
   created_at: string;
+  sales_order_id: string | null;
+}
+
+export interface WonLineInput {
+  product_id: string;
+  quantity: number;
+}
+
+export interface OpportunityLocation {
+  id: string;
+  code: string;
+  name: string;
+  is_blocked: boolean;
 }
 
 export interface CreateOpportunityInput {
@@ -72,11 +85,28 @@ export function transitionOpportunity(
   token: string,
   opportunityId: string,
   stage: OpportunityStage,
-  options?: { lostReason?: string; correlationId?: string },
+  options?: {
+    lostReason?: string;
+    wonLines?: WonLineInput[];
+    wonLocationId?: string;
+    requestedShipDate?: string;
+    correlationId?: string;
+  },
 ) {
   return apiFetch<Opportunity>(`/crm/opportunities/${opportunityId}/transition`, {
     method: "POST",
     token,
-    body: { stage, lost_reason: options?.lostReason, correlation_id: options?.correlationId },
+    body: {
+      stage,
+      lost_reason: options?.lostReason,
+      won_lines: options?.wonLines,
+      won_location_id: options?.wonLocationId,
+      requested_ship_date: options?.requestedShipDate,
+      correlation_id: options?.correlationId,
+    },
   });
+}
+
+export function listOpportunityLocations(token: string) {
+  return apiFetch<OpportunityLocation[]>("/crm/locations", { token });
 }

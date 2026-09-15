@@ -33,6 +33,7 @@ import {
 } from "./api";
 import { OpportunityFormDialog } from "./OpportunityFormDialog";
 import { MarkLostDialog } from "./MarkLostDialog";
+import { MarkWonDialog } from "./MarkWonDialog";
 
 const stages: OpportunityStage[] = ["prospecting", "qualification", "proposal", "negotiation", "won", "lost"];
 const OPPORTUNITIES_QUERY_KEY = ["crm", "opportunities"] as const;
@@ -65,6 +66,7 @@ export function PipelinePage() {
   const [draggedOpportunity, setDraggedOpportunity] = useState<Opportunity | null>(null);
   const [dragOverStage, setDragOverStage] = useState<OpportunityStage | null>(null);
   const [losingOpportunity, setLosingOpportunity] = useState<Opportunity | null>(null);
+  const [winningOpportunity, setWinningOpportunity] = useState<Opportunity | null>(null);
   const [formOpen, setFormOpen] = useState(false);
   const [editingOpportunity, setEditingOpportunity] = useState<Opportunity | null>(null);
   const [search, setSearch] = useState("");
@@ -96,6 +98,10 @@ export function PipelinePage() {
   function moveToStage(opportunity: Opportunity, stage: OpportunityStage) {
     if (stage === "lost") {
       setLosingOpportunity(opportunity);
+      return;
+    }
+    if (stage === "won") {
+      setWinningOpportunity(opportunity);
       return;
     }
     mutation.mutate({ id: opportunity.id, stage });
@@ -236,6 +242,7 @@ export function PipelinePage() {
 
       <OpportunityFormDialog open={formOpen} onOpenChange={setFormOpen} opportunity={editingOpportunity} />
       <MarkLostDialog opportunity={losingOpportunity} onOpenChange={(open) => !open && setLosingOpportunity(null)} />
+      <MarkWonDialog opportunity={winningOpportunity} onOpenChange={(open) => !open && setWinningOpportunity(null)} />
     </div>
   );
 }

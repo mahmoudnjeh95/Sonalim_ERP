@@ -87,8 +87,8 @@ function relativeTime(iso: string, language: Language) {
 
 const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
 
-function formatMoney(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
+function formatCurrency(amount: number) {
+  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
 }
 
 export function CrmDashboardPage() {
@@ -135,24 +135,27 @@ export function CrmDashboardPage() {
   // Snapshot totals (forecast, won) tell you where things stand; these tell you
   // what to do next. Keeping them apart means a scan of the page answers "am I
   // okay?" before it answers "how did I get here?".
+  const overdue = data?.overdue;
+  const dueThisWeek = data?.due_this_week;
+
   const attentionRows = [
-    ...(data && data.overdue.count > 0
+    ...(overdue && overdue.count > 0
       ? [
           {
             code: "overdue",
             tone: "destructive" as const,
             title: t("crm.dashboard.attention.overdue"),
-            detail: `${data.overdue.count} · $${formatMoney(data.overdue.amount)}`,
+            detail: `${overdue.count} · ${formatCurrency(overdue.amount)}`,
           },
         ]
       : []),
-    ...(data && data.due_this_week.count > 0
+    ...(dueThisWeek && dueThisWeek.count > 0
       ? [
           {
             code: "due-this-week",
             tone: "warning" as const,
             title: t("crm.dashboard.attention.dueThisWeek"),
-            detail: `${data.due_this_week.count} · $${formatMoney(data.due_this_week.amount)}`,
+            detail: `${dueThisWeek.count} · ${formatCurrency(dueThisWeek.amount)}`,
           },
         ]
       : []),
@@ -188,24 +191,24 @@ export function CrmDashboardPage() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
             <StatCard
               label={t("crm.dashboard.stat.forecast")}
-              value={Math.round(data.forecast.amount)}
+              value={Math.round(data.forecast?.amount ?? 0)}
               icon={<Target className="h-5 w-5" />}
               accent="primary"
-              prefix="$"
+              unit="F CFA"
             />
             <StatCard
               label={t("crm.dashboard.stat.forecastWeighted")}
-              value={Math.round(data.forecast_weighted.amount)}
+              value={Math.round(data.forecast_weighted?.amount ?? 0)}
               icon={<Target className="h-5 w-5" />}
               accent="primary"
-              prefix="$"
+              unit="F CFA"
             />
             <StatCard
               label={t("crm.dashboard.stat.won")}
               value={Math.round(data.won_amount)}
               icon={<Trophy className="h-5 w-5" />}
               accent="success"
-              prefix="$"
+              unit="F CFA"
             />
             <StatCard
               label={t("crm.dashboard.stat.winRate")}
@@ -220,7 +223,7 @@ export function CrmDashboardPage() {
               value={Math.round(avgDealSize ?? 0)}
               icon={<Coins className="h-5 w-5" />}
               accent="accent"
-              prefix="$"
+              unit="F CFA"
             />
           </div>
 
