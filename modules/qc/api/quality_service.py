@@ -234,7 +234,43 @@ class QualityReportService:
             # None rather than 100% when nothing was inspected: "no data" and
             # "everything passed" are different answers.
             "conformity_rate": (conforming / total) if total > 0 else None,
+            "pending_nc_reports": self._reports_needing_nc(tenant_id=tenant_id, of_id=of_id),
         }
+
+    def _reports_needing_nc(self, *, tenant_id: str, of_id: str) -> list[dict]:
+        """Validated reports that logged a defect but never got a case raised for it.
+
+        A carton flagged `non_conforming_cartons` on the inspection form is only
+        an observation -- nothing pulls it off the market until someone raises a
+        non-conformity ticket against it (decision 21, see
+        `NonConformityService.get_rejected_quantity_for_of`). That second step is
+        manual, so a validated report can sit indefinitely with a defect nobody
+        acted on; this is what lets a screen say so instead of only showing a
+        conformity rate that already includes the drop.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT r.id, r.report_date, d.non_conforming_cartons
+            FROM qc.quality_reports r
+            JOIN qc.quality_report_details d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            WHERE r.tenant_id = %s AND r.of_id = %s AND r.status = 'validated'
+              AND d.non_conforming_cartons > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM qc.non_conformities n
+                  WHERE n.tenant_id = r.tenant_id AND n.quality_report_id = r.id
+              )
+            ORDER BY r.report_date DESC
+            """,
+            (tenant_id, of_id),
+        ).fetchall()
+        return [
+            {
+                "report_id": report_id,
+                "report_date": report_date.isoformat(),
+                "non_conforming_cartons": float(non_conforming_cartons),
+            }
+            for report_id, report_date, non_conforming_cartons in rows
+        ]
 
     GRAINS = ("day", "week", "month", "year")
 

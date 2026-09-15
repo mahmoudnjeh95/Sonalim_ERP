@@ -57,6 +57,7 @@ import {
   listProducts,
   listReports,
   listWorkOrders,
+  reviseReport,
   submitReport,
   updateConditionnementReport,
   type ConditionnementReportDetail,
@@ -260,13 +261,15 @@ export function ConditionnementTab() {
   const collapseInitializedFor = useRef<GroupByOption | null>(null);
   const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
   const [openMode, setOpenMode] = useState<"view" | "edit" | "history" | "delete">("view");
+  const [autoResubmit, setAutoResubmit] = useState(false);
   // Which report is open lives in the URL as well as in state, so the OF
   // details page can link straight to one instead of landing on the list.
   const [searchParams, setSearchParams] = useSearchParams();
   const linkedId = searchParams.get("report");
-  function openReportAt(report: ProductionReport, mode: "view" | "edit" | "history" | "delete") {
+  function openReportAt(report: ProductionReport, mode: "view" | "edit" | "history" | "delete", options?: { autoResubmit?: boolean }) {
     setOpenReport(report);
     setOpenMode(mode);
+    setAutoResubmit(options?.autoResubmit ?? false);
   }
 
   const { data: reports = [], isLoading } = useQuery({
@@ -356,6 +359,18 @@ export function ConditionnementTab() {
     },
     onError: (error) => {
       toast.error(t("production.reports.submitError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
+  });
+
+  const reviseMutation = useMutation({
+    mutationFn: (reportId: string) => reviseReport(token, reportId),
+    onSuccess: (revised) => {
+      openReportAt(revised, "edit", { autoResubmit: true });
+    },
+    onError: (error) => {
+      toast.error(t("production.reports.resubmitError"), {
         description: error instanceof ApiError ? error.message : undefined,
       });
     },
@@ -461,6 +476,8 @@ export function ConditionnementTab() {
           onOpenReport={(mode) => openReportAt(r, mode)}
           onSubmitReport={() => submitMutation.mutate(r.id)}
           isSubmitting={submitMutation.isPending && submitMutation.variables === r.id}
+          onReviseReport={() => reviseMutation.mutate(r.id)}
+          isResubmitting={reviseMutation.isPending && reviseMutation.variables === r.id}
         />
       ),
     },
@@ -755,9 +772,11 @@ export function ConditionnementTab() {
           uoms={uoms}
           suppliers={suppliers}
           initialMode={openMode}
+          autoResubmit={autoResubmit}
           onClose={() => {
             setOpenReport(null);
             setOpenMode("view");
+            setAutoResubmit(false);
             // Drop the deep link too, or closing reopens it next render.
             if (linkedId) {
               const next = new URLSearchParams(searchParams);
@@ -786,6 +805,7 @@ export function PackingReportDialog({
   uoms,
   suppliers,
   initialMode,
+  autoResubmit,
   onClose,
 }: {
   report: ProductionReport;
@@ -797,6 +817,7 @@ export function PackingReportDialog({
   uoms: { id: string; code: string }[];
   suppliers: Partner[];
   initialMode?: "view" | "edit" | "history" | "delete";
+  autoResubmit?: boolean;
   onClose: () => void;
 }) {
   const { session } = useAuth();
@@ -858,22 +879,30 @@ export function PackingReportDialog({
   }
 
   const saveMutation = useMutation({
-    mutationFn: (input: CreateForm) => {
+    mutationFn: async (input: CreateForm) => {
+      let updated: ProductionReport;
       if (report.status === "validated") {
-        return correctValidatedConditionnementReport(token, report.id, toDetail(input), reason);
+        updated = await correctValidatedConditionnementReport(token, report.id, toDetail(input), reason);
+      } else if (report.status === "submitted") {
+        updated = await correctConditionnementReport(token, report.id, toDetail(input), reason);
+      } else {
+        updated = await updateConditionnementReport(token, report.id, toDetail(input));
       }
-      if (report.status === "submitted") {
-        return correctConditionnementReport(token, report.id, toDetail(input), reason);
+
+      // If this is a resubmit flow, chain a submit call after save succeeds
+      if (autoResubmit) {
+        await submitReport(token, report.id);
       }
-      return updateConditionnementReport(token, report.id, toDetail(input));
+
+      return updated;
     },
     onSuccess: () => {
       invalidate();
-      toast.success(t("production.reports.updated"));
+      toast.success(autoResubmit ? t("production.reports.resubmitted") : t("production.reports.updated"));
       onClose();
     },
     onError: (error) => {
-      toast.error(t("production.reports.updateError"), {
+      toast.error(autoResubmit ? t("production.reports.resubmitError") : t("production.reports.updateError"), {
         description: error instanceof ApiError ? error.message : undefined,
       });
     },
@@ -1152,11 +1181,7 @@ function DailyReportPackagingHint({ dailyReportId }: { dailyReportId: string | u
       <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
         {t("production.conditionnement.hint.dailyReport.title")}
       </p>
-      <div className="grid grid-cols-3 gap-2 text-sm">
-        <div>
-          <span className="text-muted-foreground">{t("production.conditionnement.hint.dailyReport.dough")}: </span>
-          {formatQuantity(detail.dough_quantity, "kg")}
-        </div>
+      <div className="grid grid-cols-2 gap-2 text-sm">
         <div>
           <span className="text-muted-foreground">
             {t("production.conditionnement.hint.dailyReport.finishedProduct")}:{" "}
@@ -1202,6 +1227,13 @@ function PackingDetailFields({
   // distinct tagged products -- which one applies is just whichever the
   // operator picks here, not a separate field.
   const rubanOptions = packagingRoleOptions(products, tagId("RUBAN"), orderType, form.watch("ruban_product_id"));
+  // The déchet "Emballage" dropdown can only ever be one of these -- never a
+  // finished good or an unrelated raw material, and never the whole catalog.
+  const packagingWasteProducts = Array.from(
+    new Map(
+      [...filmOptions, ...cartonOptions, ...scotchOptions, ...rubanOptions].map((p) => [p.id, p]),
+    ).values(),
+  );
   // Packaging leaves stock in its own unit and finished goods enter in theirs,
   // so every quantity here states the unit the warehouse will move.
   const goodsUnit = productUnit(finishedProductId, products, uoms);
@@ -1459,6 +1491,7 @@ function PackingDetailFields({
             // -- picking one of three would be a guess, not a default.
             category === "product" ? finishedProductId || undefined : undefined
           }
+          productsFor={(category) => (category === "packaging" ? packagingWasteProducts : products)}
         />
       </section>
 
@@ -1522,11 +1555,15 @@ function PackingRowActions({
   onOpenReport,
   onSubmitReport,
   isSubmitting,
+  onReviseReport,
+  isResubmitting,
 }: {
   report: ProductionReport;
   onOpenReport: (mode: "edit" | "history" | "delete") => void;
   onSubmitReport: () => void;
   isSubmitting: boolean;
+  onReviseReport: () => void;
+  isResubmitting: boolean;
 }) {
   const { t } = useI18n();
 
@@ -1535,13 +1572,25 @@ function PackingRowActions({
       {report.status === "rejected" && report.rejection_reason && (
         <span className="mr-1 text-xs text-destructive">{report.rejection_reason}</span>
       )}
-      <Button size="sm" variant="ghost" aria-label={t("common.edit")} onClick={() => onOpenReport("edit")}>
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t("common.edit")}
+        onClick={() => (report.status === "rejected" ? onReviseReport() : onOpenReport("edit"))}
+        disabled={report.status === "rejected" && isResubmitting}
+      >
         <Pencil className="h-3.5 w-3.5" />
       </Button>
       {report.status === "draft" && (
         <Button size="sm" variant="outline" onClick={onSubmitReport} disabled={isSubmitting}>
           <Send className="h-3.5 w-3.5" />
           {isSubmitting ? t("production.reports.submitting") : t("production.reports.submit")}
+        </Button>
+      )}
+      {report.status === "rejected" && (
+        <Button size="sm" variant="outline" onClick={onReviseReport} disabled={isResubmitting}>
+          <Send className="h-3.5 w-3.5" />
+          {isResubmitting ? t("production.reports.resubmitting") : t("production.reports.resubmit")}
         </Button>
       )}
       <Button

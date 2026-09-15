@@ -96,6 +96,9 @@ const detailSchema = z.object({
   raw_material_location_id: z.string().optional(),
   regrind_input_quantity: z.coerce.number().min(0),
   regrind_input_product_id: z.string().optional(),
+  // Not a visible field: no input renders it. Kept in the schema purely so an
+  // edit round-trips the value the backend already has instead of the
+  // pydantic request model defaulting the column back to 0 on save.
   dough_quantity: z.coerce.number().min(0),
   finished_product_quantity: z.coerce.number().min(0),
   regrind_quantity: z.coerce.number().min(0),
@@ -1095,8 +1098,8 @@ function DailyDetailFields({
   const { t } = useI18n();
   // Every figure is entered in its product's own stock unit — the same unit the
   // warehouse deducts in — so the label states it rather than offering a choice.
-  // The first line stands in for "the semoule unit" where one figure (dough)
-  // needs a single unit to show — dough is the mix of whatever was poured.
+  // The first line stands in for "the semoule unit" where finished product
+  // needs a single unit to show, since it's reported as a mass, not per-item.
   const semolinaUnit = productUnit(form.watch("semolina_lines.0.product_id"), products, uoms);
   const rebroyatUnit = productUnit(form.watch("regrind_input_product_id"), products, uoms);
   // What the shift *produced* as rebroyat is always the tenant's one rebroyat
@@ -1493,7 +1496,13 @@ function ReportRowActions({
       {report.status === "rejected" && report.rejection_reason && (
         <span className="mr-1 text-xs text-destructive">{report.rejection_reason}</span>
       )}
-      <Button size="sm" variant="ghost" aria-label={t("common.edit")} onClick={() => onOpenReport("edit")}>
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t("common.edit")}
+        onClick={() => (report.status === "rejected" ? onReviseReport() : onOpenReport("edit"))}
+        disabled={report.status === "rejected" && isResubmitting}
+      >
         <Pencil className="h-3.5 w-3.5" />
       </Button>
       {report.status === "draft" && (

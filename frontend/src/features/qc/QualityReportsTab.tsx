@@ -1150,7 +1150,13 @@ function QualityRowActions({
       {report.status === "rejected" && report.rejection_reason && (
         <span className="mr-1 text-xs text-destructive">{report.rejection_reason}</span>
       )}
-      <Button size="sm" variant="ghost" aria-label={t("common.edit")} onClick={() => onOpenReport("edit")}>
+      <Button
+        size="sm"
+        variant="ghost"
+        aria-label={t("common.edit")}
+        onClick={() => (report.status === "rejected" ? onReviseReport() : onOpenReport("edit"))}
+        disabled={report.status === "rejected" && isResubmitting}
+      >
         <Pencil className="h-3.5 w-3.5" />
       </Button>
       {report.status === "draft" && (

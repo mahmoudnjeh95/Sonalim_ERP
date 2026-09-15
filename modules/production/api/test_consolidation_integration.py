@@ -505,6 +505,51 @@ def test_an_unvalidated_quality_report_does_not_count(db, env, of):
     assert result["conformity_rate"] is None
 
 
+def test_a_validated_defect_with_no_case_raised_is_flagged(db, env, of):
+    """A validated report can log `non_conforming_cartons` and still have nobody
+    raise the case for it -- that carton then never gets pulled off the market
+    (decision 21 in NonConformityService.get_rejected_quantity_for_of), which a
+    conformity percentage alone cannot show. `pending_nc_reports` is what lets a
+    screen warn about it, and it must clear once the case is actually raised.
+    """
+    packing = _packing(db, env, of, date=datetime.date(2026, 9, 1))
+    quality = QualityReportService(db)
+    created = quality.create_report(
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.id,
+        detail=QualityReportDetail(conforming_cartons=90, non_conforming_cartons=10, defect_details="bad seal"),
+    )
+    report = created.value["report"]
+    quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    quality.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+    )
+
+    result = _consolidate(db, of)["quality"]
+    assert result["pending_nc_reports"] == [
+        {"report_id": report.id, "report_date": "2026-09-01", "non_conforming_cartons": 10.0}
+    ]
+
+    from modules.qc.api.non_conformity_service import NonConformityService
+
+    quarantine = str(ULID())
+    db.execute(
+        """
+        INSERT INTO warehouse.locations (id, tenant_id, code, name, is_blocked, blocked_reason)
+        VALUES (%s, %s, 'CONSO-QUAR', 'Quarantine', TRUE, 'non-conformity')
+        """,
+        (quarantine, TENANT),
+    )
+    raised = NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, product_id=env["product"],
+        quantity=1, source_location_id=env["location"], quarantine_location_id=quarantine,
+        defect_type="bad seal", correlation_id=str(ULID()), quality_report_id=report.id,
+    )
+    assert isinstance(raised, Ok), getattr(raised, "message", "")
+
+    result = _consolidate(db, of)["quality"]
+    assert result["pending_nc_reports"] == []
+
+
 # --- yield, recomputed off the reports --------------------------------------
 
 

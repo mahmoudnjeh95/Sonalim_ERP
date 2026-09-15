@@ -46,6 +46,7 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
   products,
   uoms,
   defaultProductFor,
+  productsFor,
   fixedUnit,
 }: {
   form: UseFormReturn<TFieldValues>;
@@ -59,6 +60,13 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
    * shift can override beats an empty dropdown they must resolve every time.
    */
   defaultProductFor?: (category: WasteCategory) => string | undefined;
+  /**
+   * Narrows the dropdown to what a category can actually lose -- packaging
+   * waste can only be film/carton/scotch/ruban, never a finished good or an
+   * unrelated raw material. Defaults to the full `products` list when a
+   * category has no narrower set of its own.
+   */
+  productsFor?: (category: WasteCategory) => { id: string; name: string; uom_id: string }[];
   /**
    * Overrides the per-row unit derived from the chosen product. The daily
    * report's déchets are always weighed in kg regardless of how the item
@@ -99,6 +107,8 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
             const productId = form.watch(`${name}.${index}.product_id` as Path<TFieldValues>) as
               | string
               | undefined;
+            const rowCategory = form.watch(`${name}.${index}.category` as Path<TFieldValues>) as WasteCategory;
+            const rowProducts = productsFor?.(rowCategory) ?? products;
             const unit = fixedUnit ?? productUnit(productId, products, uoms);
             return (
               <div
@@ -130,7 +140,13 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
                     {...form.register(`${name}.${index}.product_id` as Path<TFieldValues>)}
                   >
                     <option value="">—</option>
-                    {products.map((product) => (
+                    {/* An already-saved line may reference a product the current
+                        category filter would exclude (retagged since) -- keep it
+                        selectable so opening the report for edit doesn't blank it. */}
+                    {(rowProducts.some((p) => p.id === productId)
+                      ? rowProducts
+                      : [...rowProducts, ...products.filter((p) => p.id === productId)]
+                    ).map((product) => (
                       <option key={product.id} value={product.id}>
                         {product.name}
                       </option>

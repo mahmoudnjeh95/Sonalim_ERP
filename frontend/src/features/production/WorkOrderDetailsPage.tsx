@@ -564,6 +564,39 @@ export function WorkOrderDetailsPage() {
               </span>
             </div>
 
+            {consolidation && consolidation.quality.pending_nc_reports.length > 0 && (
+              <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive-soft p-3">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                  <p className="text-sm font-medium text-destructive">
+                    {consolidation.quality.pending_nc_reports.length > 1
+                      ? t("production.ofDetails.quality.pendingNc.titlePlural")
+                      : t("production.ofDetails.quality.pendingNc.title")}
+                  </p>
+                </div>
+                <p className="text-xs text-muted-foreground">{t("production.ofDetails.quality.pendingNc.hint")}</p>
+                <div className="space-y-1.5">
+                  {consolidation.quality.pending_nc_reports.map((pending) => {
+                    const report = qualityReports.find((r) => r.id === pending.report_id);
+                    return (
+                      <button
+                        key={pending.report_id}
+                        type="button"
+                        onClick={() => report && setOpenQualityReport(report)}
+                        className="flex w-full items-center justify-between gap-2 rounded-md border border-destructive/20 bg-background px-2.5 py-1.5 text-left text-xs transition-colors hover:border-destructive/40 hover:bg-muted/40"
+                      >
+                        <span className="font-medium">{pending.report_date}</span>
+                        <span className="text-muted-foreground">
+                          {formatQuantity(pending.non_conforming_cartons)}{" "}
+                          {t("production.ofDetails.quality.pendingNc.cartonsSuffix")}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {qualityReports.length === 0 && nonConformities.length === 0 ? (
               <EmptyState
                 icon={<FlaskConical className="h-5 w-5" />}
