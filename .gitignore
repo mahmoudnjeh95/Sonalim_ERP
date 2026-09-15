@@ -6,3 +6,5 @@ __pycache__
 .env
 .pytest_cache
 docker-compose.override.yml
+.claude/settings.json
+.claude/settings.local.json

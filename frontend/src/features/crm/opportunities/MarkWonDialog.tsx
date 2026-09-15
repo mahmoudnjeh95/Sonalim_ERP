@@ -9,13 +9,13 @@ import { z } from "zod";
 import { useAuth } from "../../../lib/auth";
 import { ApiError } from "../../../lib/api";
 import { useI18n } from "../../../lib/i18n";
-import { productUnit, productRequiresIntegerQuantity } from "../../../lib/units";
+import { productRequiresIntegerQuantity } from "../../../lib/units";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { Select } from "../../../components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { listProducts, listUoms } from "../../production/api";
+import { listProducts, listUoms, listClassifications } from "../../production/api";
 import { listOpportunityLocations, transitionOpportunity, type Opportunity } from "./api";
 
 const lineSchema = z.object({
@@ -34,6 +34,7 @@ const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
 const LOCATIONS_QUERY_KEY = ["crm", "locations"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
+const CLASSIFICATIONS_QUERY_KEY = ["production", "product-classifications"] as const;
 
 const EMPTY_DEFAULTS: WonForm = {
   location_id: "",
@@ -63,8 +64,25 @@ export function MarkWonDialog({
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listOpportunityLocations(token) });
   const { data: allProducts = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
+  const { data: classifications = [] } = useQuery({ queryKey: CLASSIFICATIONS_QUERY_KEY, queryFn: () => listClassifications(token) });
   const availableLocations = locations.filter((location) => !location.is_blocked);
   const products = allProducts.filter((product) => product.is_sellable);
+
+  // Classifications are keyed by whatever product_id they were saved under —
+  // sku for older rows, the product's real id for ones set through the
+  // classifications screen — so both forms are indexed (see the same pattern
+  // in FinishedGoodsAnalysisTab). Only "sac" is called out; every other
+  // finished good ships in a carton, so that's the default.
+  const packagingFormatByProductId = new Map<string, string | null>();
+  for (const c of classifications) {
+    packagingFormatByProductId.set(c.product_id, c.packaging_format);
+    const product = products.find((p) => p.sku === c.product_id);
+    if (product) packagingFormatByProductId.set(product.id, c.packaging_format);
+  }
+  const packagingWord = (productId: string | null | undefined) =>
+    productId && packagingFormatByProductId.get(productId) === "sac"
+      ? t("production.classifications.packagingFormat.sac")
+      : t("production.classifications.packagingFormat.carton");
 
   const {
     register,
@@ -155,9 +173,7 @@ export function MarkWonDialog({
                   </Select>
                   <div className="w-28 space-y-1">
                     <span className="block text-xs font-medium text-foreground">
-                      {productUnit(watch(`lines.${index}.product_id`), products, uoms)
-                        ? `${t("crm.opportunities.won.field.qty")} (${productUnit(watch(`lines.${index}.product_id`), products, uoms)})`
-                        : t("crm.opportunities.won.field.qty")}
+                      {t("crm.opportunities.won.field.qty")} ({packagingWord(watch(`lines.${index}.product_id`))})
                     </span>
                     <Input
                       type="number"

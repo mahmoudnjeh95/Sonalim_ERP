@@ -9,7 +9,7 @@ import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
-import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
+import { productRequiresIntegerQuantity } from "../../lib/units";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -36,7 +36,7 @@ import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners } from "../partners/api";
-import { listProducts } from "../production/api";
+import { listProducts, listClassifications } from "../production/api";
 import { confirmOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
 
 const lineSchema = z.object({
@@ -56,6 +56,7 @@ const QUERY_KEY = ["sales", "orders"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
+const CLASSIFICATIONS_QUERY_KEY = ["production", "product-classifications"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
@@ -77,7 +78,24 @@ export function SalesOrdersPage() {
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
   const { data: allProducts = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
+  const { data: classifications = [] } = useQuery({ queryKey: CLASSIFICATIONS_QUERY_KEY, queryFn: () => listClassifications(token) });
   const products = allProducts.filter((product) => product.is_sellable);
+
+  // Classifications are keyed by whatever product_id they were saved under —
+  // sku for older rows, the product's real id for ones set through the
+  // classifications screen — so both forms are indexed (see the same pattern
+  // in FinishedGoodsAnalysisTab). Only "sac" is called out; every other
+  // finished good ships in a carton, so that's the default.
+  const packagingFormatByProductId = new Map<string, string | null>();
+  for (const c of classifications) {
+    packagingFormatByProductId.set(c.product_id, c.packaging_format);
+    const product = products.find((p) => p.sku === c.product_id);
+    if (product) packagingFormatByProductId.set(product.id, c.packaging_format);
+  }
+  const packagingWord = (productId: string | null | undefined) =>
+    productId && packagingFormatByProductId.get(productId) === "sac"
+      ? t("production.classifications.packagingFormat.sac")
+      : t("production.classifications.packagingFormat.carton");
   const customers = partners.filter((p) => p.kind === "customer" || p.kind === "both");
   const activeCustomers = customers.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
@@ -363,9 +381,7 @@ export function SalesOrdersPage() {
                         </Select>
                         <div className="w-24 space-y-1">
                           <span className="block text-xs font-medium text-foreground">
-                            {productUnit(watch(`lines.${index}.product_id`), products, uoms)
-                              ? `${t("sales.field.qty")} (${productUnit(watch(`lines.${index}.product_id`), products, uoms)})`
-                              : t("sales.field.qty")}
+                            {t("sales.field.qty")} ({packagingWord(watch(`lines.${index}.product_id`))})
                           </span>
                           <Input
                             type="number"
@@ -479,9 +495,7 @@ export function SalesOrdersPage() {
                         </Select>
                         <div className="w-24 space-y-1">
                           <span className="block text-xs font-medium text-foreground">
-                            {productUnit(watchEdit(`lines.${index}.product_id`), products, uoms)
-                              ? `${t("sales.field.qty")} (${productUnit(watchEdit(`lines.${index}.product_id`), products, uoms)})`
-                              : t("sales.field.qty")}
+                            {t("sales.field.qty")} ({packagingWord(watchEdit(`lines.${index}.product_id`))})
                           </span>
                           <Input
                             type="number"
