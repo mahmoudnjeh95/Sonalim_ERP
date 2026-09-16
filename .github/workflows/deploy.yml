@@ -65,6 +65,7 @@ jobs:
           script: |
             set -e
             cd /home/debian/Sonalim_erp/Erpsonalim
+            git pull
             echo "${{ secrets.SECRET_SONALIM }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
             docker compose pull app worker web
             docker compose up -d app worker web
