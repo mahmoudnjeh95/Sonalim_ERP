@@ -8,6 +8,7 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
+import SecureIcon from "../assets/illustrations/auth/secure.svg?react";
 
 export function LoginPage() {
   const { login } = useAuth();
@@ -47,7 +48,10 @@ export function LoginPage() {
         </div>
         <Card className="shadow-raised">
         <CardHeader>
-          <CardTitle>{t("login.title")}</CardTitle>
+          <CardTitle className="flex items-center gap-2">
+            <SecureIcon className="h-4 w-4 text-primary" />
+            {t("login.title")}
+          </CardTitle>
         </CardHeader>
         <CardContent>
           <form className="space-y-4" onSubmit={handleSubmit}>
