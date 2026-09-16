@@ -1064,6 +1064,8 @@ function productionFigures(
       { label: "production.dailyReports.field.water", value: d.water_quantity, unit: UTILITY_UNITS.water },
       { label: "production.dailyReports.field.fuel", value: d.fuel_quantity, unit: UTILITY_UNITS.fuel },
       { label: "production.dailyReports.field.gasoil", value: d.gasoil_quantity, unit: UTILITY_UNITS.gasoil },
+      { label: "production.dailyReports.field.gasoilFlowRate", value: d.gasoil_flow_rate, unit: "L/h" },
+      { label: "production.dailyReports.field.generatorHours", value: d.generator_hours, unit: "h" },
       { label: "production.dailyReports.field.electricity", value: d.electricity_quantity, unit: UTILITY_UNITS.electricity },
       { label: "production.dailyReports.field.semolinaFlowRate", value: d.semolina_flow_rate, unit: "t/h" },
       { label: "production.reports.field.productionMinutes", value: d.production_minutes, duration: true },
@@ -1071,7 +1073,7 @@ function productionFigures(
       // than one reason, since downtime became a list.
       ...d.downtime_lines.map((line) => ({
         label: "production.reports.field.downtimeMinutes",
-        suffix: line.motif ?? undefined,
+        suffix: [line.downtime_type, line.classification, line.motif].filter(Boolean).join(" · ") || undefined,
         value: line.minutes,
         duration: true,
       })),

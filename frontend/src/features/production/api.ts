@@ -1217,6 +1217,10 @@ export interface SemolinaLine {
 export interface DowntimeLine {
   /** The stated cause. Optional while a draft is being typed, required to submit if minutes > 0. */
   motif: string | null;
+  /** What kind of intervention this was (préventive, corrective, ...). */
+  downtime_type: string | null;
+  /** Which system it hit (pneumatique, électrique, ...). */
+  classification: string | null;
   minutes: number;
   note: string | null;
 }
@@ -1234,9 +1238,15 @@ export interface DailyReportDetail {
   // Which fournisseur this shift's fioul came from — informational only, since
   // fuel is never posted to stock and more than one supplier can deliver it.
   fuel_supplier_id: string | null;
-  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul).
+  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul). Derived from
+  // gasoil_flow_rate x generator_hours, the same way water_quantity is derived
+  // from water_percentage.
   gasoil_quantity: number;
   gasoil_supplier_id: string | null;
+  // Groupe électrogène consumption rate (L/h) and hours run this shift — the
+  // operator's real inputs; gasoil_quantity is their product.
+  gasoil_flow_rate: number;
+  generator_hours: number;
   electricity_quantity: number;
   // Débit de semoule, tonnes/hour. Recorded for future recipe statistics only.
   semolina_flow_rate: number;

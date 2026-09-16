@@ -79,7 +79,7 @@ import {
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners, type Partner } from "../partners/api";
-import { UTILITY_UNITS, productUnit, totalsByUomCategory } from "../../lib/units";
+import { UTILITY_UNITS, productUnit, totalsByUomCategory, formatQuantity } from "../../lib/units";
 
 // A shift's daily report. Semolina is the one figure here that leaves stock when
 // a supervisor validates it, which is why the form insists on naming the product
@@ -122,9 +122,14 @@ const detailSchema = z.object({
   water_percentage: z.coerce.number().min(0).max(100),
   fuel_quantity: z.coerce.number().min(0),
   fuel_supplier_id: z.string().optional(),
-  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul).
+  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul). Derived from
+  // gasoil_flow_rate x generator_hours — see DailyDetailFields.
   gasoil_quantity: z.coerce.number().min(0),
   gasoil_supplier_id: z.string().optional(),
+  // The groupe électrogène's own consumption rate (L/h) and how long it ran
+  // this shift — the operator's real inputs; gasoil_quantity is their product.
+  gasoil_flow_rate: z.coerce.number().min(0),
+  generator_hours: z.coerce.number().min(0),
   electricity_quantity: z.coerce.number().min(0),
   // Débit de semoule, tonnes/hour — recorded for future recipe statistics.
   semolina_flow_rate: z.coerce.number().min(0),
@@ -136,6 +141,8 @@ const detailSchema = z.object({
   downtime_lines: z.array(
     z.object({
       motif: z.string(),
+      downtime_type: z.string(),
+      classification: z.string(),
       minutes: z.coerce.number().int().min(0),
       note: z.string(),
     }),
@@ -183,6 +190,8 @@ const EMPTY_DETAIL = {
   fuel_supplier_id: "",
   gasoil_quantity: 0,
   gasoil_supplier_id: "",
+  gasoil_flow_rate: 0,
+  generator_hours: 0,
   electricity_quantity: 0,
   semolina_flow_rate: 0,
   start_time: "",
@@ -894,6 +903,18 @@ export function DailyReportDialog({
       group: "in" as const,
     },
     {
+      label: t("production.dailyReports.field.gasoilFlowRate"),
+      value: detail?.gasoil_flow_rate,
+      unit: "L/h",
+      group: "in" as const,
+    },
+    {
+      label: t("production.dailyReports.field.generatorHours"),
+      value: detail?.generator_hours,
+      unit: "h",
+      group: "in" as const,
+    },
+    {
       label: t("production.dailyReports.field.electricity"),
       value: detail?.electricity_quantity,
       unit: UTILITY_UNITS.electricity,
@@ -939,9 +960,17 @@ export function DailyReportDialog({
       duration: true,
       group: "time" as const,
     },
-    // One row per arrêt, each with its own motif, plus the total lost.
+    // One row per arrêt, each with its own type/classification/motif, plus the total lost.
     ...(detail?.downtime_lines ?? []).map((line) => ({
-      label: `${t("production.ofDetails.time.downtime")} — ${line.motif ?? t("production.waste.unknownItem")}`,
+      label: `${t("production.ofDetails.time.downtime")} — ${
+        [
+          line.downtime_type && t(`production.downtime.type.${line.downtime_type}` as Parameters<typeof t>[0]),
+          line.classification && t(`production.downtime.classification.${line.classification}` as Parameters<typeof t>[0]),
+          line.motif && t(`production.downtime.motif.${line.motif}` as Parameters<typeof t>[0]),
+        ]
+          .filter(Boolean)
+          .join(" · ") || t("production.waste.unknownItem")
+      }`,
       value: line.minutes,
       duration: true,
       group: "time" as const,
@@ -1066,6 +1095,8 @@ function toDetail(input: CreateForm): Partial<DailyReportDetail> {
     fuel_supplier_id: input.fuel_supplier_id || undefined,
     gasoil_quantity: input.gasoil_quantity,
     gasoil_supplier_id: input.gasoil_supplier_id || undefined,
+    gasoil_flow_rate: input.gasoil_flow_rate,
+    generator_hours: input.generator_hours,
     electricity_quantity: input.electricity_quantity,
     semolina_flow_rate: input.semolina_flow_rate,
     start_time: input.start_time || undefined,
@@ -1170,6 +1201,18 @@ function DailyDetailFields({
     // every keystroke elsewhere in the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedWaterPercentage, mixedInputKg]);
+
+  // The groupe électrogène's own consumption rate and how long it ran are the
+  // operator's real inputs (same reasoning as water_percentage above);
+  // gasoil_quantity — what every downstream reader (consolidation,
+  // consumption reports) expects in litres — is their product.
+  const watchedGasoilFlowRate = Number(form.watch("gasoil_flow_rate")) || 0;
+  const watchedGeneratorHours = Number(form.watch("generator_hours")) || 0;
+  const computedGasoilQuantity = Math.round((watchedGasoilFlowRate * watchedGeneratorHours + Number.EPSILON) * 100) / 100;
+  useEffect(() => {
+    form.setValue("gasoil_quantity", computedGasoilQuantity);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computedGasoilQuantity]);
   return (
     <div className="space-y-3">
       <section className="space-y-2">
@@ -1195,42 +1238,6 @@ function DailyDetailFields({
           </Select>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="space-y-2.5">
-            <Label htmlFor="raw_material_location_id" className="flex min-h-[2.5rem] items-start">
-              {t("production.dailyReports.field.rawMaterialLocation")}
-            </Label>
-            <Select id="raw_material_location_id" {...form.register("raw_material_location_id")}>
-              <option value="">—</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="space-y-2.5">
-            <Label htmlFor="regrind_input_quantity" className="flex min-h-[2.5rem] items-start gap-1">
-              {withUnit(t("production.dailyReports.field.regrindInput"), rebroyatUnit)}
-              <HelpTooltip text={t("production.dailyReports.help.regrindInput")} />
-            </Label>
-            <Input id="regrind_input_quantity" type="number" step="any" {...form.register("regrind_input_quantity")} />
-          </div>
-          <div className="space-y-2.5">
-            <Label htmlFor="regrind_input_product_id" className="flex min-h-[2.5rem] items-start">
-              {t("production.dailyReports.field.regrindInputProduct")}
-            </Label>
-            <Select id="regrind_input_product_id" {...form.register("regrind_input_product_id")}>
-              <option value="">—</option>
-              {regrindInputProducts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-        </div>
-
         <div className="space-y-1.5">
           <Label className="flex items-center gap-1">
             {t("production.dailyReports.field.semolina")}
@@ -1245,6 +1252,42 @@ function DailyDetailFields({
             <HelpTooltip text={t("production.dailyReports.help.semolinaFlowRate")} />
           </Label>
           <Input id="semolina_flow_rate" type="number" step="any" {...form.register("semolina_flow_rate")} />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-2.5">
+            <Label htmlFor="regrind_input_product_id" className="flex min-h-[2.5rem] items-start">
+              {t("production.dailyReports.field.regrindInputProduct")}
+            </Label>
+            <Select id="regrind_input_product_id" {...form.register("regrind_input_product_id")}>
+              <option value="">—</option>
+              {regrindInputProducts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-2.5">
+            <Label htmlFor="regrind_input_quantity" className="flex min-h-[2.5rem] items-start gap-1">
+              {withUnit(t("production.dailyReports.field.regrindInput"), rebroyatUnit)}
+              <HelpTooltip text={t("production.dailyReports.help.regrindInput")} />
+            </Label>
+            <Input id="regrind_input_quantity" type="number" step="any" {...form.register("regrind_input_quantity")} />
+          </div>
+          <div className="space-y-2.5">
+            <Label htmlFor="raw_material_location_id" className="flex min-h-[2.5rem] items-start">
+              {t("production.dailyReports.field.rawMaterialLocation")}
+            </Label>
+            <Select id="raw_material_location_id" {...form.register("raw_material_location_id")}>
+              <option value="">—</option>
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </Select>
+          </div>
         </div>
       </section>
 
@@ -1362,10 +1405,21 @@ function DailyDetailFields({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="gasoil_quantity">
-              {t("production.dailyReports.field.gasoil")} ({UTILITY_UNITS.gasoil})
+            <Label htmlFor="gasoil_flow_rate" className="flex items-center gap-1">
+              {t("production.dailyReports.field.gasoilFlowRate")} (L/h)
+              <HelpTooltip text={t("production.dailyReports.help.gasoilFlowRate")} />
             </Label>
-            <Input id="gasoil_quantity" type="number" step="any" {...form.register("gasoil_quantity")} />
+            <Input id="gasoil_flow_rate" type="number" step="any" {...form.register("gasoil_flow_rate")} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="generator_hours" className="flex items-center gap-1">
+              {t("production.dailyReports.field.generatorHours")}
+              <HelpTooltip text={t("production.dailyReports.help.generatorHours")} />
+            </Label>
+            <Input id="generator_hours" type="number" step="any" {...form.register("generator_hours")} />
+            <p className="text-xs text-muted-foreground">
+              {t("production.dailyReports.hint.gasoilFromRate")} {formatQuantity(computedGasoilQuantity)} {UTILITY_UNITS.gasoil}
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="gasoil_supplier_id">{t("production.dailyReports.field.gasoilSupplier")}</Label>

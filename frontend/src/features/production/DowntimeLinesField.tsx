@@ -7,11 +7,13 @@ import { Select } from "../../components/ui/select";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useI18n } from "../../lib/i18n";
 import { formatDuration } from "../../lib/units";
-import { DOWNTIME_MOTIFS } from "./DowntimeMotifSelect";
+import { DOWNTIME_MOTIFS, DOWNTIME_TYPES, DOWNTIME_CLASSIFICATIONS } from "./DowntimeMotifSelect";
 
 /** One row of the arrêt editor. */
 export interface DowntimeLineForm {
   motif: string;
+  downtime_type: string;
+  classification: string;
   minutes: number;
   note: string;
 }
@@ -39,7 +41,7 @@ export function DowntimeLinesField<TFieldValues extends FieldValues>({
   });
 
   function addLine() {
-    append({ motif: "", minutes: 0, note: "" });
+    append({ motif: "", downtime_type: "", classification: "", minutes: 0, note: "" });
   }
 
   const watchedLines = (form.watch(name) ?? []) as DowntimeLineForm[];
@@ -54,59 +56,94 @@ export function DowntimeLinesField<TFieldValues extends FieldValues>({
       ) : (
         <div className="space-y-2">
           {fields.map((field, index) => (
-            <div
-              key={field.id}
-              className="grid grid-cols-1 items-end gap-2 rounded-lg border border-border p-2 sm:grid-cols-[minmax(0,1fr)_minmax(0,7rem)_minmax(0,1fr)_auto]"
-            >
-              <div className="space-y-1">
-                <Label htmlFor={`${name}_${index}_motif`} className="text-xs">
-                  {t("production.downtime.field.motif")}
-                </Label>
-                <Select
-                  id={`${name}_${index}_motif`}
-                  {...form.register(`${name}.${index}.motif` as Path<TFieldValues>)}
+            <div key={field.id} className="space-y-2 rounded-lg border border-border p-2">
+              <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-3">
+                <div className="space-y-1">
+                  <Label htmlFor={`${name}_${index}_downtime_type`} className="text-xs">
+                    {t("production.downtime.field.type")}
+                  </Label>
+                  <Select
+                    id={`${name}_${index}_downtime_type`}
+                    {...form.register(`${name}.${index}.downtime_type` as Path<TFieldValues>)}
+                  >
+                    <option value="">—</option>
+                    {DOWNTIME_TYPES.map((type) => (
+                      <option key={type} value={type}>
+                        {t(`production.downtime.type.${type}` as Parameters<typeof t>[0])}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor={`${name}_${index}_classification`} className="text-xs">
+                    {t("production.downtime.field.classification")}
+                  </Label>
+                  <Select
+                    id={`${name}_${index}_classification`}
+                    {...form.register(`${name}.${index}.classification` as Path<TFieldValues>)}
+                  >
+                    <option value="">—</option>
+                    {DOWNTIME_CLASSIFICATIONS.map((classification) => (
+                      <option key={classification} value={classification}>
+                        {t(`production.downtime.classification.${classification}` as Parameters<typeof t>[0])}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor={`${name}_${index}_motif`} className="text-xs">
+                    {t("production.downtime.field.motif")}
+                  </Label>
+                  <Select
+                    id={`${name}_${index}_motif`}
+                    {...form.register(`${name}.${index}.motif` as Path<TFieldValues>)}
+                  >
+                    <option value="">—</option>
+                    {DOWNTIME_MOTIFS.map((motif) => (
+                      <option key={motif} value={motif}>
+                        {t(`production.downtime.motif.${motif}` as Parameters<typeof t>[0])}
+                      </option>
+                    ))}
+                  </Select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto]">
+                <div className="space-y-1">
+                  <Label htmlFor={`${name}_${index}_minutes`} className="text-xs">
+                    {t("production.downtime.field.minutes")}
+                  </Label>
+                  <Input
+                    id={`${name}_${index}_minutes`}
+                    type="number"
+                    step="1"
+                    min={0}
+                    {...form.register(`${name}.${index}.minutes` as Path<TFieldValues>)}
+                  />
+                </div>
+
+                <div className="space-y-1">
+                  <Label htmlFor={`${name}_${index}_note`} className="text-xs">
+                    {t("production.downtime.field.note")}
+                  </Label>
+                  <Input
+                    id={`${name}_${index}_note`}
+                    {...form.register(`${name}.${index}.note` as Path<TFieldValues>)}
+                  />
+                </div>
+
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="ghost"
+                  aria-label={t("production.downtime.remove")}
+                  onClick={() => remove(index)}
                 >
-                  <option value="">—</option>
-                  {DOWNTIME_MOTIFS.map((motif) => (
-                    <option key={motif} value={motif}>
-                      {t(`production.downtime.motif.${motif}` as Parameters<typeof t>[0])}
-                    </option>
-                  ))}
-                </Select>
+                  <Trash2 className="h-4 w-4 text-destructive" />
+                </Button>
               </div>
-
-              <div className="space-y-1">
-                <Label htmlFor={`${name}_${index}_minutes`} className="text-xs">
-                  {t("production.downtime.field.minutes")}
-                </Label>
-                <Input
-                  id={`${name}_${index}_minutes`}
-                  type="number"
-                  step="1"
-                  min={0}
-                  {...form.register(`${name}.${index}.minutes` as Path<TFieldValues>)}
-                />
-              </div>
-
-              <div className="space-y-1">
-                <Label htmlFor={`${name}_${index}_note`} className="text-xs">
-                  {t("production.downtime.field.note")}
-                </Label>
-                <Input
-                  id={`${name}_${index}_note`}
-                  {...form.register(`${name}.${index}.note` as Path<TFieldValues>)}
-                />
-              </div>
-
-              <Button
-                type="button"
-                size="sm"
-                variant="ghost"
-                aria-label={t("production.downtime.remove")}
-                onClick={() => remove(index)}
-              >
-                <Trash2 className="h-4 w-4 text-destructive" />
-              </Button>
             </div>
           ))}
         </div>
@@ -132,10 +169,14 @@ export function DowntimeLinesField<TFieldValues extends FieldValues>({
 
 /** Form rows for a report being opened for edit; an empty list stays empty. */
 export function toDowntimeLineForms(
-  lines: { motif: string | null; minutes: number; note: string | null }[] | undefined,
+  lines:
+    | { motif: string | null; downtime_type: string | null; classification: string | null; minutes: number; note: string | null }[]
+    | undefined,
 ): DowntimeLineForm[] {
   return (lines ?? []).map((line) => ({
     motif: line.motif ?? "",
+    downtime_type: line.downtime_type ?? "",
+    classification: line.classification ?? "",
     minutes: line.minutes,
     note: line.note ?? "",
   }));
@@ -152,6 +193,8 @@ export function fromDowntimeLineForms(lines: DowntimeLineForm[] | undefined) {
     .filter((line) => Number(line.minutes) > 0 || line.note.trim().length > 0)
     .map((line) => ({
       motif: line.motif.trim() || null,
+      downtime_type: line.downtime_type.trim() || null,
+      classification: line.classification.trim() || null,
       minutes: Number(line.minutes),
       note: line.note.trim() || null,
     }));

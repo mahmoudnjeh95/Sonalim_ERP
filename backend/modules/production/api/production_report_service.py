@@ -55,7 +55,7 @@ _DAILY_COLUMNS = """
     start_time, end_time, production_minutes,
     raw_material_location_id, regrind_input_quantity, regrind_input_product_id,
     regrind_product_id, mold_id, water_percentage, semolina_flow_rate,
-    fuel_supplier_id, gasoil_supplier_id
+    fuel_supplier_id, gasoil_supplier_id, gasoil_flow_rate, generator_hours
 """
 
 # An OF that has been closed or written off takes no new reports: closure is the
@@ -127,6 +127,8 @@ def _row_to_daily_detail(
         semolina_flow_rate=float(row[16]),
         fuel_supplier_id=row[17],
         gasoil_supplier_id=row[18],
+        gasoil_flow_rate=float(row[19]),
+        generator_hours=float(row[20]),
         waste_lines=waste_lines,
         semolina_lines=semolina_lines,
         downtime_lines=downtime_lines,
@@ -1474,6 +1476,8 @@ class ProductionReportService:
             detail.semolina_flow_rate,
             detail.fuel_supplier_id,
             detail.gasoil_supplier_id,
+            detail.gasoil_flow_rate,
+            detail.generator_hours,
         )
 
     def _write_revision(

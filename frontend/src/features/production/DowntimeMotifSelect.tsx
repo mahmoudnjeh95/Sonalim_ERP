@@ -33,6 +33,22 @@ export const DOWNTIME_MOTIFS = [
 
 export type DowntimeMotif = (typeof DOWNTIME_MOTIFS)[number];
 
+/** What kind of intervention a stoppage was. */
+export const DOWNTIME_TYPES = ["preventive", "corrective", "maintenance", "cleaning"] as const;
+export type DowntimeType = (typeof DOWNTIME_TYPES)[number];
+
+/** Which system a stoppage hit. */
+export const DOWNTIME_CLASSIFICATIONS = [
+  "pneumatic",
+  "electric",
+  "electronic",
+  "mechanical",
+  "hydraulic",
+  "it",
+  "other",
+] as const;
+export type DowntimeClassification = (typeof DOWNTIME_CLASSIFICATIONS)[number];
+
 export function DowntimeMotifSelect({
   id,
   value,
