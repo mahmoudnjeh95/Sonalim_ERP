@@ -2,10 +2,11 @@ services:
   app:
     build: ./backend
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://erp:erp@postgres:5432/erp}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://erp:${POSTGRES_PASSWORD:-erp}@postgres:5432/erp}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
-      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:erp@rabbitmq:5672/}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:${RABBITMQ_PASSWORD:-erp}@rabbitmq:5672/}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
+      FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:-http://localhost}
     ports:
       - "8000:8000"
     depends_on:
@@ -13,6 +14,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
 
   web:
     build:
@@ -22,14 +29,15 @@ services:
     ports:
       - "80:80"
     depends_on:
-      - app
+      app:
+        condition: service_healthy
 
   worker:
     build: ./backend
     command: ["python", "-m", "worker.main"]
     environment:
-      DATABASE_URL: ${DATABASE_URL:-postgresql://erp:erp@postgres:5432/erp}
-      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:erp@rabbitmq:5672/}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://erp:${POSTGRES_PASSWORD:-erp}@postgres:5432/erp}
+      RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:${RABBITMQ_PASSWORD:-erp}@rabbitmq:5672/}
     depends_on:
       postgres:
         condition: service_healthy

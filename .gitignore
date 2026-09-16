@@ -1,5 +1,7 @@
 .git
 .venv
+.venv.zip
+tools/.venv-pgadmin
 __pycache__
 *.py[cod]
 *.log
