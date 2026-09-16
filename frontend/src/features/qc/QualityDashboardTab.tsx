@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../..
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
+import EmptyQualityIllustration from "../../assets/illustrations/empty-states/empty-no-quality.svg?react";
 import {
   getDispositionSummary,
   listNonConformities,
@@ -169,7 +170,7 @@ export function QualityDashboardTab() {
   if (!hasAnyData) {
     return (
       <EmptyState
-        icon={<Gauge className="h-5 w-5" />}
+        icon={<EmptyQualityIllustration className="h-5 w-5" />}
         title={t("qc.dashboard.empty.title")}
         description={t("qc.dashboard.empty.description")}
       />

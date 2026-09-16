@@ -3,8 +3,9 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertOctagon, CheckCircle2, Plus, ShieldAlert, Split, Trash2 } from "lucide-react";
+import { CheckCircle2, Plus, ShieldAlert, Split, Trash2 } from "lucide-react";
 import { toast } from "sonner";
+import EmptyQualityIllustration from "../../assets/illustrations/empty-states/empty-no-quality.svg?react";
 import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
@@ -566,7 +567,7 @@ export function NonConformitiesTab() {
             </div>
           ) : visible.length === 0 ? (
             <EmptyState
-              icon={<AlertOctagon className="h-5 w-5" />}
+              icon={<EmptyQualityIllustration className="h-5 w-5" />}
               title={t("qc.nc.empty.title")}
               description={t("qc.nc.empty.description")}
             />

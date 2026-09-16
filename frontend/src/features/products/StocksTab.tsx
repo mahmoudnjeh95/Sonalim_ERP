@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Boxes } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
+import EmptyStockIllustration from "../../assets/illustrations/empty-states/empty-no-stock.svg?react";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { Button } from "../../components/ui/button";
@@ -227,7 +228,7 @@ export function StocksTab() {
             {!isLoading && rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={visibleColumns.length} className="p-0">
-                  <EmptyState icon={<Boxes className="h-5 w-5" />} title={t("products.stocks.empty.title")} description={t("products.stocks.empty.description")} />
+                  <EmptyState icon={<EmptyStockIllustration className="h-5 w-5" />} title={t("products.stocks.empty.title")} description={t("products.stocks.empty.description")} />
                 </TableCell>
               </TableRow>
             )}

@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { CheckCircle2, ClipboardList, Eye, PauseCircle, PlayCircle, Plus, Pencil, Timer, XCircle } from "lucide-react";
 import { toast } from "sonner";
+import EmptyOrdersIllustration from "../../assets/illustrations/empty-states/empty-no-orders.svg?react";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
@@ -608,7 +609,7 @@ export function WorkOrdersTab() {
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">
                     <EmptyState
-                      icon={<ClipboardList className="h-5 w-5" />}
+                      icon={<EmptyOrdersIllustration className="h-5 w-5" />}
                       title={t("production.workOrders.empty.title")}
                       description={t("production.workOrders.empty.description")}
                     />

@@ -11,7 +11,6 @@ import {
   Package,
   PackageCheck,
   PackageMinus,
-  PackageSearch,
   Pencil,
   Plus,
   Trash2,
@@ -20,6 +19,7 @@ import {
   Warehouse,
   Wrench,
 } from "lucide-react";
+import EmptyStockIllustration from "../../assets/illustrations/empty-states/empty-no-stock.svg?react";
 import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -938,7 +938,7 @@ export function StockTab() {
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">
                     <EmptyState
-                      icon={<PackageSearch className="h-5 w-5" />}
+                      icon={<EmptyStockIllustration className="h-5 w-5" />}
                       title={t("warehouse.stock.empty.title")}
                       description={t("warehouse.stock.empty.description")}
                     />

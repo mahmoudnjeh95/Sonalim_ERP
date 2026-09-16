@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { isRouteErrorResponse, Link, useNavigate, useRouteError } from "react-router-dom";
-import { AlertTriangle, RotateCw } from "lucide-react";
+import { RotateCw } from "lucide-react";
 import { useI18n } from "../lib/i18n";
 import { Card, CardContent } from "../components/ui/card";
+import ErrorIllustration from "../assets/illustrations/empty-states/empty-error.svg?react";
 
 // Errors thrown while rendering a route land here instead of tearing down the
 // whole app (react-router's default crash screen). Placed on each leaf route
@@ -18,7 +19,7 @@ export function RouteErrorBoundary() {
     return (
       <Card>
         <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-          <AlertTriangle className="h-8 w-8 text-muted-foreground" />
+          <ErrorIllustration className="h-8 w-8 text-muted-foreground" />
           <div>
             <p className="text-base font-semibold">{t("error.notFound.title")}</p>
             <p className="text-sm text-muted-foreground">{t("error.notFound.description")}</p>
@@ -44,7 +45,7 @@ export function RouteErrorBoundary() {
   return (
     <Card>
       <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-        <AlertTriangle className="h-8 w-8 text-destructive" />
+        <ErrorIllustration className="h-8 w-8 text-destructive" />
         <div>
           <p className="text-base font-semibold">{t("error.boundary.title")}</p>
           <p className="text-sm text-muted-foreground">{t("error.boundary.description")}</p>
