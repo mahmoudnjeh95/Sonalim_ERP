@@ -25,7 +25,8 @@ project settings for the relevant environments:
 - `FRONTEND_ORIGINS`: the deployed frontend origin, for example
 	`https://your-frontend.example.com`
 
-Deploy from the repository root. `api/index.py` is the Vercel ASGI entrypoint.
+Deploy from the repository root; `vercel.json` points the build at
+`backend/api/index.py`, the Vercel ASGI entrypoint.
 The application runs migrations during startup, so the database must be
 reachable from Vercel and the configured database user must be allowed to
 create and alter the application tables. Do not use the Compose URL
@@ -38,9 +39,9 @@ The application and worker share the same image. Modules remain inside the monol
 
 ## Modules
 
-`core` is the shared kernel (Product, Partner, UoM, Currency, Company, tenancy, auth, audit). Business modules live under `modules/`: `warehouse`, `production`, `crm`, `sales`, `finance`, `hr`, `procurement`, `qc`, and `maintenance`. Each ships a `module.json` manifest, `domain/`, `api/`, and `migrations/`; migrations run automatically on app/worker startup and are tracked per-module in `core.module_migrations`.
+`backend/core` is the shared kernel (Product, Partner, UoM, Currency, Company, tenancy, auth, audit). Business modules live under `backend/modules/`: `warehouse`, `production`, `crm`, `sales`, `finance`, `hr`, `procurement`, `qc`, and `maintenance`. Each ships a `module.json` manifest, `domain/`, `api/`, and `migrations/`; migrations run automatically on app/worker startup and are tracked per-module in `core.module_migrations`.
 
-Migration load order is `core → warehouse → production → crm → sales → finance → hr → procurement → qc → maintenance` (`core/migrations/runner.py`). `core` runs first because other schemas reference its tables; `qc` runs after `production` for readability rather than necessity — it holds `of_id` as an opaque column with no foreign key into `production`, because a module may not reference another's tables. `maintenance` runs last of all: its own `equipment` registry was split out of `production.machines`, and its init migration copies that table's rows across before a second migration drops it — both steps need `production`'s migrations to have already run.
+Migration load order is `core → warehouse → production → crm → sales → finance → hr → procurement → qc → maintenance` (`backend/core/migrations/runner.py`). `core` runs first because other schemas reference its tables; `qc` runs after `production` for readability rather than necessity — it holds `of_id` as an opaque column with no foreign key into `production`, because a module may not reference another's tables. `maintenance` runs last of all: its own `equipment` registry was split out of `production.machines`, and its init migration copies that table's rows across before a second migration drops it — both steps need `production`'s migrations to have already run.
 
 Seed a demo tenant (user, UoM, product, partner) once the stack is up:
 
@@ -65,6 +66,7 @@ curl -X POST http://localhost:8000/core/auth/login -H "Content-Type: application
 Domain-layer unit tests run without a database:
 
 ```powershell
+cd backend
 pip install -r requirements-dev.txt
 pytest
 ```

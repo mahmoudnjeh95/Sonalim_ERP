@@ -28,7 +28,7 @@ timeout /t 1 /nobreak
 
 echo.
 echo Starting backend server on port 8000...
-start "Sonalim ERP - Backend" cmd /k "cd /d "%SCRIPT_DIR%" && .\.venv\Scripts\activate.bat && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
+start "Sonalim ERP - Backend" cmd /k "cd /d "%SCRIPT_DIR%backend" && .\.venv\Scripts\activate.bat && python -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000"
 
 REM Wait a moment for backend to start
 timeout /t 3 /nobreak

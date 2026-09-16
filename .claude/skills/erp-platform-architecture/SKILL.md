@@ -12,20 +12,21 @@ Use this skill as the source of truth for architectural decisions in the Sonalim
 The platform is a modular monolith. Each business domain (warehouse, production, CRM, sales, finance, HR, and so on) is an independent bounded context with its own schema, service layer, and public API. Modules never access one another's tables directly.
 
 ```text
-/core            shared kernel: Product, Partner, UoM, Currency, Company,
+/backend
+  /core          shared kernel: Product, Partner, UoM, Currency, Company,
                  Sequence/Numbering, Auth, Tenancy, Audit
-/events          event catalog, schemas, outbox dispatcher
-/modules
-  /warehouse
-    /domain      entities, value objects, business rules
-    /api         public service interface; the only cross-module interface
-    /events      publishers and subscribers
-    /migrations
-    module.json  manifest
-  /production
-  /crm
-  /sales
-  /finance
+  /events        event catalog, schemas, outbox dispatcher
+  /modules
+    /warehouse
+      /domain    entities, value objects, business rules
+      /api       public service interface; the only cross-module interface
+      /events    publishers and subscribers
+      /migrations
+      module.json manifest
+    /production
+    /crm
+    /sales
+    /finance
 ```
 
 ## Hard Rules
@@ -141,9 +142,9 @@ Every view that reads or writes server data goes through **TanStack Query** (`us
 
 ### Audit logging (ISO 9001 traceability)
 
-Every mutating action in every module — create, update, delete, and every state transition — must call `record_audit()` (`core/audit.py`) in the same database transaction as the write, so the change and its audit row commit or roll back together. This is mandatory platform-wide, not opt-in per module.
+Every mutating action in every module — create, update, delete, and every state transition — must call `record_audit()` (`backend/core/audit.py`) in the same database transaction as the write, so the change and its audit row commit or roll back together. This is mandatory platform-wide, not opt-in per module.
 
-Pattern (see `modules/warehouse/api/material_receipt_service.py` for the reference implementation):
+Pattern (see `backend/modules/warehouse/api/material_receipt_service.py` for the reference implementation):
 
 1. Every mutating service method takes `actor_id: str` (no default — a mutation with no identifiable actor is a bug, not an edge case to tolerate silently).
 2. Every router endpoint that calls a mutating method passes `actor_id=tenant.user_id` from the `TenantContext` — never a client-supplied value.
@@ -178,7 +179,7 @@ Use the shared primitives — don't hand-roll this per table:
 
 Every entity that has a create action must also have an edit action — do not ship create-only CRUD and treat editing as a follow-up. This is a platform-wide requirement (2026-08-24), same rollout shape as the lessons above: new entities ship with edit from day one, existing ones are retrofitted incrementally.
 
-1. **Permission:** edit is gated by a *separate* `<module>.admin_<entity>` permission — distinct from the `manage_*` permission the entity's create/transition actions use, not reused from it. This is deliberate: being able to create or progress a record through its normal workflow is a different, more common trust level than being able to reach in and directly overwrite a field on an existing one. Reference implementation: `warehouse.admin_material_receipts` (`modules/warehouse/api/material_receipt_service.py`'s `admin_update_receipt`/`admin_force_status`, `modules/warehouse/api/router.py`), built before this was generalized into a platform rule. Every entity's edit permission follows the same `admin_<entity>` naming. Nobody has it by default — it's granted per user through the existing Admin → Users flow, same mechanism as every other permission.
+1. **Permission:** edit is gated by a *separate* `<module>.admin_<entity>` permission — distinct from the `manage_*` permission the entity's create/transition actions use, not reused from it. This is deliberate: being able to create or progress a record through its normal workflow is a different, more common trust level than being able to reach in and directly overwrite a field on an existing one. Reference implementation: `warehouse.admin_material_receipts` (`backend/modules/warehouse/api/material_receipt_service.py`'s `admin_update_receipt`/`admin_force_status`, `backend/modules/warehouse/api/router.py`), built before this was generalized into a platform rule. Every entity's edit permission follows the same `admin_<entity>` naming. Nobody has it by default — it's granted per user through the existing Admin → Users flow, same mechanism as every other permission.
 2. **Backend:** add `update_x(*, tenant_id, actor_id, entity_id, field=None, ...) -> Result[X]` (or `admin_update_x` for entities that already have a plain `update_x`/other method at that name) to the entity's service, alongside `create_x`. Every parameter besides `tenant_id`/`actor_id`/`entity_id` is optional and defaults to `None`, meaning "leave unchanged" — build the updated entity by falling back to the current stored value field-by-field, then run it through the *same* domain validation function `create_x` already uses before writing. Expose it as `PATCH /module/entities/{id}`, gated by the entity's `admin_<entity>` permission. Edits are allowed regardless of the record's current status/state — the elevated permission is what limits blast radius, not a status check; don't also bolt on a "only while draft" restriction, that's redundant with the permission gate and the material-receipts reference implementation doesn't do it either.
 3. **Audit:** exactly like every other mutation — call `record_audit(..., action="<entity>.updated", entity_id=..., payload={...the fields that changed and their new values...})` in the same transaction as the write. Not optional for edits; a user correcting a record is exactly the kind of change ISO 9001 traceability exists to capture (who changed what, and when).
 4. **Frontend:** a pencil/edit affordance per row opens the same dialog used for creation, pre-filled with the row's current values, submitting through an `update` mutation instead of `create`; `onSuccess` invalidates the same query key create does.
@@ -193,7 +194,7 @@ Every list/table view lets the signed-in user resize columns and show/hide them,
 2. **Wire it with `useTableColumns(tableKey, columns)`.** `tableKey` must be a stable, globally unique id for the table (e.g. `"warehouse.stock"`, `"production.workOrders"` — module-qualified, matches the existing query-key naming style). Returns `visibleColumns`, `colWidths`, `isVisible`/`toggleVisible`, `getWidth`/`setWidth`, `resetAll`. Render the header via `visibleColumns.map(col => <ResizableTableHead .../>)`, pass `colWidths` to `<Table colWidths={...}>` (renders a `<colgroup>` — the correct HTML mechanism for column widths, not per-cell inline styles), and body cells via `visibleColumns.map(col => <TableCell>{col.cell(row)}</TableCell>)`. Add `<ColumnVisibilityMenu columns={columns} isVisible={...} onToggle={...} onReset={...} />` (`components/patterns/ColumnVisibilityMenu.tsx`) next to the table's existing filter controls.
 3. **An actions/buttons column is `alwaysVisible: true`** — it can be resized but never hidden, so a user can't hide their way into a table with no way to act on a row.
 4. **A cell that needs its own hooks** (a per-row `useQuery`/`useFieldArray`/`useEffect`, e.g. Purchase Orders' or Work Orders' receive/complete dialogs) must delegate to a real named subcomponent invoked via JSX (`cell: (row) => <RowActions row={row} .../>`), never call a plain function containing hooks from inside `.map()` — that violates the Rules of Hooks since the call count/order would vary with row count.
-5. **Persistence is backend-owned, not `localStorage`.** `GET`/`PUT /core/table-preferences/{table_key}` (`core/table_preferences.py`), backed by `core.user_table_preferences (user_id, tenant_id, table_key, columns jsonb)`. Gated by `require_session` only — no `admin_*`/`manage_*` permission, since it's strictly self-scoped (a user can only ever read/write their own row, keyed by their own `user_id` from the session). Resize commits on drag-end, not per pixel; visibility commits immediately on toggle.
+5. **Persistence is backend-owned, not `localStorage`.** `GET`/`PUT /core/table-preferences/{table_key}` (`backend/core/table_preferences.py`), backed by `core.user_table_preferences (user_id, tenant_id, table_key, columns jsonb)`. Gated by `require_session` only — no `admin_*`/`manage_*` permission, since it's strictly self-scoped (a user can only ever read/write their own row, keyed by their own `user_id` from the session). Resize commits on drag-end, not per pixel; visibility commits immediately on toggle.
 6. **Deliberately not audited.** Unlike every other mutating endpoint on the platform, `save_table_preferences` does **not** call `record_audit()`. This is an intentional, one-off exception to the "every mutation is audited" rule elsewhere in this document: a column-width drag is a personal display setting, not a business record, and logging it would be pure noise in the ISO 9001 audit trail. Don't treat this as precedent for skipping audit logging anywhere else — it applies only to this endpoint.
 
 **Why:** requested as a platform-wide, apply-to-every-table feature (2026-08-26), so it was built once as a shared primitive and swept across every existing list view in the same pass, rather than one-off per table. The column-array refactor was necessary, not optional — the prior hand-rolled header/body JSX had no single source of truth to hide a column from safely.
