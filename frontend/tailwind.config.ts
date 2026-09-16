@@ -6,21 +6,21 @@ export default {
   theme: {
     extend: {
       colors: {
-        border: "hsl(214 20% 88%)",
-        ring: "hsl(217 91% 60%)",
-        background: "hsl(0 0% 100%)",
-        foreground: "hsl(222 20% 14%)",
+        border: "#d6cfc0",
+        ring: "#7a8a72",
+        background: "#f8f4ec",
+        foreground: "#2a2b22",
         muted: {
-          DEFAULT: "hsl(210 20% 96%)",
-          foreground: "hsl(215 16% 47%)",
+          DEFAULT: "#e4ddcf",
+          foreground: "#6b6a5c",
         },
         primary: {
-          DEFAULT: "hsl(217 91% 45%)",
-          foreground: "hsl(0 0% 100%)",
+          DEFAULT: "#8fa286",
+          foreground: "#1f231b",
         },
         accent: {
-          DEFAULT: "hsl(258 90% 66%)",
-          foreground: "hsl(0 0% 100%)",
+          DEFAULT: "#c3c6af",
+          foreground: "#2a2b22",
         },
         success: {
           DEFAULT: "hsl(152 69% 31%)",
@@ -44,9 +44,9 @@ export default {
         xl: "0.9rem",
       },
       boxShadow: {
-        soft: "0 1px 2px 0 hsl(222 20% 14% / 0.04), 0 1px 3px 0 hsl(222 20% 14% / 0.06)",
-        raised: "0 4px 16px -4px hsl(222 30% 20% / 0.12), 0 2px 6px -2px hsl(222 30% 20% / 0.08)",
-        glow: "0 0 0 1px hsl(217 91% 45% / 0.08), 0 8px 24px -8px hsl(217 91% 45% / 0.35)",
+        soft: "0 1px 2px 0 hsl(80 15% 14% / 0.04), 0 1px 3px 0 hsl(80 15% 14% / 0.06)",
+        raised: "0 4px 16px -4px hsl(80 20% 16% / 0.12), 0 2px 6px -2px hsl(80 20% 16% / 0.08)",
+        glow: "0 0 0 1px hsl(101 13% 45% / 0.1), 0 8px 24px -8px hsl(101 13% 45% / 0.4)",
       },
       fontFamily: {
         sans: [
