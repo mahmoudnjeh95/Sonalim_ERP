@@ -8,10 +8,10 @@ export default {
       colors: {
         border: "#d6cfc0",
         ring: "#7a8a72",
-        background: "#f8f4ec",
+        background: "var(--background)",
         foreground: "#2a2b22",
         muted: {
-          DEFAULT: "#e4ddcf",
+          DEFAULT: "rgb(var(--muted) / <alpha-value>)",
           foreground: "#6b6a5c",
         },
         primary: {
