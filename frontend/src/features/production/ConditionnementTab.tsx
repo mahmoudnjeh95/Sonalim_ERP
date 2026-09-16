@@ -662,7 +662,10 @@ export function ConditionnementTab() {
                 orderType={orderTypeOf(selectedOfId)}
                 locations={locations}
                 uoms={uoms}
-                finishedProductId={productOfOrder(form.watch("of_id"))}
+                // The OF may not have a product yet -- that's exactly when the
+                // "Produit fini" picker above is shown, so fall back to whatever
+                // it's been set to instead of leaving the carton/sac tier blank.
+                finishedProductId={productOfOrder(form.watch("of_id")) || form.watch("product_id") || undefined}
                 suppliers={suppliers}
                 dailyReports={dailyReports}
               />
