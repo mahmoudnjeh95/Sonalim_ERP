@@ -35,10 +35,10 @@ Resolved:
 - **`GET /crm/leads` now exists** (`LeadService.list_leads`, same tenant-scoped pattern as every other query). The Leads table is a real `useQuery` against it, not client-only state.
 - **401s force a logout.** `apiFetch` dispatches a `window` `"auth:unauthorized"` event on any 401; `AuthProvider` listens and clears the session, which sends `ProtectedRoute` back to `/login`. No per-call-site handling needed.
 - **Access tokens are short-lived (30 min) and silently renewed.** `AuthProvider` schedules a call to `POST /core/auth/refresh` just before the access token expires, trading it for a new one via the longer-lived (7 day) refresh token — an active user never sees a logout. A stolen access token is only useful for the 30-minute window.
-- **Refresh tokens rotate on every use, with reuse detection.** Each refresh call revokes the refresh token it was given and issues a new one (`core/auth.py`). If a already-revoked refresh token is ever presented again — the signature of a stolen copy being replayed — the backend kills every session and refresh token that user has and forces a real re-login.
+- **Refresh tokens rotate on every use, with reuse detection.** Each refresh call revokes the refresh token it was given and issues a new one (`backend/core/auth.py`). If a already-revoked refresh token is ever presented again — the signature of a stolen copy being replayed — the backend kills every session and refresh token that user has and forces a real re-login.
 - **Sign-out revokes both tokens server-side.** `logout()` calls `POST /core/auth/logout` with the refresh token, which deletes the `core.sessions` row and marks the refresh token revoked — a signed-out (or force-logged-out) credential stops working immediately, not at natural expiry.
-- **Passwords are bcrypt-hashed**, not single-round SHA-256 (`core/auth.py`) — backend-only, but closes the most severe finding from the security pass.
-- **Login is rate-limited.** `core/auth.py` tracks failed attempts per email in Redis (already a stack dependency, previously unused) and locks out after 5 failures for 15 minutes.
+- **Passwords are bcrypt-hashed**, not single-round SHA-256 (`backend/core/auth.py`) — backend-only, but closes the most severe finding from the security pass.
+- **Login is rate-limited.** `backend/core/auth.py` tracks failed attempts per email in Redis (already a stack dependency, previously unused) and locks out after 5 failures for 15 minutes.
 - **Permissions are enforced.** `core.user_permissions` + `core.tenancy.require_permission(code)` check that the session's user was actually granted a permission, not just that they're logged in. CRM's router uses it (`crm.view_leads`, `crm.manage_leads`); other modules' routers still only call `require_session` and need the same one-line swap.
 
 Still open — deliberate, not oversights:
@@ -49,7 +49,7 @@ Still open — deliberate, not oversights:
 
 Resolved (admin UI/API for permissions):
 
-- **`core/users.py`** adds `GET /core/users` (tenant-scoped, with each user's current grants), `GET /core/permissions/catalog` (aggregated from every module's `module.json` — no second copy of the permission list to keep in sync), `POST /core/users/{id}/permissions`, and `DELETE /core/users/{id}/permissions/{permission}`. All four require `core.manage_permissions` via the same `require_permission()` used elsewhere — permissions administration is itself just another permission, not a separate role system.
+- **`backend/core/users.py`** adds `GET /core/users` (tenant-scoped, with each user's current grants), `GET /core/permissions/catalog` (aggregated from every module's `module.json` — no second copy of the permission list to keep in sync), `POST /core/users/{id}/permissions`, and `DELETE /core/users/{id}/permissions/{permission}`. All four require `core.manage_permissions` via the same `require_permission()` used elsewhere — permissions administration is itself just another permission, not a separate role system.
 - Granting validates the permission string against the catalog (typos become a 422, not a silent no-op grant); revoking and granting both verify the target user belongs to the caller's tenant; and an admin can't revoke their own `core.manage_permissions` and lock themselves out.
 - **`/admin/users`** in the frontend — a table of users, their permission chips (click × to revoke), and a per-row grant control. `seed_dev.py` now grants the demo user `core.manage_permissions` so this is reachable immediately after seeding.
 
@@ -62,7 +62,7 @@ src/
 ├── routes/        router config, layout shell, login
 └── features/
     └── crm/
-        └── leads/  the only implemented feature — mirrors modules/crm on the backend
+        └── leads/  the only implemented feature — mirrors backend/modules/crm on the backend
 ```
 
-New modules get a new `features/<module>/` folder, not new top-level concepts — same boundary the backend draws at `modules/`.
+New modules get a new `features/<module>/` folder, not new top-level concepts — same boundary the backend draws at `backend/modules/`.
