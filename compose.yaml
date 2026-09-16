@@ -1,6 +1,7 @@
 services:
   app:
-    build: ./backend
+    image: ghcr.io/smarttoolsagro/erpsonalim-backend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://erp:${POSTGRES_PASSWORD:-erp}@postgres:5432/erp}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
@@ -8,7 +9,7 @@ services:
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:-http://localhost}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -22,19 +23,22 @@ services:
       start_period: 10s
 
   web:
-    build:
-      context: ./frontend
-      args:
-        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+    image: ghcr.io/smarttoolsagro/erpsonalim-frontend:${IMAGE_TAG:-latest}
+    restart: unless-stopped
     ports:
-      - "80:80"
+      - "${WEB_PORT:-8080}:80"
     depends_on:
       app:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/health >/dev/null"]
+      interval: 10s
+      timeout: 5s
 
   worker:
-    build: ./backend
+    image: ghcr.io/smarttoolsagro/erpsonalim-backend:${IMAGE_TAG:-latest}
     command: ["python", "-m", "worker.main"]
+    restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://erp:${POSTGRES_PASSWORD:-erp}@postgres:5432/erp}
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:${RABBITMQ_PASSWORD:-erp}@rabbitmq:5672/}
@@ -46,6 +50,7 @@ services:
 
   postgres:
     image: postgres:18-alpine
+    restart: unless-stopped
     environment:
       POSTGRES_DB: erp
       POSTGRES_USER: erp
@@ -53,8 +58,7 @@ services:
     ports:
       - "127.0.0.1:5432:5432"
     volumes:
-      - postgres_data:/var/lib/postgresql/data
-      - ./backend/docker/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - postgres_data:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U erp -d erp"]
       interval: 5s
@@ -63,6 +67,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    restart: unless-stopped
     ports:
       - "127.0.0.1:6379:6379"
     volumes:
@@ -70,6 +75,7 @@ services:
 
   rabbitmq:
     image: rabbitmq:4-management-alpine
+    restart: unless-stopped
     environment:
       RABBITMQ_DEFAULT_USER: erp
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD:-erp}
@@ -84,13 +90,15 @@ services:
 
   prometheus:
     image: prom/prometheus:v3.5.0
+    restart: unless-stopped
     ports:
       - "127.0.0.1:9090:9090"
     volumes:
-      - ./backend/docker/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
 
   grafana:
     image: grafana/grafana:12.1.1
+    restart: unless-stopped
     ports:
       - "127.0.0.1:3000:3000"
     volumes:
