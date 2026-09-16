@@ -4,6 +4,7 @@ import { useAuth } from "../lib/auth";
 import { AppLayout } from "./AppLayout";
 import { LoginPage } from "./LoginPage";
 import { RouteErrorBoundary } from "./RouteErrorBoundary";
+import { AppLoader } from "../components/patterns/AppLoader";
 import { LeadsPage } from "../features/crm/leads/LeadsPage";
 import { PartnersPage } from "../features/partners/PartnersPage";
 import { PartnerDetailsPage } from "../features/partners/PartnerDetailsPage";
@@ -55,7 +56,7 @@ const protectedChildren: RouteObject[] = [
   {
     path: "/crm",
     element: (
-      <Suspense fallback={null}>
+      <Suspense fallback={<AppLoader fullScreen />}>
         <CrmDashboardPage />
       </Suspense>
     ),

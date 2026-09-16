@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-hidden="true">
+<style>
+  .sonalim-spin-ring{transform-origin:50px 50px;animation:sonalim-spin 1.1s linear infinite}
+  .sonalim-spin-inner{transform-origin:50px 50px;animation:sonalim-spin-reverse 1.7s linear infinite}
+  @keyframes sonalim-spin{to{transform:rotate(360deg)}}
+  @keyframes sonalim-spin-reverse{to{transform:rotate(-360deg)}}
+  @media(prefers-reduced-motion:reduce){.sonalim-spin-ring,.sonalim-spin-inner{animation:none}}
+</style>
+<circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" stroke-width="6" opacity=".18"/>
+<g class="sonalim-spin-ring"><path d="M50 10a40 40 0 0 1 40 40" fill="none" stroke="currentColor" stroke-width="6" stroke-linecap="round"/></g>
+<g class="sonalim-spin-inner"><path d="M50 24a26 26 0 0 0-26 26" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-dasharray="4 6" opacity=".7"/></g>
+</svg>

@@ -42,6 +42,10 @@ const en = {
   "login.submit": "Sign in",
   "login.submitting": "Signing in…",
 
+  "app.loading": "Loading…",
+  "app.startingUp": "Starting up…",
+  "app.tagline": "Production • Quality • Performance",
+
   "settings.title": "Settings",
   "settings.subtitle": "Your account and session.",
   "settings.account.title": "Account",
@@ -2840,6 +2844,10 @@ const fr: Record<TranslationKey, string> = {
   "login.password": "Mot de passe",
   "login.submit": "Se connecter",
   "login.submitting": "Connexion…",
+
+  "app.loading": "Chargement…",
+  "app.startingUp": "Démarrage en cours…",
+  "app.tagline": "Production • Qualité • Performance",
 
   "settings.title": "Paramètres",
   "settings.subtitle": "Votre compte et votre session.",
