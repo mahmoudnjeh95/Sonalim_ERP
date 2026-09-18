@@ -22,12 +22,10 @@ import {
   ShieldCheck,
   Sparkles,
   Timer,
-  TrendingUp,
   XCircle,
   Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import EmptyOrdersIllustration from "../../assets/illustrations/empty-states/empty-no-orders.svg?react";
 import ProductionEmptyStateIllustration from "../../assets/illustrations/production/production-empty-state.svg?react";
 import ProductPackagingThumbIllustration from "../../assets/illustrations/production/product-packaging-thumb.svg?react";
 import ProductionFlowIllustration from "../../assets/illustrations/production/production-flow.svg?react";
@@ -47,7 +45,6 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
@@ -93,7 +90,6 @@ import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { listQualityReports } from "../qc/api";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
-import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
@@ -520,8 +516,7 @@ export function WorkOrdersTab() {
       ),
     },
   ];
-  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
-    useTableColumns("production.workOrders", columns);
+  const { isVisible, toggleVisible, resetAll, sortRows } = useTableColumns("production.workOrders", columns);
   const sortedOrders = sortRows(filteredOrders);
   const groupedOrders = (["PC", "PL"] as const).map((groupType) => ({
     type: groupType,

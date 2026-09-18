@@ -5,7 +5,6 @@ import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
-  CheckCheck,
   CheckCircle2,
   ClipboardList,
   Droplets,
