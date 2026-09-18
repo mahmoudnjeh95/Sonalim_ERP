@@ -14,6 +14,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../../components/ui/dialog";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { ActivityKindBadge } from "../../components/patterns/ActivityKindBadge";
+import { AppLoader } from "../../components/patterns/AppLoader";
 import { listOpportunities } from "../crm/opportunities/api";
 import { listActivities } from "../crm/activities/api";
 import { listOrders } from "../sales/api";
@@ -83,7 +84,7 @@ export function PartnerDetailsPage() {
     setDialogOpen(true);
   }
 
-  if (isLoading || !partner) return <p className="text-sm text-muted-foreground">{t("partners.details.loading")}</p>;
+  if (isLoading || !partner) return <AppLoader label={t("partners.details.loading")} className="min-h-[220px]" />;
 
   return (
     <div className="space-y-6">

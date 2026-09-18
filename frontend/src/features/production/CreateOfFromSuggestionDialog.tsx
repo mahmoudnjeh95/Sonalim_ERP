@@ -3,6 +3,7 @@ import { useEffect } from "react";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { Loader2 } from "lucide-react";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { ApiError } from "../../lib/api";
@@ -16,13 +17,13 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { listUoms } from "../warehouse/api";
 import { createWorkOrder, listProducts, listWorkCenters } from "./api";
 import type { ProductionSuggestion } from "./planning";
+import SuggestionToOfIcon from "../../assets/icons/production/suggestion-to-of.svg?react";
 
-const formSchema = z.object({
-  work_center_id: z.string().min(1, "Required"),
-  planned_quantity: z.coerce.number().positive("Must be > 0"),
-  start_date: z.string().optional(),
-});
-type FormValues = z.infer<typeof formSchema>;
+type FormValues = {
+  work_center_id: string;
+  planned_quantity: number;
+  start_date?: string;
+};
 
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
@@ -46,6 +47,12 @@ export function CreateOfFromSuggestionDialog({
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+
+  const formSchema = z.object({
+    work_center_id: z.string().min(1, t("common.required")),
+    planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")),
+    start_date: z.string().optional(),
+  });
 
   const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
@@ -107,9 +114,12 @@ export function CreateOfFromSuggestionDialog({
         </DialogHeader>
         {suggestion && (
           <form className="space-y-4" onSubmit={handleSubmit((input) => mutation.mutate(input))}>
-            <div className="space-y-1.5">
-              <Label>{t("production.planning.dialog.field.product")}</Label>
-              <p className="text-sm font-medium">{product?.name ?? "—"}</p>
+            <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-3">
+              <SuggestionToOfIcon className="h-8 w-8 shrink-0 text-primary" />
+              <div className="space-y-1.5">
+                <Label className="text-xs">{t("production.planning.dialog.field.product")}</Label>
+                <p className="text-sm font-medium">{product?.name ?? "—"}</p>
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
@@ -149,6 +159,7 @@ export function CreateOfFromSuggestionDialog({
               </p>
             )}
             <Button type="submit" className="w-full" disabled={mutation.isPending}>
+              {mutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
               {mutation.isPending ? t("production.planning.creating") : t("production.planning.dialog.confirm")}
             </Button>
           </form>

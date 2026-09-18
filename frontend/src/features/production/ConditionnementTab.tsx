@@ -10,6 +10,7 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { rowEnterProps } from "../../components/motion/rowMotion";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -108,68 +109,40 @@ function finishedGoodOptions(products: Product[], orderType: string | null | und
   return filtered;
 }
 
-// The packing report. This is the one that puts finished product into stock and
-// takes packaging out — the only place packaging is ever deducted.
-const detailSchema = z.object({
-  // Decision 24/25: cartons decide the finished-goods quantity for a product
-  // with a carton tier; the machine's own tally sits beside it. Tonnage is no
-  // longer typed here at all -- it comes from the daily report (decision 25).
-  packets_counted: z.coerce.number().min(0),
-  finished_goods_location_id: z.string().optional(),
-  film_quantity: z.coerce.number().min(0),
-  film_product_id: z.string().optional(),
-  film_supplier_id: z.string().optional(),
-  carton_quantity: z.coerce.number().min(0),
-  // Part of carton_quantity that held no sellable product -- empty or damaged
-  // cartons still swept into the physical tally. Never its own consumption,
-  // so it carries no product/supplier of its own.
-  waste_carton_quantity: z.coerce.number().min(0),
-  carton_product_id: z.string().optional(),
-  carton_supplier_id: z.string().optional(),
-  scotch_quantity: z.coerce.number().min(0),
-  scotch_product_id: z.string().optional(),
-  scotch_supplier_id: z.string().optional(),
-  ruban_quantity: z.coerce.number().min(0),
-  ruban_product_id: z.string().optional(),
-  ruban_supplier_id: z.string().optional(),
-  packaging_location_id: z.string().optional(),
-  // Déchets. A list, so scotch -- which had no column at all -- can finally
-  // be recorded, and every figure names the item that gives it a unit.
-  waste_lines: z.array(
-    z.object({
-      category: z.enum(["product", "packaging"]),
-      product_id: z.string(),
-      quantity: z.coerce.number().min(0),
-      note: z.string(),
-    }),
-  ),
-  machine_speed: z.coerce.number().min(0).optional(),
-  production_minutes: z.coerce.number().int().min(0),
-  downtime_minutes: z.coerce.number().int().min(0),
-  downtime_reason: z.string().optional(),
-  downtime_note: z.string().optional(),
-  lot_number: z.string().optional(),
-  dlc_date: z.string().optional(),
-});
-
-const createSchema = detailSchema.extend({
-  of_id: z.string().min(1, "Required"),
-  report_date: z.string().min(1, "Required"),
-  team: z.string().optional(),
-  shift: z.string().optional(),
-  // Only required when the chosen order has no product yet — this report is
-  // then what names one.
-  product_id: z.string().optional(),
-  // Which machine within the OF's line ran this shift. Optional here (a
-  // draft may be saved before the team knows) but required to submit.
-  equipment_id: z.string().optional(),
-  // The daily report whose output this run packaged. Always optional -- a
-  // team may file conditionnement before that day's daily report exists --
-  // but it's what lets QC see packets/cartons/regrind as a hint when they
-  // later pick this run to inspect.
-  daily_report_id: z.string().optional(),
-});
-type CreateForm = z.infer<typeof createSchema>;
+type WasteLine = { category: "product" | "packaging"; product_id: string; quantity: number; note: string };
+type CreateForm = {
+  packets_counted: number;
+  finished_goods_location_id?: string;
+  film_quantity: number;
+  film_product_id?: string;
+  film_supplier_id?: string;
+  carton_quantity: number;
+  waste_carton_quantity: number;
+  carton_product_id?: string;
+  carton_supplier_id?: string;
+  scotch_quantity: number;
+  scotch_product_id?: string;
+  scotch_supplier_id?: string;
+  ruban_quantity: number;
+  ruban_product_id?: string;
+  ruban_supplier_id?: string;
+  packaging_location_id?: string;
+  waste_lines: WasteLine[];
+  machine_speed?: number;
+  production_minutes: number;
+  downtime_minutes: number;
+  downtime_reason?: string;
+  downtime_note?: string;
+  lot_number?: string;
+  dlc_date?: string;
+  of_id: string;
+  report_date: string;
+  team?: string;
+  shift?: string;
+  product_id?: string;
+  equipment_id?: string;
+  daily_report_id?: string;
+};
 
 const QUERY_KEY = ["production", "reports", "conditionnement"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
@@ -250,6 +223,51 @@ export function ConditionnementTab() {
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+
+  const detailSchema = z.object({
+    packets_counted: z.coerce.number().min(0),
+    finished_goods_location_id: z.string().optional(),
+    film_quantity: z.coerce.number().min(0),
+    film_product_id: z.string().optional(),
+    film_supplier_id: z.string().optional(),
+    carton_quantity: z.coerce.number().min(0),
+    waste_carton_quantity: z.coerce.number().min(0),
+    carton_product_id: z.string().optional(),
+    carton_supplier_id: z.string().optional(),
+    scotch_quantity: z.coerce.number().min(0),
+    scotch_product_id: z.string().optional(),
+    scotch_supplier_id: z.string().optional(),
+    ruban_quantity: z.coerce.number().min(0),
+    ruban_product_id: z.string().optional(),
+    ruban_supplier_id: z.string().optional(),
+    packaging_location_id: z.string().optional(),
+    waste_lines: z.array(
+      z.object({
+        category: z.enum(["product", "packaging"]),
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        note: z.string(),
+      }),
+    ),
+    machine_speed: z.coerce.number().min(0).optional(),
+    production_minutes: z.coerce.number().int().min(0),
+    downtime_minutes: z.coerce.number().int().min(0),
+    downtime_reason: z.string().optional(),
+    downtime_note: z.string().optional(),
+    lot_number: z.string().optional(),
+    dlc_date: z.string().optional(),
+  });
+
+  const createSchema = detailSchema.extend({
+    of_id: z.string().min(1, t("common.required")),
+    report_date: z.string().min(1, t("common.required")),
+    team: z.string().optional(),
+    shift: z.string().optional(),
+    product_id: z.string().optional(),
+    equipment_id: z.string().optional(),
+    daily_report_id: z.string().optional(),
+  });
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   // Conditionnement is the OF's final stage, so tracking one order's packing
@@ -662,7 +680,10 @@ export function ConditionnementTab() {
                 orderType={orderTypeOf(selectedOfId)}
                 locations={locations}
                 uoms={uoms}
-                finishedProductId={productOfOrder(form.watch("of_id"))}
+                // The OF may not have a product yet -- that's exactly when the
+                // "Produit fini" picker above is shown, so fall back to whatever
+                // it's been set to instead of leaving the carton/sac tier blank.
+                finishedProductId={productOfOrder(form.watch("of_id")) || form.watch("product_id") || undefined}
                 suppliers={suppliers}
                 dailyReports={dailyReports}
               />
@@ -708,48 +729,48 @@ export function ConditionnementTab() {
               </TableHeader>
               <TableBody>
                 <AnimatePresence initial={false}>
-                  {rowGroups.flatMap((group) => {
-                    const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
-                    const rows: ReactNode[] = [];
-                    if (groupSpec) {
-                      rows.push(
-                        <GroupHeaderRow
-                          key={`group-${group.key}`}
-                          label={group.label}
-                          count={group.rows.length}
-                          collapsed={collapsed}
-                          onToggle={() => toggleGroup(group.key)}
-                          colSpan={table.visibleColumns.length}
-                        />,
-                      );
-                    }
-                    if (!collapsed) {
-                      for (const report of group.rows) {
+                  {(() => {
+                    let rowIndex = 0;
+                    return rowGroups.flatMap((group) => {
+                      const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
+                      const rows: ReactNode[] = [];
+                      if (groupSpec) {
                         rows.push(
-                          <motion.tr
-                            key={report.id}
-                            layout
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                            onClick={() => openReportAt(report, "view")}
-                          >
-                            {table.visibleColumns.map((column) => (
-                              <TableCell
-                                key={column.key}
-                                className={column.cellClassName}
-                                onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
-                              >
-                                {column.cell(report)}
-                              </TableCell>
-                            ))}
-                          </motion.tr>,
+                          <GroupHeaderRow
+                            key={`group-${group.key}`}
+                            label={group.label}
+                            count={group.rows.length}
+                            collapsed={collapsed}
+                            onToggle={() => toggleGroup(group.key)}
+                            colSpan={table.visibleColumns.length}
+                          />,
                         );
                       }
-                    }
-                    return rows;
-                  })}
+                      if (!collapsed) {
+                        for (const report of group.rows) {
+                          rows.push(
+                            <motion.tr
+                              key={report.id}
+                              {...rowEnterProps(rowIndex++)}
+                              className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
+                              onClick={() => openReportAt(report, "view")}
+                            >
+                              {table.visibleColumns.map((column) => (
+                                <TableCell
+                                  key={column.key}
+                                  className={column.cellClassName}
+                                  onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
+                                >
+                                  {column.cell(report)}
+                                </TableCell>
+                              ))}
+                            </motion.tr>,
+                          );
+                        }
+                      }
+                      return rows;
+                    });
+                  })()}
                 </AnimatePresence>
               </TableBody>
             </Table>
@@ -825,6 +846,50 @@ export function PackingReportDialog({
   const token = session!.token;
   const queryClient = useQueryClient();
   const [reason, setReason] = useState("");
+
+  const detailSchema = z.object({
+    packets_counted: z.coerce.number().min(0),
+    finished_goods_location_id: z.string().optional(),
+    film_quantity: z.coerce.number().min(0),
+    film_product_id: z.string().optional(),
+    film_supplier_id: z.string().optional(),
+    carton_quantity: z.coerce.number().min(0),
+    waste_carton_quantity: z.coerce.number().min(0),
+    carton_product_id: z.string().optional(),
+    carton_supplier_id: z.string().optional(),
+    scotch_quantity: z.coerce.number().min(0),
+    scotch_product_id: z.string().optional(),
+    scotch_supplier_id: z.string().optional(),
+    ruban_quantity: z.coerce.number().min(0),
+    ruban_product_id: z.string().optional(),
+    ruban_supplier_id: z.string().optional(),
+    packaging_location_id: z.string().optional(),
+    waste_lines: z.array(
+      z.object({
+        category: z.enum(["product", "packaging"]),
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        note: z.string(),
+      }),
+    ),
+    machine_speed: z.coerce.number().min(0).optional(),
+    production_minutes: z.coerce.number().int().min(0),
+    downtime_minutes: z.coerce.number().int().min(0),
+    downtime_reason: z.string().optional(),
+    downtime_note: z.string().optional(),
+    lot_number: z.string().optional(),
+    dlc_date: z.string().optional(),
+  });
+
+  const createSchema = detailSchema.extend({
+    of_id: z.string().min(1, t("common.required")),
+    report_date: z.string().min(1, t("common.required")),
+    team: z.string().optional(),
+    shift: z.string().optional(),
+    product_id: z.string().optional(),
+    equipment_id: z.string().optional(),
+    daily_report_id: z.string().optional(),
+  });
 
   const { data: full } = useQuery({
     queryKey: ["production", "reports", report.id],

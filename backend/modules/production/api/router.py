@@ -257,12 +257,16 @@ class DowntimeLineRequest(BaseModel):
     """
 
     motif: str | None = None
+    downtime_type: str | None = None
+    classification: str | None = None
     minutes: int = 0
     note: str | None = None
 
     def to_line(self, order: int) -> DowntimeLine:
         return DowntimeLine(
             motif=self.motif,
+            downtime_type=self.downtime_type,
+            classification=self.classification,
             minutes=self.minutes,
             note=self.note,
             line_order=order,
@@ -277,6 +281,8 @@ def _downtime_lines(lines: list[DowntimeLineRequest]) -> tuple[DowntimeLine, ...
 def _serialize_downtime_line(line: DowntimeLine) -> dict:
     return {
         "motif": line.motif,
+        "downtime_type": line.downtime_type,
+        "classification": line.classification,
         "minutes": line.minutes,
         "note": line.note,
     }
@@ -331,9 +337,14 @@ class DailyReportDetailRequest(BaseModel):
     # Which fournisseur this shift's fioul came from -- informational only, see
     # DailyReportDetail.fuel_supplier_id.
     fuel_supplier_id: str | None = None
-    # Gasoil (diesel) -- a separate fuel from fuel_quantity (fioul).
+    # Gasoil (diesel) -- a separate fuel from fuel_quantity (fioul). Derived on
+    # the frontend from gasoil_flow_rate x generator_hours.
     gasoil_quantity: float = 0
     gasoil_supplier_id: str | None = None
+    # Groupe électrogène consumption rate (L/h) and hours run this shift --
+    # the operator's real inputs; gasoil_quantity is their product.
+    gasoil_flow_rate: float = 0
+    generator_hours: float = 0
     electricity_quantity: float = 0
     # Débit de semoule: feed rate in tonnes/hour. Recorded only, for future
     # recipe statistics -- see PRODUCTION_RECIPE_STATISTICS_PLAN.md.
@@ -2343,6 +2354,8 @@ def _serialize_daily_detail(detail: DailyReportDetail) -> dict:
         "fuel_supplier_id": detail.fuel_supplier_id,
         "gasoil_quantity": detail.gasoil_quantity,
         "gasoil_supplier_id": detail.gasoil_supplier_id,
+        "gasoil_flow_rate": detail.gasoil_flow_rate,
+        "generator_hours": detail.generator_hours,
         "electricity_quantity": detail.electricity_quantity,
         "semolina_flow_rate": detail.semolina_flow_rate,
         "start_time": detail.start_time.isoformat() if detail.start_time is not None else None,

@@ -5,7 +5,7 @@ from ulid import ULID
 
 from modules.production.domain.production_report import DowntimeLine
 
-_COLUMNS = "motif, minutes, note, line_order"
+_COLUMNS = "motif, downtime_type, classification, minutes, note, line_order"
 
 
 def load_downtime_lines(
@@ -23,9 +23,11 @@ def load_downtime_lines(
     return tuple(
         DowntimeLine(
             motif=row[0],
-            minutes=int(row[1]),
-            note=row[2],
-            line_order=int(row[3]),
+            downtime_type=row[1],
+            classification=row[2],
+            minutes=int(row[3]),
+            note=row[4],
+            line_order=int(row[5]),
         )
         for row in rows
     )
@@ -51,13 +53,15 @@ def replace_downtime_lines(
         connection.execute(
             f"""
             INSERT INTO production.report_downtime_lines (id, tenant_id, report_id, {_COLUMNS})
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 str(ULID()),
                 tenant_id,
                 report_id,
                 (line.motif or None),
+                (line.downtime_type or None),
+                (line.classification or None),
                 line.minutes,
                 (line.note or None),
                 order,

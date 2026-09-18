@@ -1,15 +1,13 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ComponentType } from "react";
 import { NavLink, useLocation } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
-  Boxes,
   Building2,
   CalendarDays,
   ChevronsLeft,
   ChevronsRight,
   ClipboardList,
   Contact,
-  Factory,
   FileText,
   History,
   KeyRound,
@@ -25,10 +23,14 @@ import {
   Target,
   Truck,
   UserCircle,
-  Wallet, FlaskConical, Wrench } from "lucide-react";
+  Wallet } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useI18n, type Language } from "../lib/i18n";
 import { cn } from "../lib/utils";
+import ProductionIcon from "../assets/icons/production/line.svg?react";
+import QualityIcon from "../assets/icons/quality/check.svg?react";
+import MaintenanceIcon from "../assets/icons/maintenance/wrench.svg?react";
+import WarehouseIcon from "../assets/icons/warehouse/warehouse.svg?react";
 
 const COLLAPSED_STORAGE_KEY = "sonalim-erp.sidebar-collapsed";
 
@@ -65,7 +67,7 @@ interface NavItem {
     | "nav.roles"
     | "nav.activityLog"
     | "nav.hr";
-  icon: typeof Contact;
+  icon: ComponentType<{ className?: string }>;
   exact?: boolean;
   /** Hide this item unless the signed-in user holds this permission. Omit to show it to everyone. */
   permission?: string;
@@ -104,13 +106,13 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.operations",
     items: [
-      { to: "/production", labelKey: "nav.production", icon: Factory },
+      { to: "/production", labelKey: "nav.production", icon: ProductionIcon },
       { to: "/production/ia-assistant", labelKey: "nav.iaAssistant", icon: Sparkles, permission: "production.use_ia_assistant" },
     ],
   },
   {
     labelKey: "nav.quality",
-    items: [{ to: "/quality", labelKey: "nav.quality", icon: FlaskConical }],
+    items: [{ to: "/quality", labelKey: "nav.quality", icon: QualityIcon }],
   },
   {
     labelKey: "nav.analytics",
@@ -118,12 +120,12 @@ const NAV_GROUPS: NavGroup[] = [
   },
   {
     labelKey: "nav.maintenance",
-    items: [{ to: "/maintenance", labelKey: "nav.maintenance", icon: Wrench }],
+    items: [{ to: "/maintenance", labelKey: "nav.maintenance", icon: MaintenanceIcon }],
   },
   {
     labelKey: "nav.productsServices",
     items: [
-      { to: "/warehouse", labelKey: "nav.warehouse", icon: Boxes },
+      { to: "/warehouse", labelKey: "nav.warehouse", icon: WarehouseIcon },
       { to: "/products", labelKey: "nav.products", icon: PackageSearch },
       { to: "/inventories", labelKey: "nav.inventories", icon: ClipboardList },
       { to: "/shipments", labelKey: "nav.shipments", icon: Truck },

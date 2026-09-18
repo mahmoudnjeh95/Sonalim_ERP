@@ -15,6 +15,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, Di
 import { EmptyState } from "../../../components/patterns/EmptyState";
 import { FilterTabs } from "../../../components/patterns/FilterTabs";
 import { StatusBadge } from "../../../components/patterns/StatusBadge";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 import { ActivityKindBadge } from "../../../components/patterns/ActivityKindBadge";
 import { ColumnFilterRow } from "../../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
@@ -344,7 +345,7 @@ export function ActivitiesPage() {
           {!isError && !isLoading && columnFilteredActivities.length === 0 && (
             <EmptyState icon={<CalendarDays className="h-5 w-5" />} title={t("crm.activities.empty.title")} description={t("crm.activities.empty.description")} />
           )}
-          {isLoading && <p className="py-8 text-center text-sm text-muted-foreground">{t("crm.activities.loading")}</p>}
+          {isLoading && <AppLoader label={t("crm.activities.loading")} className="py-8" />}
           {!isError && columnFilteredActivities.length > 0 && (
             <Table colWidths={colWidths}>
               <TableHeader>

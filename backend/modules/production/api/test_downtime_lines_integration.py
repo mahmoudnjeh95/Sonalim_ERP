@@ -276,5 +276,12 @@ def test_the_deletion_audit_records_the_downtime_that_was_there(db, env, of):
         (report.id,),
     ).fetchone()[0]
     assert payload["detail"]["downtime_lines"] == [
-        {"motif": "extruder_failure", "minutes": 20, "note": None, "line_order": 0}
+        {
+            "motif": "extruder_failure",
+            "downtime_type": None,
+            "classification": None,
+            "minutes": 20,
+            "note": None,
+            "line_order": 0,
+        }
     ]

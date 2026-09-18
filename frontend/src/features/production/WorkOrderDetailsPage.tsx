@@ -5,14 +5,18 @@ import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckCheck,
   CheckCircle2,
   ClipboardList,
   Droplets,
   Factory,
   FlaskConical,
+  FileText,
   PauseCircle,
   PlayCircle,
   Recycle,
+  Rocket,
+  ShieldCheck,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
@@ -264,6 +268,21 @@ export function WorkOrderDetailsPage() {
       : []),
   ];
 
+  const reportStatusIcon = (status: string) => {
+    switch (status) {
+      case "draft":
+        return <FileText className="h-3.5 w-3.5 text-primary" />;
+      case "submitted":
+        return <Rocket className="h-3.5 w-3.5 text-warning" />;
+      case "validated":
+        return <ShieldCheck className="h-3.5 w-3.5 text-success" />;
+      case "rejected":
+        return <AlertTriangle className="h-3.5 w-3.5 text-destructive" />;
+      default:
+        return <FileText className="h-3.5 w-3.5 text-primary" />;
+    }
+  };
+
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
@@ -355,12 +374,13 @@ export function WorkOrderDetailsPage() {
         </Card>
       )}
 
-      <Card>
-        <CardHeader>
-          <CardTitle>{t("production.ofDetails.progress.title")}</CardTitle>
-          <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.progress.subtitle")}</p>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24, ease: "easeOut" }}>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("production.ofDetails.progress.title")}</CardTitle>
+            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.progress.subtitle")}</p>
+          </CardHeader>
+          <CardContent className="space-y-3">
           <div className="flex items-baseline justify-between">
             {/* Tonnes throughout: the OF is planned in them (decision 19) and the
                 packing reports report them (decision 17). The packet count is the
@@ -381,13 +401,14 @@ export function WorkOrderDetailsPage() {
               transition={{ duration: 0.4, ease: "easeOut" }}
             />
           </div>
-          <p className="text-xs text-muted-foreground">
-            {t("production.ofDetails.progress.planned")}: {formatQuantity(order.planned_quantity, "t")} ·{" "}
-            {t("production.conditionnement.field.packetsCounted")}:{" "}
-            {formatQuantity(consolidation?.packets_counted, productUom)}
-          </p>
-        </CardContent>
-      </Card>
+            <p className="text-xs text-muted-foreground">
+              {t("production.ofDetails.progress.planned")}: {formatQuantity(order.planned_quantity, "t")} ·{" "}
+              {t("production.conditionnement.field.packetsCounted")}:{" "}
+              {formatQuantity(consolidation?.packets_counted, productUom)}
+            </p>
+          </CardContent>
+        </Card>
+      </motion.div>
 
       {/* The écart net. Read-only by decision 22 — it never held anything up, and
           it sits here because this is where a supervisor decides whether a run
@@ -511,12 +532,17 @@ export function WorkOrderDetailsPage() {
               reports.map((report: ProductionReport) => (
                 // Opens right here rather than navigating to the Production
                 // tab, so closing it leaves the user on this OF's page.
-                <button
+                <motion.button
                   key={report.id}
                   type="button"
                   onClick={() => setOpenReport(report)}
+                  whileHover={{ y: -1 }}
+                  transition={{ duration: 0.15 }}
                   className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/40"
                 >
+                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/15 bg-primary/10 text-primary">
+                    {reportStatusIcon(report.status)}
+                  </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <span className="text-sm font-medium">{report.report_date}</span>
@@ -531,7 +557,7 @@ export function WorkOrderDetailsPage() {
                     </div>
                   </div>
                   <StatusBadge status={report.status} />
-                </button>
+                </motion.button>
               ))
             )}
             {reports.length > 0 && (
@@ -606,13 +632,17 @@ export function WorkOrderDetailsPage() {
             ) : (
               <div className="space-y-2">
                 {qualityReports.map((report) => (
-                  <button
+                  <motion.button
                     key={report.id}
                     type="button"
                     onClick={() => setOpenQualityReport(report)}
+                    whileHover={{ y: -1 }}
+                    transition={{ duration: 0.15 }}
                     className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/40"
                   >
-                    <FlaskConical className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/15 bg-primary/10 text-primary">
+                      {reportStatusIcon(report.status)}
+                    </div>
                     <span className="min-w-0 flex-1 text-sm">{report.report_date}</span>
                     {report.revision > 1 && (
                       <span className="flex items-center gap-1">
@@ -623,7 +653,7 @@ export function WorkOrderDetailsPage() {
                       </span>
                     )}
                     <StatusBadge status={report.status} />
-                  </button>
+                  </motion.button>
                 ))}
                 {nonConformities.map((nc) => (
                   <button

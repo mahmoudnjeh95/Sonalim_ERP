@@ -135,6 +135,11 @@ class DowntimeLine:
     """
 
     motif: str | None = None
+    # What kind of intervention this stoppage was (préventive, corrective, ...)
+    # and which system it hit (pneumatique, électrique, ...) -- both free text,
+    # same as motif: the plant has not asked for a controlled vocabulary here.
+    downtime_type: str | None = None
+    classification: str | None = None
     minutes: int = 0
     note: str | None = None
     # Only ever the order the shift typed them in. Nothing is derived from it.
@@ -184,10 +189,19 @@ class DailyReportDetail:
     # record of who delivered it, because more than one supplier can deliver it.
     fuel_supplier_id: str | None = None
     # Gasoil (diesel) -- a separate fuel from fuel_quantity (fioul), tracked
-    # alongside it rather than folded into it.
+    # alongside it rather than folded into it. What the groupe électrogène (the
+    # plant's generator) burns. Derived on the frontend from gasoil_flow_rate x
+    # generator_hours, the same way water_quantity is derived from
+    # water_percentage -- stored here because every downstream reader
+    # (consolidation, consumption reports) already expects a litre total.
     gasoil_quantity: float = 0
     # Same informational purpose as fuel_supplier_id, for gasoil's own fournisseur.
     gasoil_supplier_id: str | None = None
+    # The generator's own consumption rate (L/h) and how long it ran this
+    # shift -- the operator's real inputs; gasoil_quantity is their product.
+    # Recorded only, for future recipe statistics, like semolina_flow_rate.
+    gasoil_flow_rate: float = 0
+    generator_hours: float = 0
     electricity_quantity: float = 0
     # Débit de semoule: how fast semoule was fed into the line, tonnes/hour.
     # Recorded only, for the same future statistics.
@@ -298,6 +312,8 @@ DAILY_QUANTITY_FIELDS = (
     "water_percentage",
     "fuel_quantity",
     "gasoil_quantity",
+    "gasoil_flow_rate",
+    "generator_hours",
     "electricity_quantity",
     "semolina_flow_rate",
 )

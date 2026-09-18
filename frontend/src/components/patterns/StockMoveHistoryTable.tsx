@@ -10,6 +10,9 @@ import { StockMoveDetailDialog } from "./StockMoveDetailDialog";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { MOVE_TYPE_VARIANT, formatMoveReference, signedMoveQuantity, useMoveTypeLabels, useReferenceKindLabels } from "../../lib/stockMoveTypes";
 import { useI18n } from "../../lib/i18n";
+import { rowEnterProps } from "../motion/rowMotion";
+import MovementInIcon from "../../assets/icons/warehouse/movement-in.svg?react";
+import MovementOutIcon from "../../assets/icons/warehouse/movement-out.svg?react";
 import type { StockMove } from "../../features/warehouse/api";
 import type { RegrindScrapInput } from "../../features/production/api";
 
@@ -97,8 +100,10 @@ export function StockMoveHistoryTable({
       defaultWidth: 140,
       cell: (move) => {
         const signed = signedMoveQuantity(move);
+        const Icon = signed < 0 ? MovementOutIcon : MovementInIcon;
         return (
-          <span className={`tabular-nums ${signed < 0 ? "text-destructive" : "text-success"}`}>
+          <span className={`inline-flex items-center gap-1 tabular-nums ${signed < 0 ? "text-destructive" : "text-success"}`}>
+            <Icon className="h-3.5 w-3.5 shrink-0" />
             {signed > 0 ? "+" : ""}
             {signed}
           </span>
@@ -177,13 +182,10 @@ export function StockMoveHistoryTable({
             </TableRow>
           )}
           <AnimatePresence initial={false}>
-            {sortedMoves.map((move) => (
+            {sortedMoves.map((move, index) => (
               <motion.tr
                 key={move.id}
-                layout
-                initial={{ opacity: 0 }}
-                animate={{ opacity: 1 }}
-                exit={{ opacity: 0 }}
+                {...rowEnterProps(index)}
                 className="cursor-pointer border-b border-border transition-colors hover:bg-muted/50"
                 onClick={() => setSelectedMove(move)}
               >

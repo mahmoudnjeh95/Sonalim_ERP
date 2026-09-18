@@ -12,6 +12,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../../components/ui/table";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
 import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import {
   assignRole,
@@ -333,8 +334,8 @@ export function UsersPage() {
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={visibleColumns.length} className="py-8 text-center text-muted-foreground">
-                    {t("admin.users.loading")}
+                  <TableCell colSpan={visibleColumns.length} className="p-0">
+                    <AppLoader label={t("admin.users.loading")} className="py-8" />
                   </TableCell>
                 </TableRow>
               )}

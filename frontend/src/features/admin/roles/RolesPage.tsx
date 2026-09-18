@@ -16,6 +16,7 @@ import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibil
 import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
 import { EmptyState } from "../../../components/patterns/EmptyState";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../../components/ui/dialog";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 import { useColumnFilters, type FilterField } from "../../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import {
@@ -399,8 +400,8 @@ export function RolesPage() {
             <TableBody>
               {isLoading && (
                 <TableRow>
-                  <TableCell colSpan={visibleColumns.length} className="py-8 text-center text-muted-foreground">
-                    {t("admin.roles.loading")}
+                  <TableCell colSpan={visibleColumns.length} className="p-0">
+                    <AppLoader label={t("admin.roles.loading")} className="py-8" />
                   </TableCell>
                 </TableRow>
               )}

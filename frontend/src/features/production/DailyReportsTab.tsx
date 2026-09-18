@@ -3,13 +3,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, ClipboardList, Droplets, Flame, History, Pencil, Plus, Send, Trash2, Wheat } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardList, Droplets, Flame, History, Loader2, Pencil, Plus, Send, Trash2, Wheat } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { cn } from "../../lib/utils";
+import { rowEnterProps } from "../../components/motion/rowMotion";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -79,79 +81,46 @@ import {
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners, type Partner } from "../partners/api";
-import { UTILITY_UNITS, productUnit, totalsByUomCategory } from "../../lib/units";
+import { UTILITY_UNITS, productUnit, totalsByUomCategory, formatQuantity } from "../../lib/units";
 
-// A shift's daily report. Semolina is the one figure here that leaves stock when
-// a supervisor validates it, which is why the form insists on naming the product
-// and the store before the report can be handed over.
-const detailSchema = z.object({
-  // Semoule poured this shift, one line per quality — see SemolinaLinesField.
-  semolina_lines: z.array(
-    z.object({
-      product_id: z.string(),
-      quantity: z.coerce.number().min(0),
-      location_id: z.string(),
-    }),
-  ),
-  raw_material_location_id: z.string().optional(),
-  regrind_input_quantity: z.coerce.number().min(0),
-  regrind_input_product_id: z.string().optional(),
-  // Not a visible field: no input renders it. Kept in the schema purely so an
-  // edit round-trips the value the backend already has instead of the
-  // pydantic request model defaulting the column back to 0 on save.
-  dough_quantity: z.coerce.number().min(0),
-  finished_product_quantity: z.coerce.number().min(0),
-  regrind_quantity: z.coerce.number().min(0),
-  regrind_product_id: z.string().optional(),
-  // Which mold this shift ran — named per report, not on the OF.
-  mold_id: z.string().optional(),
-  // Déchets. A list, so a shift can record whatever it actually lost --
-  // and each line names its item, which is what gives the figure a unit.
-  waste_lines: z
-    .array(
-      z.object({
-        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
-        product_id: z.string(),
-        quantity: z.coerce.number().min(0),
-        note: z.string(),
-      }),
-    ),
-  water_quantity: z.coerce.number().min(0),
-  // The operator's real input: water dosed as a percentage of the semoule
-  // poured. water_quantity is derived from it — see DailyDetailFields.
-  water_percentage: z.coerce.number().min(0).max(100),
-  fuel_quantity: z.coerce.number().min(0),
-  fuel_supplier_id: z.string().optional(),
-  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul).
-  gasoil_quantity: z.coerce.number().min(0),
-  gasoil_supplier_id: z.string().optional(),
-  electricity_quantity: z.coerce.number().min(0),
-  // Débit de semoule, tonnes/hour — recorded for future recipe statistics.
-  semolina_flow_rate: z.coerce.number().min(0),
-  // HH:MM from a native time input, or "" when not entered.
-  start_time: z.string().optional(),
-  production_minutes: z.coerce.number().int().min(0),
-  // Arrêts. A list, so a shift can record more than one stoppage and more
-  // than one reason -- see DowntimeLinesField.
-  downtime_lines: z.array(
-    z.object({
-      motif: z.string(),
-      minutes: z.coerce.number().int().min(0),
-      note: z.string(),
-    }),
-  ),
-});
-
-const createSchema = detailSchema.extend({
-  of_id: z.string().min(1, "Required"),
-  report_date: z.string().min(1, "Required"),
-  team: z.string().optional(),
-  shift: z.string().optional(),
-  // Which machine within the OF's line ran this shift. Optional here (a
-  // draft may be saved before the team knows) but required to submit.
-  equipment_id: z.string().optional(),
-});
-type CreateForm = z.infer<typeof createSchema>;
+type SemolinaLine = { product_id: string; quantity: number; location_id: string };
+type WasteLine = {
+  category: "raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning";
+  product_id: string;
+  quantity: number;
+  note: string;
+};
+type DowntimeLine = { motif: string; downtime_type: string; classification: string; minutes: number; note: string };
+type CreateForm = {
+  semolina_lines: SemolinaLine[];
+  raw_material_location_id?: string;
+  regrind_input_quantity: number;
+  regrind_input_product_id?: string;
+  dough_quantity: number;
+  finished_product_quantity: number;
+  regrind_quantity: number;
+  regrind_product_id?: string;
+  mold_id?: string;
+  waste_lines: WasteLine[];
+  water_quantity: number;
+  water_percentage: number;
+  fuel_quantity: number;
+  fuel_supplier_id?: string;
+  gasoil_quantity: number;
+  gasoil_supplier_id?: string;
+  gasoil_flow_rate: number;
+  generator_hours: number;
+  electricity_quantity: number;
+  semolina_flow_rate: number;
+  start_time?: string;
+  production_minutes: number;
+  downtime_lines: DowntimeLine[];
+  of_id: string;
+  report_date: string;
+  team?: string;
+  shift?: string;
+  equipment_id?: string;
+};
 
 const QUERY_KEY = ["production", "reports", "daily"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
@@ -183,6 +152,8 @@ const EMPTY_DETAIL = {
   fuel_supplier_id: "",
   gasoil_quantity: 0,
   gasoil_supplier_id: "",
+  gasoil_flow_rate: 0,
+  generator_hours: 0,
   electricity_quantity: 0,
   semolina_flow_rate: 0,
   start_time: "",
@@ -199,6 +170,62 @@ export function DailyReportsTab() {
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+
+  const detailSchema = z.object({
+    semolina_lines: z.array(
+      z.object({
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        location_id: z.string(),
+      }),
+    ),
+    raw_material_location_id: z.string().optional(),
+    regrind_input_quantity: z.coerce.number().min(0),
+    regrind_input_product_id: z.string().optional(),
+    dough_quantity: z.coerce.number().min(0),
+    finished_product_quantity: z.coerce.number().min(0),
+    regrind_quantity: z.coerce.number().min(0),
+    regrind_product_id: z.string().optional(),
+    mold_id: z.string().optional(),
+    waste_lines: z.array(
+      z.object({
+        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        note: z.string(),
+      }),
+    ),
+    water_quantity: z.coerce.number().min(0),
+    water_percentage: z.coerce.number().min(0).max(100),
+    fuel_quantity: z.coerce.number().min(0),
+    fuel_supplier_id: z.string().optional(),
+    gasoil_quantity: z.coerce.number().min(0),
+    gasoil_supplier_id: z.string().optional(),
+    gasoil_flow_rate: z.coerce.number().min(0),
+    generator_hours: z.coerce.number().min(0),
+    electricity_quantity: z.coerce.number().min(0),
+    semolina_flow_rate: z.coerce.number().min(0),
+    start_time: z.string().optional(),
+    production_minutes: z.coerce.number().int().min(0),
+    downtime_lines: z.array(
+      z.object({
+        motif: z.string(),
+        downtime_type: z.string(),
+        classification: z.string(),
+        minutes: z.coerce.number().int().min(0),
+        note: z.string(),
+      }),
+    ),
+  });
+
+  const createSchema = detailSchema.extend({
+    of_id: z.string().min(1, t("common.required")),
+    report_date: z.string().min(1, t("common.required")),
+    team: z.string().optional(),
+    shift: z.string().optional(),
+    equipment_id: z.string().optional(),
+  });
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   // Grouped by work order by default, matching the other report lists — it's
@@ -260,6 +287,7 @@ export function DailyReportsTab() {
     resolver: zodResolver(createSchema),
     defaultValues: { of_id: "", report_date: todayIso(), team: "", shift: "", equipment_id: "", ...EMPTY_DETAIL },
   });
+  const [createShake, setCreateShake] = useState(false);
 
   // Machines the chosen OF's line can be attributed to — a line like Line_1_PL
   // can carry more than one at once, so the report must say which one it ran on.
@@ -548,8 +576,14 @@ export function DailyReportsTab() {
                     <DialogDescription>{t("production.dailyReports.dialog.create.description")}</DialogDescription>
                   </DialogHeader>
                   <form
-                    className="space-y-4"
-                    onSubmit={form.handleSubmit((input) => createMutation.mutate(input))}
+                    className={cn("space-y-4", createShake && "animate-shake")}
+                    onSubmit={form.handleSubmit(
+                      (input) => createMutation.mutate(input),
+                      () => {
+                        setCreateShake(true);
+                        setTimeout(() => setCreateShake(false), 300);
+                      },
+                    )}
                   >
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="space-y-1.5">
@@ -605,6 +639,7 @@ export function DailyReportsTab() {
                     />
 
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
+                      {createMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
                       {createMutation.isPending ? t("common.saving") : t("production.dailyReports.create")}
                     </Button>
                   </form>
@@ -646,50 +681,50 @@ export function DailyReportsTab() {
               </TableHeader>
               <TableBody>
                 <AnimatePresence initial={false}>
-                  {rowGroups.flatMap((group) => {
-                    const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
-                    const rows: ReactNode[] = [];
-                    if (groupSpec) {
-                      rows.push(
-                        <GroupHeaderRow
-                          key={`group-${group.key}`}
-                          label={group.label}
-                          count={group.rows.length}
-                          collapsed={collapsed}
-                          onToggle={() => toggleGroup(group.key)}
-                          colSpan={table.visibleColumns.length}
-                        />,
-                      );
-                    }
-                    if (!collapsed) {
-                      for (const report of group.rows) {
+                  {(() => {
+                    let rowIndex = 0;
+                    return rowGroups.flatMap((group) => {
+                      const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
+                      const rows: ReactNode[] = [];
+                      if (groupSpec) {
                         rows.push(
-                          <motion.tr
-                            key={report.id}
-                            layout
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                            onClick={() => openReportAt(report, "view")}
-                          >
-                            {table.visibleColumns.map((column) => (
-                              <TableCell
-                                key={column.key}
-                                className={column.cellClassName}
-                                // The action column has its own buttons; a click there
-                                // should not also open the report behind them.
-                                onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
-                              >
-                                {column.cell(report)}
-                              </TableCell>
-                            ))}
-                          </motion.tr>,
+                          <GroupHeaderRow
+                            key={`group-${group.key}`}
+                            label={group.label}
+                            count={group.rows.length}
+                            collapsed={collapsed}
+                            onToggle={() => toggleGroup(group.key)}
+                            colSpan={table.visibleColumns.length}
+                          />,
                         );
                       }
-                    }
-                    return rows;
-                  })}
+                      if (!collapsed) {
+                        for (const report of group.rows) {
+                          rows.push(
+                            <motion.tr
+                              key={report.id}
+                              {...rowEnterProps(rowIndex++)}
+                              className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
+                              onClick={() => openReportAt(report, "view")}
+                            >
+                              {table.visibleColumns.map((column) => (
+                                <TableCell
+                                  key={column.key}
+                                  className={column.cellClassName}
+                                  // The action column has its own buttons; a click there
+                                  // should not also open the report behind them.
+                                  onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
+                                >
+                                  {column.cell(report)}
+                                </TableCell>
+                              ))}
+                            </motion.tr>,
+                          );
+                        }
+                      }
+                      return rows;
+                    });
+                  })()}
                 </AnimatePresence>
               </TableBody>
             </Table>
@@ -768,6 +803,61 @@ export function DailyReportDialog({
   const token = session!.token;
   const queryClient = useQueryClient();
   const [reason, setReason] = useState("");
+
+  const detailSchema = z.object({
+    semolina_lines: z.array(
+      z.object({
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        location_id: z.string(),
+      }),
+    ),
+    raw_material_location_id: z.string().optional(),
+    regrind_input_quantity: z.coerce.number().min(0),
+    regrind_input_product_id: z.string().optional(),
+    dough_quantity: z.coerce.number().min(0),
+    finished_product_quantity: z.coerce.number().min(0),
+    regrind_quantity: z.coerce.number().min(0),
+    regrind_product_id: z.string().optional(),
+    mold_id: z.string().optional(),
+    waste_lines: z.array(
+      z.object({
+        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        note: z.string(),
+      }),
+    ),
+    water_quantity: z.coerce.number().min(0),
+    water_percentage: z.coerce.number().min(0).max(100),
+    fuel_quantity: z.coerce.number().min(0),
+    fuel_supplier_id: z.string().optional(),
+    gasoil_quantity: z.coerce.number().min(0),
+    gasoil_supplier_id: z.string().optional(),
+    gasoil_flow_rate: z.coerce.number().min(0),
+    generator_hours: z.coerce.number().min(0),
+    electricity_quantity: z.coerce.number().min(0),
+    semolina_flow_rate: z.coerce.number().min(0),
+    start_time: z.string().optional(),
+    production_minutes: z.coerce.number().int().min(0),
+    downtime_lines: z.array(
+      z.object({
+        motif: z.string(),
+        downtime_type: z.string(),
+        classification: z.string(),
+        minutes: z.coerce.number().int().min(0),
+        note: z.string(),
+      }),
+    ),
+  });
+
+  const createSchema = detailSchema.extend({
+    of_id: z.string().min(1, t("common.required")),
+    report_date: z.string().min(1, t("common.required")),
+    team: z.string().optional(),
+    shift: z.string().optional(),
+    equipment_id: z.string().optional(),
+  });
 
   const { data: full } = useQuery({
     queryKey: ["production", "reports", report.id],
@@ -894,6 +984,18 @@ export function DailyReportDialog({
       group: "in" as const,
     },
     {
+      label: t("production.dailyReports.field.gasoilFlowRate"),
+      value: detail?.gasoil_flow_rate,
+      unit: "L/h",
+      group: "in" as const,
+    },
+    {
+      label: t("production.dailyReports.field.generatorHours"),
+      value: detail?.generator_hours,
+      unit: "h",
+      group: "in" as const,
+    },
+    {
       label: t("production.dailyReports.field.electricity"),
       value: detail?.electricity_quantity,
       unit: UTILITY_UNITS.electricity,
@@ -939,9 +1041,17 @@ export function DailyReportDialog({
       duration: true,
       group: "time" as const,
     },
-    // One row per arrêt, each with its own motif, plus the total lost.
+    // One row per arrêt, each with its own type/classification/motif, plus the total lost.
     ...(detail?.downtime_lines ?? []).map((line) => ({
-      label: `${t("production.ofDetails.time.downtime")} — ${line.motif ?? t("production.waste.unknownItem")}`,
+      label: `${t("production.ofDetails.time.downtime")} — ${
+        [
+          line.downtime_type && t(`production.downtime.type.${line.downtime_type}` as Parameters<typeof t>[0]),
+          line.classification && t(`production.downtime.classification.${line.classification}` as Parameters<typeof t>[0]),
+          line.motif && t(`production.downtime.motif.${line.motif}` as Parameters<typeof t>[0]),
+        ]
+          .filter(Boolean)
+          .join(" · ") || t("production.waste.unknownItem")
+      }`,
       value: line.minutes,
       duration: true,
       group: "time" as const,
@@ -1026,6 +1136,7 @@ export function DailyReportDialog({
             className="w-full"
             disabled={saveMutation.isPending || (needsReason && !reason.trim())}
           >
+            {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
             {saveMutation.isPending ? t("common.saving") : t("common.save")}
           </Button>
 
@@ -1066,6 +1177,8 @@ function toDetail(input: CreateForm): Partial<DailyReportDetail> {
     fuel_supplier_id: input.fuel_supplier_id || undefined,
     gasoil_quantity: input.gasoil_quantity,
     gasoil_supplier_id: input.gasoil_supplier_id || undefined,
+    gasoil_flow_rate: input.gasoil_flow_rate,
+    generator_hours: input.generator_hours,
     electricity_quantity: input.electricity_quantity,
     semolina_flow_rate: input.semolina_flow_rate,
     start_time: input.start_time || undefined,
@@ -1170,6 +1283,18 @@ function DailyDetailFields({
     // every keystroke elsewhere in the form.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedWaterPercentage, mixedInputKg]);
+
+  // The groupe électrogène's own consumption rate and how long it ran are the
+  // operator's real inputs (same reasoning as water_percentage above);
+  // gasoil_quantity — what every downstream reader (consolidation,
+  // consumption reports) expects in litres — is their product.
+  const watchedGasoilFlowRate = Number(form.watch("gasoil_flow_rate")) || 0;
+  const watchedGeneratorHours = Number(form.watch("generator_hours")) || 0;
+  const computedGasoilQuantity = Math.round((watchedGasoilFlowRate * watchedGeneratorHours + Number.EPSILON) * 100) / 100;
+  useEffect(() => {
+    form.setValue("gasoil_quantity", computedGasoilQuantity);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [computedGasoilQuantity]);
   return (
     <div className="space-y-3">
       <section className="space-y-2">
@@ -1195,42 +1320,6 @@ function DailyDetailFields({
           </Select>
         </div>
 
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          <div className="space-y-2.5">
-            <Label htmlFor="raw_material_location_id" className="flex min-h-[2.5rem] items-start">
-              {t("production.dailyReports.field.rawMaterialLocation")}
-            </Label>
-            <Select id="raw_material_location_id" {...form.register("raw_material_location_id")}>
-              <option value="">—</option>
-              {locations.map((l) => (
-                <option key={l.id} value={l.id}>
-                  {l.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-          <div className="space-y-2.5">
-            <Label htmlFor="regrind_input_quantity" className="flex min-h-[2.5rem] items-start gap-1">
-              {withUnit(t("production.dailyReports.field.regrindInput"), rebroyatUnit)}
-              <HelpTooltip text={t("production.dailyReports.help.regrindInput")} />
-            </Label>
-            <Input id="regrind_input_quantity" type="number" step="any" {...form.register("regrind_input_quantity")} />
-          </div>
-          <div className="space-y-2.5">
-            <Label htmlFor="regrind_input_product_id" className="flex min-h-[2.5rem] items-start">
-              {t("production.dailyReports.field.regrindInputProduct")}
-            </Label>
-            <Select id="regrind_input_product_id" {...form.register("regrind_input_product_id")}>
-              <option value="">—</option>
-              {regrindInputProducts.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </Select>
-          </div>
-        </div>
-
         <div className="space-y-1.5">
           <Label className="flex items-center gap-1">
             {t("production.dailyReports.field.semolina")}
@@ -1245,6 +1334,42 @@ function DailyDetailFields({
             <HelpTooltip text={t("production.dailyReports.help.semolinaFlowRate")} />
           </Label>
           <Input id="semolina_flow_rate" type="number" step="any" {...form.register("semolina_flow_rate")} />
+        </div>
+
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+          <div className="space-y-2.5">
+            <Label htmlFor="regrind_input_product_id" className="flex min-h-[2.5rem] items-start">
+              {t("production.dailyReports.field.regrindInputProduct")}
+            </Label>
+            <Select id="regrind_input_product_id" {...form.register("regrind_input_product_id")}>
+              <option value="">—</option>
+              {regrindInputProducts.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-2.5">
+            <Label htmlFor="regrind_input_quantity" className="flex min-h-[2.5rem] items-start gap-1">
+              {withUnit(t("production.dailyReports.field.regrindInput"), rebroyatUnit)}
+              <HelpTooltip text={t("production.dailyReports.help.regrindInput")} />
+            </Label>
+            <Input id="regrind_input_quantity" type="number" step="any" {...form.register("regrind_input_quantity")} />
+          </div>
+          <div className="space-y-2.5">
+            <Label htmlFor="raw_material_location_id" className="flex min-h-[2.5rem] items-start">
+              {t("production.dailyReports.field.rawMaterialLocation")}
+            </Label>
+            <Select id="raw_material_location_id" {...form.register("raw_material_location_id")}>
+              <option value="">—</option>
+              {locations.map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </Select>
+          </div>
         </div>
       </section>
 
@@ -1362,10 +1487,21 @@ function DailyDetailFields({
             </Select>
           </div>
           <div className="space-y-1.5">
-            <Label htmlFor="gasoil_quantity">
-              {t("production.dailyReports.field.gasoil")} ({UTILITY_UNITS.gasoil})
+            <Label htmlFor="gasoil_flow_rate" className="flex items-center gap-1">
+              {t("production.dailyReports.field.gasoilFlowRate")} (L/h)
+              <HelpTooltip text={t("production.dailyReports.help.gasoilFlowRate")} />
             </Label>
-            <Input id="gasoil_quantity" type="number" step="any" {...form.register("gasoil_quantity")} />
+            <Input id="gasoil_flow_rate" type="number" step="any" {...form.register("gasoil_flow_rate")} />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="generator_hours" className="flex items-center gap-1">
+              {t("production.dailyReports.field.generatorHours")}
+              <HelpTooltip text={t("production.dailyReports.help.generatorHours")} />
+            </Label>
+            <Input id="generator_hours" type="number" step="any" {...form.register("generator_hours")} />
+            <p className="text-xs text-muted-foreground">
+              {t("production.dailyReports.hint.gasoilFromRate")} {formatQuantity(computedGasoilQuantity)} {UTILITY_UNITS.gasoil}
+            </p>
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="gasoil_supplier_id">{t("production.dailyReports.field.gasoilSupplier")}</Label>
