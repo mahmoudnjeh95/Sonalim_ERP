@@ -24,14 +24,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../..
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Skeleton } from "../../components/ui/skeleton";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { Table, TableBody, TableCell, TableHeader, TableRow, ResizableTableHead } from "../../components/ui/table";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { StatCard } from "../../components/patterns/StatCard";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
+import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { formatQuantity } from "../../lib/units";
 import {
   exportProductionRecap,
   getProductionAnalytics,
+  type ProductionCostAnomaly,
   type ProductionPeriodPoint,
   type ProductionRecapPeriod,
 } from "../production/api";
@@ -126,6 +129,118 @@ export function ProductionRecapExportTab() {
   const trend = analytics?.trend ?? [];
   const hasData = Boolean(current && (current.tonnage > 0 || trend.some((p) => p.tonnage > 0)));
   const costPerTonneValues = trend.filter((p) => p.cost_per_tonne !== null).map((p) => p.cost_per_tonne as number);
+
+  const summaryColumns: ColumnDef<ProductionPeriodPoint>[] = [
+    { key: "period", header: t("analytics.productionRecap.table.summary.column.period"), defaultWidth: 160, cellClassName: "font-medium", cell: (p) => p.label },
+    {
+      key: "tonnage",
+      header: t("analytics.productionRecap.table.summary.column.tonnage"),
+      defaultWidth: 130,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (p) => formatQuantity(p.tonnage),
+      sortValue: (p) => p.tonnage,
+    },
+    {
+      key: "mpCost",
+      header: t("analytics.productionRecap.table.summary.column.mpCost"),
+      defaultWidth: 130,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (p) => cfa(p.mp_cost),
+      sortValue: (p) => p.mp_cost ?? 0,
+    },
+    {
+      key: "packagingCost",
+      header: t("analytics.productionRecap.table.summary.column.packagingCost"),
+      defaultWidth: 150,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (p) => cfa(p.packaging_cost),
+      sortValue: (p) => p.packaging_cost ?? 0,
+    },
+    {
+      key: "costPerTonne",
+      header: t("analytics.productionRecap.table.summary.column.costPerTonne"),
+      defaultWidth: 150,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (p) => cfa(p.cost_per_tonne),
+      sortValue: (p) => p.cost_per_tonne ?? 0,
+    },
+    {
+      key: "cartons",
+      header: t("analytics.productionRecap.table.summary.column.cartons"),
+      defaultWidth: 130,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (p) => formatQuantity(p.cartons),
+      sortValue: (p) => p.cartons,
+    },
+    {
+      key: "packets",
+      header: t("analytics.productionRecap.table.summary.column.packets"),
+      defaultWidth: 130,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (p) => formatQuantity(p.packets),
+      sortValue: (p) => p.packets,
+    },
+  ];
+  const summaryTable = useTableColumns("analytics.productionRecap.summary", summaryColumns);
+
+  const anomalyColumns: ColumnDef<ProductionCostAnomaly>[] = [
+    {
+      key: "date",
+      header: t("analytics.productionRecap.table.anomalies.column.date"),
+      defaultWidth: 130,
+      cell: (row) => row.invoice_date ?? "—",
+      sortValue: (row) => row.invoice_date ?? "",
+    },
+    {
+      key: "product",
+      header: t("analytics.productionRecap.table.anomalies.column.product"),
+      defaultWidth: 180,
+      cellClassName: "font-medium",
+      cell: (row) => productName(row.product_id),
+      sortValue: (row) => productName(row.product_id),
+    },
+    {
+      key: "supplier",
+      header: t("analytics.productionRecap.table.anomalies.column.supplier"),
+      defaultWidth: 180,
+      cell: (row) => supplierName(row.supplier_id),
+      sortValue: (row) => supplierName(row.supplier_id),
+    },
+    {
+      key: "costPerUnit",
+      header: t("analytics.productionRecap.table.anomalies.column.costPerUnit"),
+      defaultWidth: 150,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (row) => cfa(row.cost_per_unit_base),
+      sortValue: (row) => row.cost_per_unit_base,
+    },
+    {
+      key: "baseline",
+      header: t("analytics.productionRecap.table.anomalies.column.baseline"),
+      defaultWidth: 150,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums",
+      cell: (row) => cfa(row.baseline_avg_cost_per_unit),
+      sortValue: (row) => row.baseline_avg_cost_per_unit ?? 0,
+    },
+    {
+      key: "deviation",
+      header: t("analytics.productionRecap.table.anomalies.column.deviation"),
+      defaultWidth: 150,
+      headerClassName: "text-right",
+      cellClassName: "text-right tabular-nums font-medium text-destructive",
+      cell: (row) => (row.cost_deviation_pct !== null ? `+${row.cost_deviation_pct.toFixed(0)}%` : "—"),
+      sortValue: (row) => row.cost_deviation_pct ?? 0,
+    },
+  ];
+  const anomalyTable = useTableColumns("analytics.productionRecap.anomalies", anomalyColumns);
 
   return (
     <div className="space-y-6">
@@ -393,30 +508,39 @@ export function ProductionRecapExportTab() {
           <Card>
             <CardHeader>
               <CardTitle>{t("analytics.productionRecap.table.summary.title")}</CardTitle>
+              <ColumnVisibilityMenu
+                columns={summaryColumns}
+                isVisible={summaryTable.isVisible}
+                onToggle={summaryTable.toggleVisible}
+                onReset={summaryTable.resetAll}
+              />
             </CardHeader>
             <CardContent className="p-0">
-              <Table>
+              <Table colWidths={summaryTable.colWidths}>
                 <TableHeader>
                   <TableRow>
-                    <TableHead>{t("analytics.productionRecap.table.summary.column.period")}</TableHead>
-                    <TableHead className="text-right">{t("analytics.productionRecap.table.summary.column.tonnage")}</TableHead>
-                    <TableHead className="text-right">{t("analytics.productionRecap.table.summary.column.mpCost")}</TableHead>
-                    <TableHead className="text-right">{t("analytics.productionRecap.table.summary.column.packagingCost")}</TableHead>
-                    <TableHead className="text-right">{t("analytics.productionRecap.table.summary.column.costPerTonne")}</TableHead>
-                    <TableHead className="text-right">{t("analytics.productionRecap.table.summary.column.cartons")}</TableHead>
-                    <TableHead className="text-right">{t("analytics.productionRecap.table.summary.column.packets")}</TableHead>
+                    {summaryTable.visibleColumns.map((column) => (
+                      <ResizableTableHead
+                        key={column.key}
+                        width={summaryTable.getWidth(column.key)}
+                        onResize={(width) => summaryTable.setWidth(column.key, width)}
+                        className={column.headerClassName}
+                        sortDirection={summaryTable.sortDirectionFor(column.key)}
+                        onSort={column.sortValue ? () => summaryTable.toggleSort(column.key) : undefined}
+                      >
+                        {column.header}
+                      </ResizableTableHead>
+                    ))}
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {trend.map((point) => (
+                  {summaryTable.sortRows(trend).map((point) => (
                     <TableRow key={point.date_from} className={point.label === current.label ? "bg-primary/5" : undefined}>
-                      <TableCell className="font-medium">{point.label}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatQuantity(point.tonnage)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{cfa(point.mp_cost)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{cfa(point.packaging_cost)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{cfa(point.cost_per_tonne)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatQuantity(point.cartons)}</TableCell>
-                      <TableCell className="text-right tabular-nums">{formatQuantity(point.packets)}</TableCell>
+                      {summaryTable.visibleColumns.map((column) => (
+                        <TableCell key={column.key} className={column.cellClassName}>
+                          {column.cell(point)}
+                        </TableCell>
+                      ))}
                     </TableRow>
                   ))}
                 </TableBody>
@@ -426,35 +550,48 @@ export function ProductionRecapExportTab() {
 
           <Card>
             <CardHeader>
-              <CardTitle>{t("analytics.productionRecap.table.anomalies.title")}</CardTitle>
-              <CardDescription>{t("analytics.productionRecap.table.anomalies.description")}</CardDescription>
+              <div>
+                <CardTitle>{t("analytics.productionRecap.table.anomalies.title")}</CardTitle>
+                <CardDescription>{t("analytics.productionRecap.table.anomalies.description")}</CardDescription>
+              </div>
+              {analytics.anomalies.length > 0 && (
+                <ColumnVisibilityMenu
+                  columns={anomalyColumns}
+                  isVisible={anomalyTable.isVisible}
+                  onToggle={anomalyTable.toggleVisible}
+                  onReset={anomalyTable.resetAll}
+                />
+              )}
             </CardHeader>
-            <CardContent className={analytics.anomalies.length === 0 ? "p-0" : "p-0"}>
+            <CardContent className="p-0">
               {analytics.anomalies.length === 0 ? (
                 <EmptyState icon={<TrendingUp className="h-5 w-5" />} title={t("analytics.productionRecap.table.anomalies.empty")} description="" />
               ) : (
-                <Table>
+                <Table colWidths={anomalyTable.colWidths}>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t("analytics.productionRecap.table.anomalies.column.date")}</TableHead>
-                      <TableHead>{t("analytics.productionRecap.table.anomalies.column.product")}</TableHead>
-                      <TableHead>{t("analytics.productionRecap.table.anomalies.column.supplier")}</TableHead>
-                      <TableHead className="text-right">{t("analytics.productionRecap.table.anomalies.column.costPerUnit")}</TableHead>
-                      <TableHead className="text-right">{t("analytics.productionRecap.table.anomalies.column.baseline")}</TableHead>
-                      <TableHead className="text-right">{t("analytics.productionRecap.table.anomalies.column.deviation")}</TableHead>
+                      {anomalyTable.visibleColumns.map((column) => (
+                        <ResizableTableHead
+                          key={column.key}
+                          width={anomalyTable.getWidth(column.key)}
+                          onResize={(width) => anomalyTable.setWidth(column.key, width)}
+                          className={column.headerClassName}
+                          sortDirection={anomalyTable.sortDirectionFor(column.key)}
+                          onSort={column.sortValue ? () => anomalyTable.toggleSort(column.key) : undefined}
+                        >
+                          {column.header}
+                        </ResizableTableHead>
+                      ))}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {analytics.anomalies.map((row) => (
+                    {anomalyTable.sortRows(analytics.anomalies).map((row) => (
                       <TableRow key={row.receipt_id}>
-                        <TableCell>{row.invoice_date ?? "—"}</TableCell>
-                        <TableCell className="font-medium">{productName(row.product_id)}</TableCell>
-                        <TableCell>{supplierName(row.supplier_id)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{cfa(row.cost_per_unit_base)}</TableCell>
-                        <TableCell className="text-right tabular-nums">{cfa(row.baseline_avg_cost_per_unit)}</TableCell>
-                        <TableCell className="text-right tabular-nums text-destructive font-medium">
-                          {row.cost_deviation_pct !== null ? `+${row.cost_deviation_pct.toFixed(0)}%` : "—"}
-                        </TableCell>
+                        {anomalyTable.visibleColumns.map((column) => (
+                          <TableCell key={column.key} className={column.cellClassName}>
+                            {column.cell(row)}
+                          </TableCell>
+                        ))}
                       </TableRow>
                     ))}
                   </TableBody>

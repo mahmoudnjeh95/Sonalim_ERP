@@ -12,10 +12,12 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Popover, PopoverTrigger, PopoverContent } from "../../components/ui/popover";
 import { Select } from "../../components/ui/select";
-import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from "../../components/ui/table";
+import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
+import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { formatQuantity } from "../../lib/units";
 import { listProducts, type Product } from "../warehouse/api";
 import { listPartners } from "../partners/api";
@@ -57,6 +59,115 @@ function inRange(dateStr: string | null, range: DateRange | null): boolean {
   if (!range) return true;
   if (!dateStr) return false;
   return dateStr >= range.from && dateStr <= range.to;
+}
+
+type HistoryPoint = PriceHistoryPoint & { product_id?: string };
+
+function priceHistoryColumns(t: TFn, leadHeader: string, getLead: (point: HistoryPoint) => string, minPrice: number): ColumnDef<HistoryPoint>[] {
+  return [
+    {
+      key: "date",
+      header: t("analytics.priceHistory.column.date"),
+      defaultWidth: 120,
+      cell: (point) => point.order_date ?? "—",
+      sortValue: (point) => point.order_date ?? "",
+    },
+    {
+      key: "lead",
+      header: leadHeader,
+      defaultWidth: 180,
+      cell: (point) => getLead(point),
+      sortValue: (point) => getLead(point),
+    },
+    {
+      key: "quantity",
+      header: t("analytics.priceHistory.column.quantity"),
+      defaultWidth: 130,
+      cellClassName: "tabular-nums",
+      cell: (point) => formatQuantity(point.quantity_ordered),
+      sortValue: (point) => point.quantity_ordered ?? 0,
+    },
+    {
+      key: "unitPriceOriginal",
+      header: t("analytics.priceHistory.column.unitPriceOriginal"),
+      defaultWidth: 160,
+      cellClassName: "tabular-nums",
+      cell: (point) => `${formatQuantity(point.unit_price)} ${point.unit_price_currency}`,
+      sortValue: (point) => point.unit_price ?? 0,
+    },
+    {
+      key: "unitPriceCfa",
+      header: t("analytics.priceHistory.column.unitPriceCfa"),
+      defaultWidth: 160,
+      cellClassName: "tabular-nums",
+      cell: (point) => {
+        const isBest = point.unit_price_cfa === minPrice;
+        if (point.unit_price_cfa == null) return "—";
+        return (
+          <span className={isBest ? "font-bold text-green-600 dark:text-green-400" : ""}>
+            {formatQuantity(point.unit_price_cfa)} CFA
+            {isBest && " ⭐"}
+          </span>
+        );
+      },
+      sortValue: (point) => point.unit_price_cfa ?? 0,
+    },
+  ];
+}
+
+function PriceHistoryTable({
+  tableKey,
+  columns,
+  points,
+  minPrice,
+}: {
+  tableKey: string;
+  columns: ColumnDef<HistoryPoint>[];
+  points: HistoryPoint[];
+  minPrice: number;
+}) {
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns(tableKey, columns);
+  const rows = sortRows(points.slice().reverse());
+
+  return (
+    <Card>
+      <CardContent className="flex justify-end p-3 pb-0">
+        <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
+      </CardContent>
+      <CardContent className="p-0 pt-3">
+        <Table colWidths={colWidths}>
+          <TableHeader>
+            <TableRow>
+              {visibleColumns.map((column) => (
+                <ResizableTableHead
+                  key={column.key}
+                  width={getWidth(column.key)}
+                  onResize={(width) => setWidth(column.key, width)}
+                  className={column.headerClassName}
+                  sortDirection={sortDirectionFor(column.key)}
+                  onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
+                >
+                  {column.header}
+                </ResizableTableHead>
+              ))}
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {rows.map((point) => (
+              <TableRow key={point.order_id} className={point.unit_price_cfa === minPrice ? "bg-green-50 dark:bg-green-950" : ""}>
+                {visibleColumns.map((column) => (
+                  <TableCell key={column.key} className={column.cellClassName}>
+                    {column.cell(point)}
+                  </TableCell>
+                ))}
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
 }
 
 export function PriceHistoryTab() {
@@ -221,34 +332,17 @@ export function PriceHistoryTab() {
             ))}
           </div>
 
-          <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("analytics.priceHistory.column.date")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.product")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.quantity")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.unitPriceOriginal")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.unitPriceCfa")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {filteredSupplierOnlyHistory
-                    .slice()
-                    .reverse()
-                    .map((point) => (
-                      <PriceHistoryRow
-                        key={point.order_id}
-                        point={point}
-                        minPrice={supplierOnlyMinPrice}
-                        leadCell={productName(point.product_id || "")}
-                      />
-                    ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <PriceHistoryTable
+            tableKey="analytics.priceHistory.bySupplier"
+            columns={priceHistoryColumns(
+              t,
+              t("analytics.priceHistory.column.product"),
+              (point) => productName(point.product_id || ""),
+              supplierOnlyMinPrice,
+            )}
+            points={filteredSupplierOnlyHistory}
+            minPrice={supplierOnlyMinPrice}
+          />
         </>
       )}
     </div>
@@ -323,6 +417,8 @@ function ProductMultiSelect({
   );
 }
 
+type RankedSupplierEntry = SupplierLeaderboardEntry & { rank: number };
+
 function SupplierLeaderboardCard({
   leaderboard,
   collapsed,
@@ -335,6 +431,60 @@ function SupplierLeaderboardCard({
   t: TFn;
 }) {
   const visible = collapsed ? leaderboard.slice(0, 3) : leaderboard;
+  const rankedLeaderboard: RankedSupplierEntry[] = leaderboard.map((entry, idx) => ({ ...entry, rank: idx }));
+
+  const columns: ColumnDef<RankedSupplierEntry>[] = [
+    {
+      key: "rank",
+      header: "#",
+      defaultWidth: 60,
+      alwaysVisible: true,
+      cell: (entry) => (
+        <span
+          className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs font-bold ${RANK_BADGE_STYLES[entry.rank] ?? "border-border bg-muted text-muted-foreground"}`}
+        >
+          {entry.rank + 1}
+        </span>
+      ),
+    },
+    {
+      key: "supplier",
+      header: t("analytics.priceHistory.column.supplier"),
+      defaultWidth: 180,
+      cellClassName: "font-medium",
+      cell: (entry) => supplierName(entry.supplier_id),
+    },
+    {
+      key: "wins",
+      header: t("analytics.priceHistory.leaderboard.column.wins"),
+      defaultWidth: 140,
+      cellClassName: "tabular-nums",
+      cell: (entry) => (
+        <span className="inline-flex items-center gap-1.5">
+          {entry.best_price_count}
+          {entry.rank === 0 && entry.best_price_count > 0 && <Trophy className="h-3.5 w-3.5 text-amber-500" />}
+        </span>
+      ),
+    },
+    {
+      key: "products",
+      header: t("analytics.priceHistory.leaderboard.column.products"),
+      defaultWidth: 140,
+      cellClassName: "tabular-nums",
+      cell: (entry) => entry.products_supplied,
+    },
+    {
+      key: "orders",
+      header: t("analytics.priceHistory.leaderboard.column.orders"),
+      defaultWidth: 140,
+      cellClassName: "tabular-nums",
+      cell: (entry) => entry.total_orders,
+    },
+  ];
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll } = useTableColumns(
+    "analytics.priceHistory.leaderboard",
+    columns,
+  );
 
   return (
     <Card className={collapsed ? "border-border" : "border-success/20"}>
@@ -346,6 +496,9 @@ function SupplierLeaderboardCard({
           </CardTitle>
           {!collapsed && <CardDescription>{t("analytics.priceHistory.leaderboard.subtitle")}</CardDescription>}
         </div>
+        {!collapsed && leaderboard.length > 0 && (
+          <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
+        )}
       </CardHeader>
       <CardContent className={collapsed ? "flex flex-wrap items-center gap-2 pt-4" : "p-0"}>
         {leaderboard.length === 0 ? (
@@ -367,35 +520,24 @@ function SupplierLeaderboardCard({
             </div>
           ))
         ) : (
-          <Table>
+          <Table colWidths={colWidths}>
             <TableHeader>
               <TableRow>
-                <TableHead className="w-12">#</TableHead>
-                <TableHead>{t("analytics.priceHistory.column.supplier")}</TableHead>
-                <TableHead>{t("analytics.priceHistory.leaderboard.column.wins")}</TableHead>
-                <TableHead>{t("analytics.priceHistory.leaderboard.column.products")}</TableHead>
-                <TableHead>{t("analytics.priceHistory.leaderboard.column.orders")}</TableHead>
+                {visibleColumns.map((column) => (
+                  <ResizableTableHead key={column.key} width={getWidth(column.key)} onResize={(width) => setWidth(column.key, width)}>
+                    {column.header}
+                  </ResizableTableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
-              {visible.map((entry, idx) => (
+              {rankedLeaderboard.map((entry) => (
                 <TableRow key={entry.supplier_id}>
-                  <TableCell>
-                    <span
-                      className={`flex h-6 w-6 items-center justify-center rounded-full border text-xs font-bold ${RANK_BADGE_STYLES[idx] ?? "border-border bg-muted text-muted-foreground"}`}
-                    >
-                      {idx + 1}
-                    </span>
-                  </TableCell>
-                  <TableCell className="font-medium">{supplierName(entry.supplier_id)}</TableCell>
-                  <TableCell className="tabular-nums">
-                    <span className="inline-flex items-center gap-1.5">
-                      {entry.best_price_count}
-                      {idx === 0 && entry.best_price_count > 0 && <Trophy className="h-3.5 w-3.5 text-amber-500" />}
-                    </span>
-                  </TableCell>
-                  <TableCell className="tabular-nums">{entry.products_supplied}</TableCell>
-                  <TableCell className="tabular-nums">{entry.total_orders}</TableCell>
+                  {visibleColumns.map((column) => (
+                    <TableCell key={column.key} className={column.cellClassName}>
+                      {column.cell(entry)}
+                    </TableCell>
+                  ))}
                 </TableRow>
               ))}
             </TableBody>
@@ -527,56 +669,15 @@ function ProductPriceSection({
             ))}
           </div>
 
-          <Card>
-            <CardContent className="p-0">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>{t("analytics.priceHistory.column.date")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.supplier")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.quantity")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.unitPriceOriginal")}</TableHead>
-                    <TableHead>{t("analytics.priceHistory.column.unitPriceCfa")}</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {history
-                    .slice()
-                    .reverse()
-                    .map((point) => (
-                      <PriceHistoryRow key={point.order_id} point={point} minPrice={minPrice} leadCell={supplierName(point.supplier_id)} />
-                    ))}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+          <PriceHistoryTable
+            tableKey="analytics.priceHistory.byProduct"
+            columns={priceHistoryColumns(t, t("analytics.priceHistory.column.supplier"), (point) => supplierName(point.supplier_id), minPrice)}
+            points={history}
+            minPrice={minPrice}
+          />
         </>
       )}
     </div>
-  );
-}
-
-function PriceHistoryRow({ point, minPrice, leadCell }: { point: PriceHistoryPoint; minPrice: number; leadCell: string }) {
-  const isBest = point.unit_price_cfa === minPrice;
-  return (
-    <TableRow className={isBest ? "bg-green-50 dark:bg-green-950" : ""}>
-      <TableCell>{point.order_date ?? "—"}</TableCell>
-      <TableCell>{leadCell}</TableCell>
-      <TableCell className="tabular-nums">{formatQuantity(point.quantity_ordered)}</TableCell>
-      <TableCell className="tabular-nums">
-        {formatQuantity(point.unit_price)} {point.unit_price_currency}
-      </TableCell>
-      <TableCell className="tabular-nums">
-        {point.unit_price_cfa != null ? (
-          <span className={isBest ? "font-bold text-green-600 dark:text-green-400" : ""}>
-            {formatQuantity(point.unit_price_cfa)} CFA
-            {isBest && " ⭐"}
-          </span>
-        ) : (
-          "—"
-        )}
-      </TableCell>
-    </TableRow>
   );
 }
 
