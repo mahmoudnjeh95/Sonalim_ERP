@@ -20,6 +20,7 @@ import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { rowEnterProps } from "../../components/motion/rowMotion";
 import { formatQuantity, productUnit } from "../../lib/units";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -570,48 +571,48 @@ export function QualityReportsTab() {
               </TableHeader>
               <TableBody>
                 <AnimatePresence initial={false}>
-                  {rowGroups.flatMap((group) => {
-                    const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
-                    const rows: ReactNode[] = [];
-                    if (groupSpec) {
-                      rows.push(
-                        <GroupHeaderRow
-                          key={`group-${group.key}`}
-                          label={group.label}
-                          count={group.rows.length}
-                          collapsed={collapsed}
-                          onToggle={() => toggleGroup(group.key)}
-                          colSpan={table.visibleColumns.length}
-                        />,
-                      );
-                    }
-                    if (!collapsed) {
-                      for (const report of group.rows) {
+                  {(() => {
+                    let rowIndex = 0;
+                    return rowGroups.flatMap((group) => {
+                      const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
+                      const rows: ReactNode[] = [];
+                      if (groupSpec) {
                         rows.push(
-                          <motion.tr
-                            key={report.id}
-                            layout
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                            onClick={() => openReportAt(report, "view")}
-                          >
-                            {table.visibleColumns.map((column) => (
-                              <TableCell
-                                key={column.key}
-                                className={column.cellClassName}
-                                onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
-                              >
-                                {column.cell(report)}
-                              </TableCell>
-                            ))}
-                          </motion.tr>,
+                          <GroupHeaderRow
+                            key={`group-${group.key}`}
+                            label={group.label}
+                            count={group.rows.length}
+                            collapsed={collapsed}
+                            onToggle={() => toggleGroup(group.key)}
+                            colSpan={table.visibleColumns.length}
+                          />,
                         );
                       }
-                    }
-                    return rows;
-                  })}
+                      if (!collapsed) {
+                        for (const report of group.rows) {
+                          rows.push(
+                            <motion.tr
+                              key={report.id}
+                              {...rowEnterProps(rowIndex++)}
+                              className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
+                              onClick={() => openReportAt(report, "view")}
+                            >
+                              {table.visibleColumns.map((column) => (
+                                <TableCell
+                                  key={column.key}
+                                  className={column.cellClassName}
+                                  onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
+                                >
+                                  {column.cell(report)}
+                                </TableCell>
+                              ))}
+                            </motion.tr>,
+                          );
+                        }
+                      }
+                      return rows;
+                    });
+                  })()}
                 </AnimatePresence>
               </TableBody>
             </Table>
@@ -790,10 +791,13 @@ export function QualityReportDialog({
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t("qc.quality.nc.linkedTitle")}
               </p>
-              {linkedNonConformities.map((nc) => (
-                <button
+              {linkedNonConformities.map((nc, index) => (
+                <motion.button
                   key={nc.id}
                   type="button"
+                  initial={{ opacity: 0, scale: 0.94 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  transition={{ duration: 0.28, ease: [0.2, 0.8, 0.2, 1], delay: Math.min(index, 8) * 0.03 }}
                   onClick={() => setOpenLinkedNc(nc)}
                   className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-destructive/30 hover:bg-muted/40"
                 >
@@ -803,7 +807,7 @@ export function QualityReportDialog({
                     <p className="truncate text-xs text-muted-foreground">{nc.defect_type}</p>
                   </div>
                   <StatusBadge status={nc.status} />
-                </button>
+                </motion.button>
               ))}
             </div>
           ) : (

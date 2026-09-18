@@ -54,6 +54,8 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { StockMoveHistoryTable } from "../../components/patterns/StockMoveHistoryTable";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { StockHistoryChart } from "../../components/patterns/StockHistoryChart";
+import { QuantityDiff } from "../../components/motion/QuantityDiff";
+import AdjustmentConfirmIcon from "../../assets/icons/warehouse/adjustment-confirm.svg?react";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { relatedRegrindBatchId } from "../../lib/stockMoveTypes";
@@ -1133,6 +1135,14 @@ export function StockTab() {
               {rowAdjustForm.formState.errors.delta && (
                 <p className="text-sm text-destructive">{rowAdjustForm.formState.errors.delta.message}</p>
               )}
+              {rowAction && Number.isFinite(Number(rowAdjustForm.watch("delta"))) && Number(rowAdjustForm.watch("delta")) !== 0 && (
+                <p className="text-sm">
+                  <QuantityDiff
+                    from={String(rowAction.item.quantity_on_hand)}
+                    to={String(rowAction.item.quantity_on_hand + Number(rowAdjustForm.watch("delta")))}
+                  />
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="row_adjust_reason">{t("warehouse.stockHistory.field.reason")}</Label>
@@ -1147,6 +1157,7 @@ export function StockTab() {
               </p>
             )}
             <Button type="submit" className="w-full" disabled={rowAdjustMutation.isPending}>
+              <AdjustmentConfirmIcon className="h-4 w-4" />
               {rowAdjustMutation.isPending ? t("warehouse.stockHistory.adjusting") : t("warehouse.stockHistory.adjust")}
             </Button>
           </form>

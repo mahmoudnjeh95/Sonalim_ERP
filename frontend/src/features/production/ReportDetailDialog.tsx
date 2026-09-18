@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { motion } from "framer-motion";
 import { AlertTriangle, History, Pencil, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
@@ -159,7 +160,14 @@ export function ReportDetailDialog({
         <DialogHeader>
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {title}
-            <StatusBadge status={status} />
+            <motion.span
+              key={status}
+              initial={{ opacity: 0, scale: 0.85 }}
+              animate={{ opacity: 1, scale: 1 }}
+              transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
+            >
+              <StatusBadge status={status} />
+            </motion.span>
             {revision !== undefined && revision > 1 && (
               <span className="text-xs font-normal text-muted-foreground">
                 {t("production.reports.column.revision")} {revision}

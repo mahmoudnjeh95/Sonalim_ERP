@@ -3,13 +3,15 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, ClipboardList, Droplets, Flame, History, Pencil, Plus, Send, Trash2, Wheat } from "lucide-react";
+import { AlertTriangle, CheckCircle2, ClipboardList, Droplets, Flame, History, Loader2, Pencil, Plus, Send, Trash2, Wheat } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useSearchParams } from "react-router-dom";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { cn } from "../../lib/utils";
+import { rowEnterProps } from "../../components/motion/rowMotion";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -269,6 +271,7 @@ export function DailyReportsTab() {
     resolver: zodResolver(createSchema),
     defaultValues: { of_id: "", report_date: todayIso(), team: "", shift: "", equipment_id: "", ...EMPTY_DETAIL },
   });
+  const [createShake, setCreateShake] = useState(false);
 
   // Machines the chosen OF's line can be attributed to — a line like Line_1_PL
   // can carry more than one at once, so the report must say which one it ran on.
@@ -557,8 +560,14 @@ export function DailyReportsTab() {
                     <DialogDescription>{t("production.dailyReports.dialog.create.description")}</DialogDescription>
                   </DialogHeader>
                   <form
-                    className="space-y-4"
-                    onSubmit={form.handleSubmit((input) => createMutation.mutate(input))}
+                    className={cn("space-y-4", createShake && "animate-shake")}
+                    onSubmit={form.handleSubmit(
+                      (input) => createMutation.mutate(input),
+                      () => {
+                        setCreateShake(true);
+                        setTimeout(() => setCreateShake(false), 300);
+                      },
+                    )}
                   >
                     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                       <div className="space-y-1.5">
@@ -614,6 +623,7 @@ export function DailyReportsTab() {
                     />
 
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
+                      {createMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
                       {createMutation.isPending ? t("common.saving") : t("production.dailyReports.create")}
                     </Button>
                   </form>
@@ -655,50 +665,50 @@ export function DailyReportsTab() {
               </TableHeader>
               <TableBody>
                 <AnimatePresence initial={false}>
-                  {rowGroups.flatMap((group) => {
-                    const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
-                    const rows: ReactNode[] = [];
-                    if (groupSpec) {
-                      rows.push(
-                        <GroupHeaderRow
-                          key={`group-${group.key}`}
-                          label={group.label}
-                          count={group.rows.length}
-                          collapsed={collapsed}
-                          onToggle={() => toggleGroup(group.key)}
-                          colSpan={table.visibleColumns.length}
-                        />,
-                      );
-                    }
-                    if (!collapsed) {
-                      for (const report of group.rows) {
+                  {(() => {
+                    let rowIndex = 0;
+                    return rowGroups.flatMap((group) => {
+                      const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
+                      const rows: ReactNode[] = [];
+                      if (groupSpec) {
                         rows.push(
-                          <motion.tr
-                            key={report.id}
-                            layout
-                            initial={{ opacity: 0 }}
-                            animate={{ opacity: 1 }}
-                            exit={{ opacity: 0 }}
-                            className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
-                            onClick={() => openReportAt(report, "view")}
-                          >
-                            {table.visibleColumns.map((column) => (
-                              <TableCell
-                                key={column.key}
-                                className={column.cellClassName}
-                                // The action column has its own buttons; a click there
-                                // should not also open the report behind them.
-                                onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
-                              >
-                                {column.cell(report)}
-                              </TableCell>
-                            ))}
-                          </motion.tr>,
+                          <GroupHeaderRow
+                            key={`group-${group.key}`}
+                            label={group.label}
+                            count={group.rows.length}
+                            collapsed={collapsed}
+                            onToggle={() => toggleGroup(group.key)}
+                            colSpan={table.visibleColumns.length}
+                          />,
                         );
                       }
-                    }
-                    return rows;
-                  })}
+                      if (!collapsed) {
+                        for (const report of group.rows) {
+                          rows.push(
+                            <motion.tr
+                              key={report.id}
+                              {...rowEnterProps(rowIndex++)}
+                              className="cursor-pointer border-b border-border transition-colors hover:bg-muted/40"
+                              onClick={() => openReportAt(report, "view")}
+                            >
+                              {table.visibleColumns.map((column) => (
+                                <TableCell
+                                  key={column.key}
+                                  className={column.cellClassName}
+                                  // The action column has its own buttons; a click there
+                                  // should not also open the report behind them.
+                                  onClick={column.key === "action" ? (event) => event.stopPropagation() : undefined}
+                                >
+                                  {column.cell(report)}
+                                </TableCell>
+                              ))}
+                            </motion.tr>,
+                          );
+                        }
+                      }
+                      return rows;
+                    });
+                  })()}
                 </AnimatePresence>
               </TableBody>
             </Table>
@@ -1055,6 +1065,7 @@ export function DailyReportDialog({
             className="w-full"
             disabled={saveMutation.isPending || (needsReason && !reason.trim())}
           >
+            {saveMutation.isPending && <Loader2 className="h-4 w-4 animate-spin" />}
             {saveMutation.isPending ? t("common.saving") : t("common.save")}
           </Button>
 

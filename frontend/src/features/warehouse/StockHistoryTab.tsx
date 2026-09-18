@@ -34,6 +34,9 @@ import { StockMoveDetailDialog } from "../../components/patterns/StockMoveDetail
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { MOVE_TYPE_VARIANT, formatMoveReference, signedMoveQuantity, useMoveTypeLabels, useReferenceKindLabels } from "../../lib/stockMoveTypes";
+import { rowEnterProps } from "../../components/motion/rowMotion";
+import MovementInIcon from "../../assets/icons/warehouse/movement-in.svg?react";
+import MovementOutIcon from "../../assets/icons/warehouse/movement-out.svg?react";
 import { adjustStock, listLocations, listProducts, listStockMoves, listUoms, type StockMove, type StockMoveType } from "./api";
 import { listWorkOrders } from "../production/api";
 
@@ -164,8 +167,10 @@ export function StockHistoryTab() {
       defaultWidth: 140,
       cell: (move) => {
         const signed = signedMoveQuantity(move);
+        const Icon = signed < 0 ? MovementOutIcon : MovementInIcon;
         return (
-          <span className={`tabular-nums ${signed < 0 ? "text-destructive" : "text-success"}`}>
+          <span className={`inline-flex items-center gap-1 tabular-nums ${signed < 0 ? "text-destructive" : "text-success"}`}>
+            <Icon className="h-3.5 w-3.5 shrink-0" />
             {signed > 0 ? "+" : ""}
             {signed}
           </span>
@@ -352,13 +357,10 @@ export function StockHistoryTab() {
               </TableRow>
             )}
             <AnimatePresence initial={false}>
-              {sortedMoves.map((move) => (
+              {sortedMoves.map((move, index) => (
                 <motion.tr
                   key={move.id}
-                  layout
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
+                  {...rowEnterProps(index)}
                   className="cursor-pointer border-b border-border transition-colors hover:bg-muted/50"
                   onClick={() => setSelectedMove(move)}
                 >

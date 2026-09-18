@@ -48,6 +48,16 @@ export default {
         raised: "0 4px 16px -4px hsl(215 35% 16% / 0.12), 0 2px 6px -2px hsl(215 35% 16% / 0.08)",
         glow: "0 0 0 1px hsl(38 96% 48% / 0.15), 0 8px 24px -8px hsl(38 96% 48% / 0.45)",
       },
+      keyframes: {
+        shake: {
+          "0%, 100%": { transform: "translateX(0)" },
+          "25%": { transform: "translateX(-3px)" },
+          "75%": { transform: "translateX(3px)" },
+        },
+      },
+      animation: {
+        shake: "shake 300ms ease-in-out",
+      },
       fontFamily: {
         sans: [
           "Inter var",

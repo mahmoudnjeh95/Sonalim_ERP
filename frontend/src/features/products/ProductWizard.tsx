@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ChevronLeft, ChevronRight } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import { ChevronLeft, ChevronRight, Loader2 } from "lucide-react";
 import { z } from "zod";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -141,22 +142,32 @@ export function ProductWizard({ open, onOpenChange, uoms, locations, onSubmit, i
           {/* Step Indicator */}
           <div className="flex gap-2">
             {[1, 2, 3, 4].map((step) => (
-              <div
-                key={step}
-                className={`h-2 flex-1 rounded-full transition-colors ${
-                  step <= currentStep ? "bg-blue-500" : "bg-gray-300"
-                }`}
-              />
+              <div key={step} className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                <motion.div
+                  className="h-full rounded-full bg-primary"
+                  initial={false}
+                  animate={{ width: step <= currentStep ? "100%" : "0%" }}
+                  transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
+                />
+              </div>
             ))}
           </div>
 
           {/* Step Content */}
-          <div>
-            {currentStep === 1 && <Step1Identity form={form} uoms={uoms} t={t} />}
-            {currentStep === 2 && <Step2Pricing form={form} t={t} />}
-            {currentStep === 3 && <Step3Packaging form={form} t={t} />}
-            {currentStep === 4 && <Step4Settings form={form} locations={locations} t={t} />}
-          </div>
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div
+              key={currentStep}
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+            >
+              {currentStep === 1 && <Step1Identity form={form} uoms={uoms} t={t} />}
+              {currentStep === 2 && <Step2Pricing form={form} t={t} />}
+              {currentStep === 3 && <Step3Packaging form={form} t={t} />}
+              {currentStep === 4 && <Step4Settings form={form} locations={locations} t={t} />}
+            </motion.div>
+          </AnimatePresence>
 
           {/* Navigation */}
           <div className="flex justify-between pt-4 border-t">
@@ -170,6 +181,7 @@ export function ProductWizard({ open, onOpenChange, uoms, locations, onSubmit, i
             </Button>
 
             <Button onClick={handleNext} disabled={isLoading}>
+              {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
               {currentStep === 4 ? t("common.create") : t("common.next")}
               {currentStep < 4 && <ChevronRight className="w-4 h-4 ml-2" />}
             </Button>

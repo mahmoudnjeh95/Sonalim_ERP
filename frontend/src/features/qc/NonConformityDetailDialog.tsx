@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
+import { motion } from "framer-motion";
 import { ExternalLink } from "lucide-react";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
@@ -108,8 +109,11 @@ export function NonConformityDetailDialog({
             ) : (
               <ul className="space-y-1.5">
                 {full!.dispositions.map((line, index) => (
-                  <li
+                  <motion.li
                     key={`${line.component}:${line.disposition}:${index}`}
+                    initial={{ opacity: 0, scale: 0.94 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ duration: 0.28, ease: [0.2, 0.8, 0.2, 1], delay: Math.min(index, 8) * 0.03 }}
                     className="flex flex-wrap items-baseline gap-2 rounded-lg border border-border p-2 text-sm"
                   >
                     <Badge variant="outline">
@@ -122,7 +126,7 @@ export function NonConformityDetailDialog({
                       {formatQuantity(line.quantity, line.unit)}
                     </span>
                     {line.note && <span className="w-full text-xs text-muted-foreground">{line.note}</span>}
-                  </li>
+                  </motion.li>
                 ))}
               </ul>
             )}

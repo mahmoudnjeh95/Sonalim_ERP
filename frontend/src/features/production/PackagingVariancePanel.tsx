@@ -3,6 +3,7 @@ import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { formatQuantity } from "../../lib/units";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
+import { AnimatedGauge } from "../../components/motion/AnimatedGauge";
 import type { PackagingVariance } from "./api";
 import type { DispositionSummaryRow } from "../qc/api";
 
@@ -126,6 +127,14 @@ export function PackagingVariancePanel({
               label={t("production.packagingVariance.field.packetVariance")}
               value={`${formatQuantity(variance.packet_variance)}${ratioLabel ? ` (${ratioLabel})` : ""}`}
               emphasis={ok ? "success" : short ? "destructive" : "warning"}
+              gauge={
+                variance.packet_variance_ratio !== null && variance.tolerance_percent > 0
+                  ? {
+                      percent: (Math.abs(variance.packet_variance_ratio) * 100 * 100) / variance.tolerance_percent,
+                      tone: ok ? "success" : short ? "destructive" : "warning",
+                    }
+                  : undefined
+              }
             />
             {variance.expected_cartons !== null && (
               <>
@@ -243,11 +252,14 @@ function Figure({
   value,
   emphasis,
   hint,
+  gauge,
 }: {
   label: string;
   value: string;
   emphasis?: "success" | "warning" | "destructive";
   hint?: string;
+  /** Share of the tolerance band this variance has used up. */
+  gauge?: { percent: number; tone: "success" | "warning" | "destructive" };
 }) {
   return (
     <div>
@@ -262,6 +274,7 @@ function Figure({
       >
         {value}
       </p>
+      {gauge && <AnimatedGauge percent={gauge.percent} tone={gauge.tone} className="mt-1" />}
       {hint && <p className="text-xs text-muted-foreground">{hint}</p>}
     </div>
   );

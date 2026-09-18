@@ -11,6 +11,7 @@ import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { rowEnterProps, highlightRowEnterProps } from "../../components/motion/rowMotion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -137,6 +138,9 @@ export function WorkOrdersTab() {
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  // Draws the eye to the row that was just created, rather than leaving the
+  // new order to blend into the rest of the list.
+  const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
   const todayIso = todayDateInputValue();
 
   const { data: orders = [], isLoading } = useQuery({
@@ -171,11 +175,13 @@ export function WorkOrdersTab() {
         start_date: input.start_date,
         supervisor_id: input.supervisor_id || undefined,
       }),
-    onSuccess: () => {
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
       reset({ work_center_id: "", product_type: "PC", start_date: todayDateInputValue(), supervisor_id: "" });
       toast.success(t("production.workOrders.created"));
+      setJustCreatedId(created.id);
+      setTimeout(() => setJustCreatedId(null), 2000);
     },
     onError: (error) => {
       toast.error(t("production.workOrders.createError"), {
@@ -620,10 +626,7 @@ export function WorkOrdersTab() {
                 {sortedOrders.map((order, i) => (
                   <motion.tr
                     key={order.id}
-                    layout
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0, transition: { delay: Math.min(i * 0.04, 0.3) } }}
-                    exit={{ opacity: 0 }}
+                    {...(order.id === justCreatedId ? highlightRowEnterProps(i) : rowEnterProps(i))}
                     className="border-b border-border last:border-0 hover:bg-muted/50"
                   >
                     {visibleColumns.map((column) => (
