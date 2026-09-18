@@ -152,8 +152,8 @@ const detailSchema = z.object({
 });
 
 const createSchema = detailSchema.extend({
-  of_id: z.string().min(1, "Required"),
-  report_date: z.string().min(1, "Required"),
+  of_id: z.string().min(1, t("common.required")),
+  report_date: z.string().min(1, t("common.required")),
   team: z.string().optional(),
   shift: z.string().optional(),
   // Which machine within the OF's line ran this shift. Optional here (a

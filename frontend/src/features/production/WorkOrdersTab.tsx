@@ -1,12 +1,41 @@
 import { useState } from "react";
-import { Link } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, ClipboardList, Eye, PauseCircle, PlayCircle, Plus, Pencil, Timer, XCircle } from "lucide-react";
+import {
+  Activity,
+  ArrowRight,
+  Boxes,
+  CheckCircle2,
+  ClipboardList,
+  Clock3,
+  Eye,
+  Factory,
+  Gauge,
+  PackageCheck,
+  PauseCircle,
+  Pencil,
+  PlayCircle,
+  Plus,
+  ShieldCheck,
+  Sparkles,
+  Timer,
+  TrendingUp,
+  XCircle,
+  Zap,
+} from "lucide-react";
 import { toast } from "sonner";
 import EmptyOrdersIllustration from "../../assets/illustrations/empty-states/empty-no-orders.svg?react";
+import ProductionEmptyStateIllustration from "../../assets/illustrations/production/production-empty-state.svg?react";
+import ProductPackagingThumbIllustration from "../../assets/illustrations/production/product-packaging-thumb.svg?react";
+import ProductionFlowIllustration from "../../assets/illustrations/production/production-flow.svg?react";
+import PlannedStatusIcon from "../../assets/icons/status/status-planned.svg?react";
+import OngoingStatusIcon from "../../assets/icons/status/status-ongoing.svg?react";
+import SuspendedStatusIcon from "../../assets/icons/status/status-suspended.svg?react";
+import ClosedStatusIcon from "../../assets/icons/status/status-closed.svg?react";
+import CancelledStatusIcon from "../../assets/icons/status/status-cancelled.svg?react";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
@@ -44,6 +73,7 @@ import {
   listWorkOrderYields,
   listWorkOrders,
   listRegrindBatches,
+  listReports,
   resumeWorkOrder,
   startWorkOrder,
   suspendWorkOrder,
@@ -61,6 +91,7 @@ import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { RowActionsMenu, type RowAction } from "../../components/patterns/RowActionsMenu";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { listQualityReports } from "../qc/api";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
@@ -85,9 +116,9 @@ function nowDatetimeLocalValue(): string {
 // named later by Conditionnement's first packaging report; the quantity is
 // assigned later too, once known, via edit.
 const newOrderSchema = z.object({
-  work_center_id: z.string().min(1, "Required"),
+  work_center_id: z.string().min(1, t("common.required")),
   product_type: z.enum(["PC", "PL"]),
-  start_date: z.string().min(1, "Required"),
+  start_date: z.string().min(1, t("common.required")),
   supervisor_id: z.string().optional(),
 });
 type NewOrderForm = z.infer<typeof newOrderSchema>;
@@ -97,7 +128,7 @@ const editOrderSchema = z.object({
   // validated reports (see the OF's consolidation), not typed in by hand. The
   // field is kept (rather than dropped) so an existing value is preserved
   // untouched on save instead of being wiped by an edit that never showed it.
-  planned_quantity: z.coerce.number().positive("Must be > 0").optional(),
+  planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")).optional(),
   work_center_id: z.string().optional(),
   supervisor_id: z.string().optional(),
   recipe_id: z.string().optional(),
@@ -107,7 +138,7 @@ const editOrderSchema = z.object({
 type EditOrderForm = z.infer<typeof editOrderSchema>;
 
 const closeOrderSchema = z.object({
-  closed_at: z.string().min(1, "Required"),
+  closed_at: z.string().min(1, t("common.required")),
 });
 type CloseOrderForm = z.infer<typeof closeOrderSchema>;
 
@@ -138,6 +169,7 @@ export function WorkOrdersTab() {
   const [detailsId, setDetailsId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | "PC" | "PL">("all");
   // Draws the eye to the row that was just created, rather than leaving the
   // new order to blend into the rest of the list.
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
@@ -316,6 +348,7 @@ export function WorkOrdersTab() {
   const ongoingCount = nonRegrindOrders.filter((o) => o.status === "ongoing").length;
   const closedCount = nonRegrindOrders.filter((o) => o.status === "closed").length;
   const statusFilteredOrders = statusFilter === "all" ? nonRegrindOrders : nonRegrindOrders.filter((o) => o.status === statusFilter);
+  const typeFilteredOrders = typeFilter === "all" ? statusFilteredOrders : statusFilteredOrders.filter((o) => o.product_type === typeFilter);
 
   const columnFilterFields: FilterField<WorkOrder>[] = [
     { key: "reference", kind: "text", getValue: (o) => o.reference },
@@ -481,6 +514,44 @@ export function WorkOrdersTab() {
   const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
     useTableColumns("production.workOrders", columns);
   const sortedOrders = sortRows(filteredOrders);
+  const groupedOrders = (["PC", "PL"] as const).map((groupType) => ({
+    type: groupType,
+    orders: sortedOrders.filter((order) => order.product_type === groupType),
+  }));
+
+  const visibleGroups = typeFilter === "all" ? groupedOrders : [{ type: typeFilter, orders: sortedOrders.filter((order) => order.product_type === typeFilter) }];
+
+  const productNameFor = (productId: string | null) => {
+    if (!productId) return "—";
+    return products.find((product) => product.id === productId)?.name ?? "—";
+  };
+
+  const workCenterNameFor = (order: WorkOrder) => workCenters.find((wc) => wc.id === order.work_center_id)?.name ?? "—";
+
+  const cardAccent = (status: WorkOrderStatus) => {
+    if (status === "closed") return "from-success/25 via-success/10 to-transparent text-success";
+    if (status === "ongoing") return "from-warning/30 via-warning/10 to-transparent text-warning";
+    if (status === "suspended") return "from-accent/30 via-accent/10 to-transparent text-accent";
+    if (status === "cancelled") return "from-destructive/25 via-destructive/10 to-transparent text-destructive";
+    return "from-primary/25 via-primary/10 to-transparent text-primary";
+  };
+
+  const StatusIconFor = (status: WorkOrderStatus) => {
+    switch (status) {
+      case "planned":
+        return <PlannedStatusIcon className="h-4 w-4" />;
+      case "ongoing":
+        return <OngoingStatusIcon className="h-4 w-4" />;
+      case "suspended":
+        return <SuspendedStatusIcon className="h-4 w-4" />;
+      case "closed":
+        return <ClosedStatusIcon className="h-4 w-4" />;
+      case "cancelled":
+        return <CancelledStatusIcon className="h-4 w-4" />;
+      default:
+        return <PlannedStatusIcon className="h-4 w-4" />;
+    }
+  };
 
   return (
     <div className="space-y-6">
@@ -507,6 +578,15 @@ export function WorkOrdersTab() {
                 { value: "suspended", label: t("status.suspended") },
                 { value: "closed", label: t("status.closed") },
                 { value: "cancelled", label: t("status.cancelled") },
+              ]}
+            />
+            <FilterTabs
+              value={typeFilter}
+              onChange={setTypeFilter}
+              options={[
+                { value: "all", label: "All types" },
+                { value: "PC", label: "PC" },
+                { value: "PL", label: "PL" },
               ]}
             />
             {columnFilters.isActive && (
@@ -583,62 +663,253 @@ export function WorkOrdersTab() {
             </DialogContent>
           </Dialog>
         </CardHeader>
-        <CardContent className="p-0">
-          <Table colWidths={colWidths}>
-            <TableHeader>
-              <TableRow>
-                {visibleColumns.map((column) => (
-                  <ResizableTableHead
-                    key={column.key}
-                    width={getWidth(column.key)}
-                    onResize={(width) => setWidth(column.key, width)}
-                    className={column.headerClassName}
-                    sortDirection={sortDirectionFor(column.key)}
-                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
-                  >
-                    {column.header}
-                  </ResizableTableHead>
-                ))}
-              </TableRow>
-              <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
-            </TableHeader>
-            <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
-              {!isLoading && filteredOrders.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={visibleColumns.length} className="p-0">
-                    <EmptyState
-                      icon={<EmptyOrdersIllustration className="h-5 w-5" />}
-                      title={t("production.workOrders.empty.title")}
-                      description={t("production.workOrders.empty.description")}
-                    />
-                  </TableCell>
-                </TableRow>
-              )}
-              <AnimatePresence initial={false}>
-                {sortedOrders.map((order, i) => (
-                  <motion.tr
-                    key={order.id}
-                    {...(order.id === justCreatedId ? highlightRowEnterProps(i) : rowEnterProps(i))}
-                    className="border-b border-border last:border-0 hover:bg-muted/50"
-                  >
-                    {visibleColumns.map((column) => (
-                      <TableCell key={column.key} className={column.cellClassName}>
-                        {column.cell(order)}
-                      </TableCell>
-                    ))}
-                  </motion.tr>
-                ))}
-              </AnimatePresence>
-            </TableBody>
-          </Table>
+        <CardContent className="p-4">
+          {isLoading ? (
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
+              {Array.from({ length: 6 }).map((_, i) => (
+                <div key={i} className="rounded-xl border border-border bg-card p-4">
+                  <Skeleton className="h-6 w-24" />
+                  <Skeleton className="mt-4 h-16 w-full" />
+                  <Skeleton className="mt-4 h-4 w-full" />
+                  <Skeleton className="mt-2 h-4 w-2/3" />
+                </div>
+              ))}
+            </div>
+          ) : typeFilteredOrders.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-border bg-muted/15 p-8">
+              <EmptyState
+                icon={<ProductionEmptyStateIllustration className="h-52 w-full max-w-md" />}
+                title={typeFilter === "all" ? t("production.workOrders.empty.title") : `No ${typeFilter} orders`}
+                description={
+                  typeFilter === "all"
+                    ? t("production.workOrders.empty.description")
+                    : `There are no ${typeFilter} work orders matching the current status and filters.`
+                }
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {visibleGroups.map((group) => (
+                <div key={group.type} className="space-y-3 rounded-2xl border border-border bg-muted/10 p-3">
+                  <div className="space-y-2 border-b border-border pb-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <motion.div
+                        initial={{ opacity: 0, x: -8 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        className="flex items-center gap-2"
+                      >
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-primary shadow-sm">
+                          {group.type === "PC" ? <Factory className="h-4 w-4" /> : <Boxes className="h-4 w-4" />}
+                        </div>
+                        <Badge variant={group.type === "PC" ? "primary" : "outline"}>{group.type}</Badge>
+                        <span className="text-sm text-muted-foreground">{group.orders.length} orders</span>
+                      </motion.div>
+                      <motion.div
+                        animate={{ rotate: [0, 4, -4, 0] }}
+                        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
+                        className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary"
+                      >
+                        <Sparkles className="h-3.5 w-3.5" />
+                      </motion.div>
+                    </div>
+
+                    <div className="grid grid-cols-3 gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                      <motion.div
+                        whileHover={{ y: -1 }}
+                        className="rounded-lg border border-border bg-background/80 px-2 py-1.5"
+                      >
+                        <div className="flex items-center gap-1.5"><Zap className="h-3 w-3 text-primary" /> Active</div>
+                        <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
+                          {group.orders.filter((o) => o.status === "ongoing" || o.status === "suspended").length}
+                        </div>
+                      </motion.div>
+                      <motion.div
+                        whileHover={{ y: -1 }}
+                        className="rounded-lg border border-border bg-background/80 px-2 py-1.5"
+                      >
+                        <div className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-success" /> Closed</div>
+                        <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
+                          {group.orders.filter((o) => o.status === "closed").length}
+                        </div>
+                      </motion.div>
+                      <motion.div
+                        whileHover={{ y: -1 }}
+                        className="rounded-lg border border-border bg-background/80 px-2 py-1.5"
+                      >
+                        <div className="flex items-center gap-1.5"><Clock3 className="h-3 w-3 text-warning" /> Planned</div>
+                        <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
+                          {group.orders.filter((o) => o.status === "planned").length}
+                        </div>
+                      </motion.div>
+                    </div>
+                  </div>
+
+                  {group.orders.length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-border bg-muted/10 px-4 py-6 text-sm text-muted-foreground">
+                      No {group.type} orders for this filter set.
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 gap-4">
+                      <AnimatePresence initial={false}>
+                        {group.orders.map((order, index) => {
+                          const productName = productNameFor(order.product_id);
+                          const visibleProgress = PROGRESS[order.status];
+                          const badgeTone = cardAccent(order.status);
+
+                          return (
+                            <motion.article
+                              key={order.id}
+                              {...(order.id === justCreatedId ? highlightRowEnterProps(index) : rowEnterProps(index))}
+                              layout
+                              whileHover={{ y: -3, scale: 1.01 }}
+                              transition={{ duration: 0.18, ease: "easeOut" }}
+                              className="group overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+                            >
+                              <div className="flex items-start justify-between gap-3 border-b border-border bg-muted/20 p-4">
+                                <Link
+                                  to={`/production/work-orders/${order.id}`}
+                                  className="flex min-w-0 flex-1 items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:text-primary"
+                                >
+                                  <motion.span
+                                    animate={{ scale: [1, 1.12, 1] }}
+                                    transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
+                                    className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary"
+                                  >
+                                    <Factory className="h-3.5 w-3.5" />
+                                  </motion.span>
+                                  <span>OF</span>
+                                  <span className="text-primary hover:underline">{order.reference}</span>
+                                </Link>
+
+                                <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                                  <StatusBadge status={order.status} />
+                                  <OrderActions
+                                    order={order}
+                                    products={products}
+                                    workCenters={workCenters}
+                                    supervisorOptions={supervisorOptions}
+                                    recipes={recipes}
+                                    packagingBoms={packagingBoms}
+                                    detailsId={detailsId}
+                                    onOpenDetails={(open) => setDetailsId(open ? order.id : null)}
+                                    onStart={() => startMutation.mutate(order.id)}
+                                    onSuspend={() => suspendMutation.mutate(order.id)}
+                                    onResume={() => resumeMutation.mutate(order.id)}
+                                    onCancel={() => cancelMutation.mutate(order.id)}
+                                    closingId={closingId}
+                                    onOpenClose={(open) => setClosingId(open ? order.id : null)}
+                                    onClose={(closedAt) => closeMutation.mutate({ id: order.id, closedAt })}
+                                    isStarting={startMutation.isPending && startMutation.variables === order.id}
+                                    isSuspending={suspendMutation.isPending && suspendMutation.variables === order.id}
+                                    isResuming={resumeMutation.isPending && resumeMutation.variables === order.id}
+                                    isCancelling={cancelMutation.isPending && cancelMutation.variables === order.id}
+                                    isClosing={closeMutation.isPending && closeMutation.variables?.id === order.id}
+                                    editingId={editingId}
+                                    onOpenEdit={(open) => openEditDialog(open ? order : null)}
+                                    editForm={editForm}
+                                    onSubmitEdit={(input) => submitEdit(order, input)}
+                                    isUpdating={updateMutation.isPending && updateMutation.variables?.id === order.id}
+                                  />
+                                </div>
+                              </div>
+
+                              <Link to={`/production/work-orders/${order.id}`} className="block p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60">
+                                <div className="space-y-4">
+                                  <div className="flex items-center gap-3">
+                                    <motion.div
+                                      animate={{ y: [0, -3, 0], rotate: [0, 1, -1, 0] }}
+                                      transition={{ duration: 3.4, repeat: Infinity, ease: "easeInOut" }}
+                                      className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-border bg-gradient-to-br shadow-inner"
+                                    >
+                                      <ProductPackagingThumbIllustration className={cn("h-full w-full object-cover", badgeTone)} />
+                                    </motion.div>
+                                    <div className="flex-1 space-y-2">
+                                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                        <span className="inline-flex items-center gap-1.5"><Factory className="h-3.5 w-3.5" /> {t("production.workOrders.column.workCenter")}</span>
+                                        <span className="font-medium text-foreground">{workCenterNameFor(order)}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                        <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" /> {t("production.workOrders.column.startDate")}</span>
+                                        <span className="font-medium text-foreground">{order.start_date ?? "—"}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                        <span className="inline-flex items-center gap-1.5"><Boxes className="h-3.5 w-3.5" /> {t("production.workOrders.column.type")}</span>
+                                        <span className="font-medium text-foreground">{order.product_type ?? "—"}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="space-y-2">
+                                    <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
+                                      <span className="inline-flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5" /> {t("production.workOrders.column.progress")}</span>
+                                      <span className="text-foreground">{visibleProgress}%</span>
+                                    </div>
+                                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                                      <motion.div
+                                        className={cn(
+                                          "h-full rounded-full",
+                                          order.status === "closed" ? "bg-success" : order.status === "ongoing" ? "bg-warning" : order.status === "cancelled" ? "bg-destructive" : "bg-primary",
+                                        )}
+                                        initial={{ width: 0 }}
+                                        animate={{ width: `${visibleProgress}%` }}
+                                        transition={{ duration: 0.5, ease: "easeOut" }}
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <div className="grid grid-cols-3 gap-2 text-xs">
+                                    <motion.div whileHover={{ y: -2 }} className="rounded-lg border border-border bg-muted/20 p-2">
+                                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                                        <Activity className="h-3 w-3 text-primary" />
+                                        <span>Live</span>
+                                      </div>
+                                      <div className="mt-1 font-medium text-foreground">{order.status}</div>
+                                    </motion.div>
+                                    <motion.div whileHover={{ y: -2 }} className="rounded-lg border border-border bg-muted/20 p-2">
+                                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                                        <PackageCheck className="h-3 w-3 text-success" />
+                                        <span>Yield</span>
+                                      </div>
+                                      <div className="mt-1 font-medium text-foreground">
+                                        {`${((yieldByWorkOrderId.get(order.id) ?? 0) * 100).toFixed(1)}%`}
+                                      </div>
+                                    </motion.div>
+                                    <motion.div whileHover={{ y: -2 }} className="rounded-lg border border-border bg-muted/20 p-2">
+                                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
+                                        {StatusIconFor(order.status)}
+                                        <span>Lead</span>
+                                      </div>
+                                      <div className="mt-1 font-medium text-foreground">{supervisorNameFor(order.supervisor_id) || "—"}</div>
+                                    </motion.div>
+                                  </div>
+
+                                  <div className="flex items-center justify-between gap-2 rounded-xl border border-border bg-muted/15 p-3">
+                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                                      <ShieldCheck className="h-3.5 w-3.5 text-success" />
+                                      <span>{productName}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1.5 text-xs font-medium text-primary">
+                                      <Zap className="h-3.5 w-3.5" />
+                                      <span>Open</span>
+                                      <ArrowRight className="h-3.5 w-3.5" />
+                                    </div>
+                                  </div>
+
+                                  <div className="rounded-xl border border-border bg-muted/15 p-3">
+                                    <ProductionFlowIllustration className="h-16 w-full" />
+                                  </div>
+                                </div>
+                              </Link>
+                            </motion.article>
+                          );
+                        })}
+                      </AnimatePresence>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>
@@ -701,6 +972,7 @@ function OrderActions({
   const { session } = useAuth();
   const token = session!.token;
   const { t } = useI18n();
+  const navigate = useNavigate();
   const productName = (productId: string | null) => {
     if (!productId) return "—";
     return products.find((p) => p.id === productId)?.name ?? "—";
@@ -716,6 +988,16 @@ function OrderActions({
   const { data: pouredInputs = [] } = useQuery({
     queryKey: ["production", "work-order-inputs", order.id],
     queryFn: () => listWorkOrderInputs(token, order.id),
+    enabled: isDetailsDialogOpen,
+  });
+  const { data: reports = [] } = useQuery({
+    queryKey: ["production", "reports", "of", order.id],
+    queryFn: () => listReports(token, { of_id: order.id }),
+    enabled: isDetailsDialogOpen,
+  });
+  const { data: qualityReports = [] } = useQuery({
+    queryKey: ["qc", "quality-reports", "of", order.id],
+    queryFn: () => listQualityReports(token, { of_id: order.id }),
     enabled: isDetailsDialogOpen,
   });
   // Consolidation and yield are both computed from validated reports, so they are
@@ -739,7 +1021,7 @@ function OrderActions({
       key: "details",
       label: t("production.workOrders.details"),
       icon: <Eye className="h-4 w-4" />,
-      onSelect: () => onOpenDetails(true),
+      onSelect: () => navigate(`/production/work-orders/${order.id}`),
     },
     {
       key: "edit",
@@ -808,6 +1090,29 @@ function OrderActions({
                 <DialogDescription>{productName(order.product_id)}</DialogDescription>
               </DialogHeader>
               <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-muted/20 p-3 text-sm">
+                  <div className="rounded-lg border border-border bg-background p-2.5">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Production reports</p>
+                    <p className="mt-1 text-lg font-semibold">{reports.length}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-2.5">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Quality reports</p>
+                    <p className="mt-1 text-lg font-semibold">{qualityReports.length}</p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-2.5">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Produced</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums">
+                      {consolidation ? consolidation.produced_quantity : "—"}
+                    </p>
+                  </div>
+                  <div className="rounded-lg border border-border bg-background p-2.5">
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Yield</p>
+                    <p className="mt-1 text-lg font-semibold tabular-nums">
+                      {yieldDetail ? `${(yieldDetail.yield_ratio * 100).toFixed(1)}%` : "—"}
+                    </p>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-2 text-sm">
                   <div>
                     <span className="text-muted-foreground">{t("production.workOrders.column.status")}: </span>

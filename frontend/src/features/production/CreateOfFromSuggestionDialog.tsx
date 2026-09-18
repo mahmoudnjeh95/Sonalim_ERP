@@ -20,8 +20,8 @@ import type { ProductionSuggestion } from "./planning";
 import SuggestionToOfIcon from "../../assets/icons/production/suggestion-to-of.svg?react";
 
 const formSchema = z.object({
-  work_center_id: z.string().min(1, "Required"),
-  planned_quantity: z.coerce.number().positive("Must be > 0"),
+  work_center_id: z.string().min(1, t("common.required")),
+  planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")),
   start_date: z.string().optional(),
 });
 type FormValues = z.infer<typeof formSchema>;

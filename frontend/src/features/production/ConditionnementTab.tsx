@@ -154,8 +154,8 @@ const detailSchema = z.object({
 });
 
 const createSchema = detailSchema.extend({
-  of_id: z.string().min(1, "Required"),
-  report_date: z.string().min(1, "Required"),
+  of_id: z.string().min(1, t("common.required")),
+  report_date: z.string().min(1, t("common.required")),
   team: z.string().optional(),
   shift: z.string().optional(),
   // Only required when the chosen order has no product yet — this report is

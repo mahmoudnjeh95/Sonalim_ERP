@@ -535,6 +535,7 @@ const en = {
 
   "common.cancel": "Cancel",
   "common.required": "Required",
+  "common.mustBeGreaterThanZero": "Must be > 0",
   "common.all": "All",
   "common.clearFilters": "Clear filters",
   "priority.low": "Low",
@@ -3338,6 +3339,7 @@ const fr: Record<TranslationKey, string> = {
 
   "common.cancel": "Annuler",
   "common.required": "Requis",
+  "common.mustBeGreaterThanZero": "Doit être > 0",
   "common.all": "Tous",
   "common.clearFilters": "Effacer les filtres",
   "priority.low": "Basse",
