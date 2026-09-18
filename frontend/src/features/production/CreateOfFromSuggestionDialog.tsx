@@ -19,12 +19,11 @@ import { createWorkOrder, listProducts, listWorkCenters } from "./api";
 import type { ProductionSuggestion } from "./planning";
 import SuggestionToOfIcon from "../../assets/icons/production/suggestion-to-of.svg?react";
 
-const formSchema = z.object({
-  work_center_id: z.string().min(1, t("common.required")),
-  planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")),
-  start_date: z.string().optional(),
-});
-type FormValues = z.infer<typeof formSchema>;
+type FormValues = {
+  work_center_id: string;
+  planned_quantity: number;
+  start_date?: string;
+};
 
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
@@ -48,6 +47,12 @@ export function CreateOfFromSuggestionDialog({
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+
+  const formSchema = z.object({
+    work_center_id: z.string().min(1, t("common.required")),
+    planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")),
+    start_date: z.string().optional(),
+  });
 
   const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });

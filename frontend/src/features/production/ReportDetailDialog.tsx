@@ -1,7 +1,17 @@
 import { useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { motion } from "framer-motion";
-import { AlertTriangle, History, Pencil, Trash2 } from "lucide-react";
+import { AnimatePresence, motion } from "framer-motion";
+import {
+  AlertTriangle,
+  CheckCheck,
+  Clock3,
+  FileText,
+  History,
+  Pencil,
+  Rocket,
+  ShieldCheck,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
@@ -128,6 +138,21 @@ export function ReportDetailDialog({
   const [mode, setMode] = useState<"view" | "edit" | "delete" | "history">(initialMode);
   const [deleteReason, setDeleteReason] = useState("");
 
+  const statusIcon = (() => {
+    switch (status) {
+      case "draft":
+        return <FileText className="h-3.5 w-3.5 text-primary" />;
+      case "submitted":
+        return <Clock3 className="h-3.5 w-3.5 text-warning" />;
+      case "validated":
+        return <CheckCheck className="h-3.5 w-3.5 text-success" />;
+      case "rejected":
+        return <AlertTriangle className="h-3.5 w-3.5 text-destructive" />;
+      default:
+        return <Rocket className="h-3.5 w-3.5 text-primary" />;
+    }
+  })();
+
   const deleteMutation = useMutation({
     mutationFn: (force: boolean) => onDelete!(deleteReason, force),
     onSuccess: () => {
@@ -165,7 +190,11 @@ export function ReportDetailDialog({
               initial={{ opacity: 0, scale: 0.85 }}
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
+              className="inline-flex items-center gap-2"
             >
+              <span className="flex h-6 w-6 items-center justify-center rounded-md border border-primary/15 bg-primary/10">
+                {statusIcon}
+              </span>
               <StatusBadge status={status} />
             </motion.span>
             {revision !== undefined && revision > 1 && (
@@ -177,126 +206,167 @@ export function ReportDetailDialog({
           <DialogDescription>{subtitle}</DialogDescription>
         </DialogHeader>
 
-        {mode === "view" && (
-          <div className="space-y-4">
-            {banner}
-            {figures.some((figure) => figure.group) ? (
-              <div className="space-y-3">
-                {FIGURE_GROUPS.map(({ key, labelKey }) => {
-                  const groupFigures = figures.filter((figure) => figure.group === key);
-                  if (groupFigures.length === 0) return null;
-                  return <FigureGroup key={key} label={t(labelKey)} figures={groupFigures} />;
-                })}
-                <FigureGroup figures={figures.filter((figure) => !figure.group)} />
-              </div>
-            ) : (
-              <FigureGroup figures={figures} />
-            )}
-
-            <div className="flex flex-wrap gap-2">
-              {editForm && (
-                <Button size="sm" variant="outline" onClick={() => setMode("edit")}>
-                  <Pencil className="h-3.5 w-3.5" />
-                  {t("common.edit")}
-                </Button>
+        <AnimatePresence mode="wait">
+          {mode === "view" && (
+            <motion.div
+              key="view"
+              initial={{ opacity: 0, y: 8, scale: 0.985 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: -8, scale: 0.985 }}
+              transition={{ duration: 0.22, ease: "easeOut" }}
+              className="space-y-4"
+            >
+              {banner}
+              {figures.some((figure) => figure.group) ? (
+                <div className="space-y-3">
+                  {FIGURE_GROUPS.map(({ key, labelKey }) => {
+                    const groupFigures = figures.filter((figure) => figure.group === key);
+                    if (groupFigures.length === 0) return null;
+                    return <FigureGroup key={key} label={t(labelKey)} figures={groupFigures} />;
+                  })}
+                  <FigureGroup figures={figures.filter((figure) => !figure.group)} />
+                </div>
+              ) : (
+                <FigureGroup figures={figures} />
               )}
-              {reportId && (
-                <Button size="sm" variant="ghost" onClick={() => setMode("history")}>
-                  <History className="h-3.5 w-3.5" />
-                  {t("production.reports.history.title")}
-                </Button>
-              )}
-              {onDelete && canDelete && (
-                <Button size="sm" variant="ghost" onClick={() => setMode("delete")}>
-                  <Trash2 className="h-3.5 w-3.5" />
-                  {t("common.delete")}
-                </Button>
-              )}
-            </div>
 
-            {status === "validated" && (
-              <p className="text-xs text-muted-foreground">{t("production.reports.validatedNote")}</p>
-            )}
-          </div>
-        )}
-
-        {mode === "history" && reportId && (
-          <div className="space-y-3">
-            <ReportHistoryPanel reportId={reportId} entityType={historyEntityType} />
-            <Button size="sm" variant="ghost" className="w-full" onClick={() => setMode("view")}>
-              {t("common.cancel")}
-            </Button>
-          </div>
-        )}
-
-        {mode === "edit" && (
-          <div className="space-y-3">
-            {editForm}
-            <Button size="sm" variant="ghost" className="w-full" onClick={() => setMode("view")}>
-              {t("common.cancel")}
-            </Button>
-          </div>
-        )}
-
-        {mode === "delete" && (
-          <div className="space-y-4">
-            <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-              <div>
-                <p className="text-sm font-medium text-destructive">{t("production.reports.delete.confirm")}</p>
-                <p className="text-sm text-muted-foreground">
-                  {status === "validated"
-                    ? t("production.reports.delete.validatedWarning")
-                    : t("production.reports.delete.draftWarning")}
-                </p>
+              <div className="flex flex-wrap gap-2">
+                {editForm && (
+                  <Button size="sm" variant="outline" onClick={() => setMode("edit")}>
+                    <Pencil className="h-3.5 w-3.5" />
+                    {t("common.edit")}
+                  </Button>
+                )}
+                {reportId && (
+                  <Button size="sm" variant="ghost" onClick={() => setMode("history")}>
+                    <History className="h-3.5 w-3.5" />
+                    {t("production.reports.history.title")}
+                  </Button>
+                )}
+                {onDelete && canDelete && (
+                  <Button size="sm" variant="ghost" onClick={() => setMode("delete")}>
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {t("common.delete")}
+                  </Button>
+                )}
               </div>
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="delete_reason">{t("production.reports.delete.reason")}</Label>
-              <Input
-                id="delete_reason"
-                value={deleteReason}
-                onChange={(event) => setDeleteReason(event.target.value)}
-                placeholder={t("production.reports.delete.reasonPlaceholder")}
-              />
-              <p className="text-xs text-muted-foreground">{t("production.reports.delete.reasonHelp")}</p>
-            </div>
 
-            {regrindAlreadyCompleted && (
-              <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-                <p className="text-sm text-destructive">{t("production.reports.delete.forceWarning")}</p>
+              {status === "validated" && (
+                <div className="flex items-center gap-2 rounded-lg border border-success/20 bg-success/5 p-2.5 text-xs text-success">
+                  <ShieldCheck className="h-3.5 w-3.5" />
+                  <span>{t("production.reports.validatedNote")}</span>
+                </div>
+              )}
+            </motion.div>
+          )}
+
+          {mode === "history" && reportId && (
+            <motion.div
+              key="history"
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="space-y-3"
+            >
+              <div className="flex items-center gap-2 rounded-lg border border-primary/10 bg-primary/5 p-2 text-xs font-medium text-primary">
+                <History className="h-3.5 w-3.5" />
+                {t("production.reports.history.title")}
               </div>
-            )}
-
-            <div className="flex gap-2">
-              <Button
-                className="flex-1"
-                variant="destructive"
-                onClick={() => deleteMutation.mutate(false)}
-                disabled={!deleteReason.trim() || deleteMutation.isPending || isDeleting}
-              >
-                <Trash2 className="h-4 w-4" />
-                {deleteMutation.isPending ? t("common.saving") : t("common.delete")}
-              </Button>
-              <Button className="flex-1" variant="outline" onClick={() => { setMode("view"); deleteMutation.reset(); }}>
+              <ReportHistoryPanel reportId={reportId} entityType={historyEntityType} />
+              <Button size="sm" variant="ghost" className="w-full" onClick={() => setMode("view")}>
                 {t("common.cancel")}
               </Button>
-            </div>
+            </motion.div>
+          )}
 
-            {regrindAlreadyCompleted && (
-              <Button
-                className="w-full"
-                variant="destructive"
-                onClick={() => deleteMutation.mutate(true)}
-                disabled={!deleteReason.trim() || deleteMutation.isPending || isDeleting}
-              >
-                <Trash2 className="h-4 w-4" />
-                {deleteMutation.isPending ? t("common.saving") : t("production.reports.delete.forceButton")}
+          {mode === "edit" && (
+            <motion.div
+              key="edit"
+              initial={{ opacity: 0, x: 12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: -12 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="space-y-3"
+            >
+              <div className="flex items-center gap-2 rounded-lg border border-warning/20 bg-warning/5 p-2 text-xs font-medium text-warning">
+                <Pencil className="h-3.5 w-3.5" />
+                {t("common.edit")}
+              </div>
+              {editForm}
+              <Button size="sm" variant="ghost" className="w-full" onClick={() => setMode("view")}>
+                {t("common.cancel")}
               </Button>
-            )}
-          </div>
-        )}
+            </motion.div>
+          )}
+
+          {mode === "delete" && (
+            <motion.div
+              key="delete"
+              initial={{ opacity: 0, x: -12 }}
+              animate={{ opacity: 1, x: 0 }}
+              exit={{ opacity: 0, x: 12 }}
+              transition={{ duration: 0.2, ease: "easeOut" }}
+              className="space-y-4"
+            >
+              <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                <div>
+                  <p className="text-sm font-medium text-destructive">{t("production.reports.delete.confirm")}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {status === "validated"
+                      ? t("production.reports.delete.validatedWarning")
+                      : t("production.reports.delete.draftWarning")}
+                  </p>
+                </div>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="delete_reason">{t("production.reports.delete.reason")}</Label>
+                <Input
+                  id="delete_reason"
+                  value={deleteReason}
+                  onChange={(event) => setDeleteReason(event.target.value)}
+                  placeholder={t("production.reports.delete.reasonPlaceholder")}
+                />
+                <p className="text-xs text-muted-foreground">{t("production.reports.delete.reasonHelp")}</p>
+              </div>
+
+              {regrindAlreadyCompleted && (
+                <div className="flex items-start gap-3 rounded-lg border border-destructive/20 bg-destructive-soft p-3">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                  <p className="text-sm text-destructive">{t("production.reports.delete.forceWarning")}</p>
+                </div>
+              )}
+
+              <div className="flex gap-2">
+                <Button
+                  className="flex-1"
+                  variant="destructive"
+                  onClick={() => deleteMutation.mutate(false)}
+                  disabled={!deleteReason.trim() || deleteMutation.isPending || isDeleting}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {deleteMutation.isPending ? t("common.saving") : t("common.delete")}
+                </Button>
+                <Button className="flex-1" variant="outline" onClick={() => { setMode("view"); deleteMutation.reset(); }}>
+                  {t("common.cancel")}
+                </Button>
+              </div>
+
+              {regrindAlreadyCompleted && (
+                <Button
+                  className="w-full"
+                  variant="destructive"
+                  onClick={() => deleteMutation.mutate(true)}
+                  disabled={!deleteReason.trim() || deleteMutation.isPending || isDeleting}
+                >
+                  <Trash2 className="h-4 w-4" />
+                  {deleteMutation.isPending ? t("common.saving") : t("production.reports.delete.forceButton")}
+                </Button>
+              )}
+            </motion.div>
+          )}
+        </AnimatePresence>
       </DialogContent>
     </Dialog>
   );

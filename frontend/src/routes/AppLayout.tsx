@@ -26,7 +26,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
 
     const timer = window.setTimeout(() => {
       setShowRouteLoader(false);
-    }, 1000);
+    }, 500);
 
     previousPathRef.current = currentPath;
 

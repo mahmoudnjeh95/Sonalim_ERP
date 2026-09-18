@@ -83,84 +83,44 @@ import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners, type Partner } from "../partners/api";
 import { UTILITY_UNITS, productUnit, totalsByUomCategory, formatQuantity } from "../../lib/units";
 
-// A shift's daily report. Semolina is the one figure here that leaves stock when
-// a supervisor validates it, which is why the form insists on naming the product
-// and the store before the report can be handed over.
-const detailSchema = z.object({
-  // Semoule poured this shift, one line per quality — see SemolinaLinesField.
-  semolina_lines: z.array(
-    z.object({
-      product_id: z.string(),
-      quantity: z.coerce.number().min(0),
-      location_id: z.string(),
-    }),
-  ),
-  raw_material_location_id: z.string().optional(),
-  regrind_input_quantity: z.coerce.number().min(0),
-  regrind_input_product_id: z.string().optional(),
-  // Not a visible field: no input renders it. Kept in the schema purely so an
-  // edit round-trips the value the backend already has instead of the
-  // pydantic request model defaulting the column back to 0 on save.
-  dough_quantity: z.coerce.number().min(0),
-  finished_product_quantity: z.coerce.number().min(0),
-  regrind_quantity: z.coerce.number().min(0),
-  regrind_product_id: z.string().optional(),
-  // Which mold this shift ran — named per report, not on the OF.
-  mold_id: z.string().optional(),
-  // Déchets. A list, so a shift can record whatever it actually lost --
-  // and each line names its item, which is what gives the figure a unit.
-  waste_lines: z
-    .array(
-      z.object({
-        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
-        product_id: z.string(),
-        quantity: z.coerce.number().min(0),
-        note: z.string(),
-      }),
-    ),
-  water_quantity: z.coerce.number().min(0),
-  // The operator's real input: water dosed as a percentage of the semoule
-  // poured. water_quantity is derived from it — see DailyDetailFields.
-  water_percentage: z.coerce.number().min(0).max(100),
-  fuel_quantity: z.coerce.number().min(0),
-  fuel_supplier_id: z.string().optional(),
-  // Gasoil (diesel) — a separate fuel from fuel_quantity (fioul). Derived from
-  // gasoil_flow_rate x generator_hours — see DailyDetailFields.
-  gasoil_quantity: z.coerce.number().min(0),
-  gasoil_supplier_id: z.string().optional(),
-  // The groupe électrogène's own consumption rate (L/h) and how long it ran
-  // this shift — the operator's real inputs; gasoil_quantity is their product.
-  gasoil_flow_rate: z.coerce.number().min(0),
-  generator_hours: z.coerce.number().min(0),
-  electricity_quantity: z.coerce.number().min(0),
-  // Débit de semoule, tonnes/hour — recorded for future recipe statistics.
-  semolina_flow_rate: z.coerce.number().min(0),
-  // HH:MM from a native time input, or "" when not entered.
-  start_time: z.string().optional(),
-  production_minutes: z.coerce.number().int().min(0),
-  // Arrêts. A list, so a shift can record more than one stoppage and more
-  // than one reason -- see DowntimeLinesField.
-  downtime_lines: z.array(
-    z.object({
-      motif: z.string(),
-      downtime_type: z.string(),
-      classification: z.string(),
-      minutes: z.coerce.number().int().min(0),
-      note: z.string(),
-    }),
-  ),
-});
-
-const createSchema = detailSchema.extend({
-  of_id: z.string().min(1, t("common.required")),
-  report_date: z.string().min(1, t("common.required")),
-  team: z.string().optional(),
-  shift: z.string().optional(),
-  // Which machine within the OF's line ran this shift. Optional here (a
-  // draft may be saved before the team knows) but required to submit.
-  equipment_id: z.string().optional(),
-});
-type CreateForm = z.infer<typeof createSchema>;
+type SemolinaLine = { product_id: string; quantity: number; location_id: string };
+type WasteLine = {
+  category: "raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning";
+  product_id: string;
+  quantity: number;
+  note: string;
+};
+type DowntimeLine = { motif: string; downtime_type: string; classification: string; minutes: number; note: string };
+type CreateForm = {
+  semolina_lines: SemolinaLine[];
+  raw_material_location_id?: string;
+  regrind_input_quantity: number;
+  regrind_input_product_id?: string;
+  dough_quantity: number;
+  finished_product_quantity: number;
+  regrind_quantity: number;
+  regrind_product_id?: string;
+  mold_id?: string;
+  waste_lines: WasteLine[];
+  water_quantity: number;
+  water_percentage: number;
+  fuel_quantity: number;
+  fuel_supplier_id?: string;
+  gasoil_quantity: number;
+  gasoil_supplier_id?: string;
+  gasoil_flow_rate: number;
+  generator_hours: number;
+  electricity_quantity: number;
+  semolina_flow_rate: number;
+  start_time?: string;
+  production_minutes: number;
+  downtime_lines: DowntimeLine[];
+  of_id: string;
+  report_date: string;
+  team?: string;
+  shift?: string;
+  equipment_id?: string;
+};
 
 const QUERY_KEY = ["production", "reports", "daily"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
@@ -210,6 +170,62 @@ export function DailyReportsTab() {
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+
+  const detailSchema = z.object({
+    semolina_lines: z.array(
+      z.object({
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        location_id: z.string(),
+      }),
+    ),
+    raw_material_location_id: z.string().optional(),
+    regrind_input_quantity: z.coerce.number().min(0),
+    regrind_input_product_id: z.string().optional(),
+    dough_quantity: z.coerce.number().min(0),
+    finished_product_quantity: z.coerce.number().min(0),
+    regrind_quantity: z.coerce.number().min(0),
+    regrind_product_id: z.string().optional(),
+    mold_id: z.string().optional(),
+    waste_lines: z.array(
+      z.object({
+        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        note: z.string(),
+      }),
+    ),
+    water_quantity: z.coerce.number().min(0),
+    water_percentage: z.coerce.number().min(0).max(100),
+    fuel_quantity: z.coerce.number().min(0),
+    fuel_supplier_id: z.string().optional(),
+    gasoil_quantity: z.coerce.number().min(0),
+    gasoil_supplier_id: z.string().optional(),
+    gasoil_flow_rate: z.coerce.number().min(0),
+    generator_hours: z.coerce.number().min(0),
+    electricity_quantity: z.coerce.number().min(0),
+    semolina_flow_rate: z.coerce.number().min(0),
+    start_time: z.string().optional(),
+    production_minutes: z.coerce.number().int().min(0),
+    downtime_lines: z.array(
+      z.object({
+        motif: z.string(),
+        downtime_type: z.string(),
+        classification: z.string(),
+        minutes: z.coerce.number().int().min(0),
+        note: z.string(),
+      }),
+    ),
+  });
+
+  const createSchema = detailSchema.extend({
+    of_id: z.string().min(1, t("common.required")),
+    report_date: z.string().min(1, t("common.required")),
+    team: z.string().optional(),
+    shift: z.string().optional(),
+    equipment_id: z.string().optional(),
+  });
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   // Grouped by work order by default, matching the other report lists — it's
@@ -787,6 +803,61 @@ export function DailyReportDialog({
   const token = session!.token;
   const queryClient = useQueryClient();
   const [reason, setReason] = useState("");
+
+  const detailSchema = z.object({
+    semolina_lines: z.array(
+      z.object({
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        location_id: z.string(),
+      }),
+    ),
+    raw_material_location_id: z.string().optional(),
+    regrind_input_quantity: z.coerce.number().min(0),
+    regrind_input_product_id: z.string().optional(),
+    dough_quantity: z.coerce.number().min(0),
+    finished_product_quantity: z.coerce.number().min(0),
+    regrind_quantity: z.coerce.number().min(0),
+    regrind_product_id: z.string().optional(),
+    mold_id: z.string().optional(),
+    waste_lines: z.array(
+      z.object({
+        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        product_id: z.string(),
+        quantity: z.coerce.number().min(0),
+        note: z.string(),
+      }),
+    ),
+    water_quantity: z.coerce.number().min(0),
+    water_percentage: z.coerce.number().min(0).max(100),
+    fuel_quantity: z.coerce.number().min(0),
+    fuel_supplier_id: z.string().optional(),
+    gasoil_quantity: z.coerce.number().min(0),
+    gasoil_supplier_id: z.string().optional(),
+    gasoil_flow_rate: z.coerce.number().min(0),
+    generator_hours: z.coerce.number().min(0),
+    electricity_quantity: z.coerce.number().min(0),
+    semolina_flow_rate: z.coerce.number().min(0),
+    start_time: z.string().optional(),
+    production_minutes: z.coerce.number().int().min(0),
+    downtime_lines: z.array(
+      z.object({
+        motif: z.string(),
+        downtime_type: z.string(),
+        classification: z.string(),
+        minutes: z.coerce.number().int().min(0),
+        note: z.string(),
+      }),
+    ),
+  });
+
+  const createSchema = detailSchema.extend({
+    of_id: z.string().min(1, t("common.required")),
+    report_date: z.string().min(1, t("common.required")),
+    team: z.string().optional(),
+    shift: z.string().optional(),
+    equipment_id: z.string().optional(),
+  });
 
   const { data: full } = useQuery({
     queryKey: ["production", "reports", report.id],

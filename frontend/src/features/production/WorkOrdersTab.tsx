@@ -115,32 +115,25 @@ function nowDatetimeLocalValue(): string {
 // Lightweight by design: work center, PC/PL and a start date. The product is
 // named later by Conditionnement's first packaging report; the quantity is
 // assigned later too, once known, via edit.
-const newOrderSchema = z.object({
-  work_center_id: z.string().min(1, t("common.required")),
-  product_type: z.enum(["PC", "PL"]),
-  start_date: z.string().min(1, t("common.required")),
-  supervisor_id: z.string().optional(),
-});
-type NewOrderForm = z.infer<typeof newOrderSchema>;
+type NewOrderForm = {
+  work_center_id: string;
+  product_type: "PC" | "PL";
+  start_date: string;
+  supervisor_id?: string;
+};
 
-const editOrderSchema = z.object({
-  // Not editable here any more: the quantity that matters is computed from
-  // validated reports (see the OF's consolidation), not typed in by hand. The
-  // field is kept (rather than dropped) so an existing value is preserved
-  // untouched on save instead of being wiped by an edit that never showed it.
-  planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")).optional(),
-  work_center_id: z.string().optional(),
-  supervisor_id: z.string().optional(),
-  recipe_id: z.string().optional(),
-  packaging_bom_id: z.string().optional(),
-  product_type: z.string().optional(),
-});
-type EditOrderForm = z.infer<typeof editOrderSchema>;
+type EditOrderForm = {
+  planned_quantity?: number;
+  work_center_id?: string;
+  supervisor_id?: string;
+  recipe_id?: string;
+  packaging_bom_id?: string;
+  product_type?: string;
+};
 
-const closeOrderSchema = z.object({
-  closed_at: z.string().min(1, t("common.required")),
-});
-type CloseOrderForm = z.infer<typeof closeOrderSchema>;
+type CloseOrderForm = {
+  closed_at: string;
+};
 
 const PROGRESS: Record<WorkOrderStatus, number> = {
   planned: 8,
@@ -188,6 +181,22 @@ export function WorkOrdersTab() {
   const { data: supervisorOptions = [] } = useQuery({ queryKey: SUPERVISORS_QUERY_KEY, queryFn: () => listSupervisorOptions(token) });
   const regrindWorkOrderIds = new Set(regrindBatches.map((b) => b.work_order_id));
   const yieldByWorkOrderId = new Map(workOrderYields.map((y) => [y.work_order_id, y.yield_ratio]));
+
+  // Create schemas with i18n messages
+  const newOrderSchema = z.object({
+    work_center_id: z.string().min(1, t("common.required")),
+    product_type: z.enum(["PC", "PL"]),
+    start_date: z.string().min(1, t("common.required")),
+    supervisor_id: z.string().optional(),
+  });
+  const editOrderSchema = z.object({
+    planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")).optional(),
+    work_center_id: z.string().optional(),
+    supervisor_id: z.string().optional(),
+    recipe_id: z.string().optional(),
+    packaging_bom_id: z.string().optional(),
+    product_type: z.string().optional(),
+  });
 
   const {
     register,
@@ -766,10 +775,7 @@ export function WorkOrdersTab() {
                               className="group overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
                             >
                               <div className="flex items-start justify-between gap-3 border-b border-border bg-muted/20 p-4">
-                                <Link
-                                  to={`/production/work-orders/${order.id}`}
-                                  className="flex min-w-0 flex-1 items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground transition-colors hover:text-primary"
-                                >
+                                <div className="flex min-w-0 flex-1 items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                                   <motion.span
                                     animate={{ scale: [1, 1.12, 1] }}
                                     transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
@@ -778,8 +784,9 @@ export function WorkOrdersTab() {
                                     <Factory className="h-3.5 w-3.5" />
                                   </motion.span>
                                   <span>OF</span>
-                                  <span className="text-primary hover:underline">{order.reference}</span>
-                                </Link>
+                                  <span className="text-primary">{order.reference}</span>
+                                  <ArrowRight className="h-3 w-3 text-muted-foreground" />
+                                </div>
 
                                 <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
                                   <StatusBadge status={order.status} />
@@ -973,6 +980,11 @@ function OrderActions({
   const token = session!.token;
   const { t } = useI18n();
   const navigate = useNavigate();
+
+  const closeOrderSchema = z.object({
+    closed_at: z.string().min(1, t("common.required")),
+  });
+
   const productName = (productId: string | null) => {
     if (!productId) return "—";
     return products.find((p) => p.id === productId)?.name ?? "—";
