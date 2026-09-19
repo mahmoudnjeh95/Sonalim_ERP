@@ -22,6 +22,7 @@ import { formatQuantity } from "../../lib/units";
 import { listProducts, type Product } from "../warehouse/api";
 import { listPartners } from "../partners/api";
 import { listPriceHistory, listSupplierLeaderboard, type PriceHistoryPoint, type SupplierLeaderboardEntry } from "../procurement/api";
+import { AnalyticsErrorState, AnalyticsInlineError } from "./AnalyticsStates";
 
 const SUPPLIER_COLORS = ["#0c978b", "#137cec", "#4332e2", "#d926a6", "#e08a1e", "#2e9e4f"];
 const BEST_PRICE_COLOR = "#22c55e";
@@ -183,7 +184,11 @@ export function PriceHistoryTab() {
 
   const { data: products = [] } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token) });
   const { data: suppliers = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
-  const { data: leaderboard = [] } = useQuery({
+  const {
+    data: leaderboard = [],
+    isError: leaderboardFailed,
+    refetch: refetchLeaderboard,
+  } = useQuery({
     queryKey: ["procurement", "supplier-leaderboard"],
     queryFn: () => listSupplierLeaderboard(token),
   });
@@ -195,11 +200,21 @@ export function PriceHistoryTab() {
   const hasProducts = productIds.length > 0;
 
   // Supplier-only browsing (no product picked yet): every product this one supplier has been ordered for.
-  const { data: supplierOnlyHistory = [], isLoading: isSupplierOnlyLoading } = useQuery({
+  const {
+    data: supplierOnlyHistory = [],
+    isLoading: isSupplierOnlyLoading,
+    isError: supplierOnlyFailed,
+    refetch: refetchSupplierOnly,
+  } = useQuery({
     queryKey: ["procurement", "price-history", "by-supplier", supplierId],
     queryFn: async () => {
       const allHistory: (PriceHistoryPoint & { product_id?: string })[] = [];
       const results = await Promise.allSettled(products.map((p) => listPriceHistory(token, p.id, supplierId)));
+      // One product failing only drops its own points, but every request failing
+      // means the backend is unreachable -- surface that instead of "no history".
+      if (results.length > 0 && results.every((result) => result.status === "rejected")) {
+        throw new Error("supplier price history unavailable");
+      }
       for (let i = 0; i < results.length; i++) {
         const result = results[i];
         if (result.status === "fulfilled") {
@@ -304,11 +319,31 @@ export function PriceHistoryTab() {
         </div>
       )}
 
-      <div key={hasProducts ? "collapsed" : "expanded"} className="animate-in fade-in slide-in-from-top-2 duration-500">
-        <SupplierLeaderboardCard leaderboard={leaderboard} collapsed={hasProducts} supplierName={supplierName} t={t} />
-      </div>
+      {leaderboardFailed ? (
+        // The card's own empty text ("once purchase orders are recorded...") would
+        // read as "there is no data", which a failed request does not tell us.
+        <AnalyticsInlineError
+          title={t("analytics.error.supplierLeaderboard.title")}
+          impact={t("analytics.error.supplierLeaderboard.impact")}
+          onRetry={() => void refetchLeaderboard()}
+        />
+      ) : (
+        <div key={hasProducts ? "collapsed" : "expanded"} className="animate-in fade-in slide-in-from-top-2 duration-500">
+          <SupplierLeaderboardCard leaderboard={leaderboard} collapsed={hasProducts} supplierName={supplierName} t={t} />
+        </div>
+      )}
 
-      {!hasProducts && supplierId && !isSupplierOnlyLoading && filteredSupplierOnlyHistory.length === 0 && (
+      {!hasProducts && supplierId && supplierOnlyFailed && (
+        <Card>
+          <AnalyticsErrorState
+            title={t("analytics.error.priceHistory.title")}
+            impact={t("analytics.error.priceHistory.impact")}
+            onRetry={() => void refetchSupplierOnly()}
+          />
+        </Card>
+      )}
+
+      {!hasProducts && supplierId && !isSupplierOnlyLoading && !supplierOnlyFailed && filteredSupplierOnlyHistory.length === 0 && (
         <EmptyState
           icon={<TrendingUp className="h-5 w-5" />}
           title={t("analytics.priceHistory.empty.noHistory.title")}
@@ -570,7 +605,12 @@ function ProductPriceSection({
   // Fetched unfiltered (every supplier, every order) so the best-supplier highlight
   // survives the supplier/period filters -- those narrow `history` below client-side
   // instead of issuing a second, identically-shaped request for the same product.
-  const { data: rawHistory = [], isLoading } = useQuery({
+  const {
+    data: rawHistory = [],
+    isLoading,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ["procurement", "price-history", productId],
     queryFn: () => listPriceHistory(token, productId),
   });
@@ -631,7 +671,17 @@ function ProductPriceSection({
         </Card>
       )}
 
-      {!isLoading && history.length === 0 && (
+      {isError && (
+        <Card>
+          <AnalyticsErrorState
+            title={t("analytics.error.priceHistory.title")}
+            impact={t("analytics.error.priceHistory.impact")}
+            onRetry={() => void refetch()}
+          />
+        </Card>
+      )}
+
+      {!isLoading && !isError && history.length === 0 && (
         <EmptyState
           icon={<TrendingUp className="h-5 w-5" />}
           title={t("analytics.priceHistory.empty.noHistory.title")}

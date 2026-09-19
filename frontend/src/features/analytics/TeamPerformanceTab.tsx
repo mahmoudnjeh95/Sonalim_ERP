@@ -16,6 +16,7 @@ import { totalsByUomCategory, type QuantityByProduct } from "../../lib/units";
 import { listTeamPerformance, type PerformanceGrain, type TeamPerformanceRow } from "../production/api";
 import { listProducts, listUoms } from "../warehouse/api";
 import { listQualityTeamPerformance, type TeamConformityRow } from "../qc/api";
+import { AnalyticsErrorState, AnalyticsInlineError } from "./AnalyticsStates";
 
 const TEAM_PERFORMANCE_QUERY_KEY = ["production", "team-performance"] as const;
 const TEAM_CONFORMITY_QUERY_KEY = ["qc", "team-performance"] as const;
@@ -83,11 +84,20 @@ export function TeamPerformanceTab() {
   const { data: reportOptions = [] } = useQuery({ queryKey: REPORT_OPTIONS_QUERY_KEY, queryFn: () => listReportOptions(token) });
   const { data: products = [] } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
-  const { data: production = [], isLoading: loadingProduction } = useQuery({
+  const {
+    data: production = [],
+    isLoading: loadingProduction,
+    isError: productionFailed,
+    refetch: refetchProduction,
+  } = useQuery({
     queryKey: [...TEAM_PERFORMANCE_QUERY_KEY, grain, range.from, range.to],
     queryFn: () => listTeamPerformance(token, { grain, date_from: range.from, date_to: range.to }),
   });
-  const { data: conformity = [] } = useQuery({
+  const {
+    data: conformity = [],
+    isError: conformityFailed,
+    refetch: refetchConformity,
+  } = useQuery({
     queryKey: [...TEAM_CONFORMITY_QUERY_KEY, grain, range.from, range.to],
     queryFn: () => listQualityTeamPerformance(token, { grain, date_from: range.from, date_to: range.to }),
   });
@@ -306,6 +316,14 @@ export function TeamPerformanceTab() {
 
       {isLoading ? (
         <div className="h-64 w-full animate-pulse rounded-lg bg-muted" />
+      ) : productionFailed ? (
+        <Card>
+          <AnalyticsErrorState
+            title={t("analytics.error.teamPerformance.title")}
+            impact={t("analytics.error.teamPerformance.impact")}
+            onRetry={() => void refetchProduction()}
+          />
+        </Card>
       ) : !hasData ? (
         <EmptyState
           icon={<Users className="h-5 w-5" />}
@@ -314,6 +332,13 @@ export function TeamPerformanceTab() {
         />
       ) : (
         <>
+          {conformityFailed && (
+            <AnalyticsInlineError
+              title={t("analytics.error.teamConformity.title")}
+              impact={t("analytics.error.teamConformity.impact")}
+              onRetry={() => void refetchConformity()}
+            />
+          )}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <TeamChart
               icon={<Gauge className="h-4 w-4" />}

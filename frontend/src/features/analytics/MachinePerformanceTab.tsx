@@ -12,6 +12,7 @@ import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listMachinePerformance, listMachines, type MachinePerformanceRow, type PerformanceGrain } from "../production/api";
+import { AnalyticsErrorState } from "./AnalyticsStates";
 
 const MACHINE_PERFORMANCE_QUERY_KEY = ["production", "machine-performance"] as const;
 const MACHINES_QUERY_KEY = ["production", "machines", "all"] as const;
@@ -63,7 +64,12 @@ export function MachinePerformanceTab() {
   const range = customRange ?? defaultRange;
 
   const { data: machines = [] } = useQuery({ queryKey: MACHINES_QUERY_KEY, queryFn: () => listMachines(token) });
-  const { data: performance = [], isLoading } = useQuery({
+  const {
+    data: performance = [],
+    isLoading,
+    isError: performanceFailed,
+    refetch: refetchPerformance,
+  } = useQuery({
     queryKey: [...MACHINE_PERFORMANCE_QUERY_KEY, grain, range.from, range.to],
     queryFn: () => listMachinePerformance(token, { grain, date_from: range.from, date_to: range.to }),
   });
@@ -206,6 +212,14 @@ export function MachinePerformanceTab() {
 
       {isLoading ? (
         <div className="h-64 w-full animate-pulse rounded-lg bg-muted" />
+      ) : performanceFailed ? (
+        <Card>
+          <AnalyticsErrorState
+            title={t("analytics.error.machinePerformance.title")}
+            impact={t("analytics.error.machinePerformance.impact")}
+            onRetry={() => void refetchPerformance()}
+          />
+        </Card>
       ) : !hasData ? (
         <EmptyState
           icon={<Cog className="h-5 w-5" />}

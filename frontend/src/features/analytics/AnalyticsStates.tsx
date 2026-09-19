@@ -1,6 +1,6 @@
 import type { ComponentType, ReactNode, SVGProps } from "react";
 import { motion } from "framer-motion";
-import { RotateCw } from "lucide-react";
+import { AlertTriangle, RotateCw } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { AppLoader } from "../../components/patterns/AppLoader";
 import { useI18n } from "../../lib/i18n";
@@ -76,5 +76,36 @@ export function AnalyticsErrorState({
         </Button>
       }
     />
+  );
+}
+
+/** For a failed source that only removes part of a view: the rest still renders, and this says what is missing. */
+export function AnalyticsInlineError({
+  title,
+  impact,
+  onRetry,
+  className,
+}: {
+  title: string;
+  impact: string;
+  onRetry: () => void;
+  className?: string;
+}) {
+  const { t } = useI18n();
+  return (
+    <div
+      role="alert"
+      className={cn("flex items-start gap-3 rounded-lg border border-warning/30 bg-warning-soft p-3", className)}
+    >
+      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium">{title}</p>
+        <p className="text-sm text-muted-foreground">{impact}</p>
+      </div>
+      <Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 gap-1 px-2 text-xs" onClick={onRetry}>
+        <RotateCw className="h-3.5 w-3.5" aria-hidden />
+        {t("analytics.state.retry")}
+      </Button>
+    </div>
   );
 }
