@@ -160,6 +160,9 @@ export interface WorkOrder {
   created_by: string | null;
   closed_at: string | null;
   closed_by: string | null;
+  // An OFR — the order a rebroyat run is built on. Tracked in Rebuts et
+  // rebroyat, never reported on.
+  is_regrind: boolean;
 }
 
 export interface PouredInputInput {
@@ -490,6 +493,8 @@ export interface ScrapRecord {
   is_reground: boolean;
   work_center_id: string | null;
   source_note: string | null;
+  // The OFR that consumed this scrap; null while it is still available.
+  regrind_work_order_id: string | null;
 }
 
 export interface RecordScrapInput {
@@ -1093,6 +1098,20 @@ export function getWorkOrderConsolidation(token: string, workOrderId: string) {
   return apiFetch<OfConsolidation>(`/production/work-orders/${workOrderId}/consolidation`, { token });
 }
 
+/** A running OF's consolidation, plus the teams that filed the validated reports behind it. */
+export interface ActiveOfConsolidation extends OfConsolidation {
+  teams: string[];
+}
+
+// Under the per-OF key's prefix so anything that refreshes one order's figures
+// refreshes the cockpit's batch too.
+export const ACTIVE_CONSOLIDATIONS_QUERY_KEY = ["production", "of-consolidation", "active"] as const;
+
+/** Every ongoing or suspended OF in one request, instead of two requests per order. */
+export function listActiveConsolidations(token: string) {
+  return apiFetch<ActiveOfConsolidation[]>(`/production/work-orders/active-consolidations`, { token });
+}
+
 // What was poured into an OF, against the recipe it follows.
 //
 // Advisory only. Nothing in the report or validation flow reads this — the plant's
@@ -1558,6 +1577,12 @@ export function reviseReport(token: string, reportId: string) {
  * way to turn a weight into a count, and `missing` says which parameter is absent.
  */
 export interface PackagingVariance {
+  /**
+   * How the product is sold (`sac` counts sacs, not packets, and has no carton
+   * tier). `null`/absent when the product is unclassified — per-report rows
+   * inside a product summary omit it.
+   */
+  packaging_format?: PackagingFormat | null;
   /**
    * Decision 25: no longer entered on the packing report. Comes from the OF's
    * own daily reports at OF/product scope, and is always `null` for a single

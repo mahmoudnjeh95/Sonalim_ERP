@@ -1,8 +1,10 @@
-"""Shift and team names, configurable per tenant.
+"""Shift and team names, and the arrêt vocabulary, configurable per tenant.
 
 A report is filed by a team on a shift, and both were free text — so the same
 shift arrived spelled three ways and nothing grouped. These are the lists the
-report forms offer.
+report forms offer. The arrêt type, classification and motif live here too:
+the frontend ships a built-in set of each, and these rows are the plant's own
+additions to it.
 
 Two rules shape the whole file:
 
@@ -26,7 +28,22 @@ from core.tenancy import TenantContext, require_permission, require_session
 
 router = APIRouter(prefix="/core", tags=["core.report_options"])
 
-VALID_KINDS = ("shift", "team")
+VALID_KINDS = ("shift", "team", "downtime_type", "downtime_classification", "downtime_motif")
+
+# Where a report stores each kind's label, so a name that reports were filed
+# under can be retired instead of deleted. A table that is not installed is
+# skipped -- see _is_in_use.
+_LABEL_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "shift": (("production.production_reports", "shift"), ("qc.quality_reports", "shift")),
+    "team": (("production.production_reports", "team"), ("qc.quality_reports", "team")),
+    "downtime_type": (("production.report_downtime_lines", "downtime_type"),),
+    "downtime_classification": (("production.report_downtime_lines", "classification"),),
+    # A conditionnement report keeps its single motif on the report itself.
+    "downtime_motif": (
+        ("production.report_downtime_lines", "motif"),
+        ("production.conditionnement_reports", "downtime_reason"),
+    ),
+}
 
 
 class ReportOption(BaseModel):
@@ -107,7 +124,7 @@ class ReportOptionsService:
             return Err("INVALID_KIND", f"kind must be one of {VALID_KINDS}")
         label = label.strip()
         if not label:
-            return Err("INVALID_LABEL", "a shift or team needs a name")
+            return Err("INVALID_LABEL", "an option needs a name")
 
         existing = self._connection.execute(
             "SELECT id, is_active FROM core.report_options "
@@ -159,7 +176,7 @@ class ReportOptionsService:
 
         new_label = current_label if label is None else label.strip()
         if not new_label:
-            return Err("INVALID_LABEL", "a shift or team needs a name")
+            return Err("INVALID_LABEL", "an option needs a name")
         if new_label.lower() != current_label.lower():
             clash = self._connection.execute(
                 "SELECT 1 FROM core.report_options "
@@ -244,8 +261,7 @@ class ReportOptionsService:
         lists. The existence check is `to_regclass` rather than a caught error —
         a failed statement would abort the caller's transaction along with it.
         """
-        column = "shift" if kind == "shift" else "team"
-        for table in ("production.production_reports", "qc.quality_reports"):
+        for table, column in _LABEL_COLUMNS[kind]:
             installed = self._connection.execute("SELECT to_regclass(%s)", (table,)).fetchone()
             if installed is None or installed[0] is None:
                 continue

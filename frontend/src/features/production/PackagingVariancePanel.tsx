@@ -45,6 +45,10 @@ export function PackagingVariancePanel({
   // machine_carton_variance are shown independently rather than one gating the
   // other. Only when neither exists is there truly nothing to compare.
   const hasWeightEcart = variance.expected_packets !== null;
+
+  // A sac is its own selling unit: the line counts sacs, and there is no carton
+  // tier to reconcile against, so every carton figure is left out.
+  const isSac = variance.packaging_format === "sac";
   const hasMachineEcart = variance.machine_carton_variance !== null;
 
   if (!hasWeightEcart && !hasMachineEcart) {
@@ -116,11 +120,19 @@ export function PackagingVariancePanel({
               value={formatQuantity(variance.tonnage, "t")}
             />
             <Figure
-              label={t("production.packagingVariance.field.expectedPackets")}
+              label={t(
+                isSac
+                  ? "production.packagingVariance.field.expectedSacs"
+                  : "production.packagingVariance.field.expectedPackets",
+              )}
               value={formatQuantity(variance.expected_packets)}
             />
             <Figure
-              label={t("production.packagingVariance.field.countedPackets")}
+              label={t(
+                isSac
+                  ? "production.packagingVariance.field.countedSacs"
+                  : "production.packagingVariance.field.countedPackets",
+              )}
               value={formatQuantity(variance.counted_packets)}
             />
             <Figure
@@ -136,7 +148,7 @@ export function PackagingVariancePanel({
                   : undefined
               }
             />
-            {variance.expected_cartons !== null && (
+            {!isSac && variance.expected_cartons !== null && (
               <>
                 <Figure
                   label={t("production.packagingVariance.field.expectedCartons")}
@@ -172,13 +184,19 @@ export function PackagingVariancePanel({
         {!hasWeightEcart && (
           <>
             <Figure
-              label={t("production.packagingVariance.field.countedPackets")}
+              label={t(
+                isSac
+                  ? "production.packagingVariance.field.countedSacs"
+                  : "production.packagingVariance.field.countedPackets",
+              )}
               value={formatQuantity(variance.counted_packets)}
             />
-            <Figure
-              label={t("production.packagingVariance.field.countedCartons")}
-              value={formatQuantity(variance.counted_cartons)}
-            />
+            {!isSac && (
+              <Figure
+                label={t("production.packagingVariance.field.countedCartons")}
+                value={formatQuantity(variance.counted_cartons)}
+              />
+            )}
           </>
         )}
         {hasMachineEcart && (
@@ -234,12 +252,18 @@ export function PackagingVariancePanel({
       <p className="flex items-center gap-1.5 border-t border-border/60 px-3 py-2 text-xs text-muted-foreground">
         <PackageSearch className="h-3.5 w-3.5 shrink-0" />
         {[
-          `${t("production.packagingVariance.basis.weight")} ${formatQuantity(variance.net_weight_grams, "g")}`,
-          `${t("production.packagingVariance.basis.perCarton")} ${
-            variance.packets_per_carton === null
-              ? t("production.packagingVariance.noCarton")
-              : formatQuantity(variance.packets_per_carton)
-          }`,
+          `${t(
+            isSac ? "production.packagingVariance.basis.sacWeight" : "production.packagingVariance.basis.weight",
+          )} ${formatQuantity(variance.net_weight_grams, "g")}`,
+          ...(isSac
+            ? []
+            : [
+                `${t("production.packagingVariance.basis.perCarton")} ${
+                  variance.packets_per_carton === null
+                    ? t("production.packagingVariance.noCarton")
+                    : formatQuantity(variance.packets_per_carton)
+                }`,
+              ]),
           `${t("production.packagingVariance.basis.tolerance")} ${variance.tolerance_percent} %`,
         ].join(" · ")}
       </p>

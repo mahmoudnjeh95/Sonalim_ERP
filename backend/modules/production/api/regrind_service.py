@@ -109,7 +109,9 @@ class ScrapService:
 
         rows = self._connection.execute(
             f"""
-            SELECT id, work_order_id, operation_step_id, scrap_type, product_id, quantity, is_reground, work_center_id, source_note
+            SELECT id, work_order_id, operation_step_id, scrap_type, product_id, quantity, is_reground, work_center_id, source_note,
+                   (SELECT rbi.regrind_batch_work_order_id FROM production.regrind_batch_inputs rbi
+                    WHERE rbi.scrap_record_id = scrap_records.id LIMIT 1)
             FROM production.scrap_records WHERE {' AND '.join(clauses)} ORDER BY created_at DESC
             """,
             params,
@@ -125,6 +127,7 @@ class ScrapService:
                 is_reground=r[6],
                 work_center_id=r[7],
                 source_note=r[8],
+                regrind_work_order_id=r[9],
             )
             for r in rows
         ]
@@ -545,6 +548,7 @@ class RegrindService:
             work_center_id=order_row[5],
             recipe_id=order_row[6],
             packaging_bom_id=order_row[7],
+            is_regrind=True,
         )
 
         # Joined through to the scrap records themselves (not just their ids) so

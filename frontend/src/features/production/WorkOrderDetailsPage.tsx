@@ -5,7 +5,6 @@ import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
-  CheckCheck,
   CheckCircle2,
   ClipboardList,
   Droplets,
@@ -33,6 +32,7 @@ import { PackagingVariancePanel } from "./PackagingVariancePanel";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { cn } from "../../lib/utils";
 import {
+  ACTIVE_CONSOLIDATIONS_QUERY_KEY,
   closeWorkOrder,
   getPreCloseCheck,
   getWorkOrderConsolidation,
@@ -49,6 +49,10 @@ import {
 } from "./api";
 import { DailyReportDialog } from "./DailyReportsTab";
 import { PackingReportDialog } from "./ConditionnementTab";
+import { ProductionFlow } from "./ProductionFlow";
+import { StageDetailsDialog } from "./StageDetailsDialog";
+import type { ProductionStepId } from "./productionSteps";
+import { useOfStageStates } from "./useOfStageStates";
 import {
   getDispositionSummary,
   listNonConformities,
@@ -86,7 +90,7 @@ export function WorkOrderDetailsPage() {
     queryFn: () => getWorkOrderConsolidation(token, workOrderId),
     enabled: Boolean(workOrderId),
   });
-  const { data: reports = [] } = useQuery({
+  const { data: reports = [], isLoading: reportsLoading } = useQuery({
     queryKey: ["production", "reports", "of", workOrderId],
     queryFn: () => listReports(token, { of_id: workOrderId }),
     enabled: Boolean(workOrderId),
@@ -131,6 +135,15 @@ export function WorkOrderDetailsPage() {
   });
   const regrindOutputProductId = regrindDefaults.find((d) => d.input_product_id === null)?.output_product_id ?? null;
 
+  const {
+    states: stageStates,
+    details: stageDetails,
+    isLoading: stagesLoading,
+  } = useOfStageStates(token, reports, order?.status ?? "planned");
+  // The stage whose popup is open. It lists the reports behind the stage's
+  // status; opening one of them swaps this popup for that report's dialog.
+  const [openStage, setOpenStage] = useState<ProductionStepId | null>(null);
+
   const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
   const [openQualityReport, setOpenQualityReport] = useState<QualityReport | null>(null);
   const [openNc, setOpenNc] = useState<NonConformity | null>(null);
@@ -141,6 +154,8 @@ export function WorkOrderDetailsPage() {
     for (const key of [
       ["production", "work-orders"],
       ["production", "of-consolidation", workOrderId],
+      // Start, suspend and close change which orders the cockpit counts as active.
+      ACTIVE_CONSOLIDATIONS_QUERY_KEY,
       ["production", "pre-close-check", workOrderId],
     ]) {
       queryClient.invalidateQueries({ queryKey: key });
@@ -338,6 +353,18 @@ export function WorkOrderDetailsPage() {
           {order.start_date ?? "—"}
           {order.closed_at ? ` → ${order.closed_at.slice(0, 10)}` : ""}
         </p>
+      </motion.div>
+
+      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24, ease: "easeOut" }}>
+        <Card>
+          <CardHeader>
+            <CardTitle>{t("production.flow.title")}</CardTitle>
+            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.flow.subtitle")}</p>
+          </CardHeader>
+          <CardContent>
+            <ProductionFlow states={stageStates} loading={reportsLoading || stagesLoading} onStepClick={setOpenStage} />
+          </CardContent>
+        </Card>
       </motion.div>
 
       {preClose && (preClose.blockers.length > 0 || preClose.warnings.length > 0) && (
@@ -681,6 +708,29 @@ export function WorkOrderDetailsPage() {
           </CardContent>
         </Card>
       </div>
+
+      <StageDetailsDialog
+        token={token}
+        orderId={workOrderId}
+        orderProduct={
+          orderProduct
+            ? { id: orderProduct.id, name: orderProduct.name, packets_per_carton: orderProduct.packets_per_carton }
+            : null
+        }
+        stepId={openStage}
+        state={openStage ? stageStates[openStage] : null}
+        details={stageDetails}
+        loading={stagesLoading}
+        products={products}
+        uoms={uoms}
+        locations={locations}
+        packetUnit={productUom}
+        onOpenReport={(report) => {
+          setOpenStage(null);
+          setOpenReport(report);
+        }}
+        onClose={() => setOpenStage(null)}
+      />
 
       {openReport &&
         (openReport.report_type === "daily" ? (

@@ -696,6 +696,15 @@ def send_ia_assistant_message(
     return reply
 
 
+@router.get("/work-orders/active-consolidations")
+def list_active_consolidations(
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> list[dict]:
+    """Consolidation of every ongoing or suspended OF, each with the teams that filed its validated reports."""
+    with get_connection() as connection:
+        return OfConsolidationService(connection).consolidate_active(tenant_id=tenant.tenant_id)
+
+
 @router.get("/work-orders/{work_order_id}/inputs")
 def list_work_order_inputs(
     work_order_id: str, tenant: TenantContext = Depends(require_permission("production.view_work_orders"))
@@ -1156,6 +1165,7 @@ def _serialize_work_order(order: WorkOrder) -> dict:
         "created_by": order.created_by,
         "closed_at": order.closed_at.isoformat() if order.closed_at is not None else None,
         "closed_by": order.closed_by,
+        "is_regrind": order.is_regrind,
     }
 
 
@@ -1568,6 +1578,7 @@ def _serialize_scrap(scrap: ScrapRecord) -> dict:
         "is_reground": scrap.is_reground,
         "work_center_id": scrap.work_center_id,
         "source_note": scrap.source_note,
+        "regrind_work_order_id": scrap.regrind_work_order_id,
     }
 
 

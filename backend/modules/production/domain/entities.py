@@ -41,6 +41,9 @@ class WorkOrder:
     created_by: str | None = None
     closed_at: datetime.datetime | None = None
     closed_by: str | None = None
+    # True for the OF a rebroyat run is built on (it has a production.regrind_batches
+    # row). Those are not production runs -- nobody files a daily report against one.
+    is_regrind: bool = False
 
 
 def transition(order: WorkOrder, new_status: str) -> Result[WorkOrder]:

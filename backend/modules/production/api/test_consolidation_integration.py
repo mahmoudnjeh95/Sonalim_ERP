@@ -467,6 +467,55 @@ def test_consolidation_works_while_the_of_is_still_running(db, env, of):
     assert result["raw_material"]["semolina_quantity"] == 1000
 
 
+# --- the cockpit's batch read -----------------------------------------------
+
+
+def _start(db, env, of) -> None:
+    started = WorkOrderService(db).start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=of.id)
+    assert isinstance(started, Ok), getattr(started, "message", "")
+
+
+def test_active_consolidations_match_the_single_order_read_and_name_the_teams(db, env, of):
+    _start(db, env, of)
+    service = ProductionReportService(db)
+    for day, team in ((1, "Équipe B"), (2, "Équipe A"), (3, "Équipe B")):
+        created = service.create_daily_report(
+            tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, day),
+            equipment_id=env["equipment"], shift="morning", team=team,
+            detail=DailyReportDetail(
+                semolina_lines=(SemolinaLine(product_id=env["product"], quantity=500, location_id=env["location"]),),
+                raw_material_location_id=env["location"],
+            ),
+        )
+        assert isinstance(created, Ok), getattr(created, "message", "")
+        report_id = created.value["report"].id
+        service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id)
+        validated = service.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id)
+        assert isinstance(validated, Ok), getattr(validated, "message", "")
+
+    batch = OfConsolidationService(db).consolidate_active(tenant_id=TENANT)
+
+    assert len(batch) == 1
+    assert batch[0]["teams"] == ["Équipe A", "Équipe B"]
+    assert {key: value for key, value in batch[0].items() if key != "teams"} == _consolidate(db, of)
+
+
+def test_active_consolidations_skip_orders_that_are_not_running(db, env, of):
+    # `of` is still planned: it has no place on the cockpit.
+    assert OfConsolidationService(db).consolidate_active(tenant_id=TENANT) == []
+
+    _start(db, env, of)
+    assert [entry["of_id"] for entry in OfConsolidationService(db).consolidate_active(tenant_id=TENANT)] == [of.id]
+
+
+def test_an_active_order_with_no_validated_reports_has_no_teams(db, env, of):
+    _start(db, env, of)
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), validate=False, semolina_quantity=500)
+
+    [entry] = OfConsolidationService(db).consolidate_active(tenant_id=TENANT)
+    assert entry["teams"] == []
+
+
 # --- quality comes from qc, through its service -----------------------------
 
 

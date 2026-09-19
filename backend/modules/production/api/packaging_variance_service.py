@@ -37,6 +37,7 @@ from ulid import ULID
 from core.api.service import CoreService
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.domain.packaging_estimate import (
     DEFAULT_TOLERANCE_PERCENT,
     compute_variance,
@@ -131,6 +132,18 @@ class PackagingVarianceService:
         if product is None:
             return None, None
         return product.net_weight_grams, product.packets_per_carton
+
+    def _packaging_format(self, *, tenant_id: str, product_id: str) -> str | None:
+        """'packet' / 'carton' / 'sac', so a screen can name the counted unit.
+
+        A sac is its own selling unit, so the panel must say "sacs", not "paquets".
+        `None` for a product nobody has classified yet -- the screen then falls back
+        to the generic packet wording rather than guessing.
+        """
+        classification = ProductClassificationService(self._connection).get_classification(
+            tenant_id, product_id
+        )
+        return classification.packaging_format if classification is not None else None
 
     def _daily_tonnage(
         self,
@@ -245,6 +258,7 @@ class PackagingVarianceService:
                 "of_id": of_id,
                 "of_reference": reference,
                 "product_id": product_id,
+                "packaging_format": self._packaging_format(tenant_id=tenant_id, product_id=product_id),
                 "report_date": report_date.isoformat(),
                 "report_status": report_status,
                 # A snapshot means the figures were frozen at validation; without
@@ -335,6 +349,7 @@ class PackagingVarianceService:
                 "of_id": of_id,
                 "of_reference": reference,
                 "product_id": product_id,
+                "packaging_format": self._packaging_format(tenant_id=tenant_id, product_id=product_id),
                 "report_count": report_count,
                 "parameters_varied": parameters_varied,
                 "quality_available": rejected["available"],
@@ -500,6 +515,7 @@ class PackagingVarianceService:
                 {
                     "scope": "product",
                     "product_id": product_id,
+                    "packaging_format": self._packaging_format(tenant_id=tenant_id, product_id=product_id),
                     "of_count": len(bucket["of_ids"]),
                     "report_count": len(bucket["reports"]),
                     "quality_available": quality_available,

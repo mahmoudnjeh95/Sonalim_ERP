@@ -23,6 +23,8 @@ class ScrapRecord:
     is_reground: bool
     work_center_id: str | None = None
     source_note: str | None = None
+    # The OFR (regrind order) that consumed this scrap; None while it is still available.
+    regrind_work_order_id: str | None = None
 
 
 def validate_scrap(

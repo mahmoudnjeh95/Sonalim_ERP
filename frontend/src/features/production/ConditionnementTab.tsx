@@ -35,7 +35,7 @@ import {
   toWasteLineForms,
   type WasteLineForm,
 } from "./WasteLinesField";
-import { DOWNTIME_MOTIFS } from "./DowntimeMotifSelect";
+import { DowntimeOptionField, downtimeLabel } from "./downtimeOptions";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
@@ -997,7 +997,7 @@ export function PackingReportDialog({
     {
       label: t("production.downtime.field.motif"),
       value: detail?.downtime_reason
-        ? t(`production.downtime.motif.${detail.downtime_reason}` as Parameters<typeof t>[0]) ?? detail.downtime_reason
+        ? downtimeLabel(t, "motif", detail.downtime_reason)
         : "—",
     },
     { label: t("production.downtime.field.note"), value: detail?.downtime_note ?? "—" },
@@ -1588,17 +1588,13 @@ function PackingDetailFields({
             <Label htmlFor="c_downtime_minutes">{t("production.reports.field.downtimeMinutes")} (min)</Label>
             <Input id="c_downtime_minutes" type="number" {...form.register("downtime_minutes")} />
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="c_downtime_reason">{t("production.downtime.field.motif")}</Label>
-            <Select id="c_downtime_reason" {...form.register("downtime_reason")}>
-              <option value="">—</option>
-              {DOWNTIME_MOTIFS.map((motif) => (
-                <option key={motif} value={motif}>
-                  {t(`production.downtime.motif.${motif}` as Parameters<typeof t>[0])}
-                </option>
-              ))}
-            </Select>
-          </div>
+          <DowntimeOptionField
+            id="c_downtime_reason"
+            field="motif"
+            registration={form.register("downtime_reason")}
+            current={form.watch("downtime_reason")}
+            onPick={(value) => form.setValue("downtime_reason", value, { shouldDirty: true })}
+          />
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="c_downtime_note">{t("production.downtime.field.note")}</Label>
             <Input id="c_downtime_note" placeholder={t("production.waste.notePlaceholder")} {...form.register("downtime_note")} />

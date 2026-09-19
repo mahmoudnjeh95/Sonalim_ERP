@@ -29,6 +29,7 @@ import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { BulkActionBar } from "../../components/patterns/BulkActionBar";
 import { useSelection } from "../../lib/useSelection";
 import { cn } from "../../lib/utils";
+import AllClearIllustration from "../../assets/illustrations/empty-states/empty-all-clear.svg?react";
 import { RecipeCheckPanel } from "./RecipeCheckPanel";
 import { PackagingVariancePanel } from "./PackagingVariancePanel";
 import {
@@ -357,6 +358,7 @@ export function ValidationCenterTab() {
           ) : grouped.length === 0 ? (
             <EmptyState
               icon={<Inbox className="h-5 w-5" />}
+              illustration={<AllClearIllustration className="h-44 w-56" />}
               title={t("production.validation.empty.title")}
               description={t("production.validation.empty.description")}
             />

@@ -5,14 +5,18 @@ import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContai
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
+import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
+import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listReportOptions, optionsFor, REPORT_OPTIONS_QUERY_KEY } from "../../lib/reportOptions";
 import { totalsByUomCategory, type QuantityByProduct } from "../../lib/units";
 import { listTeamPerformance, type PerformanceGrain, type TeamPerformanceRow } from "../production/api";
 import { listProducts, listUoms } from "../warehouse/api";
 import { listQualityTeamPerformance, type TeamConformityRow } from "../qc/api";
+import { AnalyticsErrorState, AnalyticsInlineError } from "./AnalyticsStates";
 
 const TEAM_PERFORMANCE_QUERY_KEY = ["production", "team-performance"] as const;
 const TEAM_CONFORMITY_QUERY_KEY = ["qc", "team-performance"] as const;
@@ -80,11 +84,20 @@ export function TeamPerformanceTab() {
   const { data: reportOptions = [] } = useQuery({ queryKey: REPORT_OPTIONS_QUERY_KEY, queryFn: () => listReportOptions(token) });
   const { data: products = [] } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
-  const { data: production = [], isLoading: loadingProduction } = useQuery({
+  const {
+    data: production = [],
+    isLoading: loadingProduction,
+    isError: productionFailed,
+    refetch: refetchProduction,
+  } = useQuery({
     queryKey: [...TEAM_PERFORMANCE_QUERY_KEY, grain, range.from, range.to],
     queryFn: () => listTeamPerformance(token, { grain, date_from: range.from, date_to: range.to }),
   });
-  const { data: conformity = [] } = useQuery({
+  const {
+    data: conformity = [],
+    isError: conformityFailed,
+    refetch: refetchConformity,
+  } = useQuery({
     queryKey: [...TEAM_CONFORMITY_QUERY_KEY, grain, range.from, range.to],
     queryFn: () => listQualityTeamPerformance(token, { grain, date_from: range.from, date_to: range.to }),
   });
@@ -214,6 +227,67 @@ export function TeamPerformanceTab() {
   const isLoading = loadingProduction;
   const hasData = teams.length > 0 && periods.length > 0;
 
+  const leaderboardColumns: ColumnDef<{ team: string; cell: MergedCell | null }>[] = [
+    {
+      key: "team",
+      header: t("production.teamPerformance.leaderboard.column.team"),
+      defaultWidth: 200,
+      cellClassName: "font-medium",
+      cell: ({ team }) => {
+        const index = teams.indexOf(team);
+        return (
+          <span className="inline-flex items-center gap-2">
+            <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: TEAM_COLORS[index % TEAM_COLORS.length] }} />
+            {team}
+          </span>
+        );
+      },
+      sortValue: ({ team }) => team,
+    },
+    {
+      key: "yield",
+      header: t("production.teamPerformance.leaderboard.column.yield"),
+      defaultWidth: 130,
+      cellClassName: "tabular-nums",
+      cell: ({ cell }) => {
+        const yieldPercent = cell ? ratio(cell.produced_quantity, cell.material_input_quantity) : null;
+        return yieldPercent === null ? t("production.teamPerformance.noData") : `${yieldPercent}%`;
+      },
+      sortValue: ({ cell }) => (cell ? (ratio(cell.produced_quantity, cell.material_input_quantity) ?? -1) : -1),
+    },
+    {
+      key: "downtime",
+      header: t("production.teamPerformance.leaderboard.column.downtime"),
+      defaultWidth: 130,
+      cellClassName: "tabular-nums",
+      cell: ({ cell }) => {
+        const downtimePercent = cell ? ratio(cell.downtime_minutes, cell.production_minutes + cell.downtime_minutes) : null;
+        return downtimePercent === null ? t("production.teamPerformance.noData") : `${downtimePercent}%`;
+      },
+      sortValue: ({ cell }) => (cell ? (ratio(cell.downtime_minutes, cell.production_minutes + cell.downtime_minutes) ?? -1) : -1),
+    },
+    {
+      key: "conformity",
+      header: t("production.teamPerformance.leaderboard.column.conformity"),
+      defaultWidth: 140,
+      cellClassName: "tabular-nums",
+      cell: ({ cell }) => {
+        const conformityPercent = cell ? ratio(cell.conforming_cartons, cell.conforming_cartons + cell.non_conforming_cartons) : null;
+        return conformityPercent === null ? t("production.teamPerformance.noData") : `${conformityPercent}%`;
+      },
+      sortValue: ({ cell }) => (cell ? (ratio(cell.conforming_cartons, cell.conforming_cartons + cell.non_conforming_cartons) ?? -1) : -1),
+    },
+    {
+      key: "reports",
+      header: t("production.teamPerformance.leaderboard.column.reports"),
+      defaultWidth: 120,
+      cellClassName: "tabular-nums",
+      cell: ({ cell }) => cell?.report_count ?? 0,
+      sortValue: ({ cell }) => cell?.report_count ?? 0,
+    },
+  ];
+  const leaderboardTable = useTableColumns("production.teamPerformance.leaderboard", leaderboardColumns);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -242,6 +316,14 @@ export function TeamPerformanceTab() {
 
       {isLoading ? (
         <div className="h-64 w-full animate-pulse rounded-lg bg-muted" />
+      ) : productionFailed ? (
+        <Card>
+          <AnalyticsErrorState
+            title={t("analytics.error.teamPerformance.title")}
+            impact={t("analytics.error.teamPerformance.impact")}
+            onRetry={() => void refetchProduction()}
+          />
+        </Card>
       ) : !hasData ? (
         <EmptyState
           icon={<Users className="h-5 w-5" />}
@@ -250,6 +332,13 @@ export function TeamPerformanceTab() {
         />
       ) : (
         <>
+          {conformityFailed && (
+            <AnalyticsInlineError
+              title={t("analytics.error.teamConformity.title")}
+              impact={t("analytics.error.teamConformity.impact")}
+              onRetry={() => void refetchConformity()}
+            />
+          )}
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
             <TeamChart
               icon={<Gauge className="h-4 w-4" />}
@@ -301,44 +390,46 @@ export function TeamPerformanceTab() {
           {leaderboard.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle>{t("production.teamPerformance.leaderboard.title")}</CardTitle>
-                <CardDescription>{latestPeriod}</CardDescription>
+                <div>
+                  <CardTitle>{t("production.teamPerformance.leaderboard.title")}</CardTitle>
+                  <CardDescription>{latestPeriod}</CardDescription>
+                </div>
+                <ColumnVisibilityMenu
+                  columns={leaderboardColumns}
+                  isVisible={leaderboardTable.isVisible}
+                  onToggle={leaderboardTable.toggleVisible}
+                  onReset={leaderboardTable.resetAll}
+                />
               </CardHeader>
-              <CardContent className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                      <th className="py-2 pr-4 font-medium">{t("production.teamPerformance.leaderboard.column.team")}</th>
-                      <th className="py-2 pr-4 font-medium">{t("production.teamPerformance.leaderboard.column.yield")}</th>
-                      <th className="py-2 pr-4 font-medium">{t("production.teamPerformance.leaderboard.column.downtime")}</th>
-                      <th className="py-2 pr-4 font-medium">{t("production.teamPerformance.leaderboard.column.conformity")}</th>
-                      <th className="py-2 font-medium">{t("production.teamPerformance.leaderboard.column.reports")}</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {leaderboard.map(({ team, cell }) => {
-                      const index = teams.indexOf(team);
-                      const yieldPercent = cell ? ratio(cell.produced_quantity, cell.material_input_quantity) : null;
-                      const downtimePercent = cell ? ratio(cell.downtime_minutes, cell.production_minutes + cell.downtime_minutes) : null;
-                      const conformityPercent = cell ? ratio(cell.conforming_cartons, cell.conforming_cartons + cell.non_conforming_cartons) : null;
-                      return (
-                        <tr key={team} className="border-b border-border/60 last:border-0">
-                          <td className="py-2 pr-4 font-medium">
-                            <span
-                              className="mr-2 inline-block h-2.5 w-2.5 rounded-full align-middle"
-                              style={{ backgroundColor: TEAM_COLORS[index % TEAM_COLORS.length] }}
-                            />
-                            {team}
-                          </td>
-                          <td className="py-2 pr-4 tabular-nums">{yieldPercent === null ? t("production.teamPerformance.noData") : `${yieldPercent}%`}</td>
-                          <td className="py-2 pr-4 tabular-nums">{downtimePercent === null ? t("production.teamPerformance.noData") : `${downtimePercent}%`}</td>
-                          <td className="py-2 pr-4 tabular-nums">{conformityPercent === null ? t("production.teamPerformance.noData") : `${conformityPercent}%`}</td>
-                          <td className="py-2 tabular-nums">{cell?.report_count ?? 0}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+              <CardContent className="p-0">
+                <Table colWidths={leaderboardTable.colWidths}>
+                  <TableHeader>
+                    <TableRow>
+                      {leaderboardTable.visibleColumns.map((column) => (
+                        <ResizableTableHead
+                          key={column.key}
+                          width={leaderboardTable.getWidth(column.key)}
+                          onResize={(width) => leaderboardTable.setWidth(column.key, width)}
+                          sortDirection={leaderboardTable.sortDirectionFor(column.key)}
+                          onSort={column.sortValue ? () => leaderboardTable.toggleSort(column.key) : undefined}
+                        >
+                          {column.header}
+                        </ResizableTableHead>
+                      ))}
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {leaderboardTable.sortRows(leaderboard).map(({ team, cell }) => (
+                      <TableRow key={team}>
+                        {leaderboardTable.visibleColumns.map((column) => (
+                          <TableCell key={column.key} className={column.cellClassName}>
+                            {column.cell({ team, cell })}
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
               </CardContent>
             </Card>
           )}

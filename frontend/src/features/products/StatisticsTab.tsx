@@ -5,9 +5,11 @@ import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
-import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from "../../components/ui/table";
+import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { cn } from "../../lib/utils";
 import { listProducts, listStock } from "../warehouse/api";
 
@@ -107,6 +109,35 @@ export function StatisticsTab() {
     .filter((row) => row.packagingKgPerTonne != null)
     .sort((a, b) => (b.packagingKgPerTonne ?? 0) - (a.packagingKgPerTonne ?? 0));
   const packagingChartRows = packagingRows.slice(0, 10).map((row) => ({ name: row.name, value: row.packagingKgPerTonne ?? 0 }));
+
+  const packagingColumns: ColumnDef<(typeof packagingRows)[number]>[] = [
+    { key: "product", header: t("products.statistics.packaging.table.product"), defaultWidth: 200, cellClassName: "font-medium", cell: (row) => row.name, sortValue: (row) => row.name },
+    { key: "family", header: t("products.statistics.packaging.table.family"), defaultWidth: 150, cellClassName: "text-muted-foreground", cell: (row) => row.family, sortValue: (row) => row.family },
+    { key: "type", header: t("products.statistics.packaging.table.type"), defaultWidth: 90, cell: (row) => row.type, sortValue: (row) => row.type },
+    { key: "netWeight", header: t("products.statistics.packaging.table.netWeight"), defaultWidth: 130, cell: (row) => formatNumber(row.netWeight, 0), sortValue: (row) => row.netWeight },
+    {
+      key: "sachetsPerTonne",
+      header: t("products.statistics.packaging.table.sachetsPerTonne"),
+      defaultWidth: 150,
+      cell: (row) => formatNumber(row.sachetsPerTonne, 0),
+      sortValue: (row) => row.sachetsPerTonne,
+    },
+    {
+      key: "palletsPerTonne",
+      header: t("products.statistics.packaging.table.palletsPerTonne"),
+      defaultWidth: 150,
+      cell: (row) => (row.palletsPerTonne != null ? formatNumber(row.palletsPerTonne, 2) : "—"),
+      sortValue: (row) => row.palletsPerTonne ?? 0,
+    },
+    {
+      key: "packagingPerTonne",
+      header: t("products.statistics.packaging.table.packagingPerTonne"),
+      defaultWidth: 160,
+      cell: (row) => (row.packagingKgPerTonne != null ? formatNumber(row.packagingKgPerTonne, 1) : "—"),
+      sortValue: (row) => row.packagingKgPerTonne ?? 0,
+    },
+  ];
+  const packagingTable = useTableColumns("products.statistics.packaging", packagingColumns);
 
   const attentionRows: { code: string; tone: "warning" | "destructive"; title: string; detail: string }[] = [
     ...(outOfStockProducts.length > 0
@@ -308,28 +339,38 @@ export function StatisticsTab() {
               </div>
 
               <div>
-                <Table>
+                <div className="mb-2 flex justify-end">
+                  <ColumnVisibilityMenu
+                    columns={packagingColumns}
+                    isVisible={packagingTable.isVisible}
+                    onToggle={packagingTable.toggleVisible}
+                    onReset={packagingTable.resetAll}
+                  />
+                </div>
+                <Table colWidths={packagingTable.colWidths}>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>{t("products.statistics.packaging.table.product")}</TableHead>
-                      <TableHead>{t("products.statistics.packaging.table.family")}</TableHead>
-                      <TableHead>{t("products.statistics.packaging.table.type")}</TableHead>
-                      <TableHead>{t("products.statistics.packaging.table.netWeight")}</TableHead>
-                      <TableHead>{t("products.statistics.packaging.table.sachetsPerTonne")}</TableHead>
-                      <TableHead>{t("products.statistics.packaging.table.palletsPerTonne")}</TableHead>
-                      <TableHead>{t("products.statistics.packaging.table.packagingPerTonne")}</TableHead>
+                      {packagingTable.visibleColumns.map((column) => (
+                        <ResizableTableHead
+                          key={column.key}
+                          width={packagingTable.getWidth(column.key)}
+                          onResize={(width) => packagingTable.setWidth(column.key, width)}
+                          sortDirection={packagingTable.sortDirectionFor(column.key)}
+                          onSort={column.sortValue ? () => packagingTable.toggleSort(column.key) : undefined}
+                        >
+                          {column.header}
+                        </ResizableTableHead>
+                      ))}
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {packagingRows.map((row) => (
+                    {packagingTable.sortRows(packagingRows).map((row) => (
                       <TableRow key={row.id}>
-                        <TableCell className="font-medium">{row.name}</TableCell>
-                        <TableCell className="text-muted-foreground">{row.family}</TableCell>
-                        <TableCell>{row.type}</TableCell>
-                        <TableCell>{formatNumber(row.netWeight, 0)}</TableCell>
-                        <TableCell>{formatNumber(row.sachetsPerTonne, 0)}</TableCell>
-                        <TableCell>{row.palletsPerTonne != null ? formatNumber(row.palletsPerTonne, 2) : "—"}</TableCell>
-                        <TableCell>{row.packagingKgPerTonne != null ? formatNumber(row.packagingKgPerTonne, 1) : "—"}</TableCell>
+                        {packagingTable.visibleColumns.map((column) => (
+                          <TableCell key={column.key} className={column.cellClassName}>
+                            {column.cell(row)}
+                          </TableCell>
+                        ))}
                       </TableRow>
                     ))}
                   </TableBody>

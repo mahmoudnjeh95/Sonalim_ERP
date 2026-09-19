@@ -1,8 +1,15 @@
 import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Beaker, Boxes, ClipboardCheck, ClipboardList, Disc3, Factory, LayoutDashboard, Lightbulb, NotebookPen, PackageCheck, Recycle, Settings, Tag } from "lucide-react";
+import { Boxes, Factory, LayoutDashboard, NotebookPen, Recycle, Settings, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { outlineIcon } from "../../components/patterns/outlineIcon";
 import { useI18n } from "../../lib/i18n";
+import ApprovalIcon from "../../assets/icons/quality/approval.svg?react";
+import ExtrusionIcon from "../../assets/icons/production/extrusion.svg?react";
+import LabIcon from "../../assets/icons/quality/lab.svg?react";
+import PackagingIcon from "../../assets/icons/production/packaging.svg?react";
+import PlanningIcon from "../../assets/icons/production/planning.svg?react";
+import WorkOrderIcon from "../../assets/icons/production/work-order.svg?react";
 import { WorkOrdersTab } from "./WorkOrdersTab";
 import { PlanningTab } from "./PlanningTab";
 import { PackagingBomsTab } from "./PackagingBomsTab";
@@ -19,15 +26,15 @@ import { ProductionSettingsTab } from "./ProductionSettingsTab";
 
 const TABS = [
   { value: "dashboard", labelKey: "production.tabs.dashboard", icon: LayoutDashboard, Component: ProductionDashboardTab },
-  { value: "work-orders", labelKey: "production.tabs.workOrders", icon: ClipboardList, Component: WorkOrdersTab },
-  { value: "planning", labelKey: "production.tabs.planning", icon: Lightbulb, Component: PlanningTab },
+  { value: "work-orders", labelKey: "production.tabs.workOrders", icon: outlineIcon(WorkOrderIcon), Component: WorkOrdersTab },
+  { value: "planning", labelKey: "production.tabs.planning", icon: outlineIcon(PlanningIcon), Component: PlanningTab },
   { value: "daily-reports", labelKey: "production.tabs.dailyReports", icon: NotebookPen, Component: DailyReportsTab },
-  { value: "conditionnement", labelKey: "production.tabs.conditionnement", icon: PackageCheck, Component: ConditionnementTab },
-  { value: "validation", labelKey: "production.tabs.validation", icon: ClipboardCheck, Component: ValidationCenterTab },
-  { value: "recipes", labelKey: "production.tabs.recipes", icon: Beaker, Component: RecipesTab },
+  { value: "conditionnement", labelKey: "production.tabs.conditionnement", icon: outlineIcon(PackagingIcon), Component: ConditionnementTab },
+  { value: "validation", labelKey: "production.tabs.validation", icon: outlineIcon(ApprovalIcon), Component: ValidationCenterTab },
+  { value: "recipes", labelKey: "production.tabs.recipes", icon: outlineIcon(LabIcon), Component: RecipesTab },
   { value: "regrind", labelKey: "production.tabs.regrind", icon: Recycle, Component: RegrindTab },
   { value: "work-centers", labelKey: "production.tabs.workCenters", icon: Factory, Component: WorkCentersTab },
-  { value: "molds", labelKey: "production.tabs.molds", icon: Disc3, Component: MoldsTab },
+  { value: "molds", labelKey: "production.tabs.molds", icon: outlineIcon(ExtrusionIcon), Component: MoldsTab },
   { value: "packaging-boms", labelKey: "production.tabs.packagingBoms", icon: Boxes, Component: PackagingBomsTab },
   { value: "classifications", labelKey: "production.tabs.classifications", icon: Tag, Component: ProductClassificationsTab },
   { value: "settings", labelKey: "production.tabs.settings", icon: Settings, Component: ProductionSettingsTab },

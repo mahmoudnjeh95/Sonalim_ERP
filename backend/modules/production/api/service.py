@@ -14,7 +14,8 @@ from modules.production.domain.entities import VALID_TRANSITIONS, WorkOrder, tra
 
 _WORK_ORDER_COLUMNS = """
     id, reference, product_id, planned_quantity, status, work_center_id, supervisor_id, recipe_id,
-    packaging_bom_id, start_date, product_type, notes, created_by, closed_at, closed_by
+    packaging_bom_id, start_date, product_type, notes, created_by, closed_at, closed_by,
+    EXISTS (SELECT 1 FROM production.regrind_batches rb WHERE rb.work_order_id = work_orders.id) AS is_regrind
 """
 
 
@@ -35,6 +36,7 @@ def _row_to_work_order(row: tuple) -> WorkOrder:
         created_by,
         closed_at,
         closed_by,
+        is_regrind,
     ) = row
     return WorkOrder(
         id=order_id,
@@ -52,6 +54,7 @@ def _row_to_work_order(row: tuple) -> WorkOrder:
         created_by=created_by,
         closed_at=closed_at,
         closed_by=closed_by,
+        is_regrind=is_regrind,
     )
 
 

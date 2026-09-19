@@ -1,10 +1,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowDown, ArrowUp, CalendarClock, Plus, Recycle, RotateCcw, Trash2, Users } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarClock, OctagonPause, Plus, Recycle, RotateCcw, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -26,6 +27,7 @@ import {
 } from "../../lib/reportOptions";
 import { listProducts, listRegrindDefaults, setRegrindDefault } from "./api";
 import { listFollowUpPolicies, setFollowUpPolicy } from "../qc/api";
+import { DOWNTIME_OPTION_KIND } from "./downtimeOptions";
 
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const REGRIND_DEFAULTS_QUERY_KEY = ["production", "regrind-defaults"] as const;
@@ -53,6 +55,23 @@ export function ProductionSettingsTab() {
         <RegrindDefaultsCard />
         <FollowUpPolicyCard />
       </div>
+      {/*
+        The arrêt vocabulary. The built-in values ship with the app; these lists
+        are the plant's own additions, offered beside them on every arrêt line.
+      */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+        {(["type", "classification", "motif"] as const).map((field) => (
+          <OptionListCard
+            key={field}
+            kind={DOWNTIME_OPTION_KIND[field]}
+            icon={OctagonPause}
+            title={t(`production.settings.downtime.${field}.title` as TranslationKey)}
+            description={t("production.settings.downtime.description")}
+            placeholder={t(`production.settings.downtime.${field}.placeholder` as TranslationKey)}
+            emptyDescription={t("production.settings.downtime.empty")}
+          />
+        ))}
+      </div>
     </div>
   );
 }
@@ -62,10 +81,17 @@ function OptionListCard({
   kind,
   title,
   description,
+  icon: Icon = Users,
+  placeholder,
+  emptyDescription,
 }: {
   kind: ReportOptionKind;
   title: string;
   description: string;
+  icon?: LucideIcon;
+  placeholder?: string;
+  /** For lists that start non-empty in effect, where "leave it blank" would be wrong. */
+  emptyDescription?: string;
 }) {
   const { session } = useAuth();
   const { t } = useI18n();
@@ -148,7 +174,7 @@ function OptionListCard({
     <Card>
       <CardHeader>
         <CardTitle className="flex items-center gap-1.5 text-base">
-          <Users className="h-4 w-4" />
+          <Icon className="h-4 w-4" />
           {title}
         </CardTitle>
         <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
@@ -158,9 +184,9 @@ function OptionListCard({
           <Skeleton className="h-24 w-full" />
         ) : mine.length === 0 ? (
           <EmptyState
-            icon={<Users className="h-5 w-5" />}
+            icon={<Icon className="h-5 w-5" />}
             title={t("production.settings.options.empty.title")}
-            description={t("production.settings.options.empty.description")}
+            description={emptyDescription ?? t("production.settings.options.empty.description")}
           />
         ) : (
           <ul className="divide-y divide-border rounded-lg border border-border">
@@ -238,7 +264,7 @@ function OptionListCard({
           <Input
             value={newLabel}
             onChange={(event) => setNewLabel(event.target.value)}
-            placeholder={t("production.settings.options.newPlaceholder")}
+            placeholder={placeholder ?? t("production.settings.options.newPlaceholder")}
           />
           <Button type="submit" size="sm" disabled={!newLabel.trim() || createMutation.isPending}>
             <Plus className="h-3.5 w-3.5" />

@@ -1,17 +1,19 @@
-import { useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
+import { rowEnterProps } from "../../components/motion/rowMotion";
 import { AlertTriangle, CheckCircle2, Recycle, Plus, Scale, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { currentLocale, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { listReportOptions, optionsFor } from "../../lib/reportOptions";
-import { productUnit, productRequiresIntegerQuantity } from "../../lib/units";
+import { formatQuantity, productKgRatio, productUnit, productRequiresIntegerQuantity } from "../../lib/units";
+import { formatWeightKg, fromKg, useWeightUnit } from "../../lib/weightUnit";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -33,10 +35,12 @@ import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
+import { GroupHeaderRow } from "../../components/patterns/GroupHeaderRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { useSelection } from "../../lib/useSelection";
+import { groupRows, type GroupSpec } from "../../lib/groupRows";
 import { useScrapTypeLabels } from "../../lib/scrapTypes";
 import { BulkActionBar } from "../../components/patterns/BulkActionBar";
 import {
@@ -96,6 +100,7 @@ const REGRIND_DEFAULTS_QUERY_KEY = ["production", "regrind-defaults"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const REPORT_OPTIONS_QUERY_KEY = ["core", "report-options"] as const;
 type RegrindFilter = "all" | "available" | "reground";
+type GroupByOption = "none" | "of";
 
 const REGRIND_STAGE_VARIANT: Record<RegrindStage, "default" | "warning" | "success" | "accent" | "destructive"> = {
   new: "default",
@@ -104,10 +109,6 @@ const REGRIND_STAGE_VARIANT: Record<RegrindStage, "default" | "warning" | "succe
   suspended: "accent",
   cancelled: "destructive",
 };
-
-function formatKg(value: number) {
-  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 2 }).format(value);
-}
 
 export function RegrindTab() {
   const { session, hasPermission } = useAuth();
@@ -120,6 +121,13 @@ export function RegrindTab() {
   const [selectedScrapIds, setSelectedScrapIds] = useState<string[]>([]);
   const [regrindFilter, setRegrindFilter] = useState<RegrindFilter>("all");
   const [sourceUncertain, setSourceUncertain] = useState(false);
+  // Only chooses how weights are shown; the stored figures never change.
+  const [weightUnit, setWeightUnit] = useWeightUnit();
+  // Grouped by source OF by default, like the report lists: every OFR that
+  // consumed scrap from an OF sits under that OF instead of repeating it per row.
+  const [groupBy, setGroupBy] = useState<GroupByOption>("of");
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
+  const collapseInitializedFor = useRef<GroupByOption | null>(null);
 
   const { data: scrapRecords = [], isLoading } = useQuery({ queryKey: SCRAP_QUERY_KEY, queryFn: () => listScrapRecords(token) });
   const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
@@ -136,8 +144,18 @@ export function RegrindTab() {
   const { data: reportOptions = [] } = useQuery({ queryKey: REPORT_OPTIONS_QUERY_KEY, queryFn: () => listReportOptions(token) });
   const teamOptions = optionsFor(reportOptions, "team");
   const canAssign = hasPermission("production.assign_regrind");
+  // A batch's quantities are in its output product's own unit (tonnes for
+  // rebroyat), not a fixed kg, so the view converts through that unit's ratio.
+  const kgPerUnit = (productId: string | null | undefined): number | null => productKgRatio(productId, products, uoms);
+  // Not a weight unit (or not loaded yet): show the number as stored, unconverted.
+  const weightText = (productId: string | null | undefined, quantity: number) => {
+    const ratio = kgPerUnit(productId);
+    return ratio === null ? formatQuantity(quantity) : formatWeightKg(quantity * ratio, weightUnit);
+  };
   const productName = (productId: string | null) => (productId ? products.find((p) => p.id === productId)?.name ?? productId : "—");
   const workOrderRef = (workOrderId: string) => workOrders.find((wo) => wo.id === workOrderId)?.reference ?? workOrderId;
+  // The OFR that consumed a scrap record — null while it is still available.
+  const regrindOrderRef = (scrap: ScrapRecord) => (scrap.regrind_work_order_id ? workOrderRef(scrap.regrind_work_order_id) : null);
 
   const scrapForm = useForm<ScrapForm>({ resolver: zodResolver(scrapSchema), defaultValues: { scrap_type: "cutting" } });
 
@@ -251,7 +269,7 @@ export function RegrindTab() {
       setSelectedScrapIds([]);
       batchForm.reset();
       toast.success(t("production.regrind.batchCreated"), {
-        description: `${productName(batch.work_order.product_id)} · ${t("production.regrind.inputTotal")}: ${formatKg(batch.input_quantity_total)} KG`,
+        description: `${productName(batch.work_order.product_id)} · ${t("production.regrind.inputTotal")}: ${weightText(batch.work_order.product_id, batch.input_quantity_total)} ${weightUnit}`,
       });
     },
     onError: (error) => toast.error(t("production.regrind.createBatchError"), { description: error instanceof ApiError ? error.message : undefined }),
@@ -268,7 +286,7 @@ export function RegrindTab() {
   const regroundCount = scrapRecords.filter((s) => s.is_reground).length;
   // Only a finished batch has a measured écart — a batch still new or assigned
   // has not been weighed yet, so it contributes nothing to the total.
-  const totalLoss = regrindBatches.reduce((sum, b) => sum + (b.loss_quantity ?? 0), 0);
+  const totalLossKg = regrindBatches.reduce((sum, b) => sum + (b.loss_quantity ?? 0) * (kgPerUnit(b.output_product_id) ?? 0), 0);
   const regrindFilteredRecords =
     regrindFilter === "all"
       ? scrapRecords
@@ -285,6 +303,7 @@ export function RegrindTab() {
 
   const columnFilterFields: FilterField<ScrapRecord>[] = [
     { key: "work_order_id", kind: "text", getValue: (s) => (s.work_order_id ? workOrderRef(s.work_order_id) : s.source_note) },
+    { key: "regrind_work_order_id", kind: "text", getValue: (s) => regrindOrderRef(s) },
     { key: "scrap_type", kind: "text", getValue: (s) => scrapTypeLabel(s) },
     { key: "product_id", kind: "text", getValue: (s) => productName(s.product_id) },
     { key: "quantity", kind: "range", getValue: (s) => s.quantity },
@@ -330,6 +349,28 @@ export function RegrindTab() {
         placeholder: t("production.regrind.column.workOrder"),
       },
       sortValue: (scrap) => (scrap.work_order_id ? workOrderRef(scrap.work_order_id) : scrap.source_note ?? null),
+    },
+    {
+      key: "regrind_work_order_id",
+      header: t("production.regrind.column.regrindOrder"),
+      defaultWidth: 180,
+      cell: (scrap) => {
+        const label = regrindOrderRef(scrap);
+        return label ? (
+          <span className="block truncate font-medium" title={label}>
+            {label}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        );
+      },
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.regrind_work_order_id ?? "",
+        onChange: (v) => columnFilters.setTextValue("regrind_work_order_id", v),
+        placeholder: t("production.regrind.column.regrindOrder"),
+      },
+      sortValue: (scrap) => regrindOrderRef(scrap),
     },
     {
       key: "line",
@@ -398,6 +439,36 @@ export function RegrindTab() {
   const scrapTable = useTableColumns("production.regrind.scrap", scrapColumns);
   const sortedScrapRecords = scrapTable.sortRows(filteredScrapRecords);
 
+  function toggleGroup(key: string) {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  // Scrap of uncertain origin has no source OF — it all lands in one group.
+  const groupSpec: GroupSpec<ScrapRecord> | undefined =
+    groupBy === "none"
+      ? undefined
+      : {
+          key: "of",
+          label: t("production.reports.groupBy.of"),
+          getGroupKey: (s) => s.work_order_id ?? "",
+          getGroupLabel: (s) => (s.work_order_id ? workOrderRef(s.work_order_id) : t("common.none")),
+        };
+  const scrapGroups = groupRows(sortedScrapRecords, groupSpec);
+
+  // Only the first group starts open; re-collapse the rest each time the
+  // grouping changes rather than only on first mount.
+  useEffect(() => {
+    if (groupBy === "none" || scrapGroups.length === 0) return;
+    if (collapseInitializedFor.current === groupBy) return;
+    collapseInitializedFor.current = groupBy;
+    setCollapsedGroups(new Set(scrapGroups.slice(1).map((g) => g.key)));
+  }, [groupBy, scrapGroups]);
+
   const batchColumns: ColumnDef<RegrindBatchSummary>[] = [
     ...(canAssign
       ? [
@@ -432,28 +503,28 @@ export function RegrindTab() {
     },
     {
       key: "outputQuantity",
-      header: t("production.regrind.batches.column.outputQuantity"),
+      header: `${t("production.regrind.batches.column.outputQuantity")} (${weightUnit})`,
       defaultWidth: 160,
       cell: (batch) =>
         batch.actual_output_quantity !== null ? (
-          <span className="tabular-nums text-muted-foreground">{formatKg(batch.actual_output_quantity)}</span>
+          <span className="tabular-nums text-muted-foreground">{weightText(batch.output_product_id, batch.actual_output_quantity)}</span>
         ) : (
           <span className="tabular-nums text-muted-foreground">
-            {formatKg(batch.output_quantity)} <span className="text-xs italic">({t("production.regrind.batches.estimated")})</span>
+            {weightText(batch.output_product_id, batch.output_quantity)} <span className="text-xs italic">({t("production.regrind.batches.estimated")})</span>
           </span>
         ),
       sortValue: (batch) => batch.actual_output_quantity ?? batch.output_quantity,
     },
     {
       key: "inputTotal",
-      header: t("production.regrind.batches.column.inputTotal"),
+      header: `${t("production.regrind.batches.column.inputTotal")} (${weightUnit})`,
       defaultWidth: 140,
-      cell: (batch) => <span className="tabular-nums text-muted-foreground">{formatKg(batch.input_quantity_total)}</span>,
+      cell: (batch) => <span className="tabular-nums text-muted-foreground">{weightText(batch.output_product_id, batch.input_quantity_total)}</span>,
       sortValue: (batch) => batch.input_quantity_total,
     },
     {
       key: "loss",
-      header: t("production.regrind.batches.column.loss"),
+      header: `${t("production.regrind.batches.column.loss")} (${weightUnit})`,
       defaultWidth: 150,
       // Only known once the batch is finished — before that there is nothing to
       // highlight yet, only a plan. An écart of any size, once measured, is
@@ -466,10 +537,10 @@ export function RegrindTab() {
         ) : Math.abs(batch.loss_quantity) > 0.01 ? (
           <span className="inline-flex items-center gap-1 font-medium text-destructive">
             <AlertTriangle className="h-3.5 w-3.5" />
-            <span className="tabular-nums">{formatKg(batch.loss_quantity)}</span>
+            <span className="tabular-nums">{weightText(batch.output_product_id, batch.loss_quantity)}</span>
           </span>
         ) : (
-          <span className="tabular-nums text-muted-foreground">{formatKg(batch.loss_quantity)}</span>
+          <span className="tabular-nums text-muted-foreground">{weightText(batch.output_product_id, batch.loss_quantity)}</span>
         ),
       sortValue: (batch) => batch.loss_quantity ?? Number.NEGATIVE_INFINITY,
     },
@@ -640,9 +711,9 @@ export function RegrindTab() {
         <StatCard label={t("production.regrind.stat.available")} value={availableCount} icon={<Trash2 className="h-5 w-5" />} accent="warning" />
         <StatCard label={t("production.regrind.stat.reground")} value={regroundCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
         <StatCard
-          label={t("production.regrind.stat.totalLoss")}
-          value={totalLoss}
-          decimals={2}
+          label={`${t("production.regrind.stat.totalLossLabel")} (${weightUnit})`}
+          value={fromKg(totalLossKg, weightUnit)}
+          decimals={weightUnit === "t" ? 5 : 2}
           icon={<Scale className="h-5 w-5" />}
           accent="destructive"
         />
@@ -664,6 +735,17 @@ export function RegrindTab() {
                 { value: "reground", label: t("production.regrind.reground") },
               ]}
             />
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{t("production.reports.groupBy.label")}:</span>
+              <FilterTabs
+                value={groupBy}
+                onChange={setGroupBy}
+                options={[
+                  { value: "none", label: t("production.reports.groupBy.none") },
+                  { value: "of", label: t("production.reports.groupBy.of") },
+                ]}
+              />
+            </div>
             {columnFilters.isActive && (
               <Button variant="ghost" size="sm" onClick={columnFilters.reset}>
                 {t("common.clearFilters")}
@@ -937,22 +1019,43 @@ export function RegrindTab() {
                 </TableRow>
               )}
               <AnimatePresence initial={false}>
-                {sortedScrapRecords.map((scrap, i) => (
-                  <motion.tr
-                    key={scrap.id}
-                    layout
-                    initial={{ opacity: 0, y: 8 }}
-                    animate={{ opacity: 1, y: 0, transition: { delay: Math.min(i * 0.04, 0.3) } }}
-                    exit={{ opacity: 0 }}
-                    className="border-b border-border last:border-0 hover:bg-muted/50"
-                  >
-                    {scrapTable.visibleColumns.map((column) => (
-                      <TableCell key={column.key} className={column.cellClassName}>
-                        {column.cell(scrap)}
-                      </TableCell>
-                    ))}
-                  </motion.tr>
-                ))}
+                {(() => {
+                  let rowIndex = 0;
+                  return scrapGroups.flatMap((group) => {
+                    const collapsed = groupSpec !== undefined && collapsedGroups.has(group.key);
+                    const rows: ReactNode[] = [];
+                    if (groupSpec) {
+                      rows.push(
+                        <GroupHeaderRow
+                          key={`group-${group.key}`}
+                          label={group.label}
+                          count={group.rows.length}
+                          collapsed={collapsed}
+                          onToggle={() => toggleGroup(group.key)}
+                          colSpan={scrapTable.visibleColumns.length}
+                        />,
+                      );
+                    }
+                    if (!collapsed) {
+                      for (const scrap of group.rows) {
+                        rows.push(
+                          <motion.tr
+                            key={scrap.id}
+                            {...rowEnterProps(rowIndex++)}
+                            className="border-b border-border last:border-0 hover:bg-muted/50"
+                          >
+                            {scrapTable.visibleColumns.map((column) => (
+                              <TableCell key={column.key} className={column.cellClassName}>
+                                {column.cell(scrap)}
+                              </TableCell>
+                            ))}
+                          </motion.tr>,
+                        );
+                      }
+                    }
+                    return rows;
+                  });
+                })()}
               </AnimatePresence>
             </TableBody>
           </Table>
@@ -965,6 +1068,17 @@ export function RegrindTab() {
             <div>
               <CardTitle>{t("production.regrind.batches.title")}</CardTitle>
               <p className="mt-0.5 text-sm text-muted-foreground">{t("production.regrind.batches.subtitle")}</p>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs font-medium text-muted-foreground">{t("production.regrind.unit.label")}:</span>
+              <FilterTabs
+                value={weightUnit}
+                onChange={setWeightUnit}
+                options={[
+                  { value: "kg", label: t("production.regrind.unit.kg") },
+                  { value: "t", label: t("production.regrind.unit.tonne") },
+                ]}
+              />
             </div>
             <ColumnVisibilityMenu
               columns={batchColumns}
@@ -1001,7 +1115,7 @@ export function RegrindTab() {
                       .map((batch) => (
                         <div key={batch.work_order_id} className="flex items-center justify-between gap-2 text-sm">
                           <span className="font-medium">{productName(batch.output_product_id)}</span>
-                          <span className="tabular-nums text-muted-foreground">{formatKg(batch.output_quantity)} KG</span>
+                          <span className="tabular-nums text-muted-foreground">{weightText(batch.output_product_id, batch.output_quantity)} {weightUnit}</span>
                         </div>
                       ))}
                   </div>

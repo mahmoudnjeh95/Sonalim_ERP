@@ -1,0 +1,35 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 200" fill="none" stroke-linecap="round" stroke-linejoin="round">
+<style>
+  .vcl-float{animation:vclFloat 4s ease-in-out infinite}
+  .vcl-halo{transform-box:fill-box;transform-origin:center;animation:vclHalo 4s ease-in-out infinite}
+  .vcl-ripple{transform-box:fill-box;transform-origin:center;animation:vclRipple 3s ease-out infinite}
+  .vcl-check{stroke-dasharray:1;animation:vclCheck 5s ease-in-out infinite}
+  .vcl-star{transform-box:fill-box;transform-origin:center;animation:vclTwinkle 2.6s ease-in-out infinite}
+  .vcl-star.b{animation-delay:.9s}
+  .vcl-star.c{animation-delay:1.7s}
+  @keyframes vclFloat{0%,100%{transform:translateY(0)}50%{transform:translateY(-5px)}}
+  @keyframes vclHalo{0%,100%{transform:scale(1);opacity:.06}50%{transform:scale(1.06);opacity:.1}}
+  @keyframes vclRipple{0%{transform:scale(1);opacity:.5}80%,100%{transform:scale(1.9);opacity:0}}
+  @keyframes vclCheck{0%{stroke-dashoffset:1;opacity:1}20%,84%{stroke-dashoffset:0;opacity:1}100%{stroke-dashoffset:0;opacity:0}}
+  @keyframes vclTwinkle{0%,100%{transform:scale(.4);opacity:.15}50%{transform:scale(1);opacity:1}}
+  @media(prefers-reduced-motion:reduce){
+    .vcl-float,.vcl-halo,.vcl-ripple,.vcl-check,.vcl-star{animation:none}
+    .vcl-check{stroke-dashoffset:0}
+    .vcl-ripple{opacity:0}
+    .vcl-star{opacity:.7;transform:scale(.8)}
+  }
+</style>
+<circle class="vcl-halo" cx="120" cy="100" r="72" fill="#123B6D" opacity=".06"/>
+<ellipse cx="120" cy="170" rx="34" ry="5" fill="#123B6D" opacity=".08"/>
+<g class="vcl-float">
+  <rect x="84" y="48" width="72" height="92" rx="10" fill="#FFFFFF" stroke="#123B6D" stroke-width="4"/>
+  <rect x="104" y="40" width="32" height="16" rx="6" fill="#123B6D"/>
+  <circle cx="120" cy="84" r="17" fill="#F5A900" fill-opacity=".14"/>
+  <circle class="vcl-ripple" cx="120" cy="84" r="17" stroke="#F5A900" stroke-width="2"/>
+  <path class="vcl-check" pathLength="1" d="m111 84 6 6 12-13" stroke="#F5A900" stroke-width="5"/>
+  <path d="M98 114h44M98 126h26" stroke="#C9D6E4" stroke-width="4"/>
+</g>
+<g transform="translate(58 62)"><path class="vcl-star" d="M0-7 1.8-1.8 7 0 1.8 1.8 0 7-1.8 1.8-7 0-1.8-1.8Z" fill="#F5A900"/></g>
+<g transform="translate(184 76)"><path class="vcl-star b" d="M0-6 1.5-1.5 6 0 1.5 1.5 0 6-1.5 1.5-6 0-1.5-1.5Z" fill="#123B6D"/></g>
+<g transform="translate(172 150)"><path class="vcl-star c" d="M0-5 1.2-1.2 5 0 1.2 1.2 0 5-1.2 1.2-5 0-1.2-1.2Z" fill="#F5A900"/></g>
+</svg>

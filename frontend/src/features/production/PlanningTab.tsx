@@ -5,14 +5,15 @@ import { AlertTriangle, Factory, Lightbulb } from "lucide-react";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { formatQuantity } from "../../lib/units";
-import { cn } from "../../lib/utils";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from "../../components/ui/table";
+import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
+import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
+import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listOrders } from "../sales/api";
 import { listOpportunities } from "../crm/opportunities/api";
 import { listStock, listLocations, listUoms } from "../warehouse/api";
@@ -71,6 +72,112 @@ export function PlanningTab() {
 
   const isLoading = loadingOrders;
 
+  const columns: ColumnDef<ProductionSuggestion>[] = [
+    {
+      key: "product",
+      header: t("production.planning.column.product"),
+      defaultWidth: 180,
+      cellClassName: "font-medium",
+      cell: (suggestion) => productName(suggestion.product_id),
+      sortValue: (suggestion) => productName(suggestion.product_id),
+    },
+    {
+      key: "demand",
+      header: t("production.planning.column.demand"),
+      defaultWidth: 130,
+      cellClassName: "tabular-nums",
+      cell: (suggestion) => formatQuantity(suggestion.demandQty, productUnitLabel(suggestion.product_id)),
+      sortValue: (suggestion) => suggestion.demandQty,
+    },
+    {
+      key: "available",
+      header: t("production.planning.column.available"),
+      defaultWidth: 130,
+      cellClassName: "tabular-nums text-muted-foreground",
+      cell: (suggestion) => formatQuantity(suggestion.availableQty, productUnitLabel(suggestion.product_id)),
+      sortValue: (suggestion) => suggestion.availableQty,
+    },
+    {
+      key: "plannedOf",
+      header: t("production.planning.column.plannedOf"),
+      defaultWidth: 130,
+      cellClassName: "tabular-nums text-muted-foreground",
+      cell: (suggestion) => formatQuantity(suggestion.openOfQty, productUnitLabel(suggestion.product_id)),
+      sortValue: (suggestion) => suggestion.openOfQty,
+    },
+    {
+      key: "shortfall",
+      header: t("production.planning.column.shortfall"),
+      defaultWidth: 130,
+      cellClassName: "font-medium tabular-nums text-destructive",
+      cell: (suggestion) => formatQuantity(suggestion.shortfallQty, productUnitLabel(suggestion.product_id)),
+      sortValue: (suggestion) => suggestion.shortfallQty,
+    },
+    {
+      key: "shipDate",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("production.planning.column.shipDate")}
+          <HelpTooltip text={t("production.planning.subtitle")} />
+        </span>
+      ),
+      defaultWidth: 180,
+      cell: (suggestion) => {
+        const daysAway = suggestion.earliestShipDate ? daysUntil(suggestion.earliestShipDate) : null;
+        const isOverdue = daysAway !== null && daysAway < 0;
+        const isDueSoon = daysAway !== null && daysAway >= 0 && daysAway <= DUE_SOON_DAYS;
+        return suggestion.earliestShipDate ? (
+          <span className="flex items-center gap-1.5">
+            {new Date(suggestion.earliestShipDate).toLocaleDateString(currentLocale())}
+            {(isOverdue || isDueSoon) && (
+              <Badge variant={isOverdue ? "destructive" : "warning"}>
+                <AlertTriangle className="h-3 w-3" />
+                {isOverdue ? t("production.planning.urgency.overdue") : t("production.planning.urgency.dueSoon")}
+              </Badge>
+            )}
+          </span>
+        ) : (
+          <span className="text-muted-foreground">{t("production.planning.noShipDate")}</span>
+        );
+      },
+      sortValue: (suggestion) => suggestion.earliestShipDate ?? "",
+    },
+    {
+      key: "deals",
+      header: t("production.planning.column.deals"),
+      defaultWidth: 220,
+      cellClassName: "max-w-[220px] truncate text-muted-foreground",
+      cell: (suggestion) => (
+        <span title={partnerNames(suggestion).join(", ")}>
+          {suggestion.contributingOrders.length} · {partnerNames(suggestion).join(", ")}
+        </span>
+      ),
+    },
+    {
+      key: "action",
+      header: t("production.planning.column.action"),
+      defaultWidth: 140,
+      alwaysVisible: true,
+      headerClassName: "text-right",
+      cellClassName: "text-right",
+      cell: (suggestion) => (
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={!canManageWorkOrders}
+          title={canManageWorkOrders ? undefined : t("production.planning.createOf")}
+          onClick={() => setSelectedSuggestion(suggestion)}
+        >
+          <Factory className="h-3.5 w-3.5" />
+          {t("production.planning.createOf")}
+        </Button>
+      ),
+    },
+  ];
+  const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
+    useTableColumns("production.planning", columns);
+  const sortedSuggestions = sortRows(suggestions);
+
   return (
     <div className="space-y-6">
       <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
@@ -84,38 +191,38 @@ export function PlanningTab() {
             <Lightbulb className="h-4 w-4" />
             {t("production.planning.title")}
           </CardTitle>
+          <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
         </CardHeader>
         <CardContent className="p-0">
-          <Table>
+          <Table colWidths={colWidths}>
             <TableHeader>
               <TableRow>
-                <TableHead>{t("production.planning.column.product")}</TableHead>
-                <TableHead>{t("production.planning.column.demand")}</TableHead>
-                <TableHead>{t("production.planning.column.available")}</TableHead>
-                <TableHead>{t("production.planning.column.plannedOf")}</TableHead>
-                <TableHead>{t("production.planning.column.shortfall")}</TableHead>
-                <TableHead>
-                  <span className="inline-flex items-center gap-1">
-                    {t("production.planning.column.shipDate")}
-                    <HelpTooltip text={t("production.planning.subtitle")} />
-                  </span>
-                </TableHead>
-                <TableHead>{t("production.planning.column.deals")}</TableHead>
-                <TableHead className="text-right">{t("production.planning.column.action")}</TableHead>
+                {visibleColumns.map((column) => (
+                  <ResizableTableHead
+                    key={column.key}
+                    width={getWidth(column.key)}
+                    onResize={(width) => setWidth(column.key, width)}
+                    className={column.headerClassName}
+                    sortDirection={sortDirectionFor(column.key)}
+                    onSort={column.sortValue ? () => toggleSort(column.key) : undefined}
+                  >
+                    {column.header}
+                  </ResizableTableHead>
+                ))}
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading &&
                 Array.from({ length: 3 }).map((_, i) => (
                   <TableRow key={i}>
-                    <TableCell colSpan={8}>
+                    <TableCell colSpan={visibleColumns.length}>
                       <Skeleton className="h-5 w-full" />
                     </TableCell>
                   </TableRow>
                 ))}
               {!isLoading && suggestions.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={8} className="p-0">
+                  <TableCell colSpan={visibleColumns.length} className="p-0">
                     <EmptyState
                       icon={<Factory className="h-5 w-5" />}
                       title={t("production.planning.empty.title")}
@@ -124,56 +231,15 @@ export function PlanningTab() {
                   </TableCell>
                 </TableRow>
               )}
-              {suggestions.map((suggestion) => {
-                const unit = productUnitLabel(suggestion.product_id);
-                const daysAway = suggestion.earliestShipDate ? daysUntil(suggestion.earliestShipDate) : null;
-                const isOverdue = daysAway !== null && daysAway < 0;
-                const isDueSoon = daysAway !== null && daysAway >= 0 && daysAway <= DUE_SOON_DAYS;
-                return (
-                  <TableRow key={suggestion.product_id}>
-                    <TableCell className="font-medium">{productName(suggestion.product_id)}</TableCell>
-                    <TableCell className="tabular-nums">{formatQuantity(suggestion.demandQty, unit)}</TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">{formatQuantity(suggestion.availableQty, unit)}</TableCell>
-                    <TableCell className="tabular-nums text-muted-foreground">{formatQuantity(suggestion.openOfQty, unit)}</TableCell>
-                    <TableCell className="font-medium tabular-nums text-destructive">
-                      {formatQuantity(suggestion.shortfallQty, unit)}
+              {sortedSuggestions.map((suggestion) => (
+                <TableRow key={suggestion.product_id}>
+                  {visibleColumns.map((column) => (
+                    <TableCell key={column.key} className={column.cellClassName}>
+                      {column.cell(suggestion)}
                     </TableCell>
-                    <TableCell>
-                      {suggestion.earliestShipDate ? (
-                        <span className="flex items-center gap-1.5">
-                          {new Date(suggestion.earliestShipDate).toLocaleDateString(currentLocale())}
-                          {(isOverdue || isDueSoon) && (
-                            <Badge variant={isOverdue ? "destructive" : "warning"}>
-                              <AlertTriangle className="h-3 w-3" />
-                              {isOverdue ? t("production.planning.urgency.overdue") : t("production.planning.urgency.dueSoon")}
-                            </Badge>
-                          )}
-                        </span>
-                      ) : (
-                        <span className="text-muted-foreground">{t("production.planning.noShipDate")}</span>
-                      )}
-                    </TableCell>
-                    <TableCell
-                      className="max-w-[220px] truncate text-muted-foreground"
-                      title={partnerNames(suggestion).join(", ")}
-                    >
-                      {suggestion.contributingOrders.length} · {partnerNames(suggestion).join(", ")}
-                    </TableCell>
-                    <TableCell className={cn("text-right")}>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        disabled={!canManageWorkOrders}
-                        title={canManageWorkOrders ? undefined : t("production.planning.createOf")}
-                        onClick={() => setSelectedSuggestion(suggestion)}
-                      >
-                        <Factory className="h-3.5 w-3.5" />
-                        {t("production.planning.createOf")}
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
+                  ))}
+                </TableRow>
+              ))}
             </TableBody>
           </Table>
         </CardContent>

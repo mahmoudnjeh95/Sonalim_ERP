@@ -1,8 +1,10 @@
 import { useSearchParams } from "react-router-dom";
-import { AnimatePresence, motion } from "framer-motion";
-import { Cog, FileSpreadsheet, PackageSearch, TrendingUp, Users } from "lucide-react";
+import { AnimatePresence, MotionConfig, motion } from "framer-motion";
+import { Cog, Factory, FileSpreadsheet, PackageSearch, Recycle, TrendingUp, Users } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
+import { AnalyticsOverviewSection } from "./AnalyticsOverviewSection";
+import { YieldWasteTab } from "./YieldWasteTab";
 import { TeamPerformanceTab } from "./TeamPerformanceTab";
 import { MachinePerformanceTab } from "./MachinePerformanceTab";
 import { ConsumptionReportTab } from "./ConsumptionReportTab";
@@ -19,6 +21,8 @@ import { PriceHistoryTab } from "./PriceHistoryTab";
 // Consumption-by-supplier reads production's report tables *and* procurement's
 // order history (for costing), so it belongs here for the same reason.
 const TABS = [
+  { value: "overview", labelKey: "analytics.tabs.overview", icon: Factory, Component: AnalyticsOverviewSection },
+  { value: "yield-waste", labelKey: "analytics.tabs.yieldWaste", icon: Recycle, Component: YieldWasteTab },
   { value: "team-performance", labelKey: "analytics.tabs.teamPerformance", icon: Users, Component: TeamPerformanceTab },
   { value: "machine-performance", labelKey: "analytics.tabs.machinePerformance", icon: Cog, Component: MachinePerformanceTab },
   {
@@ -42,43 +46,45 @@ export function AnalyticsPage() {
   const { t } = useI18n();
   const [searchParams, setSearchParams] = useSearchParams();
   const requested = searchParams.get("tab") as TabValue | null;
-  const tab: TabValue = TABS.some((entry) => entry.value === requested) ? requested! : "team-performance";
+  const tab: TabValue = TABS.some((entry) => entry.value === requested) ? requested! : "overview";
   const setTab = (value: TabValue) => setSearchParams({ tab: value }, { replace: true });
   const ActiveTab = TABS.find((entry) => entry.value === tab)!.Component;
 
   return (
-    <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
-        <h1 className="text-xl font-semibold tracking-tight">{t("analytics.title")}</h1>
-        <p className="text-sm text-muted-foreground">{t("analytics.subtitle")}</p>
-      </motion.div>
-
-      {TABS.length > 1 && (
-        <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
-          <TabsList>
-            {TABS.map((tabDef) => (
-              <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="analytics-tab-indicator">
-                <span className="flex items-center gap-1.5">
-                  <tabDef.icon className="h-4 w-4" />
-                  {t(tabDef.labelKey)}
-                </span>
-              </TabsTrigger>
-            ))}
-          </TabsList>
-        </Tabs>
-      )}
-
-      <AnimatePresence mode="wait">
-        <motion.div
-          key={tab}
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -8 }}
-          transition={{ duration: 0.2 }}
-        >
-          <ActiveTab />
+    <MotionConfig reducedMotion="user">
+      <div className="space-y-6">
+        <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+          <h1 className="text-xl font-semibold tracking-tight">{t("analytics.title")}</h1>
+          <p className="text-sm text-muted-foreground">{t("analytics.subtitle")}</p>
         </motion.div>
-      </AnimatePresence>
-    </div>
+
+        {TABS.length > 1 && (
+          <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
+            <TabsList>
+              {TABS.map((tabDef) => (
+                <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="analytics-tab-indicator">
+                  <span className="flex items-center gap-1.5">
+                    <tabDef.icon className="h-4 w-4" />
+                    {t(tabDef.labelKey)}
+                  </span>
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+        )}
+
+        <AnimatePresence mode="wait">
+          <motion.div
+            key={tab}
+            initial={{ opacity: 0, y: 8 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: -8 }}
+            transition={{ duration: 0.2 }}
+          >
+            <ActiveTab />
+          </motion.div>
+        </AnimatePresence>
+      </div>
+    </MotionConfig>
   );
 }

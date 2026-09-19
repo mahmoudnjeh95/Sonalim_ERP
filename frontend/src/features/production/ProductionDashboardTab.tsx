@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useMutation, useQueries, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -11,7 +11,6 @@ import {
   Factory,
   Gauge,
   Loader2,
-  PackageCheck,
   Recycle,
   Scale,
   Sparkles,
@@ -25,6 +24,7 @@ import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableHead, TableCell, ResizableTableHead } from "../../components/ui/table";
+import { AppLoader } from "../../components/patterns/AppLoader";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -34,13 +34,24 @@ import { UnitBreakdownStat } from "../../components/patterns/UnitBreakdownStat";
 import { StatBreakdownPopover, type StatBreakdownRow } from "../../components/patterns/StatBreakdownPopover";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
-import { commonUnit, convertQuantity, formatQuantity, productUnit, totalsByUomCategory, UTILITY_UNITS } from "../../lib/units";
+import { commonUnit, convertQuantity, formatQuantity, productKgRatio, productUnit, totalsByUomCategory, UTILITY_UNITS } from "../../lib/units";
+import { autoWeightUnit, fromKg } from "../../lib/weightUnit";
 import { listUoms } from "../warehouse/api";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { outlineIcon } from "../../components/patterns/outlineIcon";
 import { cn } from "../../lib/utils";
+import AllClearIllustration from "../../assets/illustrations/empty-states/empty-all-clear.svg?react";
+import MachineMonitoringIllustration from "../../assets/illustrations/machine-monitoring.svg?react";
+import ProductionLineIllustration from "../../assets/illustrations/production-line.svg?react";
+import ShiftTeamIllustration from "../../assets/illustrations/shift-team.svg?react";
+import YieldWasteIllustration from "../../assets/illustrations/yield-waste.svg?react";
+import OutputSvg from "../../assets/icons/production/output.svg?react";
+import RawMaterialsSvg from "../../assets/icons/production/raw-materials.svg?react";
+import WorkOrderSvg from "../../assets/icons/production/work-order.svg?react";
 import {
+  ACTIVE_CONSOLIDATIONS_QUERY_KEY,
   getRecipeCorrelationInsight,
-  getWorkOrderConsolidation,
+  listActiveConsolidations,
   listDowntimeBreakdown,
   listDowntimeReasons,
   listMachinePerformance,
@@ -52,6 +63,7 @@ import {
   listReports,
   listTeamPerformance,
   listWorkOrders,
+  type ActiveOfConsolidation,
   type DowntimeBreakdownRow,
   type Machine,
   type MachinePerformanceRow,
@@ -117,11 +129,16 @@ interface Alert {
   to: string;
 }
 
+const OutputIcon = outlineIcon(OutputSvg);
+const RawMaterialsIcon = outlineIcon(RawMaterialsSvg);
+const WorkOrderIcon = outlineIcon(WorkOrderSvg);
+
 export function ProductionDashboardTab() {
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const [customRange, setCustomRange] = useState<{ from: string; to: string } | null>(null);
+  const [initialLoadDone, setInitialLoadDone] = useState(false);
   const defaultRange = { from: isoWeeksAgo(16), to: todayIso() };
   const range = customRange ?? defaultRange;
 
@@ -129,14 +146,14 @@ export function ProductionDashboardTab() {
     queryKey: WORK_ORDERS_QUERY_KEY,
     queryFn: () => listWorkOrders(token),
   });
-  const { data: pendingReports = [] } = useQuery({
+  const { data: pendingReports = [], isLoading: loadingPending } = useQuery({
     queryKey: PENDING_QUERY_KEY,
     queryFn: () => listReports(token, { status: "submitted" }),
   });
-  const { data: nonConformities = [] } = useQuery({ queryKey: NC_QUERY_KEY, queryFn: () => listNonConformities(token) });
-  const { data: stock = [] } = useQuery({ queryKey: STOCK_QUERY_KEY, queryFn: () => listStock(token) });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
-  const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
+  const { data: nonConformities = [], isLoading: loadingNc } = useQuery({ queryKey: NC_QUERY_KEY, queryFn: () => listNonConformities(token) });
+  const { data: stock = [], isLoading: loadingStock } = useQuery({ queryKey: STOCK_QUERY_KEY, queryFn: () => listStock(token) });
+  const { data: products = [], isLoading: loadingProducts } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: uoms = [], isLoading: loadingUoms } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
 
   const activeOrders = workOrders.filter((o) => o.status === "ongoing" || o.status === "suspended");
 
@@ -144,69 +161,71 @@ export function ProductionDashboardTab() {
   // the same bulk query the team-performance tab reads per team. A real
   // calendar timeline, not one bar per OF, so several OFs running the same week
   // land in the same point instead of competing for the x-axis.
-  const { data: teamPerformance = [] } = useQuery({
+  const { data: teamPerformance = [], isLoading: loadingTeamPerformance } = useQuery({
     queryKey: ["production", "team-performance", "dashboard-trend", range.from, range.to],
     queryFn: () => listTeamPerformance(token, { grain: "week", date_from: range.from, date_to: range.to }),
   });
-  const { data: downtimeReasons = [] } = useQuery({
+  const { data: downtimeReasons = [], isLoading: loadingDowntimeReasons } = useQuery({
     queryKey: ["production", "downtime-reasons", range.from, range.to],
     queryFn: () => listDowntimeReasons(token, { date_from: range.from, date_to: range.to }),
   });
-  const { data: downtimeBreakdown = [] } = useQuery({
+  const { data: downtimeBreakdown = [], isLoading: loadingDowntimeBreakdown } = useQuery({
     queryKey: ["production", "downtime-breakdown", range.from, range.to],
     queryFn: () => listDowntimeBreakdown(token, { date_from: range.from, date_to: range.to }),
   });
-  const { data: recipeCorrelation = [] } = useQuery({
+  const { data: recipeCorrelation = [], isLoading: loadingRecipeCorrelation } = useQuery({
     queryKey: ["production", "recipe-correlation"],
     queryFn: () => listRecipeCorrelation(token),
   });
-  const { data: recipeDrift = [] } = useQuery({
+  const { data: recipeDrift = [], isLoading: loadingRecipeDrift } = useQuery({
     queryKey: ["production", "recipe-drift", range.from, range.to],
     queryFn: () => listRecipeDrift(token, { date_from: range.from, date_to: range.to }),
   });
   // Same grouping as team performance, keyed by machine instead of team — a
   // line can run more than one machine at once, so productivity has to be
   // checkable per machine, not just per line it sits on.
-  const { data: machinePerformance = [] } = useQuery({
+  const { data: machinePerformance = [], isLoading: loadingMachinePerformance } = useQuery({
     queryKey: ["production", "machine-performance", range.from, range.to],
     queryFn: () => listMachinePerformance(token, { grain: "week", date_from: range.from, date_to: range.to }),
   });
-  const { data: machines = [] } = useQuery({
+  const { data: machines = [], isLoading: loadingMachines } = useQuery({
     queryKey: ["production", "machines"],
     queryFn: () => listMachines(token),
   });
   // Écart de conditionnement, plant-wide by product — the scale against the
   // counter. Already computed by the backend for the OF/report drill-downs;
   // this is the same figure folded across the dashboard's own date range.
-  const { data: packagingVariance = [] } = useQuery({
+  const { data: packagingVariance = [], isLoading: loadingPackagingVariance } = useQuery({
     queryKey: ["production", "packaging-variance", range.from, range.to],
     queryFn: () => listPackagingVariance(token, { date_from: range.from, date_to: range.to }),
   });
   // No date filter on the endpoint itself -- it returns every batch ever
   // opened, so the dashboard buckets by created_at against its own range
   // client-side (see buildRegrindSummary).
-  const { data: regrindBatches = [] } = useQuery({
+  const { data: regrindBatches = [], isLoading: loadingRegrind } = useQuery({
     queryKey: ["production", "regrind-batches"],
     queryFn: () => listRegrindBatches(token),
   });
   // Every lot, tenant-wide -- no date filter on the endpoint (only
   // product_id), so near-expiry is a client-side filter against today.
-  const { data: lots = [] } = useQuery({
+  const { data: lots = [], isLoading: loadingLots } = useQuery({
     queryKey: ["warehouse", "lots"],
     queryFn: () => listLots(token),
   });
 
   // Consolidation is computed per OF and never stored, so the cockpit asks for
-  // each active order's figures rather than reading a cached total.
-  const consolidations = useQueries({
-    queries: activeOrders.map((order) => ({
-      queryKey: ["production", "of-consolidation", order.id],
-      queryFn: () => getWorkOrderConsolidation(token, order.id),
-    })),
+  // each active order's figures rather than reading a cached total -- all of
+  // them, with the teams behind each, in one request.
+  const { data: activeConsolidations = [], isPending: consolidationsPending, isLoading: loadingConsolidations } = useQuery({
+    queryKey: ACTIVE_CONSOLIDATIONS_QUERY_KEY,
+    queryFn: () => listActiveConsolidations(token),
   });
-  const loadedConsolidations = consolidations
-    .map((q) => q.data)
-    .filter((d): d is OfConsolidation => d !== undefined);
+  const consolidationByOf = new Map(activeConsolidations.map((c) => [c.of_id, c]));
+  // Only orders both reads agree are running: the work-order list and the batch
+  // land at different moments, and one can be a refetch behind the other.
+  const loadedConsolidations = activeOrders
+    .map((order) => consolidationByOf.get(order.id))
+    .filter((c): c is ActiveOfConsolidation => c !== undefined);
 
   const produced = sum(loadedConsolidations.map((c) => c.produced_quantity));
   const semolina = sum(loadedConsolidations.map((c) => c.raw_material.semolina_quantity));
@@ -216,36 +235,24 @@ export function ProductionDashboardTab() {
   const wasteEntries = loadedConsolidations.flatMap((c) => c.waste.by_product);
   const { totals: wasteTotals } = totalsByUomCategory(wasteEntries, products, uoms);
 
-  // Same validated reports the consolidation above sums, fetched again here
-  // only for their `team` field — so a tile can say which OF and which team
-  // a figure actually came from, not just the plant-wide total.
-  const activeOrderReports = useQueries({
-    queries: activeOrders.map((order) => ({
-      queryKey: ["production", "reports", "of", order.id, "validated"],
-      queryFn: () => listReports(token, { of_id: order.id, status: "validated" }),
-    })),
-  });
-  function teamsForOrder(index: number): string[] {
-    return [
-      ...new Set(
-        (activeOrderReports[index]?.data ?? [])
-          .map((report) => report.team)
-          .filter((team): team is string => Boolean(team)),
-      ),
-    ];
+  // The teams that filed the validated reports the consolidation sums, so a
+  // tile can say which OF and which team a figure actually came from, not just
+  // the plant-wide total.
+  function teamsForOrder(orderId: string): string[] {
+    return consolidationByOf.get(orderId)?.teams ?? [];
   }
 
   // One drill-down row set per stat tile, each answering "which OF, and which
   // team" for that tile's own number. Built from the same activeOrders /
   // consolidations already fetched above, never a second source of truth.
-  const activeOrdersRows: StatBreakdownRow[] = activeOrders.map((order, index) => {
-    const data = consolidations[index]?.data;
+  const activeOrdersRows: StatBreakdownRow[] = activeOrders.map((order) => {
+    const data = consolidationByOf.get(order.id);
     return {
       id: order.id,
       label: order.reference,
       href: `/production/work-orders/${order.id}`,
       status: <StatusBadge status={order.status} />,
-      teams: teamsForOrder(index),
+      teams: teamsForOrder(order.id),
       lines: data
         ? [
             {
@@ -258,14 +265,14 @@ export function ProductionDashboardTab() {
   });
 
   const producedRows: StatBreakdownRow[] = activeOrders
-    .map((order, index): StatBreakdownRow | null => {
-      const data = consolidations[index]?.data;
+    .map((order): StatBreakdownRow | null => {
+      const data = consolidationByOf.get(order.id);
       if (!data || data.produced_quantity <= 0) return null;
       return {
         id: order.id,
         label: order.reference,
         href: `/production/work-orders/${order.id}`,
-        teams: teamsForOrder(index),
+        teams: teamsForOrder(order.id),
         lines: [
           {
             label: t("production.dashboard.stat.produced"),
@@ -277,14 +284,14 @@ export function ProductionDashboardTab() {
     .filter((row): row is StatBreakdownRow => row !== null);
 
   const semolinaRows: StatBreakdownRow[] = activeOrders
-    .map((order, index): StatBreakdownRow | null => {
-      const data = consolidations[index]?.data;
+    .map((order): StatBreakdownRow | null => {
+      const data = consolidationByOf.get(order.id);
       if (!data || data.raw_material.semolina_quantity <= 0) return null;
       return {
         id: order.id,
         label: order.reference,
         href: `/production/work-orders/${order.id}`,
-        teams: teamsForOrder(index),
+        teams: teamsForOrder(order.id),
         lines: [
           {
             label: t("production.dashboard.stat.semolina"),
@@ -299,14 +306,14 @@ export function ProductionDashboardTab() {
     .filter((row): row is StatBreakdownRow => row !== null);
 
   const wasteRows: StatBreakdownRow[] = activeOrders
-    .map((order, index): StatBreakdownRow | null => {
-      const data = consolidations[index]?.data;
+    .map((order): StatBreakdownRow | null => {
+      const data = consolidationByOf.get(order.id);
       if (!data || data.waste.by_product.length === 0) return null;
       return {
         id: order.id,
         label: order.reference,
         href: `/production/work-orders/${order.id}`,
-        teams: teamsForOrder(index),
+        teams: teamsForOrder(order.id),
         lines: data.waste.by_product.map((entry) => ({
           label:
             (entry.product_id && products.find((p) => p.id === entry.product_id)?.name) ||
@@ -396,7 +403,8 @@ export function ProductionDashboardTab() {
   // scrap went into it — distinct from the Quality dashboard's disposition
   // chart, which tracks where *rejected* product ends up, not a batch's own
   // input/output efficiency.
-  const regrindSummary = buildRegrindSummary(regrindBatches as RegrindBatchSummary[], range);
+  const regrindSummary = buildRegrindSummary(regrindBatches as RegrindBatchSummary[], range, products, uoms);
+  const regrindLossUnit = regrindSummary.lossKg === null ? null : autoWeightUnit(regrindSummary.lossKg);
 
   // Finished-goods lots approaching their DLC, soonest first -- independent
   // of the dashboard's own date-range filter, since a lot doesn't stop being
@@ -448,13 +456,33 @@ export function ProductionDashboardTab() {
     soonestExpiry: nearExpiryRows[0] ?? null,
   });
 
-  if (loadingOrders) {
-    return (
-      <div className="space-y-3">
-        <Skeleton className="h-24 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
-    );
+  // Hold the branded loader until every source the page reads has answered once,
+  // so the tiles never paint as zeros while a slower request is still in flight.
+  // Latched: picking a new date range refetches, but must not swap the whole page
+  // (and the range picker with it) back to the loader.
+  const loadingAny = [
+    loadingOrders,
+    loadingPending,
+    loadingNc,
+    loadingStock,
+    loadingProducts,
+    loadingUoms,
+    loadingTeamPerformance,
+    loadingDowntimeReasons,
+    loadingDowntimeBreakdown,
+    loadingRecipeCorrelation,
+    loadingRecipeDrift,
+    loadingMachinePerformance,
+    loadingMachines,
+    loadingPackagingVariance,
+    loadingRegrind,
+    loadingLots,
+    loadingConsolidations,
+  ].some(Boolean);
+  if (!loadingAny && !initialLoadDone) setInitialLoadDone(true);
+
+  if (!initialLoadDone) {
+    return <AppLoader label={t("production.dashboard.loading")} className="py-8" />;
   }
 
   return (
@@ -465,7 +493,7 @@ export function ProductionDashboardTab() {
             <StatCard
               label={t("production.dashboard.stat.activeOrders")}
               value={activeOrders.length}
-              icon={<Factory className="h-5 w-5" />}
+              icon={<WorkOrderIcon className="h-5 w-5" />}
               accent="warning"
             />
           }
@@ -482,9 +510,9 @@ export function ProductionDashboardTab() {
           trigger={
             <StatCard
               label={t("production.dashboard.stat.produced")}
-              value={Math.round(produced)}
+              value={consolidationsPending ? null : Math.round(produced)}
               unit={producedUnit}
-              icon={<PackageCheck className="h-5 w-5" />}
+              icon={<OutputIcon className="h-5 w-5" />}
               accent="success"
             />
           }
@@ -496,9 +524,9 @@ export function ProductionDashboardTab() {
           trigger={
             <StatCard
               label={t("production.dashboard.stat.semolina")}
-              value={Math.round(semolina)}
+              value={consolidationsPending ? null : Math.round(semolina)}
               unit={semolinaUnit}
-              icon={<Activity className="h-5 w-5" />}
+              icon={<RawMaterialsIcon className="h-5 w-5" />}
               accent="primary"
             />
           }
@@ -532,10 +560,15 @@ export function ProductionDashboardTab() {
             <CardTitle>{t("production.dashboard.alerts.title")}</CardTitle>
             <p className="mt-0.5 text-sm text-muted-foreground">{t("production.dashboard.alerts.subtitle")}</p>
           </CardHeader>
-          <CardContent className={alerts.length === 0 ? "p-0" : "space-y-2"}>
-            {alerts.length === 0 ? (
+          <CardContent className={alerts.length === 0 && !consolidationsPending ? "p-0" : "space-y-2"}>
+            {alerts.length === 0 && consolidationsPending ? (
+              // No alerts yet is not "all clear": most of them are computed from
+              // the consolidations that are still on their way.
+              <Skeleton className="h-44 w-full" />
+            ) : alerts.length === 0 ? (
               <EmptyState
                 icon={<ClipboardCheck className="h-5 w-5" />}
+                illustration={<AllClearIllustration className="h-44 w-56" />}
                 title={t("production.dashboard.alerts.empty.title")}
                 description={t("production.dashboard.alerts.empty.description")}
               />
@@ -673,11 +706,16 @@ export function ProductionDashboardTab() {
                 value={regrindSummary.yieldRatio !== null ? `${(regrindSummary.yieldRatio * 100).toFixed(1)}%` : "—"}
               />
               <MiniStat
-                label={t("production.regrind.stat.totalLoss")}
+                label={t("production.regrind.stat.totalLossLabel")}
                 value={
-                  <>
-                    {formatQty(regrindSummary.lossTotal)} <span className="text-sm font-normal text-muted-foreground">KG</span>
-                  </>
+                  regrindSummary.lossKg === null || regrindLossUnit === null ? (
+                    "—"
+                  ) : (
+                    <>
+                      {formatQuantity(fromKg(regrindSummary.lossKg, regrindLossUnit))}{" "}
+                      <span className="text-sm font-normal text-muted-foreground">{regrindLossUnit === "kg" ? "KG" : "t"}</span>
+                    </>
+                  )
                 }
               />
               <MiniStat label={t("production.dashboard.regrind.finishedBatches")} value={regrindSummary.finishedCount} />
@@ -695,6 +733,7 @@ export function ProductionDashboardTab() {
           {activeOrders.length === 0 ? (
             <EmptyState
               icon={<Factory className="h-5 w-5" />}
+              illustration={<ProductionLineIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.active.empty.title")}
               description={t("production.dashboard.active.empty.description")}
             />
@@ -710,8 +749,9 @@ export function ProductionDashboardTab() {
                       {t(`status.${order.status}` as Parameters<typeof t>[0])}
                     </Badge>
                     <span className="ml-auto text-sm tabular-nums text-muted-foreground">
-                      {Math.round(consolidation?.produced_quantity ?? 0)} /{" "}
-                      {Math.round(consolidation?.material_input_quantity ?? 0)}
+                      {consolidation
+                        ? `${Math.round(consolidation.produced_quantity)} / ${Math.round(consolidation.material_input_quantity)}`
+                        : "—"}
                     </span>
                   </div>
                   <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
@@ -784,6 +824,7 @@ export function ProductionDashboardTab() {
           {teamLeaderboard.length === 0 ? (
             <EmptyState
               icon={<Users className="h-5 w-5" />}
+              illustration={<ShiftTeamIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.teamPerformance.empty.title")}
               description={t("production.dashboard.teamPerformance.empty.description")}
             />
@@ -848,6 +889,7 @@ export function ProductionDashboardTab() {
           {teamSemouleWaste.length === 0 ? (
             <EmptyState
               icon={<Recycle className="h-5 w-5" />}
+              illustration={<YieldWasteIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.chart.semouleWaste.empty.title")}
               description={t("production.dashboard.chart.semouleWaste.empty.description")}
             />
@@ -999,6 +1041,7 @@ export function ProductionDashboardTab() {
           {machineSummary.length === 0 ? (
             <EmptyState
               icon={<Gauge className="h-5 w-5" />}
+              illustration={<MachineMonitoringIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.machinePerformance.empty.title")}
               description={t("production.dashboard.machinePerformance.empty.description")}
             />
@@ -1827,7 +1870,8 @@ interface RegrindSummary {
   pendingCount: number;
   inputTotal: number;
   outputTotal: number;
-  lossTotal: number;
+  /** Kilograms, or null when a batch's unit is not a known weight unit. */
+  lossKg: number | null;
   yieldRatio: number | null;
 }
 
@@ -1837,8 +1881,18 @@ interface RegrindSummary {
  * cockpit uses ("YYYY-MM-DD" sorts lexicographically). Only finished batches
  * (actual_output_quantity set) have a real yield; a batch still new or
  * assigned has not been weighed back in yet.
+ *
+ * A batch's quantities are in its output product's own unit (tonnes for
+ * rebroyat), so the loss is restated in kg per batch before summing. If any
+ * finished batch has no weight unit the loss is withheld (null) rather than
+ * summed and mislabelled.
  */
-function buildRegrindSummary(batches: RegrindBatchSummary[], range: { from: string; to: string }): RegrindSummary {
+function buildRegrindSummary(
+  batches: RegrindBatchSummary[],
+  range: { from: string; to: string },
+  products: Parameters<typeof productKgRatio>[1],
+  uoms: Parameters<typeof productKgRatio>[2],
+): RegrindSummary {
   const inRange = batches.filter((b) => {
     const day = b.created_at.slice(0, 10);
     return day >= range.from && day <= range.to;
@@ -1846,13 +1900,16 @@ function buildRegrindSummary(batches: RegrindBatchSummary[], range: { from: stri
   const finished = inRange.filter((b) => b.actual_output_quantity !== null);
   const inputTotal = sum(finished.map((b) => b.input_quantity_total));
   const outputTotal = sum(finished.map((b) => b.actual_output_quantity as number));
-  const lossTotal = sum(finished.map((b) => b.loss_quantity ?? 0));
+  const lossKgByBatch = finished.map((b) => {
+    const kgPerUnit = productKgRatio(b.output_product_id, products, uoms);
+    return kgPerUnit === null ? null : (b.loss_quantity ?? 0) * kgPerUnit;
+  });
   return {
     finishedCount: finished.length,
     pendingCount: inRange.length - finished.length,
     inputTotal,
     outputTotal,
-    lossTotal,
+    lossKg: lossKgByBatch.some((kg) => kg === null) ? null : sum(lossKgByBatch as number[]),
     yieldRatio: inputTotal > 0 ? outputTotal / inputTotal : null,
   };
 }
@@ -1903,7 +1960,8 @@ function formatQty(amount: number): string {
 // under a tonne is easier to read in kg, matching how the plant itself talks
 // about a small spill; at or above a tonne it switches to tonnes.
 function formatWasteStageQuantity(kg: number): string {
-  return Math.abs(kg) < 1000 ? formatQuantity(kg, "kg") : formatQuantity(kg / 1000, "t");
+  const unit = autoWeightUnit(kg);
+  return formatQuantity(fromKg(kg, unit), unit);
 }
 
 function sum(values: number[]): number {
