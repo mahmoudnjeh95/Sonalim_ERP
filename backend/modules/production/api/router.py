@@ -696,6 +696,15 @@ def send_ia_assistant_message(
     return reply
 
 
+@router.get("/work-orders/active-consolidations")
+def list_active_consolidations(
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> list[dict]:
+    """Consolidation of every ongoing or suspended OF, each with the teams that filed its validated reports."""
+    with get_connection() as connection:
+        return OfConsolidationService(connection).consolidate_active(tenant_id=tenant.tenant_id)
+
+
 @router.get("/work-orders/{work_order_id}/inputs")
 def list_work_order_inputs(
     work_order_id: str, tenant: TenantContext = Depends(require_permission("production.view_work_orders"))

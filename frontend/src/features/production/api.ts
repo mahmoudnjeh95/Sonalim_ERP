@@ -1098,6 +1098,20 @@ export function getWorkOrderConsolidation(token: string, workOrderId: string) {
   return apiFetch<OfConsolidation>(`/production/work-orders/${workOrderId}/consolidation`, { token });
 }
 
+/** A running OF's consolidation, plus the teams that filed the validated reports behind it. */
+export interface ActiveOfConsolidation extends OfConsolidation {
+  teams: string[];
+}
+
+// Under the per-OF key's prefix so anything that refreshes one order's figures
+// refreshes the cockpit's batch too.
+export const ACTIVE_CONSOLIDATIONS_QUERY_KEY = ["production", "of-consolidation", "active"] as const;
+
+/** Every ongoing or suspended OF in one request, instead of two requests per order. */
+export function listActiveConsolidations(token: string) {
+  return apiFetch<ActiveOfConsolidation[]>(`/production/work-orders/active-consolidations`, { token });
+}
+
 // What was poured into an OF, against the recipe it follows.
 //
 // Advisory only. Nothing in the report or validation flow reads this — the plant's

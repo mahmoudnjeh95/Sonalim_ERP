@@ -32,6 +32,7 @@ import { PackagingVariancePanel } from "./PackagingVariancePanel";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { cn } from "../../lib/utils";
 import {
+  ACTIVE_CONSOLIDATIONS_QUERY_KEY,
   closeWorkOrder,
   getPreCloseCheck,
   getWorkOrderConsolidation,
@@ -153,6 +154,8 @@ export function WorkOrderDetailsPage() {
     for (const key of [
       ["production", "work-orders"],
       ["production", "of-consolidation", workOrderId],
+      // Start, suspend and close change which orders the cockpit counts as active.
+      ACTIVE_CONSOLIDATIONS_QUERY_KEY,
       ["production", "pre-close-check", workOrderId],
     ]) {
       queryClient.invalidateQueries({ queryKey: key });

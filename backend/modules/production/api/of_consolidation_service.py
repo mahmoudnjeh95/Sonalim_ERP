@@ -32,6 +32,49 @@ class OfConsolidationService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
+    def consolidate_active(self, *, tenant_id: str) -> list[dict]:
+        """Every running OF's consolidation in one call, each with the teams behind it.
+
+        The cockpit used to ask for each active order's consolidation and its
+        validated reports separately -- two requests per order, only to learn
+        which teams filed the figures. One connection and one team query serve
+        the same answer. Each entry is exactly `consolidate()` plus `teams`
+        (sorted, validated reports only, reports with no team left out).
+        """
+        of_ids = [
+            row[0]
+            for row in self._connection.execute(
+                """
+                SELECT id FROM production.work_orders
+                WHERE tenant_id = %s AND status IN ('ongoing', 'suspended')
+                ORDER BY created_at DESC
+                """,
+                (tenant_id,),
+            ).fetchall()
+        ]
+        if not of_ids:
+            return []
+
+        teams_by_of: dict[str, list[str]] = {}
+        for of_id, team in self._connection.execute(
+            f"""
+            SELECT of_id, team FROM production.production_reports
+            WHERE tenant_id = %s AND {_VALIDATED} AND team IS NOT NULL AND of_id = ANY(%s)
+            GROUP BY of_id, team
+            ORDER BY of_id, team
+            """,
+            (tenant_id, of_ids),
+        ).fetchall():
+            teams_by_of.setdefault(of_id, []).append(team)
+
+        consolidations: list[dict] = []
+        for of_id in of_ids:
+            result = self.consolidate(tenant_id=tenant_id, of_id=of_id)
+            if isinstance(result, Err):
+                continue  # deleted between the list and the read; nothing to show
+            consolidations.append({**result.value, "teams": teams_by_of.get(of_id, [])})
+        return consolidations
+
     def consolidate(self, *, tenant_id: str, of_id: str) -> Result[dict]:
         work_order = self._connection.execute(
             """
