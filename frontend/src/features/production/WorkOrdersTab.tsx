@@ -588,7 +588,7 @@ export function WorkOrdersTab() {
               value={typeFilter}
               onChange={setTypeFilter}
               options={[
-                { value: "all", label: "All types" },
+                { value: "all", label: t("production.workOrders.filter.allTypes") },
                 { value: "PC", label: "PC" },
                 { value: "PL", label: "PL" },
               ]}
@@ -683,30 +683,32 @@ export function WorkOrdersTab() {
             <div className="rounded-2xl border border-dashed border-border bg-muted/15 p-8">
               <EmptyState
                 icon={<ProductionEmptyStateIllustration className="h-52 w-full max-w-md" />}
-                title={typeFilter === "all" ? t("production.workOrders.empty.title") : `No ${typeFilter} orders`}
+                title={typeFilter === "all" ? t("production.workOrders.empty.title") : `${typeFilter} — aucune OF trouvée`}
                 description={
                   typeFilter === "all"
                     ? t("production.workOrders.empty.description")
-                    : `There are no ${typeFilter} work orders matching the current status and filters.`
+                    : `Aucune OF ${typeFilter} ne correspond au statut et aux filtres actuels.`
                 }
               />
             </div>
           ) : (
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
               {visibleGroups.map((group) => (
-                <div key={group.type} className="space-y-3 rounded-2xl border border-border bg-muted/10 p-3">
-                  <div className="space-y-2 border-b border-border pb-2">
+                <div key={group.type} className="space-y-3 rounded-2xl border border-border/80 bg-gradient-to-br from-muted/10 via-card to-background p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
+                  <div className="space-y-3 border-b border-border pb-3">
                     <div className="flex items-center justify-between gap-3">
                       <motion.div
                         initial={{ opacity: 0, x: -8 }}
                         animate={{ opacity: 1, x: 0 }}
                         className="flex items-center gap-2"
                       >
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-primary shadow-sm">
+                        <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-primary shadow-sm">
                           {group.type === "PC" ? <Factory className="h-4 w-4" /> : <Boxes className="h-4 w-4" />}
                         </div>
-                        <Badge variant={group.type === "PC" ? "primary" : "outline"}>{group.type}</Badge>
-                        <span className="text-sm text-muted-foreground">{group.orders.length} orders</span>
+                        <div className="space-y-0.5">
+                          <Badge variant={group.type === "PC" ? "primary" : "outline"}>{group.type}</Badge>
+                          <div className="text-xs text-muted-foreground">{group.orders.length} OF</div>
+                        </div>
                       </motion.div>
                       <motion.div
                         animate={{ rotate: [0, 4, -4, 0] }}
@@ -720,7 +722,7 @@ export function WorkOrdersTab() {
                     <div className="grid grid-cols-3 gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                       <motion.div
                         whileHover={{ y: -1 }}
-                        className="rounded-lg border border-border bg-background/80 px-2 py-1.5"
+                        className="rounded-xl border border-border bg-background/90 px-2 py-1.5 shadow-sm"
                       >
                         <div className="flex items-center gap-1.5"><Zap className="h-3 w-3 text-primary" /> Active</div>
                         <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
@@ -729,7 +731,7 @@ export function WorkOrdersTab() {
                       </motion.div>
                       <motion.div
                         whileHover={{ y: -1 }}
-                        className="rounded-lg border border-border bg-background/80 px-2 py-1.5"
+                        className="rounded-xl border border-border bg-background/90 px-2 py-1.5 shadow-sm"
                       >
                         <div className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-success" /> Closed</div>
                         <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
@@ -738,7 +740,7 @@ export function WorkOrdersTab() {
                       </motion.div>
                       <motion.div
                         whileHover={{ y: -1 }}
-                        className="rounded-lg border border-border bg-background/80 px-2 py-1.5"
+                        className="rounded-xl border border-border bg-background/90 px-2 py-1.5 shadow-sm"
                       >
                         <div className="flex items-center gap-1.5"><Clock3 className="h-3 w-3 text-warning" /> Planned</div>
                         <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
@@ -767,9 +769,9 @@ export function WorkOrdersTab() {
                               layout
                               whileHover={{ y: -3, scale: 1.01 }}
                               transition={{ duration: 0.18, ease: "easeOut" }}
-                              className="group overflow-hidden rounded-2xl border border-border bg-card shadow-sm"
+                              className="group overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-br from-card via-card to-muted/20 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
                             >
-                              <div className="flex items-start justify-between gap-3 border-b border-border bg-muted/20 p-4">
+                              <div className="flex items-start justify-between gap-3 border-b border-border bg-gradient-to-r from-primary/5 via-transparent to-transparent p-4">
                                 <div className="flex min-w-0 flex-1 items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
                                   <motion.span
                                     animate={{ scale: [1, 1.12, 1] }}
@@ -821,22 +823,22 @@ export function WorkOrdersTab() {
                                     <motion.div
                                       animate={{ y: [0, -3, 0], rotate: [0, 1, -1, 0] }}
                                       transition={{ duration: 3.4, repeat: Infinity, ease: "easeInOut" }}
-                                      className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-border bg-gradient-to-br shadow-inner"
+                                      className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-border bg-gradient-to-br from-background to-muted/25 shadow-inner"
                                     >
                                       <ProductPackagingThumbIllustration className={cn("h-full w-full object-cover", badgeTone)} />
                                     </motion.div>
                                     <div className="flex-1 space-y-2">
                                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                                         <span className="inline-flex items-center gap-1.5"><Factory className="h-3.5 w-3.5" /> {t("production.workOrders.column.workCenter")}</span>
-                                        <span className="font-medium text-foreground">{workCenterNameFor(order)}</span>
+                                        <span className="font-semibold text-foreground">{workCenterNameFor(order)}</span>
                                       </div>
                                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                                         <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" /> {t("production.workOrders.column.startDate")}</span>
-                                        <span className="font-medium text-foreground">{order.start_date ?? "—"}</span>
+                                        <span className="font-semibold text-foreground">{order.start_date ?? "—"}</span>
                                       </div>
                                       <div className="flex items-center justify-between text-xs text-muted-foreground">
                                         <span className="inline-flex items-center gap-1.5"><Boxes className="h-3.5 w-3.5" /> {t("production.workOrders.column.type")}</span>
-                                        <span className="font-medium text-foreground">{order.product_type ?? "—"}</span>
+                                        <span className="font-semibold text-foreground">{order.product_type ?? "—"}</span>
                                       </div>
                                     </div>
                                   </div>
@@ -860,28 +862,30 @@ export function WorkOrdersTab() {
                                   </div>
 
                                   <div className="grid grid-cols-3 gap-2 text-xs">
-                                    <motion.div whileHover={{ y: -2 }} className="rounded-lg border border-border bg-muted/20 p-2">
+                                    <motion.div whileHover={{ y: -2 }} className="rounded-xl border border-border bg-muted/20 p-2.5 shadow-sm">
                                       <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                                         <Activity className="h-3 w-3 text-primary" />
-                                        <span>Live</span>
+                                        <span>{t("production.workOrders.column.status")}</span>
                                       </div>
-                                      <div className="mt-1 font-medium text-foreground">{order.status}</div>
+                                      <div className="mt-1 font-semibold text-foreground">
+                                        {t(`status.${order.status}` as Parameters<typeof t>[0])}
+                                      </div>
                                     </motion.div>
-                                    <motion.div whileHover={{ y: -2 }} className="rounded-lg border border-border bg-muted/20 p-2">
+                                    <motion.div whileHover={{ y: -2 }} className="rounded-xl border border-border bg-muted/20 p-2.5 shadow-sm">
                                       <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                                         <PackageCheck className="h-3 w-3 text-success" />
-                                        <span>Yield</span>
+                                        <span>{t("production.workOrders.column.yield")}</span>
                                       </div>
-                                      <div className="mt-1 font-medium text-foreground">
+                                      <div className="mt-1 font-semibold text-foreground">
                                         {`${((yieldByWorkOrderId.get(order.id) ?? 0) * 100).toFixed(1)}%`}
                                       </div>
                                     </motion.div>
-                                    <motion.div whileHover={{ y: -2 }} className="rounded-lg border border-border bg-muted/20 p-2">
+                                    <motion.div whileHover={{ y: -2 }} className="rounded-xl border border-border bg-muted/20 p-2.5 shadow-sm">
                                       <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
                                         {StatusIconFor(order.status)}
-                                        <span>Lead</span>
+                                        <span>{t("production.workOrders.column.supervisor")}</span>
                                       </div>
-                                      <div className="mt-1 font-medium text-foreground">{supervisorNameFor(order.supervisor_id) || "—"}</div>
+                                      <div className="mt-1 font-semibold text-foreground">{supervisorNameFor(order.supervisor_id) || "—"}</div>
                                     </motion.div>
                                   </div>
 
@@ -892,7 +896,7 @@ export function WorkOrdersTab() {
                                     </div>
                                     <div className="flex items-center gap-1.5 text-xs font-medium text-primary">
                                       <Zap className="h-3.5 w-3.5" />
-                                      <span>Open</span>
+                                      <span>{t("production.workOrders.card.open")}</span>
                                       <ArrowRight className="h-3.5 w-3.5" />
                                     </div>
                                   </div>
@@ -1099,21 +1103,21 @@ function OrderActions({
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-muted/20 p-3 text-sm">
                   <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Production reports</p>
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.details.productionReports")}</p>
                     <p className="mt-1 text-lg font-semibold">{reports.length}</p>
                   </div>
                   <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Quality reports</p>
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.details.qualityReports")}</p>
                     <p className="mt-1 text-lg font-semibold">{qualityReports.length}</p>
                   </div>
                   <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Produced</p>
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.details.produced")}</p>
                     <p className="mt-1 text-lg font-semibold tabular-nums">
                       {consolidation ? consolidation.produced_quantity : "—"}
                     </p>
                   </div>
                   <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">Yield</p>
+                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.column.yield")}</p>
                     <p className="mt-1 text-lg font-semibold tabular-nums">
                       {yieldDetail ? `${(yieldDetail.yield_ratio * 100).toFixed(1)}%` : "—"}
                     </p>

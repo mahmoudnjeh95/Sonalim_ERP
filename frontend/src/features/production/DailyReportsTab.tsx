@@ -59,6 +59,7 @@ import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { groupRows, type GroupSpec } from "../../lib/groupRows";
 import { ReportDetailDialog, type FigureRow } from "./ReportDetailDialog";
 import { OfConsolidationHint } from "./OfConsolidationHint";
+import { downtimeLabel } from "./downtimeOptions";
 import {
   correctDailyReport,
   correctValidatedDailyReport,
@@ -279,8 +280,9 @@ export function DailyReportsTab() {
     return machine ? `${machine.code} — ${machine.name}` : "—";
   };
 
-  // Only orders that still accept reports — a closed or cancelled OF does not.
-  const openWorkOrders = workOrders.filter((o) => ["planned", "ongoing", "suspended"].includes(o.status));
+  // Only orders that still accept reports — a closed or cancelled OF does not,
+  // and an OFR (regrind order) is followed in Rebuts et rebroyat, not reported on.
+  const openWorkOrders = workOrders.filter((o) => !o.is_regrind && ["planned", "ongoing", "suspended"].includes(o.status));
   const referenceOf = (ofId: string) => workOrders.find((o) => o.id === ofId)?.reference ?? ofId;
 
   const form = useForm<CreateForm>({
@@ -1045,9 +1047,9 @@ export function DailyReportDialog({
     ...(detail?.downtime_lines ?? []).map((line) => ({
       label: `${t("production.ofDetails.time.downtime")} — ${
         [
-          line.downtime_type && t(`production.downtime.type.${line.downtime_type}` as Parameters<typeof t>[0]),
-          line.classification && t(`production.downtime.classification.${line.classification}` as Parameters<typeof t>[0]),
-          line.motif && t(`production.downtime.motif.${line.motif}` as Parameters<typeof t>[0]),
+          line.downtime_type && downtimeLabel(t, "type", line.downtime_type),
+          line.classification && downtimeLabel(t, "classification", line.classification),
+          line.motif && downtimeLabel(t, "motif", line.motif),
         ]
           .filter(Boolean)
           .join(" · ") || t("production.waste.unknownItem")

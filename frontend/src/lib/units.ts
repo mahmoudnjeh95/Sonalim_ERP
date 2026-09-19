@@ -208,6 +208,21 @@ export function totalsByUomCategory(
 }
 
 /**
+ * How many kilograms one unit of a product weighs, or null when the product is
+ * not counted by weight (or its unit is not loaded yet). A stored quantity is in
+ * its product's own unit — tonnes for rebroyat — so it must be multiplied by
+ * this before it is labelled or added to anything as kilograms.
+ */
+export function productKgRatio(
+  productId: string | null | undefined,
+  products: (CategorizedProduct & { uom_id: string })[],
+  uoms: CategorizedUom[],
+): number | null {
+  const uom = uoms.find((u) => u.id === products.find((p) => p.id === productId)?.uom_id);
+  return uom?.category === "weight" ? Number(uom.ratio_to_base) : null;
+}
+
+/**
  * A quantity of one item expressed in another item's unit, or null when the two
  * cannot be compared — different categories, or a unit nobody recorded.
  *

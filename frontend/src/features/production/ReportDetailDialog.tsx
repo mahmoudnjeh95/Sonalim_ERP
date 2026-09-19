@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useMemo, useState, type ReactNode } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import {
@@ -24,6 +24,9 @@ import { Skeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { formatDuration, formatQuantity } from "../../lib/units";
 import { listAuditLog, type AuditLogEntry } from "../admin/activityLog/api";
+import { listPartners } from "../partners/api";
+import { listLocations } from "../warehouse/api";
+import { listMachines, listMolds, listProducts, listWorkCenters, listWorkOrders } from "./api";
 
 export interface FigureRow {
   label: string;
@@ -396,6 +399,133 @@ function formatWhen(iso: string, language: string) {
   return new Date(iso).toLocaleString(language === "fr" ? "fr-FR" : "en-US", { dateStyle: "medium", timeStyle: "short" });
 }
 
+function humanizeAuditKey(key: string): string {
+  const labels: Record<string, string> = {
+    id: "ID",
+    of_id: "OF",
+    report_id: "Report",
+    report_type: "Type",
+    report_date: "Date",
+    product_id: "Produit",
+    product_name: "Produit",
+    sku: "SKU",
+    quantity: "Quantité",
+    qty: "Quantité",
+    direction: "Direction",
+    location_id: "Emplacement",
+    location: "Emplacement",
+    status: "Statut",
+    from_status: "De",
+    to_status: "Vers",
+    line_count: "Nombre de lignes",
+    total_cost: "Coût total",
+    window_days: "Délai",
+    supplier_id: "Fournisseur",
+    machine_id: "Machine",
+    team: "Équipe",
+    shift: "Shift",
+    revision: "Révision",
+    created_by: "Créé par",
+    validated_by: "Validé par",
+    rejected_by: "Rejeté par",
+    actor_id: "Acteur",
+  };
+
+  const normalized = key
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .replace(/[_-]+/g, " ")
+    .trim();
+
+  const direct = labels[key] ?? labels[normalized.toLowerCase().replace(/\s+/g, "_")];
+  if (direct) return direct;
+
+  return normalized
+    .split(" ")
+    .filter(Boolean)
+    .map((segment) => segment.charAt(0).toUpperCase() + segment.slice(1))
+    .join(" ");
+}
+
+function formatAuditValue(value: unknown, language: string): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "boolean") return value ? (language === "fr" ? "Oui" : "Yes") : language === "fr" ? "Non" : "No";
+  if (typeof value === "number") return Number.isInteger(value) ? String(value) : value.toLocaleString(language === "fr" ? "fr-FR" : "en-US");
+  if (typeof value === "string") return value.trim() || "—";
+  if (Array.isArray(value)) return value.length ? value.map((item) => formatAuditValue(item, language)).join(", ") : "—";
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return entries.length ? entries.map(([key, item]) => `${humanizeAuditKey(key)}: ${formatAuditValue(item, language)}`).join(" · ") : "—";
+  }
+  return String(value);
+}
+
+function renderAuditValue(value: unknown, language: string): React.ReactNode {
+  if (value === null || value === undefined) return "—";
+
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return <span>{formatAuditValue(value, language)}</span>;
+  }
+
+  if (Array.isArray(value)) {
+    if (!value.length) return "—";
+
+    if (value.every((item) => typeof item === "object" && item !== null && !Array.isArray(item))) {
+      return (
+        <div className="space-y-1">
+          {value.map((item, index) => (
+            <div key={`${index}-${JSON.stringify(item)}`} className="rounded border border-border/80 bg-background/60 p-2">
+              {Object.entries(item as Record<string, unknown>).map(([key, nestedValue]) => (
+                <div key={key} className="flex gap-2 text-xs">
+                  <span className="min-w-[7rem] text-muted-foreground">{humanizeAuditKey(key)}</span>
+                  <span className="break-all">{renderAuditValue(nestedValue, language)}</span>
+                </div>
+              ))}
+            </div>
+          ))}
+        </div>
+      );
+    }
+
+    return <span>{value.map((item) => formatAuditValue(item, language)).join(", ")}</span>;
+  }
+
+  if (typeof value === "object") {
+    const entries = Object.entries(value as Record<string, unknown>);
+    if (!entries.length) return "—";
+
+    return (
+      <div className="space-y-1">
+        {entries.map(([key, nestedValue]) => (
+          <div key={key} className="flex flex-col gap-0.5 text-xs">
+            <span className="font-medium text-muted-foreground">{humanizeAuditKey(key)}</span>
+            <div className="ml-1 break-all">{renderAuditValue(nestedValue, language)}</div>
+          </div>
+        ))}
+      </div>
+    );
+  }
+
+  return <span>{String(value)}</span>;
+}
+
+/**
+ * A snapshot in the audit trail stores what the report pointed at as ids
+ * (product, location, machine, supplier…), which mean nothing to whoever is
+ * reading the history. This swaps every string that is a known record's id for
+ * that record's name; anything else — notes, dates, statuses — passes through.
+ * Ids are ULIDs, unique across tables, so one flat lookup is enough.
+ */
+function replaceIdsWithNames(value: unknown, names: ReadonlyMap<string, string>): unknown {
+  if (typeof value === "string") return names.get(value) ?? value;
+  if (Array.isArray(value)) return value.map((item) => replaceIdsWithNames(item, names));
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [key, replaceIdsWithNames(item, names)]),
+    );
+  }
+  return value;
+}
+
 /**
  * Who filled and edited this report, and when — every draft save, submit,
  * correction, validation, rejection and reopening. `record_audit()` already
@@ -414,6 +544,28 @@ function ReportHistoryPanel({ reportId, entityType }: { reportId: string; entity
     queryKey: ["core", "audit-log", entityType, reportId],
     queryFn: () => listAuditLog(token, { entity_type: entityType, entity_id: reportId, limit: 200 }),
   });
+
+  // Same query keys the report tabs use, so these are cache hits, not new
+  // requests. A lookup the user can't read (403) just leaves its ids as-is.
+  const { data: products } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token) });
+  const { data: locations } = useQuery({ queryKey: ["warehouse", "locations"], queryFn: () => listLocations(token) });
+  const { data: machines } = useQuery({ queryKey: ["production", "machines", "all"], queryFn: () => listMachines(token) });
+  const { data: molds } = useQuery({ queryKey: ["production", "molds"], queryFn: () => listMolds(token) });
+  const { data: workCenters } = useQuery({ queryKey: ["production", "work-centers"], queryFn: () => listWorkCenters(token) });
+  const { data: workOrders } = useQuery({ queryKey: ["production", "work-orders"], queryFn: () => listWorkOrders(token) });
+  const { data: partners } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
+
+  const names = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const product of products ?? []) map.set(product.id, product.name);
+    for (const location of locations ?? []) map.set(location.id, location.name);
+    for (const machine of machines ?? []) map.set(machine.id, `${machine.code} — ${machine.name}`);
+    for (const mold of molds ?? []) map.set(mold.id, mold.name);
+    for (const workCenter of workCenters ?? []) map.set(workCenter.id, workCenter.name);
+    for (const workOrder of workOrders ?? []) map.set(workOrder.id, workOrder.reference);
+    for (const partner of partners ?? []) map.set(partner.id, partner.name);
+    return map;
+  }, [products, locations, machines, molds, workCenters, workOrders, partners]);
 
   function actionLabel(action: string): string {
     const suffix = actionSuffix(action);
@@ -460,9 +612,13 @@ function ReportHistoryPanel({ reportId, entityType }: { reportId: string; entity
             </span>
           </button>
           {expanded === entry.id && (
-            <pre className="mt-2 max-h-48 overflow-auto rounded bg-muted/50 p-2 text-xs">
-              {JSON.stringify(entry.payload, null, 2)}
-            </pre>
+            <div className="mt-2 max-h-64 overflow-auto rounded border border-border/80 bg-muted/30 p-2.5">
+              {entry.payload && Object.keys(entry.payload).length > 0 ? (
+                <div className="space-y-2">{renderAuditValue(replaceIdsWithNames(entry.payload, names), language)}</div>
+              ) : (
+                <p className="text-xs text-muted-foreground">{t("common.noData")}</p>
+              )}
+            </div>
           )}
         </div>
       ))}

@@ -11,7 +11,6 @@ import {
   Factory,
   Gauge,
   Loader2,
-  PackageCheck,
   Recycle,
   Scale,
   Sparkles,
@@ -34,10 +33,20 @@ import { UnitBreakdownStat } from "../../components/patterns/UnitBreakdownStat";
 import { StatBreakdownPopover, type StatBreakdownRow } from "../../components/patterns/StatBreakdownPopover";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { DateRangeFilter } from "../../components/patterns/DateRangeFilter";
-import { commonUnit, convertQuantity, formatQuantity, productUnit, totalsByUomCategory, UTILITY_UNITS } from "../../lib/units";
+import { commonUnit, convertQuantity, formatQuantity, productKgRatio, productUnit, totalsByUomCategory, UTILITY_UNITS } from "../../lib/units";
+import { autoWeightUnit, fromKg } from "../../lib/weightUnit";
 import { listUoms } from "../warehouse/api";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { outlineIcon } from "../../components/patterns/outlineIcon";
 import { cn } from "../../lib/utils";
+import AllClearIllustration from "../../assets/illustrations/empty-states/empty-all-clear.svg?react";
+import MachineMonitoringIllustration from "../../assets/illustrations/machine-monitoring.svg?react";
+import ProductionLineIllustration from "../../assets/illustrations/production-line.svg?react";
+import ShiftTeamIllustration from "../../assets/illustrations/shift-team.svg?react";
+import YieldWasteIllustration from "../../assets/illustrations/yield-waste.svg?react";
+import OutputSvg from "../../assets/icons/production/output.svg?react";
+import RawMaterialsSvg from "../../assets/icons/production/raw-materials.svg?react";
+import WorkOrderSvg from "../../assets/icons/production/work-order.svg?react";
 import {
   getRecipeCorrelationInsight,
   getWorkOrderConsolidation,
@@ -116,6 +125,10 @@ interface Alert {
   /** Where the alert is resolved — an alert you cannot act on is just noise. */
   to: string;
 }
+
+const OutputIcon = outlineIcon(OutputSvg);
+const RawMaterialsIcon = outlineIcon(RawMaterialsSvg);
+const WorkOrderIcon = outlineIcon(WorkOrderSvg);
 
 export function ProductionDashboardTab() {
   const { session } = useAuth();
@@ -396,7 +409,8 @@ export function ProductionDashboardTab() {
   // scrap went into it — distinct from the Quality dashboard's disposition
   // chart, which tracks where *rejected* product ends up, not a batch's own
   // input/output efficiency.
-  const regrindSummary = buildRegrindSummary(regrindBatches as RegrindBatchSummary[], range);
+  const regrindSummary = buildRegrindSummary(regrindBatches as RegrindBatchSummary[], range, products, uoms);
+  const regrindLossUnit = regrindSummary.lossKg === null ? null : autoWeightUnit(regrindSummary.lossKg);
 
   // Finished-goods lots approaching their DLC, soonest first -- independent
   // of the dashboard's own date-range filter, since a lot doesn't stop being
@@ -465,7 +479,7 @@ export function ProductionDashboardTab() {
             <StatCard
               label={t("production.dashboard.stat.activeOrders")}
               value={activeOrders.length}
-              icon={<Factory className="h-5 w-5" />}
+              icon={<WorkOrderIcon className="h-5 w-5" />}
               accent="warning"
             />
           }
@@ -484,7 +498,7 @@ export function ProductionDashboardTab() {
               label={t("production.dashboard.stat.produced")}
               value={Math.round(produced)}
               unit={producedUnit}
-              icon={<PackageCheck className="h-5 w-5" />}
+              icon={<OutputIcon className="h-5 w-5" />}
               accent="success"
             />
           }
@@ -498,7 +512,7 @@ export function ProductionDashboardTab() {
               label={t("production.dashboard.stat.semolina")}
               value={Math.round(semolina)}
               unit={semolinaUnit}
-              icon={<Activity className="h-5 w-5" />}
+              icon={<RawMaterialsIcon className="h-5 w-5" />}
               accent="primary"
             />
           }
@@ -536,6 +550,7 @@ export function ProductionDashboardTab() {
             {alerts.length === 0 ? (
               <EmptyState
                 icon={<ClipboardCheck className="h-5 w-5" />}
+                illustration={<AllClearIllustration className="h-44 w-56" />}
                 title={t("production.dashboard.alerts.empty.title")}
                 description={t("production.dashboard.alerts.empty.description")}
               />
@@ -673,11 +688,16 @@ export function ProductionDashboardTab() {
                 value={regrindSummary.yieldRatio !== null ? `${(regrindSummary.yieldRatio * 100).toFixed(1)}%` : "—"}
               />
               <MiniStat
-                label={t("production.regrind.stat.totalLoss")}
+                label={t("production.regrind.stat.totalLossLabel")}
                 value={
-                  <>
-                    {formatQty(regrindSummary.lossTotal)} <span className="text-sm font-normal text-muted-foreground">KG</span>
-                  </>
+                  regrindSummary.lossKg === null || regrindLossUnit === null ? (
+                    "—"
+                  ) : (
+                    <>
+                      {formatQuantity(fromKg(regrindSummary.lossKg, regrindLossUnit))}{" "}
+                      <span className="text-sm font-normal text-muted-foreground">{regrindLossUnit === "kg" ? "KG" : "t"}</span>
+                    </>
+                  )
                 }
               />
               <MiniStat label={t("production.dashboard.regrind.finishedBatches")} value={regrindSummary.finishedCount} />
@@ -695,6 +715,7 @@ export function ProductionDashboardTab() {
           {activeOrders.length === 0 ? (
             <EmptyState
               icon={<Factory className="h-5 w-5" />}
+              illustration={<ProductionLineIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.active.empty.title")}
               description={t("production.dashboard.active.empty.description")}
             />
@@ -784,6 +805,7 @@ export function ProductionDashboardTab() {
           {teamLeaderboard.length === 0 ? (
             <EmptyState
               icon={<Users className="h-5 w-5" />}
+              illustration={<ShiftTeamIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.teamPerformance.empty.title")}
               description={t("production.dashboard.teamPerformance.empty.description")}
             />
@@ -848,6 +870,7 @@ export function ProductionDashboardTab() {
           {teamSemouleWaste.length === 0 ? (
             <EmptyState
               icon={<Recycle className="h-5 w-5" />}
+              illustration={<YieldWasteIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.chart.semouleWaste.empty.title")}
               description={t("production.dashboard.chart.semouleWaste.empty.description")}
             />
@@ -999,6 +1022,7 @@ export function ProductionDashboardTab() {
           {machineSummary.length === 0 ? (
             <EmptyState
               icon={<Gauge className="h-5 w-5" />}
+              illustration={<MachineMonitoringIllustration className="h-auto w-56 max-w-full" />}
               title={t("production.dashboard.machinePerformance.empty.title")}
               description={t("production.dashboard.machinePerformance.empty.description")}
             />
@@ -1827,7 +1851,8 @@ interface RegrindSummary {
   pendingCount: number;
   inputTotal: number;
   outputTotal: number;
-  lossTotal: number;
+  /** Kilograms, or null when a batch's unit is not a known weight unit. */
+  lossKg: number | null;
   yieldRatio: number | null;
 }
 
@@ -1837,8 +1862,18 @@ interface RegrindSummary {
  * cockpit uses ("YYYY-MM-DD" sorts lexicographically). Only finished batches
  * (actual_output_quantity set) have a real yield; a batch still new or
  * assigned has not been weighed back in yet.
+ *
+ * A batch's quantities are in its output product's own unit (tonnes for
+ * rebroyat), so the loss is restated in kg per batch before summing. If any
+ * finished batch has no weight unit the loss is withheld (null) rather than
+ * summed and mislabelled.
  */
-function buildRegrindSummary(batches: RegrindBatchSummary[], range: { from: string; to: string }): RegrindSummary {
+function buildRegrindSummary(
+  batches: RegrindBatchSummary[],
+  range: { from: string; to: string },
+  products: Parameters<typeof productKgRatio>[1],
+  uoms: Parameters<typeof productKgRatio>[2],
+): RegrindSummary {
   const inRange = batches.filter((b) => {
     const day = b.created_at.slice(0, 10);
     return day >= range.from && day <= range.to;
@@ -1846,13 +1881,16 @@ function buildRegrindSummary(batches: RegrindBatchSummary[], range: { from: stri
   const finished = inRange.filter((b) => b.actual_output_quantity !== null);
   const inputTotal = sum(finished.map((b) => b.input_quantity_total));
   const outputTotal = sum(finished.map((b) => b.actual_output_quantity as number));
-  const lossTotal = sum(finished.map((b) => b.loss_quantity ?? 0));
+  const lossKgByBatch = finished.map((b) => {
+    const kgPerUnit = productKgRatio(b.output_product_id, products, uoms);
+    return kgPerUnit === null ? null : (b.loss_quantity ?? 0) * kgPerUnit;
+  });
   return {
     finishedCount: finished.length,
     pendingCount: inRange.length - finished.length,
     inputTotal,
     outputTotal,
-    lossTotal,
+    lossKg: lossKgByBatch.some((kg) => kg === null) ? null : sum(lossKgByBatch as number[]),
     yieldRatio: inputTotal > 0 ? outputTotal / inputTotal : null,
   };
 }
@@ -1903,7 +1941,8 @@ function formatQty(amount: number): string {
 // under a tonne is easier to read in kg, matching how the plant itself talks
 // about a small spill; at or above a tonne it switches to tonnes.
 function formatWasteStageQuantity(kg: number): string {
-  return Math.abs(kg) < 1000 ? formatQuantity(kg, "kg") : formatQuantity(kg / 1000, "t");
+  const unit = autoWeightUnit(kg);
+  return formatQuantity(fromKg(kg, unit), unit);
 }
 
 function sum(values: number[]): number {

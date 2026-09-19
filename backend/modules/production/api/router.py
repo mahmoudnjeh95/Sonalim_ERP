@@ -1156,6 +1156,7 @@ def _serialize_work_order(order: WorkOrder) -> dict:
         "created_by": order.created_by,
         "closed_at": order.closed_at.isoformat() if order.closed_at is not None else None,
         "closed_by": order.closed_by,
+        "is_regrind": order.is_regrind,
     }
 
 
@@ -1568,6 +1569,7 @@ def _serialize_scrap(scrap: ScrapRecord) -> dict:
         "is_reground": scrap.is_reground,
         "work_center_id": scrap.work_center_id,
         "source_note": scrap.source_note,
+        "regrind_work_order_id": scrap.regrind_work_order_id,
     }
 
 

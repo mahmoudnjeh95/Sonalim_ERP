@@ -114,3 +114,116 @@ def test_regrind_batch_traces_back_to_the_production_of(db):
     assert source["product_id"] == env["pasta_product"]
     assert source["scrap_type"] == "cutting"
     assert source["quantity"] == 2.5
+
+
+def test_scrap_list_names_the_ofr_that_consumed_it_and_only_then(db):
+    env = _seed(db)
+    scraps = ScrapService(db)
+    consumed = scraps.record_scrap(
+        tenant_id=TENANT, actor_id=env["actor"], scrap_type="cutting",
+        product_id=env["pasta_product"], quantity=2.5, work_order_id=env["production_of"].id,
+    )
+    available = scraps.record_scrap(
+        tenant_id=TENANT, actor_id=env["actor"], scrap_type="cutting",
+        product_id=env["pasta_product"], quantity=1, work_order_id=env["production_of"].id,
+    )
+    batch = RegrindService(db).create_regrind_batch(
+        tenant_id=TENANT, actor_id=env["actor"],
+        scrap_record_ids=[consumed.value.id], work_center_id=env["work_center"],
+    )
+    assert isinstance(batch, Ok), getattr(batch, "message", "")
+
+    by_id = {s.id: s for s in scraps.list_scrap(tenant_id=TENANT)}
+    assert by_id[consumed.value.id].regrind_work_order_id == batch.value["work_order"].id
+    assert by_id[available.value.id].regrind_work_order_id is None
+
+
+def test_only_the_regrind_order_is_flagged_is_regrind(db):
+    env = _seed(db)
+    scrap = ScrapService(db).record_scrap(
+        tenant_id=TENANT, actor_id=env["actor"], scrap_type="cutting",
+        product_id=env["pasta_product"], quantity=2.5, work_order_id=env["production_of"].id,
+    )
+    batch = RegrindService(db).create_regrind_batch(
+        tenant_id=TENANT, actor_id=env["actor"],
+        scrap_record_ids=[scrap.value.id], work_center_id=env["work_center"],
+    )
+    assert isinstance(batch, Ok), getattr(batch, "message", "")
+
+    flags = {o.id: o.is_regrind for o in WorkOrderService(db).list_work_orders(TENANT)}
+    assert flags == {env["production_of"].id: False, batch.value["work_order"].id: True}
+
+
+def test_new_regrind_orders_are_numbered_in_the_ofr_series(db):
+    env = _seed(db)
+    scrap = ScrapService(db).record_scrap(
+        tenant_id=TENANT, actor_id=env["actor"], scrap_type="cutting",
+        product_id=env["pasta_product"], quantity=2.5, work_order_id=env["production_of"].id,
+    )
+    batch = RegrindService(db).create_regrind_batch(
+        tenant_id=TENANT, actor_id=env["actor"],
+        scrap_record_ids=[scrap.value.id], work_center_id=env["work_center"],
+    )
+    assert isinstance(batch, Ok), getattr(batch, "message", "")
+    assert batch.value["work_order"].reference.startswith("OFR-")
+    assert env["production_of"].reference.startswith("OF-")
+
+
+def test_repair_migration_renumbers_a_regrind_order_left_on_the_of_series(db):
+    from pathlib import Path
+
+    env = _seed(db)
+    scraps = ScrapService(db)
+    regrind = RegrindService(db)
+    orders = []
+    for _ in range(3):
+        scrap = scraps.record_scrap(
+            tenant_id=TENANT, actor_id=env["actor"], scrap_type="cutting",
+            product_id=env["pasta_product"], quantity=1, work_order_id=env["production_of"].id,
+        )
+        batch = regrind.create_regrind_batch(
+            tenant_id=TENANT, actor_id=env["actor"],
+            scrap_record_ids=[scrap.value.id], work_center_id=env["work_center"],
+        )
+        assert isinstance(batch, Ok), getattr(batch, "message", "")
+        orders.append(batch.value["work_order"].id)
+    first, second, third = orders
+
+    # What a pre-0037 backend left behind: the middle batch on the "OF-" series.
+    db.execute("UPDATE production.work_orders SET reference = 'OF-000999' WHERE id = %s", (second,))
+    before = {
+        oid: ref for oid, ref in db.execute(
+            "SELECT id, reference FROM production.work_orders WHERE tenant_id = %s", (TENANT,)
+        ).fetchall()
+    }
+
+    migration = Path(__file__).parents[1] / "migrations" / "0044_production_regrind_reference_repair.sql"
+    db.execute(migration.read_text(encoding="utf-8"))
+
+    after = {
+        oid: ref for oid, ref in db.execute(
+            "SELECT id, reference FROM production.work_orders WHERE tenant_id = %s", (TENANT,)
+        ).fetchall()
+    }
+    assert after[first] == before[first]
+    assert after[third] == before[third]
+    assert after[env["production_of"].id] == before[env["production_of"].id]
+    assert after[second].startswith("OFR-") and after[second] not in (before[first], before[third])
+    # ...and the counter moved past it, so the next regrind order cannot collide.
+    next_batch_scrap = scraps.record_scrap(
+        tenant_id=TENANT, actor_id=env["actor"], scrap_type="cutting",
+        product_id=env["pasta_product"], quantity=1, work_order_id=env["production_of"].id,
+    )
+    nxt = regrind.create_regrind_batch(
+        tenant_id=TENANT, actor_id=env["actor"],
+        scrap_record_ids=[next_batch_scrap.value.id], work_center_id=env["work_center"],
+    )
+    assert isinstance(nxt, Ok), getattr(nxt, "message", "")
+    assert nxt.value["work_order"].reference not in after.values()
+
+    # Re-running it changes nothing.
+    db.execute(migration.read_text(encoding="utf-8"))
+    again = {oid: ref for oid, ref in db.execute(
+        "SELECT id, reference FROM production.work_orders WHERE tenant_id = %s", (TENANT,)
+    ).fetchall() if oid in after}
+    assert again == after

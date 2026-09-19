@@ -4,10 +4,13 @@ import { useLocation } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Sidebar } from "./Sidebar";
 import { AppLoader } from "../components/patterns/AppLoader";
+import { useI18n } from "../lib/i18n";
 
 export function AppLayout({ children }: { children: ReactNode }) {
   const location = useLocation();
+  const { t } = useI18n();
   const previousPathRef = useRef(location.pathname);
+  const mainRef = useRef<HTMLElement>(null);
   const [showRouteLoader, setShowRouteLoader] = useState(false);
 
   useEffect(() => {
@@ -36,14 +39,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
   return (
     <div className="relative flex h-screen overflow-hidden">
       <Sidebar />
-      <main className="relative flex-1 overflow-y-auto overflow-x-hidden px-8 py-8">
+      <main ref={mainRef} className="relative flex-1 overflow-y-auto overflow-x-hidden px-8 py-8">
         {showRouteLoader && (
           <div className="absolute inset-0 z-20 flex items-center justify-center bg-background/60 backdrop-blur-[2px]">
-            <AppLoader label="Loading…" className="py-8" />
+            <AppLoader label={t("app.loading")} className="py-8" />
           </div>
         )}
 
-        <AnimatePresence mode="wait">
+        <AnimatePresence mode="wait" onExitComplete={() => mainRef.current?.scrollTo({ top: 0 })}>
           <motion.div
             key={location.pathname}
             initial={{ opacity: 0, y: 6 }}

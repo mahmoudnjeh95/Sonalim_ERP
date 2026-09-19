@@ -253,6 +253,60 @@ def test_deleting_an_unknown_option_is_not_found(db, actor):
     assert result.code == "NOT_FOUND"
 
 
+# --- arrêt type, classification and motif ----------------------------------
+
+
+@pytest.mark.parametrize("kind", ["downtime_type", "downtime_classification", "downtime_motif"])
+def test_the_arret_vocabulary_can_be_extended(db, actor, kind):
+    option = _create(db, actor, kind=kind, label="Panne compresseur")
+    assert option["kind"] == kind
+    listed = ReportOptionsService(db).list_options(tenant_id=TENANT, kind=kind)
+    assert [o["label"] for o in listed] == ["Panne compresseur"]
+
+
+def test_the_arret_lists_are_separate_from_each_other_and_from_shifts(db, actor):
+    _create(db, actor, kind="downtime_type", label="Autre")
+    _create(db, actor, kind="downtime_motif", label="Autre")
+    _create(db, actor, kind="shift", label="Autre")
+
+    service = ReportOptionsService(db)
+    for kind in ("downtime_type", "downtime_motif", "shift"):
+        assert len(service.list_options(tenant_id=TENANT, kind=kind)) == 1
+
+
+@pytest.mark.parametrize(
+    ("kind", "column"),
+    [
+        ("downtime_type", "downtime_type"),
+        ("downtime_classification", "classification"),
+        ("downtime_motif", "motif"),
+    ],
+)
+def test_an_arret_option_a_line_was_filed_under_is_retired_not_removed(db, actor, kind, column):
+    option = _create(db, actor, kind=kind, label="Panne compresseur")
+    _file_downtime_line(db, actor, **{column: "Panne compresseur"})
+
+    result = ReportOptionsService(db).delete_option(tenant_id=TENANT, actor_id=actor, option_id=option["id"])
+    assert isinstance(result, Ok)
+    assert result.value["outcome"] == "retired"
+
+
+def test_an_unused_arret_option_is_deleted_outright(db, actor):
+    option = _create(db, actor, kind="downtime_motif", label="Panne compresseur")
+    result = ReportOptionsService(db).delete_option(tenant_id=TENANT, actor_id=actor, option_id=option["id"])
+    assert result.value["outcome"] == "deleted"
+
+
+def test_a_motif_is_not_retired_because_a_type_line_shares_its_name(db, actor):
+    """Each kind is matched against its own column; crossing them would retire
+    options nobody has used."""
+    option = _create(db, actor, kind="downtime_motif", label="Nettoyage")
+    _file_downtime_line(db, actor, downtime_type="Nettoyage")
+
+    result = ReportOptionsService(db).delete_option(tenant_id=TENANT, actor_id=actor, option_id=option["id"])
+    assert result.value["outcome"] == "deleted"
+
+
 # --- tenancy and audit ------------------------------------------------------
 
 
@@ -312,11 +366,23 @@ def _file_report(db, actor, *, shift="Matin", team=None):
     """A bare production report row. The lists are matched on the stored label,
     so nothing here needs to go through the report service."""
     of_id = _work_order(db, actor)
+    report_id = str(ULID())
     db.execute(
         "INSERT INTO production.production_reports "
         "(id, tenant_id, of_id, report_type, report_date, team, shift, status, created_by) "
         "VALUES (%s, %s, %s, 'daily', %s, %s, %s, 'draft', %s)",
-        (str(ULID()), TENANT, of_id, datetime.date(2026, 9, 1), team, shift, actor),
+        (report_id, TENANT, of_id, datetime.date(2026, 9, 1), team, shift, actor),
+    )
+    return report_id
+
+
+def _file_downtime_line(db, actor, *, motif=None, downtime_type=None, classification=None):
+    report_id = _file_report(db, actor)
+    db.execute(
+        "INSERT INTO production.report_downtime_lines "
+        "(id, tenant_id, report_id, motif, downtime_type, classification, minutes) "
+        "VALUES (%s, %s, %s, %s, %s, %s, 30)",
+        (str(ULID()), TENANT, report_id, motif, downtime_type, classification),
     )
 
 

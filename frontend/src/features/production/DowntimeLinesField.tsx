@@ -3,11 +3,10 @@ import { Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Select } from "../../components/ui/select";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useI18n } from "../../lib/i18n";
 import { formatDuration } from "../../lib/units";
-import { DOWNTIME_MOTIFS, DOWNTIME_TYPES, DOWNTIME_CLASSIFICATIONS } from "./DowntimeMotifSelect";
+import { DowntimeOptionField } from "./downtimeOptions";
 
 /** One row of the arrêt editor. */
 export interface DowntimeLineForm {
@@ -58,56 +57,26 @@ export function DowntimeLinesField<TFieldValues extends FieldValues>({
           {fields.map((field, index) => (
             <div key={field.id} className="space-y-2 rounded-lg border border-border p-2">
               <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-3">
-                <div className="space-y-1">
-                  <Label htmlFor={`${name}_${index}_downtime_type`} className="text-xs">
-                    {t("production.downtime.field.type")}
-                  </Label>
-                  <Select
-                    id={`${name}_${index}_downtime_type`}
-                    {...form.register(`${name}.${index}.downtime_type` as Path<TFieldValues>)}
-                  >
-                    <option value="">—</option>
-                    {DOWNTIME_TYPES.map((type) => (
-                      <option key={type} value={type}>
-                        {t(`production.downtime.type.${type}` as Parameters<typeof t>[0])}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                <div className="space-y-1">
-                  <Label htmlFor={`${name}_${index}_classification`} className="text-xs">
-                    {t("production.downtime.field.classification")}
-                  </Label>
-                  <Select
-                    id={`${name}_${index}_classification`}
-                    {...form.register(`${name}.${index}.classification` as Path<TFieldValues>)}
-                  >
-                    <option value="">—</option>
-                    {DOWNTIME_CLASSIFICATIONS.map((classification) => (
-                      <option key={classification} value={classification}>
-                        {t(`production.downtime.classification.${classification}` as Parameters<typeof t>[0])}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                <div className="space-y-1">
-                  <Label htmlFor={`${name}_${index}_motif`} className="text-xs">
-                    {t("production.downtime.field.motif")}
-                  </Label>
-                  <Select
-                    id={`${name}_${index}_motif`}
-                    {...form.register(`${name}.${index}.motif` as Path<TFieldValues>)}
-                  >
-                    <option value="">—</option>
-                    {DOWNTIME_MOTIFS.map((motif) => (
-                      <option key={motif} value={motif}>
-                        {t(`production.downtime.motif.${motif}` as Parameters<typeof t>[0])}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
+                {(
+                  [
+                    ["type", "downtime_type"],
+                    ["classification", "classification"],
+                    ["motif", "motif"],
+                  ] as const
+                ).map(([kind, key]) => (
+                  <DowntimeOptionField
+                    key={kind}
+                    id={`${name}_${index}_${key}`}
+                    field={kind}
+                    registration={form.register(`${name}.${index}.${key}` as Path<TFieldValues>)}
+                    current={watchedLines[index]?.[key]}
+                    onPick={(value) =>
+                      form.setValue(`${name}.${index}.${key}` as Path<TFieldValues>, value as never, {
+                        shouldDirty: true,
+                      })
+                    }
+                  />
+                ))}
               </div>
 
               <div className="grid grid-cols-1 items-end gap-2 sm:grid-cols-[minmax(0,7rem)_minmax(0,1fr)_auto]">

@@ -1,5 +1,6 @@
 /**
- * The tenant's shift and team lists.
+ * The tenant's shift and team lists, and its additions to the arrêt type,
+ * classification and motif lists.
  *
  * These were free text on every report form, so the same shift arrived spelled
  * three ways and nothing grouped by it. They live in `core` rather than in
@@ -7,7 +8,12 @@
  */
 import { apiFetch } from "./api";
 
-export type ReportOptionKind = "shift" | "team";
+export type ReportOptionKind =
+  | "shift"
+  | "team"
+  | "downtime_type"
+  | "downtime_classification"
+  | "downtime_motif";
 
 export interface ReportOption {
   id: string;
