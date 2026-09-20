@@ -66,3 +66,51 @@ body {
     display: none;
   }
 }
+
+/* Production board: the conveyor of each line and the team on shift.
+   Motion carries state -- pellets flow while a line runs, crawl in
+   maintenance and freeze at a stop; the team on shift blinks. */
+@keyframes board-flow {
+  0% { left: 2%; opacity: 0; }
+  8% { opacity: 1; }
+  92% { opacity: 1; }
+  100% { left: 98%; opacity: 0; }
+}
+
+@keyframes board-blink {
+  50% { opacity: 0.35; }
+}
+
+@keyframes board-ring {
+  0% { box-shadow: 0 0 0 0 rgb(245 169 0 / 0.6); }
+  70% { box-shadow: 0 0 0 7px rgb(245 169 0 / 0); }
+  100% { box-shadow: 0 0 0 0 rgb(245 169 0 / 0); }
+}
+
+@keyframes board-carry {
+  0% { left: 0; opacity: 0; }
+  15% { opacity: 1; }
+  80% { opacity: 1; }
+  100% { left: calc(100% - 28px); opacity: 0; }
+}
+
+.board-pellet {
+  position: absolute;
+  width: 9px;
+  height: 9px;
+  border-radius: 9999px;
+  background: #f5b51b;
+  animation: board-flow 3.4s linear infinite;
+  animation-delay: calc(var(--d) * -1);
+}
+.board-belt-maintenance .board-pellet { animation-duration: 9s; }
+.board-belt-down .board-pellet,
+.board-belt-suspended .board-pellet { animation-play-state: paused; opacity: 0.4; }
+.board-team-now { animation: board-blink 1.3s ease-in-out infinite; }
+.board-team-now .board-avatar { animation: board-ring 1.4s infinite; }
+.board-carry { position: absolute; animation: board-carry 3.2s ease-in-out infinite; }
+
+@media (prefers-reduced-motion: reduce) {
+  .board-pellet, .board-team-now, .board-team-now .board-avatar, .board-carry { animation: none; }
+  .board-pellet { opacity: 0.6; }
+}

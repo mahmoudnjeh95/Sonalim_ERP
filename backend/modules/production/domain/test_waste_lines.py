@@ -176,3 +176,53 @@ def test_no_lines_means_no_categories_rather_than_zeroes():
     """An empty dict says nothing was lost. A dict of zeroes would claim every
     stage was checked and found clean, which no one reported."""
     assert waste_total_by_category(()) == {}
+
+
+# --- the plant's own waste types --------------------------------------------
+#
+# A tenant adds kinds of its own (an id in production.waste_types, entered on one
+# report). This module reads no database, so the caller passes the ids for the
+# report type being checked and the rules stay the same closed set.
+
+
+def test_a_plants_own_waste_type_is_accepted_on_the_report_it_belongs_to():
+    lines = (WasteLine(category="01PFFAB", product_id="pate", quantity=2),)
+    result = validate_waste_lines(lines, report_type="daily", custom_categories=frozenset({"01PFFAB"}))
+    assert isinstance(result, Ok)
+
+
+def test_a_plants_own_waste_type_is_not_valid_unless_the_caller_vouches_for_it():
+    """The caller passes only the ids that belong to this report type, so a type
+    entered on the daily report is refused on a packing report: it describes a
+    stage that report never ran."""
+    lines = (WasteLine(category="01PFFAB", product_id="pate", quantity=2),)
+    result = validate_waste_lines(lines, report_type="conditionnement", custom_categories=frozenset())
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_WASTE_CATEGORY"
+
+
+def test_a_plants_own_types_do_not_open_the_door_to_typos():
+    lines = (WasteLine(category="atelier", product_id="x", quantity=1),)
+    result = validate_waste_lines(lines, report_type="daily", custom_categories=frozenset({"01PFFAB"}))
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_WASTE_CATEGORY"
+
+
+def test_built_in_categories_still_work_alongside_the_plants_own():
+    lines = (
+        WasteLine(category="press", product_id="rebut", quantity=1),
+        WasteLine(category="01PFFAB", product_id="pate", quantity=2),
+    )
+    assert isinstance(
+        validate_waste_lines(lines, report_type="daily", custom_categories=frozenset({"01PFFAB"})), Ok
+    )
+
+
+def test_the_detail_validators_pass_the_plants_types_through():
+    daily = DailyReportDetail(waste_lines=(WasteLine(category="01PFFAB", product_id="pate", quantity=2),))
+    assert isinstance(validate_daily_detail(daily), Err)
+    assert isinstance(validate_daily_detail(daily, waste_categories=frozenset({"01PFFAB"})), Ok)
+
+    packing = ConditionnementReportDetail(waste_lines=(WasteLine(category="01CELLO", product_id="film", quantity=2),))
+    assert isinstance(validate_conditionnement_detail(packing), Err)
+    assert isinstance(validate_conditionnement_detail(packing, waste_categories=frozenset({"01CELLO"})), Ok)

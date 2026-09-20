@@ -3,7 +3,6 @@ from __future__ import annotations
 import psycopg
 
 from core.domain.result import Err, Ok, Result
-from modules.production.domain.production_report import WASTE_CATEGORIES_BY_REPORT_TYPE
 
 # Only validated reports count. A draft is a team's working notes and a rejected
 # report has been refused — consolidating either would let figures nobody approved
@@ -402,16 +401,19 @@ class OfConsolidationService:
         `net_semoule_waste` below needs the original kilo figure regardless --
         `daily_raw_kg_total` carries it unconverted.
         """
-        daily_categories = list(WASTE_CATEGORIES_BY_REPORT_TYPE["daily"])
+        # Which report a line sits on decides its basis, not which category it
+        # names: the plant's own waste types are daily or packing lines too, and
+        # a fixed list of category names would leave them out of the conversion.
         rows = self._connection.execute(
             f"""
             SELECT
                 w.category,
+                r.report_type,
                 w.product_id,
                 COALESCE(SUM(w.quantity), 0),
                 COALESCE(SUM(
                     CASE
-                        WHEN w.category = ANY(%s) AND u.category = 'weight' AND u.ratio_to_base > 0
+                        WHEN r.report_type = 'daily' AND u.category = 'weight' AND u.ratio_to_base > 0
                             THEN w.quantity / u.ratio_to_base
                         ELSE w.quantity
                     END
@@ -421,17 +423,17 @@ class OfConsolidationService:
             LEFT JOIN core.products p ON p.id = w.product_id AND p.tenant_id = r.tenant_id
             LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
             WHERE r.tenant_id = %s AND r.of_id = %s AND r.{_VALIDATED}
-            GROUP BY w.category, w.product_id
+            GROUP BY w.category, r.report_type, w.product_id
             """,
-            (daily_categories, tenant_id, of_id),
+            (tenant_id, of_id),
         ).fetchall()
 
         by_category: dict[str, float] = {}
         by_product: dict[str, float] = {}
         unattributed = 0.0
         daily_raw_kg_total = 0.0
-        for category, product_id, raw_quantity, converted_quantity in rows:
-            if category in WASTE_CATEGORIES_BY_REPORT_TYPE["daily"]:
+        for category, report_type, product_id, raw_quantity, converted_quantity in rows:
+            if report_type == "daily":
                 daily_raw_kg_total += float(raw_quantity)
             amount = float(converted_quantity)
             by_category[category] = by_category.get(category, 0.0) + amount

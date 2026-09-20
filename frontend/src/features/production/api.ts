@@ -616,43 +616,6 @@ export function getRegrindBatch(token: string, workOrderId: string) {
   return apiFetch<RegrindBatch>(`/production/regrind-batches/${workOrderId}`, { token });
 }
 
-// --- Metered resource types ------------------------------------------------
-//
-// The per-date and per-OF consumption ledgers these used to key are gone:
-// water, fuel and electricity are recorded on the daily production report now.
-// The lookup itself is kept pending the Phase 8 dashboard.
-
-export interface ResourceType {
-  id: string;
-  code: string;
-  name: string;
-  unit: string;
-}
-
-export interface CreateResourceTypeInput {
-  code: string;
-  name: string;
-  unit: string;
-}
-
-export interface UpdateResourceTypeInput {
-  code?: string;
-  name?: string;
-  unit?: string;
-}
-
-export function listResourceTypes(token: string) {
-  return apiFetch<ResourceType[]>("/production/resource-types", { token });
-}
-
-export function createResourceType(token: string, input: CreateResourceTypeInput) {
-  return apiFetch<ResourceType>("/production/resource-types", { method: "POST", token, body: input });
-}
-
-export function updateResourceType(token: string, resourceTypeId: string, input: UpdateResourceTypeInput) {
-  return apiFetch<ResourceType>(`/production/resource-types/${resourceTypeId}`, { method: "PATCH", token, body: input });
-}
-
 // --- Rendement (yield) ------------------------------------------------------
 
 export interface WorkOrderYield {
@@ -1199,20 +1162,53 @@ export interface ProductionReport {
 }
 
 /**
- * Where in the process material was lost. `raw_material`, `press`, `pouring`,
- * `cross`, `kneading` and `finished_product_conditioning` belong to the daily
- * report, `product` and `packaging` to the packing report — the backend
- * refuses a line filed under the other one's stage.
+ * Where in the process material was lost: either one of the built-ins below or
+ * the id of a kind the plant added itself (see `WasteType`). The backend refuses
+ * a line filed under a kind the report does not have, so a daily report never
+ * carries a packing stage.
+ *
+ * A string, not a union, because the plant's own ids are not known at compile
+ * time. Use `useWasteTypes().label(category)` to show one — never the raw value.
  */
-export type WasteCategory =
-  | "raw_material"
-  | "press"
-  | "pouring"
-  | "cross"
-  | "kneading"
-  | "finished_product_conditioning"
-  | "product"
-  | "packaging";
+export type WasteCategory = string;
+
+/**
+ * The built-in kinds, by the report they are entered on. `raw_material`, `press`,
+ * `pouring`, `cross`, `kneading` and `finished_product_conditioning` belong to
+ * the daily report, `product` and `packaging` to the packing report. Their names
+ * are translated; a plant's own kinds carry the name its administrator typed.
+ */
+export const BUILT_IN_WASTE_CATEGORIES = {
+  daily: ["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"],
+  conditionnement: ["product", "packaging"],
+} as const satisfies Record<ReportType, readonly string[]>;
+
+/** A déchet kind a plant defined for itself, entered on one report. */
+export interface WasteType {
+  /** What a line stores as its category. */
+  id: string;
+  name: string;
+  report_type: ReportType;
+  sort_order: number;
+  /** A retired kind is no longer offered on a new line but still explains old ones. */
+  is_active: boolean;
+}
+
+export function listWasteTypes(token: string) {
+  return apiFetch<WasteType[]>("/production/waste-types", { token });
+}
+
+export function createWasteType(token: string, input: { name: string; report_type: ReportType; sort_order?: number }) {
+  return apiFetch<WasteType>("/production/waste-types", { method: "POST", token, body: input });
+}
+
+export function updateWasteType(
+  token: string,
+  wasteTypeId: string,
+  input: { name?: string; sort_order?: number; is_active?: boolean },
+) {
+  return apiFetch<WasteType>(`/production/waste-types/${wasteTypeId}`, { method: "PATCH", token, body: input });
+}
 
 export interface WasteLine {
   category: WasteCategory;
@@ -1355,14 +1351,6 @@ export interface ProductionReportWithDetail extends ProductionReport {
   detail: DailyReportDetail | ConditionnementReportDetail | null;
 }
 
-export interface ReportRevision {
-  revision: number;
-  detail: Record<string, unknown>;
-  reason: string | null;
-  actor_id: string | null;
-  created_at: string;
-}
-
 export interface CreateDailyReportInput {
   of_id: string;
   report_date: string;
@@ -1387,10 +1375,6 @@ export function listReports(
 
 export function getReport(token: string, reportId: string) {
   return apiFetch<ProductionReportWithDetail>(`/production/reports/${reportId}`, { token });
-}
-
-export function listReportRevisions(token: string, reportId: string) {
-  return apiFetch<ReportRevision[]>(`/production/reports/${reportId}/revisions`, { token });
 }
 
 export function createDailyReport(token: string, input: CreateDailyReportInput) {
@@ -1623,7 +1607,7 @@ export interface PackagingVariance {
    */
   machine_carton_variance: number | null;
   machine_carton_variance_ratio: number | null;
-  tolerance_percent: number;
+  tolerance_percent: number | null;
   within_tolerance: boolean | null;
   missing: string[];
 }

@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.result import Err
 from core.tenancy import TenantContext, require_permission
-from modules.maintenance.api.equipment_service import EquipmentService
+from modules.maintenance.api.equipment_service import UNSET, EquipmentService
 from modules.maintenance.domain.equipment import Equipment
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -16,12 +16,15 @@ class CreateEquipmentRequest(BaseModel):
     work_center_id: str
     code: str
     name: str
+    production_stage: str | None = None
 
 
 class UpdateEquipmentRequest(BaseModel):
     work_center_id: str | None = None
     code: str | None = None
     name: str | None = None
+    # Sent as null it clears the stage; left out it is left as it is.
+    production_stage: str | None = None
 
 
 class TransitionEquipmentRequest(BaseModel):
@@ -35,6 +38,7 @@ def _serialize_equipment(equipment: Equipment) -> dict:
         "code": equipment.code,
         "name": equipment.name,
         "status": equipment.status,
+        "production_stage": equipment.production_stage,
     }
 
 
@@ -51,6 +55,7 @@ def create_equipment(
             work_center_id=body.work_center_id,
             code=body.code,
             name=body.name,
+            production_stage=body.production_stage,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -85,6 +90,7 @@ def update_equipment(
             work_center_id=body.work_center_id,
             code=body.code,
             name=body.name,
+            production_stage=body.production_stage if "production_stage" in body.model_fields_set else UNSET,
         )
         if isinstance(result, Err):
             connection.rollback()

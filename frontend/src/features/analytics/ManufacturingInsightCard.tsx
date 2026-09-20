@@ -2,14 +2,12 @@ import { motion } from "framer-motion";
 import { ArrowRight } from "lucide-react";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
-import { MotionSafeSvg } from "../../components/motion/MotionSafeSvg";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { AnalyticsStatusBadge, TONE_BORDER } from "./AnalyticsStatusBadge";
 import type { SvgComponent } from "./AnalyticsStates";
 import { useInsightText } from "./manufacturing/format";
 import type { Insight, InsightKind } from "./manufacturing/insights";
-import AlertPulse from "../../assets/animations/alert-pulse.svg?react";
 import CostIcon from "../../assets/icons/cost.svg?react";
 import MachineIcon from "../../assets/icons/machine.svg?react";
 import ProductionIcon from "../../assets/icons/production.svg?react";
@@ -40,7 +38,6 @@ export function ManufacturingInsightCard({
   const { t } = useI18n();
   const text = useInsightText();
   const Icon = KIND_ICON[insight.kind];
-  const critical = insight.tone === "danger";
 
   return (
     <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.22, delay: index * 0.05 }}>
@@ -53,11 +50,6 @@ export function ManufacturingInsightCard({
             <div>
               <p className="flex items-center gap-1.5 text-sm font-medium leading-tight">
                 {t(`analytics.insight.${insight.kind}.title` as TranslationKey)}
-                {critical && (
-                  <MotionSafeSvg>
-                    <AlertPulse aria-hidden viewBox="340 190 120 120" className="h-4 w-4" />
-                  </MotionSafeSvg>
-                )}
               </p>
               <p className="text-lg font-semibold tabular-nums leading-tight">{insight.value}</p>
             </div>

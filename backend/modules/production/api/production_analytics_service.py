@@ -124,9 +124,16 @@ def build_analytics_payload(connection, *, tenant_id: str, period: str, date: st
     ]
     current = trend[-1]
 
-    period_anomalies = [r for r in receipt_lines if r["is_cost_anomaly"] and date_from <= (r["invoice_date"] or "") <= date_to]
-    anomalies = period_anomalies or [r for r in receipt_lines if r["is_cost_anomaly"]]
-    anomalies = sorted(anomalies, key=lambda r: -(r["cost_deviation_pct"] or 0))[:20]
+    # Receipts priced above that material's own baseline, biggest deviation first. No
+    # "anomalous beyond X%" cut-off is applied here: the deviation is the recorded
+    # fact and the ranking is the only judgement. The first receipt for a material
+    # has no baseline (deviation None) and so never appears.
+    def _above_baseline(receipt: dict) -> bool:
+        return (receipt["cost_deviation_pct"] or 0) > 0
+
+    in_period = [r for r in receipt_lines if _above_baseline(r) and date_from <= (r["invoice_date"] or "") <= date_to]
+    anomalies = in_period or [r for r in receipt_lines if _above_baseline(r)]
+    anomalies = sorted(anomalies, key=lambda r: -r["cost_deviation_pct"])[:20]
 
     return {
         "period": period,

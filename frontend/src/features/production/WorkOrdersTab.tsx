@@ -38,6 +38,7 @@ import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
+import { formatQuantity } from "../../lib/units";
 import { rowEnterProps, highlightRowEnterProps } from "../../components/motion/rowMotion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -1113,7 +1114,7 @@ function OrderActions({
                   <div className="rounded-lg border border-border bg-background p-2.5">
                     <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.details.produced")}</p>
                     <p className="mt-1 text-lg font-semibold tabular-nums">
-                      {consolidation ? consolidation.produced_quantity : "—"}
+                      {consolidation ? formatQuantity(consolidation.produced_quantity, "t") : "—"}
                     </p>
                   </div>
                   <div className="rounded-lg border border-border bg-background p-2.5">
@@ -1149,7 +1150,9 @@ function OrderActions({
                   </div>
                   <div>
                     <span className="text-muted-foreground">{t("production.workOrders.details.produced")}: </span>
-                    <span className="font-medium">{consolidation ? consolidation.produced_quantity : "—"}</span>
+                    <span className="font-medium">
+                      {consolidation ? formatQuantity(consolidation.produced_quantity, "t") : "—"}
+                    </span>
                   </div>
                   <div>
                     <span className="text-muted-foreground">{t("production.workOrders.details.recipe")}: </span>

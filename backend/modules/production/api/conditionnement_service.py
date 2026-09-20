@@ -10,6 +10,7 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.production.api.production_report_service import ProductionReportService, _detail_to_json
 from modules.production.api.waste_line_store import load_waste_lines, replace_waste_lines
+from modules.production.api.waste_type_service import custom_waste_categories
 from modules.production.domain.packaging_estimate import tonnage_from_count
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
@@ -297,7 +298,12 @@ class ConditionnementReportService:
             return header_validation
 
         detail = detail or ConditionnementReportDetail()
-        detail_validation = validate_conditionnement_detail(detail)
+        detail_validation = validate_conditionnement_detail(
+            detail,
+            waste_categories=custom_waste_categories(
+                self._connection, tenant_id=tenant_id, report_type="conditionnement"
+            ),
+        )
         if isinstance(detail_validation, Err):
             return detail_validation
 
@@ -398,7 +404,12 @@ class ConditionnementReportService:
         if header.status != "draft":
             return Err("NOT_EDITABLE", f"a {header.status} report cannot be edited as a draft")
 
-        validation = validate_conditionnement_detail(detail)
+        validation = validate_conditionnement_detail(
+            detail,
+            waste_categories=custom_waste_categories(
+                self._connection, tenant_id=tenant_id, report_type="conditionnement"
+            ),
+        )
         if isinstance(validation, Err):
             return validation
 
@@ -437,7 +448,12 @@ class ConditionnementReportService:
         if header.status != "submitted":
             return Err("NOT_CORRECTABLE", f"only a submitted report can be corrected, not a {header.status} one")
 
-        validation = validate_conditionnement_detail(detail)
+        validation = validate_conditionnement_detail(
+            detail,
+            waste_categories=custom_waste_categories(
+                self._connection, tenant_id=tenant_id, report_type="conditionnement"
+            ),
+        )
         if isinstance(validation, Err):
             return validation
 

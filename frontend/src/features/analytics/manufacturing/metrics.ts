@@ -46,18 +46,19 @@ export function ratioPct(numerator: number, denominator: number): number | null 
   return denominator > 0 ? (numerator / denominator) * 100 : null;
 }
 
-export type Tone = "good" | "warning" | "danger" | "neutral";
+export type Tone = "good" | "warning" | "neutral";
 
 /**
- * How large a change against the previous period has to be before it is
- * flagged. These are display severities, not business targets: the plant has
- * no configured yield/downtime/quality target anywhere in the system, so the
- * only honest benchmark available is the previous equal-length period.
+ * A change against the previous period is judged by its direction alone. The
+ * plant has no configured yield/downtime/quality target anywhere in the system,
+ * so the only honest benchmark is the previous equal-length period, and no
+ * "small" or "large" band is invented on top of it. Both sides are compared at
+ * the precision the cards print (one decimal): a move that reads 96.5% → 96.5%
+ * is no change.
  */
-export const SEVERITY = {
-  ratioPoints: { warning: 0.5, danger: 2 },
-  quantityPercent: { warning: 5, danger: 15 },
-} as const;
+function atDisplayPrecision(value: number): number {
+  return Math.round(value * 10) / 10;
+}
 
 export interface Comparison {
   current: number | null;
@@ -69,33 +70,29 @@ export interface Comparison {
   direction: "up" | "down" | "flat" | null;
 }
 
-function toneFor(delta: number | null, higherIsBetter: boolean, limits: { warning: number; danger: number }): Tone {
-  if (delta === null) return "neutral";
-  const magnitude = Math.abs(delta);
-  if (magnitude < limits.warning) return "neutral";
-  const worse = higherIsBetter ? delta < 0 : delta > 0;
-  if (!worse) return "good";
-  return magnitude >= limits.danger ? "danger" : "warning";
+function toneFor(delta: number | null, higherIsBetter: boolean): Tone {
+  if (delta === null || delta === 0) return "neutral";
+  return (higherIsBetter ? delta > 0 : delta < 0) ? "good" : "warning";
 }
 
-function directionFor(delta: number | null, limits: { warning: number }): Comparison["direction"] {
+function directionFor(delta: number | null): Comparison["direction"] {
   if (delta === null) return null;
-  if (Math.abs(delta) < limits.warning) return "flat";
+  if (delta === 0) return "flat";
   return delta > 0 ? "up" : "down";
 }
 
 /** For a metric already expressed as a percentage (yield, conformity, downtime rate). */
 export function compareRatio(current: number | null, previous: number | null, higherIsBetter: boolean): Comparison {
-  const delta = current !== null && previous !== null ? current - previous : null;
-  const limits = SEVERITY.ratioPoints;
-  return { current, previous, delta, kind: "points", tone: toneFor(delta, higherIsBetter, limits), direction: directionFor(delta, limits) };
+  const delta =
+    current !== null && previous !== null ? atDisplayPrecision(atDisplayPrecision(current) - atDisplayPrecision(previous)) : null;
+  return { current, previous, delta, kind: "points", tone: toneFor(delta, higherIsBetter), direction: directionFor(delta) };
 }
 
 /** For an absolute quantity (tonnes, kg, minutes, cost per tonne). */
 export function compareQuantity(current: number | null, previous: number | null, higherIsBetter: boolean): Comparison {
-  const delta = current !== null && previous !== null && previous > 0 ? ((current - previous) / previous) * 100 : null;
-  const limits = SEVERITY.quantityPercent;
-  return { current, previous, delta, kind: "percent", tone: toneFor(delta, higherIsBetter, limits), direction: directionFor(delta, limits) };
+  const delta =
+    current !== null && previous !== null && previous > 0 ? atDisplayPrecision(((current - previous) / previous) * 100) : null;
+  return { current, previous, delta, kind: "percent", tone: toneFor(delta, higherIsBetter), direction: directionFor(delta) };
 }
 
 // --- Production / yield / waste (team-performance rows) ---------------------

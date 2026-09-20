@@ -39,7 +39,6 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.domain.packaging_estimate import (
-    DEFAULT_TOLERANCE_PERCENT,
     compute_variance,
     variance_to_json,
 )
@@ -58,8 +57,9 @@ class PackagingTolerancePolicyService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
-    def resolve_tolerance_percent(self, *, tenant_id: str, product_id: str | None) -> float:
-        """Per-product override, else the tenant default, else 2%."""
+    def resolve_tolerance_percent(self, *, tenant_id: str, product_id: str | None) -> float | None:
+        """Per-product override, else the tenant default, else None: with no
+        tolerance configured an ecart is shown but not judged."""
         if product_id is not None:
             row = self._connection.execute(
                 "SELECT tolerance_percent FROM production.packaging_tolerances "
@@ -74,7 +74,7 @@ class PackagingTolerancePolicyService:
             "WHERE tenant_id = %s AND product_id IS NULL",
             (tenant_id,),
         ).fetchone()
-        return float(row[0]) if row is not None else DEFAULT_TOLERANCE_PERCENT
+        return float(row[0]) if row is not None else None
 
     def set_policy(
         self, *, tenant_id: str, actor_id: str, tolerance_percent: float, product_id: str | None = None

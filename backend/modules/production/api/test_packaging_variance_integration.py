@@ -435,6 +435,7 @@ def test_the_ecart_never_refuses_a_validation(db, env, of):
         "SELECT status FROM production.production_reports WHERE id = %s", (report.id,)
     ).fetchone()[0]
     assert status == "validated"
+    PackagingTolerancePolicyService(db).set_policy(tenant_id=TENANT, actor_id=env["actor"], tolerance_percent=2)
     variance = PackagingVarianceService(db).for_of(tenant_id=TENANT, of_id=of.id).value
     assert variance["packet_variance"] == -24_999
     assert variance["within_tolerance"] is False
@@ -443,11 +444,19 @@ def test_the_ecart_never_refuses_a_validation(db, env, of):
 # ---- the tolerance -------------------------------------------------------
 
 
-def test_the_default_tolerance_is_two_percent(db, env):
+def test_with_no_tolerance_configured_there_is_none_to_resolve(db, env):
     resolved = PackagingTolerancePolicyService(db).resolve_tolerance_percent(
         tenant_id=TENANT, product_id=env["product"]
     )
-    assert resolved == 2.0
+    assert resolved is None
+
+
+def test_an_unconfigured_tolerance_leaves_the_ecart_unjudged(db, env, of):
+    _validated_report(db, env, of, tonnage=12.5, packets=24_750, cartons=1240, date=datetime.date(2026, 9, 1))
+    variance = PackagingVarianceService(db).for_of(tenant_id=TENANT, of_id=of.id).value
+    assert variance["packet_variance"] == -250
+    assert variance["tolerance_percent"] is None
+    assert variance["within_tolerance"] is None
 
 
 def test_a_product_override_beats_the_tenant_default(db, env):
@@ -465,9 +474,10 @@ def test_the_tolerance_changes_the_colour_not_the_figures(db, env, of):
     OF scope (decision 25)."""
     _validated_report(db, env, of, tonnage=12.5, packets=24_750, cartons=1240, date=datetime.date(2026, 9, 1))
     service = PackagingVarianceService(db)
+    PackagingTolerancePolicyService(db).set_policy(tenant_id=TENANT, actor_id=env["actor"], tolerance_percent=2)
     strict = service.for_of(tenant_id=TENANT, of_id=of.id).value
     assert strict["packet_variance"] == -250
-    assert strict["within_tolerance"] is True  # -1% against the 2% default
+    assert strict["within_tolerance"] is True  # -1% against the 2% the plant configured
 
     PackagingTolerancePolicyService(db).set_policy(
         tenant_id=TENANT, actor_id=env["actor"], tolerance_percent=0.5, product_id=env["product"]

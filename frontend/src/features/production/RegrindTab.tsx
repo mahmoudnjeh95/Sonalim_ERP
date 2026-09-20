@@ -91,6 +91,10 @@ const batchSchema = z.object({
 });
 type BatchForm = z.infer<typeof batchSchema>;
 
+// A loss is input minus output in floating point, so an exact match can leave a
+// residue of 1e-16; this only absorbs that, it is not a size below which a loss is ignored.
+const FLOAT_EPSILON = 1e-9;
+
 const SCRAP_QUERY_KEY = ["production", "scrap-records"] as const;
 const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
@@ -527,14 +531,14 @@ export function RegrindTab() {
       header: `${t("production.regrind.batches.column.loss")} (${weightUnit})`,
       defaultWidth: 150,
       // Only known once the batch is finished — before that there is nothing to
-      // highlight yet, only a plan. An écart of any size, once measured, is
-      // called out in red with a warning icon rather than blending into the row.
+      // highlight yet, only a plan. Any écart, once measured, is called out in red
+      // with a warning icon rather than blending into the row; no size is "too small".
       cell: (batch) =>
         batch.loss_quantity === null ? (
           <span className="text-muted-foreground" title={t("production.regrind.batches.pending")}>
             —
           </span>
-        ) : Math.abs(batch.loss_quantity) > 0.01 ? (
+        ) : Math.abs(batch.loss_quantity) > FLOAT_EPSILON ? (
           <span className="inline-flex items-center gap-1 font-medium text-destructive">
             <AlertTriangle className="h-3.5 w-3.5" />
             <span className="tabular-nums">{weightText(batch.output_product_id, batch.loss_quantity)}</span>

@@ -5,7 +5,8 @@ import { AnimatePresence, motion } from "framer-motion";
 import { AlertTriangle, CheckCircle2, ClipboardCheck, Inbox, Pencil, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { useI18n, type TranslationKey } from "../../lib/i18n";
+import { downtimeLabel } from "./downtimeOptions";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Checkbox } from "../../components/ui/checkbox";
@@ -32,6 +33,7 @@ import { cn } from "../../lib/utils";
 import AllClearIllustration from "../../assets/illustrations/empty-states/empty-all-clear.svg?react";
 import { RecipeCheckPanel } from "./RecipeCheckPanel";
 import { PackagingVariancePanel } from "./PackagingVariancePanel";
+import { useWasteTypes } from "./wasteTypes";
 import {
   type ConditionnementReportDetail,
   type DailyReportDetail,
@@ -682,6 +684,7 @@ function ReviewDialog({
     queryKey: ["core", "uoms"],
     queryFn: () => listUoms(token),
   });
+  const { label: wasteLabel } = useWasteTypes();
 
   // The quality rapport declares non-conforming stock in cartons, but an NC's
   // `quantity` (and the stock transfer it drives) is in the product's own unit
@@ -718,7 +721,9 @@ function ReviewDialog({
   const wasteFigures: ReviewFigure[] = (
     (productionDetail?.detail as { waste_lines?: WasteLine[] } | undefined)?.waste_lines ?? []
   ).map((line) => ({
-    label: `production.waste.category.${line.category}`,
+    // The kind's name, not a translation key: a plant's own kind has no key.
+    label: line.category,
+    labelText: wasteLabel(line.category),
     suffix:
       (line.product_id && products.find((p) => p.id === line.product_id)?.name) ||
       t("production.waste.unknownItem"),
@@ -730,7 +735,7 @@ function ReviewDialog({
 
   const figures = isQuality
     ? qualityFigures(qualityDetail?.detail, !ncPacketsPerCarton)
-    : [...productionFigures(item.source, productionDetail?.detail, units, products, uoms), ...wasteFigures];
+    : [...productionFigures(item.source, productionDetail?.detail, units, products, uoms, t), ...wasteFigures];
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -851,7 +856,7 @@ function ReviewDialog({
                   // Keyed by position: two déchets of the same stage are two rows.
                   <div key={`${f.label}:${index}`} className="flex items-baseline justify-between gap-3">
                     <dt className="text-sm text-muted-foreground">
-                      {t(f.label as Parameters<typeof t>[0])}
+                      {f.labelText ?? t(f.label as Parameters<typeof t>[0])}
                       {f.suffix ? ` — ${f.suffix}` : ""}
                     </dt>
                     <dd className="text-sm font-medium tabular-nums">
@@ -1023,6 +1028,8 @@ function ReviewDialog({
 interface ReviewFigure {
   /** A translation key; `suffix` carries anything that is not translatable. */
   label: string;
+  /** An already-readable name shown instead of translating `label`, for a name that has no key. */
+  labelText?: string;
   /** Appended after the translated label, e.g. the name of the item lost. */
   suffix?: string;
   value: number | string | null;
@@ -1045,6 +1052,7 @@ function productionFigures(
   },
   products: { id: string; name: string; uom_id: string }[],
   uoms: { id: string; code: string }[],
+  t: (key: TranslationKey) => string,
 ): ReviewFigure[] {
   if (!detail) return [];
   if (source === "daily") {
@@ -1075,7 +1083,14 @@ function productionFigures(
       // than one reason, since downtime became a list.
       ...d.downtime_lines.map((line) => ({
         label: "production.reports.field.downtimeMinutes",
-        suffix: [line.downtime_type, line.classification, line.motif].filter(Boolean).join(" · ") || undefined,
+        suffix:
+          [
+            line.downtime_type && downtimeLabel(t, "type", line.downtime_type),
+            line.classification && downtimeLabel(t, "classification", line.classification),
+            line.motif && downtimeLabel(t, "motif", line.motif),
+          ]
+            .filter(Boolean)
+            .join(" · ") || undefined,
         value: line.minutes,
         duration: true,
       })),

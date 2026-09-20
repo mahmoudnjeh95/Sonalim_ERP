@@ -18,6 +18,7 @@ from modules.production.api.of_consolidation_service import OfConsolidationServi
 from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.regrind_service import RegrindDefaultsService
 from modules.production.api.service import WorkOrderService
+from modules.production.api.waste_type_service import WasteTypeService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
@@ -402,6 +403,52 @@ def test_daily_waste_in_kg_is_restated_against_a_tonne_product(db, env, of):
 
     # Netted against the form's own kilos, not the converted 0.2 t figure --
     # summing the converted by_category here would have read this as -9.8.
+    assert waste["net_semoule_waste"] == 200 - 10
+
+
+def test_a_plants_own_daily_waste_type_is_restated_and_netted_like_a_built_in(db, env, of):
+    """A kind the plant added is not on any list of category names, so what makes
+    its line a daily one is the report it sits on. Left out of that, a 200 kg
+    spill logged under it would read as 200 t against a tonne product and drop out
+    of the écart net_semoule_waste is netted against. A packing-report kind, on
+    the other hand, is weighed in the item's own unit and must pass through."""
+    tonne_uom, tonne_product = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (tonne_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'CONSO-TONNE-OWN', 'Semoule en tonnes', %s)",
+        (tonne_product, TENANT, tonne_uom),
+    )
+    StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=tonne_product, location_id=env["location"], quantity=100,
+        correlation_id=str(ULID()), reference="seed", actor_id=env["actor"],
+    )
+    types = WasteTypeService(db)
+    pf_fab = types.create_type(tenant_id=TENANT, actor_id=env["actor"], name="Déchet PF fab", report_type="daily").value
+    cello = types.create_type(
+        tenant_id=TENANT, actor_id=env["actor"], name="Déchet cello", report_type="conditionnement"
+    ).value
+
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        semolina_quantity=12, semolina_product_id=tonne_product,
+        regrind_quantity=10,
+        waste_lines=(WasteLine(category=pf_fab["id"], product_id=tonne_product, quantity=200),),
+    )
+    _packing(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        packets_counted=900,
+        waste_lines=(WasteLine(category=cello["id"], product_id=env["film"], quantity=3),),
+    )
+
+    waste = _consolidate(db, of)["waste"]
+    assert waste["by_category"][pf_fab["id"]] == pytest.approx(0.2)
+    assert waste["by_category"][cello["id"]] == 3
+    # The plant's own daily kind is netted at its raw kilos, and the packing
+    # kind's 3 does not leak into the semoule-side écart.
     assert waste["net_semoule_waste"] == 200 - 10
 
 

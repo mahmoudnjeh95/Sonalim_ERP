@@ -60,6 +60,7 @@ import { groupRows, type GroupSpec } from "../../lib/groupRows";
 import { ReportDetailDialog, type FigureRow } from "./ReportDetailDialog";
 import { OfConsolidationHint } from "./OfConsolidationHint";
 import { downtimeLabel } from "./downtimeOptions";
+import { useWasteTypes } from "./wasteTypes";
 import {
   correctDailyReport,
   correctValidatedDailyReport,
@@ -86,7 +87,8 @@ import { UTILITY_UNITS, productUnit, totalsByUomCategory, formatQuantity } from 
 
 type SemolinaLine = { product_id: string; quantity: number; location_id: string };
 type WasteLine = {
-  category: "raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning";
+  // A built-in stage or the id of a kind the plant added.
+  category: string;
   product_id: string;
   quantity: number;
   note: string;
@@ -146,7 +148,7 @@ const EMPTY_DETAIL = {
   regrind_quantity: 0,
   regrind_product_id: "",
   mold_id: "",
-  waste_lines: [] as WasteLineForm<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">[],
+  waste_lines: [] as WasteLineForm[],
   water_quantity: 0,
   water_percentage: 0,
   fuel_quantity: 0,
@@ -190,7 +192,9 @@ export function DailyReportsTab() {
     mold_id: z.string().optional(),
     waste_lines: z.array(
       z.object({
-        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        // A built-in stage or the id of a kind the plant added; the backend refuses
+        // one the daily report does not have.
+        category: z.string().min(1),
         product_id: z.string(),
         quantity: z.coerce.number().min(0),
         note: z.string(),
@@ -824,7 +828,7 @@ export function DailyReportDialog({
     mold_id: z.string().optional(),
     waste_lines: z.array(
       z.object({
-        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        category: z.string().min(1),
         product_id: z.string(),
         quantity: z.coerce.number().min(0),
         note: z.string(),
@@ -881,7 +885,7 @@ export function DailyReportDialog({
       regrind_input_product_id: detail?.regrind_input_product_id ?? "",
       regrind_product_id: detail?.regrind_product_id ?? "",
       mold_id: detail?.mold_id ?? "",
-      waste_lines: toWasteLineForms<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">(detail?.waste_lines),
+      waste_lines: toWasteLineForms(detail?.waste_lines),
       start_time: detail?.start_time ?? "",
       downtime_lines: toDowntimeLineForms(detail?.downtime_lines),
     } as CreateForm,
@@ -932,6 +936,7 @@ export function DailyReportDialog({
   const regrindDeltaConfirmRequired =
     saveMutation.error instanceof ApiError && saveMutation.error.code === "REGRIND_DELTA_REQUIRES_NEW_ORDER";
 
+  const { label: wasteLabel } = useWasteTypes();
   const semolinaUnit = productUnit(detail?.semolina_lines?.[0]?.product_id, products, uoms);
   const rebroyatUnit = productUnit(detail?.regrind_input_product_id, products, uoms);
   const regrindUnit = productUnit(detail?.regrind_product_id, products, uoms);
@@ -1017,7 +1022,7 @@ export function DailyReportDialog({
     // déchets are always weighed in kg (see WasteLinesField's fixedUnit), so
     // the unit here is fixed too rather than resolved per product.
     ...(detail?.waste_lines ?? []).map((line) => ({
-      label: `${t(`production.waste.category.${line.category}` as Parameters<typeof t>[0])} — ${productName(line.product_id)}`,
+      label: `${wasteLabel(line.category)} — ${productName(line.product_id)}`,
       value: line.quantity,
       unit: "kg",
       group: "out" as const,
@@ -1211,6 +1216,7 @@ function DailyDetailFields({
   suppliers: Partner[];
 }) {
   const { t } = useI18n();
+  const { categoriesFor } = useWasteTypes();
   // Every figure is entered in its product's own stock unit — the same unit the
   // warehouse deducts in — so the label states it rather than offering a choice.
   // The first line stands in for "the semoule unit" where finished product
@@ -1397,7 +1403,10 @@ function DailyDetailFields({
         <WasteLinesField
           form={form}
           name="waste_lines"
-          categories={["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]}
+          categories={categoriesFor(
+            "daily",
+            (form.watch("waste_lines") ?? []).map((line) => line.category),
+          )}
           products={products}
           uoms={uoms}
           // The daily report's déchets are always weighed in kg -- every stage

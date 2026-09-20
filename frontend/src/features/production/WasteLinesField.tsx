@@ -8,13 +8,14 @@ import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useI18n } from "../../lib/i18n";
 import { productUnit } from "../../lib/units";
 import type { WasteCategory } from "./api";
+import { useWasteTypes } from "./wasteTypes";
 
 /**
  * One row of the déchet editor.
  *
- * Generic over the category so each report type narrows it: a daily form's rows
- * can only be `raw_material` or `press`, which is what lets the schema refuse a
- * packing stage before the request is ever made.
+ * Generic over the category so a caller can narrow it. The set is no longer
+ * fixed: besides the built-in stages a plant adds kinds of its own, so the backend
+ * is what refuses a kind the report does not have.
  */
 export interface WasteLineForm<C extends WasteCategory = WasteCategory> {
   category: C;
@@ -51,7 +52,10 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
 }: {
   form: UseFormReturn<TFieldValues>;
   name: Path<TFieldValues>;
-  /** The stages this report type has. A daily report has no packaging stage. */
+  /**
+   * The kinds this report type has -- built-ins plus the plant's own, from
+   * `useWasteTypes().categoriesFor`. A daily report has no packaging stage.
+   */
   categories: WasteCategory[];
   products: { id: string; name: string; uom_id: string }[];
   uoms: { id: string; code: string; symbol?: string | null }[];
@@ -82,8 +86,7 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
     name: name as unknown as string,
   });
 
-  const categoryLabel = (category: WasteCategory) =>
-    t(`production.waste.category.${category}` as Parameters<typeof t>[0]);
+  const { label: categoryLabel } = useWasteTypes();
 
   function addLine() {
     const category = categories[0];
@@ -113,7 +116,7 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
             return (
               <div
                 key={field.id}
-                className="grid grid-cols-1 items-end gap-2 rounded-lg border border-border p-2 sm:grid-cols-[minmax(0,7rem)_minmax(0,1fr)_minmax(0,7rem)_minmax(0,1fr)_auto]"
+                className="grid grid-cols-1 items-end gap-2 rounded-lg border border-border p-2 sm:grid-cols-[minmax(0,11rem)_minmax(0,1fr)_minmax(0,7rem)_minmax(0,1fr)_auto]"
               >
                 <div className="space-y-1">
                   <Label htmlFor={`${name}_${index}_category`} className="text-xs">
@@ -123,11 +126,16 @@ export function WasteLinesField<TFieldValues extends FieldValues>({
                     id={`${name}_${index}_category`}
                     {...form.register(`${name}.${index}.category` as Path<TFieldValues>)}
                   >
-                    {categories.map((category) => (
-                      <option key={category} value={category}>
-                        {categoryLabel(category)}
-                      </option>
-                    ))}
+                    {/* A row may hold a kind the form no longer offers (retired since
+                        the draft was written) -- keep it selectable so opening the
+                        report for edit doesn't blank it. */}
+                    {(!rowCategory || categories.includes(rowCategory) ? categories : [...categories, rowCategory]).map(
+                      (category) => (
+                        <option key={category} value={category}>
+                          {categoryLabel(category)}
+                        </option>
+                      ),
+                    )}
                   </Select>
                 </div>
 

@@ -114,7 +114,7 @@ export function RecipesTab() {
     resolver: zodResolver(newRecipeSchema),
     defaultValues: {
       target_product_id: "",
-      lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 95, max_percentage: 100, is_hard_limit: false }],
+      lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 0, max_percentage: 100, is_hard_limit: false }],
     },
   });
   const { fields, append, remove } = useFieldArray({ control, name: "lines" });
@@ -126,7 +126,7 @@ export function RecipesTab() {
       setDialogOpen(false);
       reset({
         target_product_id: "",
-        lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 95, max_percentage: 100, is_hard_limit: false }],
+        lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 0, max_percentage: 100, is_hard_limit: false }],
       });
       toast.success(t("production.recipes.created"), { description: `${recipe.target_product_id} · v${recipe.version}` });
     },

@@ -32,6 +32,11 @@ from modules.production.domain.product_classification import ProductClassificati
 from modules.production.api.recipe_service import RecipeService
 from modules.production.api.regrind_service import RegrindDefaultsService, RegrindService, ScrapService
 from modules.production.api.of_consolidation_service import OfConsolidationService
+from modules.production.api.dashboard_day_service import GRANULARITIES, DashboardDayService
+from modules.production.api.dashboard_lines_service import DashboardLinesService
+from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.waste_type_service import WasteTypeService
+from modules.production.domain.dashboard import ShiftWindow
 from modules.production.api.packaging_variance_service import (
     PackagingTolerancePolicyService,
     PackagingVarianceService,
@@ -2463,3 +2468,225 @@ def set_regrind_default(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
         connection.commit()
     return result.value
+
+
+# --- waste types ------------------------------------------------------------
+#
+# The déchet kinds a plant adds to the built-in ones: a name, and the report the
+# entry belongs to. See waste_type_service.py.
+
+
+class CreateWasteTypeRequest(BaseModel):
+    name: str
+    report_type: str
+    sort_order: int = 0
+
+
+class UpdateWasteTypeRequest(BaseModel):
+    name: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+def _waste_type_result(connection, result) -> dict:
+    if isinstance(result, Err):
+        connection.rollback()
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if result.code == "NOT_FOUND"
+            else status.HTTP_409_CONFLICT
+            if result.code == "DUPLICATE_WASTE_TYPE"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(code, {"code": result.code, "message": result.message})
+    connection.commit()
+    return result.value
+
+
+@router.get("/waste-types")
+def list_waste_types(
+    report_type: str | None = None,
+    include_inactive: bool = True,
+    # Anyone who can read a report needs the names to read its déchets.
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    with get_connection() as connection:
+        return WasteTypeService(connection).list_types(
+            tenant_id=tenant.tenant_id, report_type=report_type, include_inactive=include_inactive
+        )
+
+
+@router.post("/waste-types", status_code=status.HTTP_201_CREATED)
+def create_waste_type(
+    body: CreateWasteTypeRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).create_type(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            name=body.name,
+            report_type=body.report_type,
+            sort_order=body.sort_order,
+        )
+        return _waste_type_result(connection, result)
+
+
+@router.patch("/waste-types/{waste_type_id}")
+def update_waste_type(
+    waste_type_id: str,
+    body: UpdateWasteTypeRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).update_type(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            waste_type_id=waste_type_id,
+            name=body.name,
+            sort_order=body.sort_order,
+            is_active=body.is_active,
+        )
+        return _waste_type_result(connection, result)
+
+
+# --- dashboard settings -----------------------------------------------------
+#
+# What the production dashboard is configured with: the clock times of each
+# shift, which team works which shift on which line, which stage each machine
+# belongs to, and which stores hold finished product before and after its
+# release. Each list is replaced as a whole. See dashboard_settings_service.py.
+
+
+class ShiftWindowRequest(BaseModel):
+    shift: str
+    start_time: datetime.time
+    end_time: datetime.time
+
+
+class ReplaceShiftWindowsRequest(BaseModel):
+    items: list[ShiftWindowRequest]
+
+
+class RosterEntryRequest(BaseModel):
+    work_center_id: str
+    shift: str
+    team: str
+
+
+class ReplaceRosterRequest(BaseModel):
+    items: list[RosterEntryRequest]
+
+
+class StoreRoleRequest(BaseModel):
+    location_id: str
+    role: str
+
+
+class ReplaceStoreRolesRequest(BaseModel):
+    items: list[StoreRoleRequest]
+
+
+def _settings_result(connection, result) -> list[dict]:
+    if isinstance(result, Err):
+        connection.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+    connection.commit()
+    return result.value
+
+
+@router.get("/dashboard/settings")
+def get_dashboard_settings(
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    with get_connection() as connection:
+        return DashboardSettingsService(connection).get_settings(tenant_id=tenant.tenant_id)
+
+
+@router.put("/dashboard/settings/shift-windows")
+def replace_shift_windows(
+    body: ReplaceShiftWindowsRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> list[dict]:
+    with get_connection() as connection:
+        result = DashboardSettingsService(connection).replace_shift_windows(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            windows=[ShiftWindow(shift=i.shift, start=i.start_time, end=i.end_time) for i in body.items],
+        )
+        return _settings_result(connection, result)
+
+
+@router.put("/dashboard/settings/roster")
+def replace_line_roster(
+    body: ReplaceRosterRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> list[dict]:
+    with get_connection() as connection:
+        result = DashboardSettingsService(connection).replace_roster(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, entries=[i.model_dump() for i in body.items]
+        )
+        return _settings_result(connection, result)
+
+
+@router.put("/dashboard/settings/store-roles")
+def replace_store_roles(
+    body: ReplaceStoreRolesRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> list[dict]:
+    with get_connection() as connection:
+        result = DashboardSettingsService(connection).replace_store_roles(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, entries=[i.model_dump() for i in body.items]
+        )
+        return _settings_result(connection, result)
+
+
+@router.get("/dashboard/lines")
+def get_dashboard_lines(
+    at: datetime.time | None = Query(default=None, description="Plant-local clock time, HH:MM. Defaults to the server's."),
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> dict:
+    """The live board: each line with the OFs open on it, every machine declared
+    on it (with its stage once the plant has set one), and its roster with the
+    team on shift at `at`."""
+    with get_connection() as connection:
+        return DashboardLinesService(connection).get_lines(
+            tenant_id=tenant.tenant_id, at=at or datetime.datetime.now().time().replace(second=0, microsecond=0)
+        )
+
+
+@router.get("/dashboard/day")
+def get_dashboard_day(
+    date: datetime.date = Query(...),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """One day's production from validated reports: totals against the previous
+    day, each OF cut by shift and team, and where déchets and stops came from."""
+    with get_connection() as connection:
+        return DashboardDayService(connection).get_day(tenant_id=tenant.tenant_id, date=date)
+
+
+@router.get("/dashboard/trend")
+def get_dashboard_trend(
+    date_from: datetime.date = Query(...),
+    date_to: datetime.date = Query(...),
+    granularity: str = Query(default="day"),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """Semoule poured (rebroyat included) and finished product, for the period
+    and for the equal-length period just before it, bucketed by shift, day,
+    week or month. A bucket nobody reported on is null, not zero."""
+    if granularity not in GRANULARITIES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"code": "INVALID_GRANULARITY", "message": f"granularity must be one of {GRANULARITIES}"},
+        )
+    if date_from > date_to:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"code": "INVALID_PERIOD", "message": "date_from cannot be after date_to"},
+        )
+    with get_connection() as connection:
+        return DashboardDayService(connection).get_trend(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to, granularity=granularity
+        )

@@ -273,8 +273,6 @@ export function AnalyticsOverviewSection() {
                   breakdown={breakdown}
                   machineRecords={machineRecords}
                   fmt={fmt}
-                  insight={insights.find((insight) => insight.kind === "highestDowntimeMachine") ?? null}
-                  onDrilldown={openDrilldown}
                 />
               )}
 

@@ -31,8 +31,6 @@ const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
 
-const DUE_SOON_DAYS = 7;
-
 function daysUntil(dateIso: string): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
@@ -124,15 +122,16 @@ export function PlanningTab() {
       defaultWidth: 180,
       cell: (suggestion) => {
         const daysAway = suggestion.earliestShipDate ? daysUntil(suggestion.earliestShipDate) : null;
+        // Overdue is a fact about the ship date and today; "due soon" would need a
+        // window nobody has configured, so it is not judged.
         const isOverdue = daysAway !== null && daysAway < 0;
-        const isDueSoon = daysAway !== null && daysAway >= 0 && daysAway <= DUE_SOON_DAYS;
         return suggestion.earliestShipDate ? (
           <span className="flex items-center gap-1.5">
             {new Date(suggestion.earliestShipDate).toLocaleDateString(currentLocale())}
-            {(isOverdue || isDueSoon) && (
-              <Badge variant={isOverdue ? "destructive" : "warning"}>
+            {isOverdue && (
+              <Badge variant="destructive">
                 <AlertTriangle className="h-3 w-3" />
-                {isOverdue ? t("production.planning.urgency.overdue") : t("production.planning.urgency.dueSoon")}
+                {t("production.planning.urgency.overdue")}
               </Badge>
             )}
           </span>

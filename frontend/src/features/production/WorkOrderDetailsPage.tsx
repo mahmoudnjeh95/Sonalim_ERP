@@ -604,11 +604,7 @@ export function WorkOrderDetailsPage() {
               <span
                 className={cn(
                   "text-sm font-medium tabular-nums",
-                  consolidation?.quality.conformity_rate == null
-                    ? "text-muted-foreground"
-                    : consolidation.quality.conformity_rate >= 0.95
-                      ? "text-success"
-                      : "text-warning",
+                  consolidation?.quality.conformity_rate == null && "text-muted-foreground",
                 )}
               >
                 {consolidation?.quality.conformity_rate == null

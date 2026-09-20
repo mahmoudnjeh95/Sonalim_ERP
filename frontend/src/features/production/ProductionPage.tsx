@@ -1,6 +1,6 @@
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Boxes, Factory, LayoutDashboard, NotebookPen, Recycle, Settings, Tag } from "lucide-react";
+import { Boxes, Factory, NotebookPen, Recycle, Settings, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { outlineIcon } from "../../components/patterns/outlineIcon";
 import { useI18n } from "../../lib/i18n";
@@ -21,11 +21,9 @@ import { RegrindTab } from "./RegrindTab";
 import { DailyReportsTab } from "./DailyReportsTab";
 import { ConditionnementTab } from "./ConditionnementTab";
 import { ValidationCenterTab } from "./ValidationCenterTab";
-import { ProductionDashboardTab } from "./ProductionDashboardTab";
 import { ProductionSettingsTab } from "./ProductionSettingsTab";
 
 const TABS = [
-  { value: "dashboard", labelKey: "production.tabs.dashboard", icon: LayoutDashboard, Component: ProductionDashboardTab },
   { value: "work-orders", labelKey: "production.tabs.workOrders", icon: outlineIcon(WorkOrderIcon), Component: WorkOrdersTab },
   { value: "planning", labelKey: "production.tabs.planning", icon: outlineIcon(PlanningIcon), Component: PlanningTab },
   { value: "daily-reports", labelKey: "production.tabs.dailyReports", icon: NotebookPen, Component: DailyReportsTab },
@@ -47,8 +45,10 @@ export function ProductionPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   // The tab lives in the URL so a dashboard alert, a bookmark or a shared link
   // can land straight on the right screen.
-  const requested = searchParams.get("tab") as TabValue | null;
-  const tab: TabValue = TABS.some((entry) => entry.value === requested) ? requested! : "dashboard";
+  const requested = searchParams.get("tab") as TabValue | "dashboard" | null;
+  // The dashboard moved to its own sidebar entry; keep old ?tab=dashboard links working.
+  if (requested === "dashboard") return <Navigate to="/production/dashboard" replace />;
+  const tab: TabValue = TABS.some((entry) => entry.value === requested) ? requested! : "work-orders";
   const setTab = (value: TabValue) => setSearchParams({ tab: value }, { replace: true });
   const ActiveTab = TABS.find((t) => t.value === tab)!.Component;
 
