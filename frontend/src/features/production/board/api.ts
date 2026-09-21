@@ -53,6 +53,8 @@ export interface ShiftWindowRow {
   shift: string;
   start_time: string;
   end_time: string;
+  /** How long the shift runs, across midnight if need be. Read from the settings; never sent back. */
+  length_minutes?: number;
 }
 
 export interface BoardLines {
@@ -108,6 +110,86 @@ export interface StopRow {
   team: string | null;
   work_center_id: string | null;
   value: number;
+}
+
+// --- Releasing packed goods ---------------------------------------------------
+
+export const RELEASE_STOCK_PERMISSION = "production.release_stock";
+
+export interface ReleaseItem {
+  product_id: string;
+  product_name: string;
+  uom_id: string;
+  /** Pieces in a carton; null when the product has no carton tier (a sac, or loose packets). */
+  packets_per_carton: number | null;
+  packaging_format: "packet" | "carton" | "sac" | null;
+  /** All four quantities are in the product's own unit. `releasable` is what the line store can actually give now. */
+  packed: number;
+  released: number;
+  remaining: number;
+  releasable: number;
+  /** null when the product has no default storage location: it cannot be released until one is set. */
+  destination: { id: string; name: string | null } | null;
+}
+
+export interface StockReleaseList {
+  /** The day whose packing reports are listed (YYYY-MM-DD), and today's date. */
+  day: string;
+  today: string;
+  /** null when the production settings name no single line store. */
+  line_store: { id: string; name: string | null } | null;
+  items: ReleaseItem[];
+}
+
+/** Without a day the server opens on yesterday, or on today once yesterday has nothing left to release. */
+export function getStockRelease(token: string, day?: string | null) {
+  return apiFetch<StockReleaseList>(`/production/stock-release${day ? `?day=${day}` : ""}`, { token });
+}
+
+export function releaseStock(token: string, day: string, items: { product_id: string; quantity: number }[]) {
+  return apiFetch<{ reference: string; day: string; released: { product_id: string; quantity: number; to_location_id: string }[] }>(
+    "/production/stock-release",
+    { method: "POST", token, body: { day, items } },
+  );
+}
+
+// --- The shift running now ---------------------------------------------------
+
+/** Where the current shift's report stands. Only `validated` is a result; the rest is work in progress. */
+export type LiveStatus = "open" | "submitted" | "returned" | "validated";
+
+export interface LiveOf {
+  of_id: string;
+  reference: string | null;
+  semolina_poured: number;
+  finished_product: number;
+  yield_pct: number | null;
+  production_minutes: number;
+  downtime_minutes: number;
+  waste_kg: number;
+  packets_counted: number | null;
+  stops: { motif: string | null; minutes: number }[];
+}
+
+export interface LiveLine {
+  work_center_id: string;
+  report: { id: string; status: LiveStatus; team: string | null };
+  /** Empty for a shift sent back to its team. */
+  ofs: LiveOf[];
+  /** Machines whose stop has begun and not ended yet. */
+  ongoing_stops: { equipment_id: string | null; since: string; motif: string | null }[];
+}
+
+export interface BoardLive {
+  at: string;
+  /** null when the plant has configured no shift for this time. */
+  shift: { shift: string; start_time: string; end_time: string; report_date: string } | null;
+  unit: string | null;
+  lines: LiveLine[];
+}
+
+export function getBoardLive(token: string, date: string, at: string) {
+  return apiFetch<BoardLive>(`/production/dashboard/live?date=${encodeURIComponent(date)}&at=${encodeURIComponent(at)}`, { token });
 }
 
 export interface BoardDay {

@@ -1,16 +1,18 @@
 import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertOctagon, FlaskConical, LayoutDashboard } from "lucide-react";
+import { AlertOctagon, CalendarClock, FlaskConical, LayoutDashboard } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
 import { QualityDashboardTab } from "./QualityDashboardTab";
 import { QualityReportsTab } from "./QualityReportsTab";
 import { NonConformitiesTab } from "./NonConformitiesTab";
+import { LotDlcTab } from "./LotDlcTab";
 
 const TABS = [
   { value: "dashboard", labelKey: "qc.tabs.dashboard", icon: LayoutDashboard, Component: QualityDashboardTab },
   { value: "reports", labelKey: "qc.tabs.qualityReports", icon: FlaskConical, Component: QualityReportsTab },
   { value: "non-conformities", labelKey: "qc.tabs.nonConformities", icon: AlertOctagon, Component: NonConformitiesTab },
+  { value: "lot-dlc", labelKey: "qc.tabs.lotDlc", icon: CalendarClock, Component: LotDlcTab },
 ] as const;
 
 type TabValue = (typeof TABS)[number]["value"];

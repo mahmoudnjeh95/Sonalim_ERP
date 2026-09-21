@@ -138,27 +138,30 @@ def test_create_defaults_the_work_center_from_the_of(db, env, of):
     assert report.work_center_id == env["work_center"]
 
 
-def test_a_dlc_needs_both_a_lot_number_and_a_date(db, env, of):
-    service = ConditionnementReportService(db)
-    half = service.create_report(
+def test_a_lot_number_can_be_filed_without_its_dlc(db, env, of):
+    # The DLC is entered afterwards by quality, on the lot; production files the number only.
+    created = ConditionnementReportService(db).create_report(
         tenant_id=TENANT,
         actor_id=env["actor"],
         of_id=of.id,
         report_date=datetime.date(2026, 9, 1),
         detail=ConditionnementReportDetail(lot_number="L-1"),
     )
-    assert isinstance(half, Err)
-    assert half.code == "INCOMPLETE_DLC"
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    assert created.value["detail"].lot_number == "L-1"
+    assert created.value["detail"].dlc_date is None
 
-    other_half = service.create_report(
+
+def test_a_dlc_with_no_lot_number_is_refused(db, env, of):
+    result = ConditionnementReportService(db).create_report(
         tenant_id=TENANT,
         actor_id=env["actor"],
         of_id=of.id,
         report_date=datetime.date(2026, 9, 1),
         detail=ConditionnementReportDetail(dlc_date=datetime.date(2027, 9, 1)),
     )
-    assert isinstance(other_half, Err)
-    assert other_half.code == "INCOMPLETE_DLC"
+    assert isinstance(result, Err)
+    assert result.code == "INCOMPLETE_DLC"
 
 
 def test_the_shared_submit_and_revision_machinery_works_for_packing(db, env, of):
@@ -364,7 +367,28 @@ def test_the_lot_gets_its_stock_when_the_report_is_validated(db, env, of):
     assert expiry == datetime.date(2027, 9, 1)
 
 
-def test_validating_without_a_dlc_registers_no_lot(db, env, of):
+def test_validating_a_lot_filed_without_a_dlc_registers_it_waiting_for_quality(db, env, of):
+    from modules.warehouse.api.lot_service import LotService
+
+    reports = ProductionReportService(db)
+    report = _report(db, env, of, finished_product_quantity=800, lot_number="4187SNL")
+    reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    assert isinstance(reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id), Ok)
+
+    waiting = LotService(db).list_lots(
+        tenant_id=TENANT, source_type="production.conditionnement_report", without_expiry=True
+    )
+    assert [(lot.lot_number, lot.source_id) for lot in waiting] == [("4187SNL", report.id)]
+
+    # Quality enters the DLC on the lot; the lot leaves the queue.
+    entered = LotService(db).set_expiry(
+        tenant_id=TENANT, actor_id=env["actor"], lot_id=waiting[0].id, expiry_date=datetime.date(2029, 9, 1)
+    )
+    assert isinstance(entered, Ok)
+    assert LotService(db).list_lots(tenant_id=TENANT, without_expiry=True) == []
+
+
+def test_validating_without_a_lot_number_registers_no_lot(db, env, of):
     reports = ProductionReportService(db)
     report = _report(db, env, of, finished_product_quantity=800)
     reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)

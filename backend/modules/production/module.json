@@ -1,6 +1,6 @@
 {
   "name": "production",
-  "version": "0.13.0",
+  "version": "0.15.0",
   "depends": ["core"],
   "optional_depends": ["warehouse", "qc", "maintenance", "procurement"],
   "provides_api": [
@@ -22,7 +22,10 @@
     "MachinePerformanceService",
     "ConsumptionReportService",
     "DashboardSettingsService",
-    "WasteTypeService"
+    "WasteTypeService",
+    "DaySheetService",
+    "LotSuggestionService",
+    "ShiftReportService"
   ],
   "publishes_events": [
     "production.work_order.closed",
@@ -58,7 +61,19 @@
     "production.admin_resource_types",
     "production.view_reports",
     "production.manage_dashboard_settings",
+    "production.release_stock",
     "production.manage_waste_types",
+    "production.shift.view",
+    "production.shift.validate",
+    "production.shift.edit.runs",
+    "production.shift.edit.waste_production",
+    "production.shift.edit.stops",
+    "production.shift.edit.silo",
+    "production.shift.edit.staffing",
+    "production.shift.edit.packing",
+    "production.shift.edit.packet_checks",
+    "production.shift.edit.waste_packing",
+    "production.shift.edit.energy",
     "production.manage_reports",
     "production.validate_reports",
     "production.admin_reports",

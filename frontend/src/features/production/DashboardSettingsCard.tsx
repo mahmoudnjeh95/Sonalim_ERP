@@ -9,7 +9,6 @@ import { REPORT_OPTIONS_QUERY_KEY, listReportOptions } from "../../lib/reportOpt
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { listLocations } from "../warehouse/api";
 import { listWorkCenters } from "./api";
@@ -23,6 +22,7 @@ import {
   type DashboardSettings,
   type StoreRole,
 } from "./board/api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 function useSaveSection<T>(save: (token: string, items: T[]) => Promise<unknown>) {
   const { session } = useAuth();
@@ -254,7 +254,7 @@ export function DashboardSettingsCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         {!ready ? (
-          <Skeleton className="h-40 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : (
           <>
             <ShiftHoursForm key={`h-${JSON.stringify(settings.data!.shift_windows)}`} shifts={activeOf("shift")} initial={settings.data!.shift_windows} canEdit={canEdit} />

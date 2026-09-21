@@ -22,10 +22,13 @@ import type {
   BoardDay,
   BoardLine,
   BoardLines,
+  BoardLive,
   BoardMachine,
   BoardOf,
   DayOf,
   LineState,
+  LiveLine,
+  LiveStatus,
   MachineStatus,
   RosterEntry,
   Stage,
@@ -130,6 +133,58 @@ function RosterPills({ roster }: { roster: RosterEntry[] }) {
   );
 }
 
+// --- The shift running now ----------------------------------------------------
+
+const LIVE_STATUS_TONE: Record<LiveStatus, string> = {
+  open: "bg-muted text-muted-foreground",
+  submitted: "bg-warning-soft text-warning",
+  returned: "bg-destructive-soft text-destructive",
+  validated: "bg-success/10 text-success",
+};
+
+/**
+ * What the team on shift has entered for this OF so far. It sits apart from the validated
+ * figures below and says it is not validated until a validator has approved the shift.
+ */
+function LiveStrip({ live, liveLine, of }: { live: BoardLive; liveLine: LiveLine | undefined; of: BoardOf }) {
+  const { t } = useI18n();
+  if (!live.shift) return null;
+  const liveOf = liveLine?.ofs.find((o) => o.of_id === of.of_id);
+  const status = liveLine?.report.status;
+  return (
+    <div className="mx-4 mb-2 flex flex-wrap items-center gap-x-4 gap-y-1 rounded-lg border border-dashed border-border bg-muted/40 px-3 py-2 text-sm">
+      <span className="flex items-center gap-2 font-semibold text-primary">
+        <ShiftIcon className="h-4 w-4" aria-hidden="true" />
+        {t("production.board.live.now")} · {live.shift.shift} {live.shift.start_time}–{live.shift.end_time}
+        {liveLine?.report.team ? ` · ${liveLine.report.team}` : ""}
+      </span>
+      {status ? (
+        <span className={cn("rounded-full px-2 py-0.5 text-[11px] font-semibold", LIVE_STATUS_TONE[status])}>
+          {t(`production.board.live.status.${status}` as TranslationKey)}
+        </span>
+      ) : null}
+      {status && status !== "validated" ? (
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-warning">{t("production.board.live.notValidated")}</span>
+      ) : null}
+      {liveOf ? (
+        <span className="tabular-nums">
+          <b>
+            {formatNumber(liveOf.semolina_poured, 1)} → {formatNumber(liveOf.finished_product, 1)} {live.unit ?? ""}
+          </b>
+          {liveOf.yield_pct !== null ? ` · ${formatNumber(liveOf.yield_pct, 1)}%` : ""}
+          {` · ${formatDuration(liveOf.production_minutes)}`}
+          {liveOf.packets_counted !== null ? ` · ${formatNumber(liveOf.packets_counted, 0)} ${t("production.board.of.packets").toLowerCase()}` : ""}
+          {liveOf.downtime_minutes > 0 ? ` · ${t("production.board.of.stops")} ${formatDuration(liveOf.downtime_minutes)}` : ""}
+        </span>
+      ) : (
+        <span className="text-muted-foreground">
+          {liveLine ? (status === "returned" ? "" : t("production.board.live.nothingForOf")) : t("production.board.live.noReport")}
+        </span>
+      )}
+    </div>
+  );
+}
+
 // --- Conveyor ---------------------------------------------------------------
 
 /** The stage is the machine's own record in Maintenance; a machine registered with none points there. */
@@ -151,7 +206,7 @@ function MachineStageLine({ machine }: { machine: BoardMachine }) {
 }
 
 /** One machine of the line: its stage's picture once the stage is known, its own status ring always. */
-function MachineNode({ machine, left }: { machine: BoardMachine; left: string }) {
+function MachineNode({ machine, left, stoppedSince }: { machine: BoardMachine; left: string; stoppedSince?: string }) {
   const { t } = useI18n();
   const { status, stage } = machine;
   return (
@@ -183,12 +238,17 @@ function MachineNode({ machine, left }: { machine: BoardMachine; left: string })
       <span className="mt-1 max-w-full truncate rounded bg-white px-1 text-[11.5px] font-semibold text-primary">{machine.code}</span>
       <span className="max-w-full truncate bg-white px-1 text-[10.5px] text-muted-foreground">{machine.name}</span>
       <MachineStageLine machine={machine} />
+      {stoppedSince ? (
+        <span className="mt-0.5 rounded bg-destructive-soft px-1 text-[10px] font-semibold text-destructive">
+          {t("production.board.live.stoppedSince")} {new Date(stoppedSince).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+        </span>
+      ) : null}
     </div>
   );
 }
 
 /** Every machine declared on the line, side by side; a long line scrolls sideways rather than crowd them. */
-function LineBelt({ line, state }: { line: BoardLine; state: LineState }) {
+function LineBelt({ line, state, stoppedSince }: { line: BoardLine; state: LineState; stoppedSince?: Map<string, string> }) {
   const { t } = useI18n();
   if (line.machines.length === 0) {
     return <p className="mx-4 mb-3 ml-14 text-xs text-muted-foreground">{t("production.board.machine.none")}</p>;
@@ -202,7 +262,7 @@ function LineBelt({ line, state }: { line: BoardLine; state: LineState }) {
           <span key={i} className="board-pellet" style={{ top: 48.5, ["--d" as string]: `${(i * 0.42).toFixed(2)}s` }} />
         ))}
         {line.machines.map((machine, index) => (
-          <MachineNode key={machine.id} machine={machine} left={`${((index + 0.5) / line.machines.length) * 100}%`} />
+          <MachineNode key={machine.id} machine={machine} left={`${((index + 0.5) / line.machines.length) * 100}%`} stoppedSince={stoppedSince?.get(machine.id)} />
         ))}
       </div>
     </div>
@@ -284,7 +344,7 @@ function OfDetails({ figures }: { figures: DayOf }) {
   );
 }
 
-function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen }: { of: BoardOf; line: BoardLine; figures: DayOf | undefined; dayIsLoading: boolean; unit: string | null; defaultOpen: boolean }) {
+function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen, live, liveLine }: { of: BoardOf; line: BoardLine; figures: DayOf | undefined; dayIsLoading: boolean; unit: string | null; defaultOpen: boolean; live: BoardLive | undefined; liveLine: LiveLine | undefined }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(defaultOpen);
   // The machine behind the line's colour: a down machine outranks one in maintenance.
@@ -325,7 +385,13 @@ function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen }: { of: Bo
         <ChevronRight className={cn("ml-auto h-4 w-4 text-muted-foreground transition-transform", open && "rotate-90")} aria-hidden="true" />
       </button>
 
-      <LineBelt line={line} state={of.state} />
+      {live ? <LiveStrip live={live} liveLine={liveLine} of={of} /> : null}
+
+      <LineBelt
+        line={line}
+        state={of.state}
+        stoppedSince={new Map((liveLine?.ongoing_stops ?? []).flatMap((s) => (s.equipment_id ? [[s.equipment_id, s.since] as [string, string]] : [])))}
+      />
 
       <AnimatePresence initial={false}>
         {open ? (
@@ -349,7 +415,7 @@ function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen }: { of: Bo
  * made now, so a line with nothing running is not drawn at all. Several OFs on
  * one line are stacked, one card each.
  */
-export function LinesBoard({ board, day, dayIsLoading }: { board: BoardLines; day: BoardDay | undefined; dayIsLoading: boolean }) {
+export function LinesBoard({ board, day, dayIsLoading, live }: { board: BoardLines; day: BoardDay | undefined; dayIsLoading: boolean; live: BoardLive | undefined }) {
   const { t } = useI18n();
   const figuresByOf = new Map((day?.ofs ?? []).map((o) => [o.of_id, o]));
   const active = board.lines.filter((line) => line.ofs.length > 0);
@@ -375,7 +441,19 @@ export function LinesBoard({ board, day, dayIsLoading }: { board: BoardLines; da
           line.ofs.map((of) => {
             const open = first;
             first = false;
-            return <OfCard key={of.of_id} of={of} line={line} figures={figuresByOf.get(of.of_id)} dayIsLoading={dayIsLoading} unit={day?.unit ?? null} defaultOpen={open} />;
+            return (
+              <OfCard
+                key={of.of_id}
+                of={of}
+                line={line}
+                figures={figuresByOf.get(of.of_id)}
+                dayIsLoading={dayIsLoading}
+                unit={day?.unit ?? null}
+                defaultOpen={open}
+                live={live}
+                liveLine={live?.lines.find((l) => l.work_center_id === line.work_center_id)}
+              />
+            );
           }),
         )}
       </div>

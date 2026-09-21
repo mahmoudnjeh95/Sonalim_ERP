@@ -4,7 +4,6 @@ import { useAuth } from "../../../lib/auth";
 import { useI18n } from "../../../lib/i18n";
 import { formatQuantity } from "../../../lib/units";
 import { Button } from "../../../components/ui/button";
-import { Skeleton } from "../../../components/ui/skeleton";
 import { outlineIcon } from "../../../components/patterns/outlineIcon";
 import PalletSvg from "../../../assets/icons/warehouse/pallet.svg?react";
 import EmptyNoStock from "../../../assets/illustrations/empty-states/empty-no-stock.svg?react";
@@ -12,6 +11,8 @@ import storageImage from "../../../assets/illustrations/production/stage-stockag
 import { listLocations, listProducts, listStock, listUoms } from "../../warehouse/api";
 import { DASHBOARD_SETTINGS_QUERY_KEY, getDashboardSettings, type StoreRole } from "./api";
 import { BlockError, MissingState } from "./BoardStates";
+import { ReleaseStockDialog } from "./ReleaseStockDialog";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 
 const PalletIcon = outlineIcon(PalletSvg);
 
@@ -43,18 +44,21 @@ export function StockToday() {
   const failed = queries.find((q) => q.isError);
   const loading = queries.some((q) => q.isLoading);
 
-  const shell = (children: React.ReactNode) => (
+  const shell = (children: React.ReactNode, action?: React.ReactNode) => (
     <section className="rounded-xl border border-border bg-white p-4 shadow-soft">
-      <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-primary">
-        <PalletIcon className="h-4 w-4" aria-hidden="true" />
-        {t("production.board.stock.title")}
-      </h3>
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <h3 className="flex items-center gap-2 text-sm font-semibold text-primary">
+          <PalletIcon className="h-4 w-4" aria-hidden="true" />
+          {t("production.board.stock.title")}
+        </h3>
+        {action}
+      </div>
       {children}
     </section>
   );
 
   if (failed) return shell(<BlockError onRetry={() => queries.forEach((q) => void q.refetch())} />);
-  if (loading || !settings.data || !stock.data || !locations.data || !products.data || !uoms.data) return shell(<Skeleton className="h-40 w-full" />);
+  if (loading || !settings.data || !stock.data || !locations.data || !products.data || !uoms.data) return shell(<AppLoader size={96} className="py-4" />);
 
   const roles = new Map<string, StoreRole>(settings.data.store_roles.map((r) => [r.location_id, r.role]));
   if (roles.size === 0) {
@@ -122,5 +126,7 @@ export function StockToday() {
       </div>
       {side("final", t("production.board.stock.final"), false)}
     </div>,
+    // Moving goods out of the line store is what the panel is drawing, so the action sits on it.
+    <ReleaseStockDialog unitOf={(uomId) => uomById.get(uomId)?.symbol || uomById.get(uomId)?.code || ""} />,
   );
 }

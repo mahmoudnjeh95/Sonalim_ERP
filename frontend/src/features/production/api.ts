@@ -61,6 +61,7 @@ export function listUoms(token: string) {
 
 export type ProductCategory = "raw_material" | "semi_finished" | "packaging_component" | "finished_good";
 export type PackagingFormat = "packet" | "carton" | "sac";
+export type PackagingKind = "film" | "carton" | "bobine" | "scotch" | "ruban";
 
 export interface ProductClassification {
   product_id: string;
@@ -68,6 +69,7 @@ export interface ProductClassification {
   is_regrind: boolean;
   packaging_format: PackagingFormat | null;
   is_water: boolean;
+  packaging_kind: PackagingKind | null;
 }
 
 export interface SetClassificationInput {
@@ -76,6 +78,7 @@ export interface SetClassificationInput {
   is_regrind: boolean;
   packaging_format?: PackagingFormat;
   is_water?: boolean;
+  packaging_kind?: PackagingKind;
 }
 
 export function listClassifications(token: string) {
@@ -1208,6 +1211,73 @@ export function updateWasteType(
   input: { name?: string; sort_order?: number; is_active?: boolean },
 ) {
   return apiFetch<WasteType>(`/production/waste-types/${wasteTypeId}`, { method: "PATCH", token, body: input });
+}
+
+export type DaySheetSection = "material" | "production" | "waste" | "packing" | "energy";
+
+/** One row of the day sheet. The fixed rows are named by `key`; the ones that exist once per product or déchet kind carry `ref`/`name`. */
+export interface DaySheetRow {
+  section: DaySheetSection;
+  key: string;
+  /** A product id, or a déchet category, for the rows that exist once per item. */
+  ref: string | null;
+  name: string | null;
+  unit: string | null;
+  /** A shift with no report is absent, which is not the same as 0. */
+  by_column: Record<string, number>;
+  total: number | null;
+}
+
+export interface DaySheetColumn {
+  /** The shift as filed (empty for reports filed with none) on a day sheet; the product's id on the month recap. */
+  key: string;
+  /** The recap's column title, the product's name. */
+  name?: string | null;
+  teams: string[];
+  lots: string[];
+  reports: Record<ReportType, { validated: number; pending: number }>;
+}
+
+export interface DaySheet {
+  date: string;
+  work_center: { id: string; code: string; name: string };
+  include_pending: boolean;
+  columns: DaySheetColumn[];
+  rows: DaySheetRow[];
+  ofs: { id: string; reference: string | null; product_name: string | null }[];
+}
+
+/** The same rows as a day sheet, added up over a month, with a column per product. */
+export interface MonthRecap {
+  month: string;
+  work_center: { id: string; code: string; name: string };
+  columns: DaySheetColumn[];
+  rows: DaySheetRow[];
+}
+
+export function getDaySheet(token: string, params: { date: string; workCenterId: string; includePending: boolean }) {
+  const query = new URLSearchParams({
+    date: params.date,
+    work_center_id: params.workCenterId,
+    include_pending: String(params.includePending),
+  });
+  return apiFetch<DaySheet>(`/production/day-sheet?${query}`, { token });
+}
+
+/** The lot a packing report is most likely to carry, and the earlier lot it is counted on from. */
+export interface LotSuggestion {
+  lot_number: string | null;
+  based_on: { lot_number: string; report_date: string } | null;
+}
+
+export function getLotSuggestion(token: string, params: { workCenterId: string; reportDate: string }) {
+  const query = new URLSearchParams({ work_center_id: params.workCenterId, report_date: params.reportDate });
+  return apiFetch<LotSuggestion>(`/production/lot-suggestion?${query}`, { token });
+}
+
+export function getMonthRecap(token: string, params: { month: string; workCenterId: string }) {
+  const query = new URLSearchParams({ month: params.month, work_center_id: params.workCenterId });
+  return apiFetch<MonthRecap>(`/production/month-recap?${query}`, { token });
 }
 
 export interface WasteLine {

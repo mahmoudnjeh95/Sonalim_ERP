@@ -7,6 +7,7 @@ from core.domain.result import Err, Ok, Result
 from modules.production.domain.dashboard import (
     STORE_ROLES,
     ShiftWindow,
+    shift_length_minutes,
     validate_shift_window,
 )
 
@@ -30,6 +31,17 @@ class DashboardSettingsService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
+    def line_store_id(self, *, tenant_id: str) -> str | None:
+        """The store finished product waits in, when the settings name exactly one.
+
+        None when none is set, and also when several are: packed goods are not put into one of
+        them by guesswork, they keep going to the product's own store until the settings are clear.
+        """
+        rows = self._connection.execute(
+            "SELECT location_id FROM production.store_roles WHERE tenant_id = %s AND role = 'line'", (tenant_id,)
+        ).fetchall()
+        return rows[0][0] if len(rows) == 1 else None
+
     def get_settings(self, *, tenant_id: str) -> dict:
         windows = self._connection.execute(
             "SELECT shift, start_time, end_time FROM production.shift_windows "
@@ -46,7 +58,17 @@ class DashboardSettingsService:
             (tenant_id,),
         ).fetchall()
         return {
-            "shift_windows": [{"shift": s, "start_time": _hhmm(a), "end_time": _hhmm(b)} for s, a, b in windows],
+            # The length rides along so a report form can offer the shift's hours as the
+            # time produced without every screen re-deriving how a night shift wraps.
+            "shift_windows": [
+                {
+                    "shift": s,
+                    "start_time": _hhmm(a),
+                    "end_time": _hhmm(b),
+                    "length_minutes": shift_length_minutes(ShiftWindow(shift=s, start=a, end=b)),
+                }
+                for s, a, b in windows
+            ],
             "roster": [{"work_center_id": w, "shift": s, "team": t} for w, s, t in roster],
             "store_roles": [{"location_id": l, "role": r} for l, r in roles],
         }

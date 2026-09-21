@@ -6,13 +6,13 @@ import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { cn } from "../../../lib/utils";
 import { Input } from "../../../components/ui/input";
 import { Select } from "../../../components/ui/select";
-import { Skeleton } from "../../../components/ui/skeleton";
 import { outlineIcon } from "../../../components/patterns/outlineIcon";
 import YieldSvg from "../../../assets/icons/production/yield.svg?react";
 import DelayIllustration from "../../../assets/illustrations/production-delay.svg?react";
 import { getBoardTrend, type Granularity } from "./api";
 import { addDays, formatDay, formatNumber } from "./boardFormat";
 import { BlockError, MissingState } from "./BoardStates";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 
 const YieldIcon = outlineIcon(YieldSvg);
 
@@ -124,7 +124,7 @@ export function TrendCard({ date }: { date: string }) {
       {trend.isError ? (
         <BlockError onRetry={() => void trend.refetch()} />
       ) : trend.isLoading ? (
-        <Skeleton className="h-56 w-full" />
+        <AppLoader size={120} className="h-56" />
       ) : !hasData ? (
         <MissingState illustration={<DelayIllustration className="h-24 w-auto" />} title={t("production.board.trend.empty.title")} description={t("production.board.trend.empty.desc")} />
       ) : (

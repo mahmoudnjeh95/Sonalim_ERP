@@ -28,7 +28,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -72,6 +71,7 @@ import {
   type QualityReportDetail,
   type QualityReportStatus,
 } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const detailSchema = z.object({
   pre_dryer_index: z.coerce.number().min(0).optional(),
@@ -540,10 +540,7 @@ export function QualityReportsTab() {
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="space-y-2 p-6">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-9 w-full" />
-            </div>
+            <AppLoader className="py-8" />
           ) : visible.length === 0 ? (
             <EmptyState
               icon={<FlaskConical className="h-5 w-5" />}

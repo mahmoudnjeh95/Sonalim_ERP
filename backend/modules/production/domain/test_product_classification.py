@@ -56,3 +56,15 @@ def test_validate_classification_rejects_regrind_and_water_together():
 def test_validate_classification_accepts_water_flag_on_raw_material():
     result = validate_classification("raw_material", False, is_water=True)
     assert isinstance(result, Ok)
+
+
+def test_packaging_kind_is_only_for_packaging_components():
+    ok = validate_classification("packaging_component", False, packaging_kind="film")
+    assert isinstance(ok, Ok)
+    wrong_category = validate_classification("raw_material", False, packaging_kind="film")
+    assert isinstance(wrong_category, Err) and wrong_category.code == "PACKAGING_KIND_INVALID"
+
+
+def test_packaging_kind_must_be_a_known_kind():
+    result = validate_classification("packaging_component", False, packaging_kind="bogus")
+    assert isinstance(result, Err) and result.code == "INVALID_PACKAGING_KIND"

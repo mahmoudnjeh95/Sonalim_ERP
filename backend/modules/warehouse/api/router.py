@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
@@ -340,6 +342,10 @@ class TransitionLotRequest(BaseModel):
     new_status: str
 
 
+class SetLotExpiryRequest(BaseModel):
+    expiry_date: datetime.date
+
+
 def _lot_response(lot: Lot) -> dict:
     return {
         "id": lot.id,
@@ -363,11 +369,16 @@ def _lot_err_status(code: str) -> int:
 
 @router.get("/lots")
 def list_lots(
-    product_id: str | None = None, tenant: TenantContext = Depends(require_permission("warehouse.view_lots"))
+    product_id: str | None = None,
+    source_type: str | None = None,
+    without_expiry: bool = False,
+    tenant: TenantContext = Depends(require_permission("warehouse.view_lots")),
 ) -> list[dict]:
     with get_connection() as connection:
         service = LotService(connection)
-        lots = service.list_lots(tenant_id=tenant.tenant_id, product_id=product_id)
+        lots = service.list_lots(
+            tenant_id=tenant.tenant_id, product_id=product_id, source_type=source_type, without_expiry=without_expiry
+        )
     return [_lot_response(lot) for lot in lots]
 
 
@@ -383,6 +394,24 @@ def list_lot_stock(
     with get_connection() as connection:
         service = LotService(connection)
         return service.list_lot_stock(tenant_id=tenant.tenant_id, product_id=product_id)
+
+
+@router.patch("/lots/{lot_id}/expiry")
+def set_lot_expiry(
+    lot_id: str,
+    body: SetLotExpiryRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.set_lot_expiry")),
+) -> dict:
+    with get_connection() as connection:
+        service = LotService(connection)
+        result = service.set_expiry(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, lot_id=lot_id, expiry_date=body.expiry_date
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_lot_err_status(result.code), {"code": result.code, "message": result.message})
+        connection.commit()
+    return _lot_response(result.value)
 
 
 @router.post("/lots/{lot_id}/transition")

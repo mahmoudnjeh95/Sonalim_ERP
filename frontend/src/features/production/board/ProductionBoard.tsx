@@ -5,8 +5,7 @@ import { Link } from "react-router-dom";
 import { useAuth } from "../../../lib/auth";
 import { useI18n } from "../../../lib/i18n";
 import { cn } from "../../../lib/utils";
-import { Skeleton } from "../../../components/ui/skeleton";
-import { getBoardDay, getBoardLines, getBoardTrend } from "./api";
+import { getBoardDay, getBoardLines, getBoardLive, getBoardTrend } from "./api";
 import { addDays, clockTime, formatDay, isoDay } from "./boardFormat";
 import { BlockError } from "./BoardStates";
 import { GlanceBand } from "./GlanceBand";
@@ -15,6 +14,7 @@ import { QualityBlock } from "./QualityBlock";
 import { RankingCards } from "./RankingCards";
 import { StockToday } from "./StockToday";
 import { TrendCard } from "./TrendCard";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 
 /**
  * The production board a manager opens in the morning: what happened
@@ -44,6 +44,14 @@ export function ProductionBoard() {
     refetchInterval: 60_000,
   });
   const day = useQuery({ queryKey: ["production", "board", "day", date], queryFn: () => getBoardDay(token, date) });
+  // The shift running now, from what its team has entered so far. Shown apart from the validated
+  // figures; if it cannot be read the board simply has no live strip.
+  const live = useQuery({
+    queryKey: ["production", "board", "live"],
+    queryFn: () => getBoardLive(token, isoDay(new Date()), clockTime(new Date())),
+    refetchInterval: 60_000,
+    retry: false,
+  });
 
   // Same parameters as the chart's "week" tab, so the two share one cached read.
   const weekParams = { date_from: addDays(date, -6), date_to: date, granularity: "day" as const };
@@ -87,12 +95,9 @@ export function ProductionBoard() {
         {lines.isError ? (
           <BlockError onRetry={() => void lines.refetch()} />
         ) : lines.isLoading || !lines.data ? (
-          <div className="mt-6 space-y-3">
-            <Skeleton className="h-52 w-full" />
-            <Skeleton className="h-52 w-full" />
-          </div>
+          <AppLoader className="mt-6 py-8" />
         ) : (
-          <LinesBoard board={lines.data} day={day.data} dayIsLoading={day.isLoading} />
+          <LinesBoard board={lines.data} day={day.data} dayIsLoading={day.isLoading} live={live.data} />
         )}
       </section>
 

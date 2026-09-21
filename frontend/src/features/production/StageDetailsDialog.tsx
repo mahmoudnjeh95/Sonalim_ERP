@@ -15,6 +15,7 @@ import type {
   ProductionReportWithDetail,
 } from "./api";
 import { productionSteps, type ProductionStepId, type StageState, type StageStatus } from "./productionSteps";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 interface Metric {
   /** Groups figures that can be summed across reports. */
@@ -240,10 +241,7 @@ export function StageDetailsDialog({
             </DialogHeader>
 
             {loading ? (
-              <div className="space-y-2">
-                <Skeleton className="h-14 w-full" />
-                <Skeleton className="h-14 w-full" />
-              </div>
+              <AppLoader size={96} className="py-4" />
             ) : !state || state.reports.length === 0 ? (
               <p className="rounded-lg border border-dashed border-border p-4 text-center text-sm text-muted-foreground">
                 {t("production.flow.details.empty")}

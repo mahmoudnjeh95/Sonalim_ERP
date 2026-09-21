@@ -7,6 +7,7 @@ from modules.production.domain.dashboard import (
     direction,
     line_state,
     previous_period,
+    shift_length_minutes,
     validate_shift_window,
 )
 
@@ -82,3 +83,13 @@ def test_direction_compares_at_display_precision_and_never_judges():
     assert direction(96.2, 96.1, decimals=1) == "up"
     assert direction(95.9, 96.1, decimals=1) == "down"
     assert direction(10, None, decimals=1) is None
+
+
+def test_a_shift_is_as_long_as_its_window():
+    assert [shift_length_minutes(w) for w in _windows()] == [8 * 60, 8 * 60, 8 * 60]
+    assert shift_length_minutes(ShiftWindow(shift="Matin", start=T(7, 0), end=T(14, 30))) == 7 * 60 + 30
+
+
+def test_a_window_through_midnight_is_measured_across_it():
+    assert shift_length_minutes(ShiftWindow(shift="Nuit", start=T(22, 0), end=T(7, 0))) == 9 * 60
+    assert shift_length_minutes(ShiftWindow(shift="Nuit", start=T(23, 45), end=T(0, 15))) == 30

@@ -51,6 +51,8 @@ def test_shift_windows_round_trip_including_a_window_through_midnight(db, actor)
         ("Shift 3", "23:00", "07:00"),
     }
     assert {w.shift for w in service.list_shift_windows(tenant_id=TENANT)} == {"Shift 1", "Shift 3"}
+    # Each shift says how long it runs, the night one across midnight.
+    assert {w["shift"]: w["length_minutes"] for w in stored} == {"Shift 1": 8 * 60, "Shift 3": 8 * 60}
 
 
 def test_replacing_shift_windows_drops_the_ones_left_out(db, actor):

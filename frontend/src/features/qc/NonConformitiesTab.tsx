@@ -21,7 +21,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -53,6 +52,7 @@ import {
   type NonConformity,
   type NonConformityStatus,
 } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const raiseSchema = z.object({
   of_id: z.string().min(1, "Required"),
@@ -561,10 +561,7 @@ export function NonConformitiesTab() {
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="space-y-2 p-6">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-9 w-full" />
-            </div>
+            <AppLoader className="py-8" />
           ) : visible.length === 0 ? (
             <EmptyState
               icon={<EmptyQualityIllustration className="h-5 w-5" />}

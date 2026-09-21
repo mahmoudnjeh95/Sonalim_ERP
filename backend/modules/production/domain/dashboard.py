@@ -38,6 +38,14 @@ def validate_shift_window(*, shift: str, start: datetime.time, end: datetime.tim
     return Ok(None)
 
 
+def shift_length_minutes(window: ShiftWindow) -> int:
+    """How long a shift runs, in minutes. A window whose end is before its start runs
+    through midnight (22:00 to 07:00 is nine hours), which is what the modulo is for."""
+    start = window.start.hour * 60 + window.start.minute
+    end = window.end.hour * 60 + window.end.minute
+    return (end - start) % (24 * 60)
+
+
 def current_shift(windows: list[ShiftWindow], at: datetime.time) -> ShiftWindow | None:
     """The shift whose window contains `at`, or None when nothing is configured
     for that time.

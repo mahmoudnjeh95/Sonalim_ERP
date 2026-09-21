@@ -112,6 +112,12 @@ class MachinePerformanceService:
             LEFT JOIN (
                 SELECT report_id, tenant_id, SUM(minutes) AS total_minutes
                 FROM production.report_downtime_lines
+                -- The report rows of a shift carry a copy of its stops, filed under the machine the
+                -- run is on; the stops themselves know which machine stopped, so they are read
+                -- below and only older reports (no shift behind them) count from here.
+                WHERE report_id NOT IN (
+                    SELECT id FROM production.shift_runs UNION SELECT id FROM production.shift_packing_rows
+                )
                 GROUP BY report_id, tenant_id
             ) dl ON dl.report_id = r.id AND dl.tenant_id = r.tenant_id
             GROUP BY r.equipment_id, r.period
@@ -120,8 +126,8 @@ class MachinePerformanceService:
             params + params,
         ).fetchall()
 
-        return [
-            {
+        result = {
+            (equipment_id, period.isoformat()): {
                 "equipment_id": equipment_id,
                 "period": period.isoformat(),
                 "report_count": int(report_count),
@@ -134,4 +140,36 @@ class MachinePerformanceService:
                 equipment_id, period, report_count, semolina_quantity, regrind_input_quantity_normalized,
                 produced_quantity, production_minutes, downtime_minutes,
             ) in rows
-        ]
+        }
+
+        # Stops of validated shifts, each on the machine that stopped (a stop that names no machine
+        # cannot be given one, so it is not attributed). A machine that only stopped, with no report
+        # filed under it, still gets its row.
+        stop_where, stop_params = ["s.tenant_id = %s", "s.status = 'validated'"], [grain, tenant_id]
+        if date_from is not None:
+            stop_where.append("s.report_date >= %s")
+            stop_params.append(date_from)
+        if date_to is not None:
+            stop_where.append("s.report_date <= %s")
+            stop_params.append(date_to)
+        for equipment_id, period, minutes in self._connection.execute(
+            f"""
+            SELECT ms.equipment_id, date_trunc(%s, s.report_date)::date AS period,
+                   SUM(ROUND(EXTRACT(EPOCH FROM (ms.ended_at - ms.started_at)) / 60))
+            FROM production.machine_stops ms
+            JOIN production.shift_reports s ON s.id = ms.shift_report_id AND s.tenant_id = ms.tenant_id
+            WHERE {' AND '.join(stop_where)} AND ms.ended_at IS NOT NULL AND ms.equipment_id IS NOT NULL
+            GROUP BY ms.equipment_id, period
+            """,
+            stop_params,
+        ).fetchall():
+            key = (equipment_id, period.isoformat())
+            row = result.setdefault(
+                key,
+                {
+                    "equipment_id": equipment_id, "period": period.isoformat(), "report_count": 0,
+                    "material_input_quantity": 0.0, "produced_quantity": 0.0, "production_minutes": 0, "downtime_minutes": 0,
+                },
+            )
+            row["downtime_minutes"] += int(minutes)
+        return sorted(result.values(), key=lambda r: (r["period"], r["equipment_id"]))

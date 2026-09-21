@@ -2,7 +2,6 @@ import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { useAuth } from "../../../lib/auth";
 import { useI18n } from "../../../lib/i18n";
-import { Skeleton } from "../../../components/ui/skeleton";
 import { outlineIcon } from "../../../components/patterns/outlineIcon";
 import InspectionSvg from "../../../assets/icons/quality/inspection.svg?react";
 import NonconformitySvg from "../../../assets/icons/quality/nonconformity.svg?react";
@@ -11,6 +10,7 @@ import QualityInspection from "../../../assets/illustrations/quality-inspection.
 import { listNonConformities, listQualityTeamPerformance } from "../../qc/api";
 import { formatNumber } from "./boardFormat";
 import { BlockError, MissingState } from "./BoardStates";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 
 const InspectionIcon = outlineIcon(InspectionSvg);
 const NonconformityIcon = outlineIcon(NonconformitySvg);
@@ -59,11 +59,7 @@ export function QualityBlock({ date }: { date: string }) {
   }
   if (conformity.isLoading || ncs.isLoading || !conformity.data || !ncs.data) {
     return (
-      <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-        {Array.from({ length: 3 }).map((_, i) => (
-          <Skeleton key={i} className="h-32" />
-        ))}
-      </div>
+      <AppLoader size={120} className="py-6" />
     );
   }
 

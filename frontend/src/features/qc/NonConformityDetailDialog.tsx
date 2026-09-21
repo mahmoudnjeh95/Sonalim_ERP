@@ -13,10 +13,10 @@ import {
 } from "../../components/ui/dialog";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Skeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { formatQuantity, productUnit } from "../../lib/units";
 import { getNonConformity, type NonConformity } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 /**
  * A non-conformity, opened from wherever it was mentioned.
@@ -103,7 +103,7 @@ export function NonConformityDetailDialog({
               {t("qc.nc.dispositions")}
             </p>
             {isLoading ? (
-              <Skeleton className="h-16 w-full" />
+              <AppLoader size={96} className="py-4" />
             ) : (full?.dispositions ?? []).length === 0 ? (
               <p className="text-sm text-muted-foreground">{t("qc.nc.dispositionsEmpty")}</p>
             ) : (

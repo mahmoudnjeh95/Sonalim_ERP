@@ -11,8 +11,9 @@ GRANULARITIES = ("shift", "day", "week", "month")
 
 # Same rule as every other aggregate in this module: a draft or rejected report
 # is a team's working notes, and a submitted one is still waiting for a
-# supervisor. Only validated reports are results.
-_VALIDATED = "r.tenant_id = %s AND r.status = 'validated' AND r.report_date BETWEEN %s AND %s"
+# supervisor. Only validated reports are results. The live view of the current shift is the
+# one reader that may ask for `submitted` as well, and says so on screen.
+_KNOWN_STATUSES = ("validated", "submitted")
 
 
 def _pct(finished: float, material: float) -> float | None:
@@ -56,8 +57,13 @@ class DashboardDayService:
     up to 1000x.
     """
 
-    def __init__(self, connection: psycopg.Connection) -> None:
+    def __init__(self, connection: psycopg.Connection, *, statuses: tuple[str, ...] = ("validated",)) -> None:
         self._connection = connection
+        if not statuses or any(status not in _KNOWN_STATUSES for status in statuses):
+            raise ValueError(f"statuses must be some of {_KNOWN_STATUSES}")
+        # Fixed strings from the tuple above, never user input, so inlining them is safe.
+        quoted = ", ".join(f"'{status}'" for status in statuses)
+        self._scope = f"r.tenant_id = %s AND r.status IN ({quoted}) AND r.report_date BETWEEN %s AND %s"
 
     # -- facts ---------------------------------------------------------------
 
@@ -85,7 +91,7 @@ class DashboardDayService:
             LEFT JOIN sem ON sem.report_id = r.id
             LEFT JOIN core.products rip ON rip.id = d.regrind_input_product_id AND rip.tenant_id = r.tenant_id
             LEFT JOIN core.uoms riu ON riu.id = rip.uom_id AND riu.tenant_id = rip.tenant_id
-            WHERE {_VALIDATED} AND r.report_type = 'daily'
+            WHERE {self._scope} AND r.report_type = 'daily'
             """,
             (tenant_id, tenant_id, date_from, date_to),
         ).fetchall()
@@ -106,12 +112,12 @@ class DashboardDayService:
             SELECT r.of_id, r.work_center_id, r.team, dl.motif, dl.minutes
             FROM production.report_downtime_lines dl
             JOIN production.production_reports r ON r.id = dl.report_id AND r.tenant_id = dl.tenant_id
-            WHERE {_VALIDATED} AND dl.minutes > 0
+            WHERE {self._scope} AND dl.minutes > 0
             UNION ALL
             SELECT r.of_id, r.work_center_id, r.team, c.downtime_reason, c.downtime_minutes
             FROM production.conditionnement_reports c
             JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
-            WHERE {_VALIDATED} AND c.downtime_minutes > 0
+            WHERE {self._scope} AND c.downtime_minutes > 0
             """,
             (tenant_id, date_from, date_to, tenant_id, date_from, date_to),
         ).fetchall()
@@ -129,7 +135,7 @@ class DashboardDayService:
             SELECT r.of_id, r.work_center_id, r.team, w.category, SUM(w.quantity)
             FROM production.report_waste_lines w
             JOIN production.production_reports r ON r.id = w.report_id AND r.tenant_id = w.tenant_id
-            WHERE {_VALIDATED} AND r.report_type = 'daily'
+            WHERE {self._scope} AND r.report_type = 'daily'
             GROUP BY r.of_id, r.work_center_id, r.team, w.category
             """,
             (tenant_id, date_from, date_to),
@@ -147,7 +153,7 @@ class DashboardDayService:
             JOIN production.production_reports r ON r.id = sl.report_id AND r.tenant_id = sl.tenant_id
             LEFT JOIN core.products p ON p.id = sl.product_id AND p.tenant_id = sl.tenant_id
             LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
-            WHERE {_VALIDATED} AND r.report_type = 'daily'
+            WHERE {self._scope} AND r.report_type = 'daily'
             GROUP BY r.of_id, sl.product_id, p.name, u.code
             ORDER BY r.of_id, SUM(sl.quantity) DESC
             """,
@@ -166,7 +172,7 @@ class DashboardDayService:
             SELECT r.of_id, SUM(c.packets_counted)
             FROM production.conditionnement_reports c
             JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
-            WHERE {_VALIDATED}
+            WHERE {self._scope}
             GROUP BY r.of_id
             """,
             (tenant_id, date_from, date_to),
@@ -181,7 +187,7 @@ class DashboardDayService:
             JOIN production.production_reports r ON r.id = sl.report_id AND r.tenant_id = sl.tenant_id
             JOIN core.products p ON p.id = sl.product_id AND p.tenant_id = sl.tenant_id
             JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
-            WHERE {_VALIDATED} AND r.report_type = 'daily'
+            WHERE {self._scope} AND r.report_type = 'daily'
             GROUP BY u.code
             ORDER BY COUNT(*) DESC
             LIMIT 1
@@ -191,11 +197,20 @@ class DashboardDayService:
         return row[0] if row else None
 
     def _awaiting_validation(self, tenant_id: str, day: datetime.date) -> int:
-        return self._connection.execute(
+        """Work handed in for the day and not yet a result: shifts waiting for their validator,
+        plus any old-style report still submitted. A shift's own report rows only exist as
+        `submitted` for the instant of its validation, so the two never count the same work."""
+        reports = self._connection.execute(
             "SELECT count(*) FROM production.production_reports "
             "WHERE tenant_id = %s AND status = 'submitted' AND report_date = %s",
             (tenant_id, day),
         ).fetchone()[0]
+        shifts = self._connection.execute(
+            "SELECT count(*) FROM production.shift_reports "
+            "WHERE tenant_id = %s AND status = 'submitted' AND report_date = %s",
+            (tenant_id, day),
+        ).fetchone()[0]
+        return reports + shifts
 
     def _of_details(self, tenant_id: str, of_ids: list[str]) -> dict[str, dict]:
         if not of_ids:
@@ -301,6 +316,98 @@ class DashboardDayService:
             "waste": collapse(waste, "category", "quantity"),
             "stops": collapse(stops, "motif", "minutes"),
         }
+
+    # -- one shift ---------------------------------------------------------------
+
+    def shift_figures(
+        self, *, tenant_id: str, date: datetime.date, shift: str, work_center_ids: list[str]
+    ) -> tuple[dict[str, list[dict]], str | None]:
+        """Each OF's figures for one shift on the given lines, and the semoule unit they are in.
+
+        The same unit handling as the day's totals (they share `_report_facts`), cut to a single
+        shift. Which statuses count is decided by how the service was built: the live view builds
+        it to include a shift that is handed in but not yet validated.
+        """
+        if not work_center_ids:
+            return {}, None
+        facts = [
+            f
+            for f in self._report_facts(tenant_id, date, date)
+            if f["work_center_id"] in work_center_ids and (f["shift"] or "").lower() == shift.lower()
+        ]
+        cut = "AND r.work_center_id = ANY(%s) AND lower(r.shift) = lower(%s)"
+        cut_params = (work_center_ids, shift)
+        stops = self._connection.execute(
+            f"""
+            SELECT r.work_center_id, r.of_id, dl.motif, dl.minutes
+            FROM production.report_downtime_lines dl
+            JOIN production.production_reports r ON r.id = dl.report_id AND r.tenant_id = dl.tenant_id
+            WHERE {self._scope} {cut} AND dl.minutes > 0
+            UNION ALL
+            SELECT r.work_center_id, r.of_id, c.downtime_reason, c.downtime_minutes
+            FROM production.conditionnement_reports c
+            JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
+            WHERE {self._scope} {cut} AND c.downtime_minutes > 0
+            """,
+            (tenant_id, date, date, *cut_params, tenant_id, date, date, *cut_params),
+        ).fetchall()
+        waste = self._connection.execute(
+            f"""
+            SELECT r.work_center_id, r.of_id, SUM(w.quantity)
+            FROM production.report_waste_lines w
+            JOIN production.production_reports r ON r.id = w.report_id AND r.tenant_id = w.tenant_id
+            WHERE {self._scope} {cut} AND r.report_type = 'daily'
+            GROUP BY r.work_center_id, r.of_id
+            """,
+            (tenant_id, date, date, *cut_params),
+        ).fetchall()
+        packets = self._connection.execute(
+            f"""
+            SELECT r.work_center_id, r.of_id, SUM(c.packets_counted)
+            FROM production.conditionnement_reports c
+            JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
+            WHERE {self._scope} {cut}
+            GROUP BY r.work_center_id, r.of_id
+            """,
+            (tenant_id, date, date, *cut_params),
+        ).fetchall()
+
+        of_ids = sorted(
+            {f["of_id"] for f in facts} | {row[1] for row in stops} | {row[1] for row in waste} | {row[1] for row in packets}
+        )
+        details = self._of_details(tenant_id, of_ids)
+        figures: dict[str, list[dict]] = {}
+        for wc in work_center_ids:
+            for of_id in of_ids:
+                of_facts = [f for f in facts if f["work_center_id"] == wc and f["of_id"] == of_id]
+                of_stops = [(motif, minutes) for w, o, motif, minutes in stops if w == wc and o == of_id]
+                of_waste = sum(float(q) for w, o, q in waste if w == wc and o == of_id)
+                of_packets = [float(q) for w, o, q in packets if w == wc and o == of_id]
+                if not (of_facts or of_stops or of_waste or of_packets):
+                    continue
+                poured = sum(f["semolina"] + f["regrind"] for f in of_facts)
+                finished = sum(f["finished"] for f in of_facts)
+                by_motif: dict[str | None, int] = {}
+                for motif, minutes in of_stops:
+                    by_motif[motif] = by_motif.get(motif, 0) + int(minutes)
+                figures.setdefault(wc, []).append(
+                    {
+                        "of_id": of_id,
+                        **details.get(of_id, {"reference": None, "product_type": None, "work_center_id": None}),
+                        "semolina_poured": poured,
+                        "finished_product": finished,
+                        "yield_pct": _pct(finished, poured),
+                        "production_minutes": sum(f["production_minutes"] for f in of_facts),
+                        "downtime_minutes": sum(by_motif.values()),
+                        "waste_kg": of_waste,
+                        "packets_counted": of_packets[0] if of_packets else None,
+                        "stops": [
+                            {"motif": motif, "minutes": minutes}
+                            for motif, minutes in sorted(by_motif.items(), key=lambda kv: -kv[1])
+                        ],
+                    }
+                )
+        return figures, self._semolina_unit(tenant_id, date, date)
 
     # -- the trend -----------------------------------------------------------
 

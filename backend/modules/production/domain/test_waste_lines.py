@@ -129,15 +129,14 @@ def test_the_daily_submit_check_covers_the_waste_list():
     assert result.code == "MISSING_WASTE_PRODUCT"
 
 
-def test_the_packing_submit_check_covers_the_waste_list():
+def test_packing_waste_names_no_item():
+    """Packing waste is a kind and a weight in kilos; it is not an item, so nothing is asked for one."""
     detail = ConditionnementReportDetail(
         finished_product_quantity=100,
         finished_goods_location_id="store",
         waste_lines=(WasteLine(category="packaging", quantity=2),),
     )
-    result = validate_conditionnement_stock_targets(detail)
-    assert isinstance(result, Err)
-    assert result.code == "MISSING_WASTE_PRODUCT"
+    assert isinstance(validate_conditionnement_stock_targets(detail), Ok)
 
 
 def test_the_detail_validators_reject_a_wrong_category():

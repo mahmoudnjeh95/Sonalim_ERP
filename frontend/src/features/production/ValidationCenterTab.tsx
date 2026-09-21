@@ -1,3 +1,4 @@
+import { ShiftValidationPanel } from "./shift/ShiftValidationPanel";
 import { useState, useEffect } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -14,7 +15,6 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
 import {
   Dialog,
@@ -61,6 +61,7 @@ import {
 
 import { UTILITY_UNITS, formatDuration, formatQuantity, productUnit } from "../../lib/units";
 import { listLocations, listUoms } from "../warehouse/api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 const PRODUCTION_QUERY_KEY = ["production", "reports", "pending"] as const;
 const QUALITY_QUERY_KEY = ["qc", "quality-reports", "pending"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
@@ -232,6 +233,8 @@ export function ValidationCenterTab() {
 
   return (
     <div className="space-y-6">
+      <ShiftValidationPanel />
+
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard
           label={t("production.validation.stat.daily")}
@@ -353,10 +356,7 @@ export function ValidationCenterTab() {
             </BulkActionBar>
           )}
           {isLoading ? (
-            <div className="space-y-2 p-6">
-              <Skeleton className="h-16 w-full" />
-              <Skeleton className="h-16 w-full" />
-            </div>
+            <AppLoader className="py-8" />
           ) : grouped.length === 0 ? (
             <EmptyState
               icon={<Inbox className="h-5 w-5" />}

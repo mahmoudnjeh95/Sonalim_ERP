@@ -36,6 +36,7 @@ import {
   type ProductPackagingVariance,
 } from "../production/api";
 import { PackagingVariancePanel } from "../production/PackagingVariancePanel";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const CHART_COLORS = {
   primary: "hsl(217 91% 45%)",
@@ -719,7 +720,7 @@ function PackagingVarianceSection({
 }) {
   const { t } = useI18n();
 
-  if (isLoading) return null;
+  if (isLoading) return <AppLoader size={120} className="py-6" />;
 
   if (rows.length === 0) {
     return (

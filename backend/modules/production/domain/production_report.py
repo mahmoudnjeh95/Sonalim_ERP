@@ -471,8 +471,9 @@ def validate_conditionnement_detail(
     """Check a packing report's figures for internal sense.
 
     As permissive as the daily report about what the plant reports — a shift that
-    packed nothing is legitimate — but a DLC needs both halves: a lot number
-    without an expiry date, or the reverse, cannot become a usable lot.
+    packed nothing is legitimate. A lot number may be filed without its DLC: the
+    DLC is entered afterwards by quality, on the lot itself. A DLC with no lot number
+    is refused, though -- it would belong to nothing.
 
     `waste_categories` is the tenant's own packing-report waste types (see
     `validate_waste_lines`).
@@ -499,9 +500,8 @@ def validate_conditionnement_detail(
             f"motif must be one of {sorted(allowed_motifs)}, got {detail.downtime_reason!r}",
         )
 
-    has_lot = bool((detail.lot_number or "").strip())
-    if has_lot != (detail.dlc_date is not None):
-        return Err("INCOMPLETE_DLC", "a lot number and its DLC date must be given together")
+    if detail.dlc_date is not None and not (detail.lot_number or "").strip():
+        return Err("INCOMPLETE_DLC", "a DLC date needs the lot number it belongs to")
     return validate_waste_lines(detail.waste_lines, report_type="conditionnement", custom_categories=waste_categories)
 
 
@@ -561,7 +561,9 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
                 return Err("MISSING_STOCK_TARGET", f"the {label} figure must name the product it consumed")
             if not (detail.packaging_location_id or "").strip():
                 return Err("MISSING_STOCK_TARGET", "packaging figures must name the store they came out of")
-    return validate_waste_products(detail.waste_lines)
+    # Packing waste is a kind and a weight in kilos, recorded as a figure rather than moved as
+    # stock, so unlike production waste it is not asked to name an item.
+    return Ok(None)
 
 
 def validate_report_header(*, report_type: str, of_id: str) -> Result[None]:

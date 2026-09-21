@@ -17,6 +17,7 @@ import {
   type NcDisposition,
   type NonConformitySeverity,
 } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const NC_QUERY_KEY = ["qc", "non-conformities"] as const;
 const TEAM_CONFORMITY_QUERY_KEY = ["qc", "team-performance", "dashboard-trend"] as const;
@@ -159,10 +160,7 @@ export function QualityDashboardTab() {
 
   if (isLoading) {
     return (
-      <div className="space-y-3">
-        <div className="h-24 w-full animate-pulse rounded-lg bg-muted" />
-        <div className="h-64 w-full animate-pulse rounded-lg bg-muted" />
-      </div>
+      <AppLoader className="py-8" />
     );
   }
 

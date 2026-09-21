@@ -46,7 +46,6 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -96,6 +95,7 @@ import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { cn } from "../../lib/utils";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 function todayDateInputValue(): string {
   const now = new Date();
@@ -670,16 +670,7 @@ export function WorkOrdersTab() {
         </CardHeader>
         <CardContent className="p-4">
           {isLoading ? (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <div key={i} className="rounded-xl border border-border bg-card p-4">
-                  <Skeleton className="h-6 w-24" />
-                  <Skeleton className="mt-4 h-16 w-full" />
-                  <Skeleton className="mt-4 h-4 w-full" />
-                  <Skeleton className="mt-2 h-4 w-2/3" />
-                </div>
-              ))}
-            </div>
+            <AppLoader className="py-8" />
           ) : typeFilteredOrders.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border bg-muted/15 p-8">
               <EmptyState

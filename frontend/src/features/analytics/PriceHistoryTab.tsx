@@ -22,7 +22,7 @@ import { formatQuantity } from "../../lib/units";
 import { listProducts, type Product } from "../warehouse/api";
 import { listPartners } from "../partners/api";
 import { listPriceHistory, listSupplierLeaderboard, type PriceHistoryPoint, type SupplierLeaderboardEntry } from "../procurement/api";
-import { AnalyticsErrorState, AnalyticsInlineError } from "./AnalyticsStates";
+import { AnalyticsErrorState, AnalyticsInlineError, AnalyticsLoadingState } from "./AnalyticsStates";
 
 const SUPPLIER_COLORS = ["#0c978b", "#137cec", "#4332e2", "#d926a6", "#e08a1e", "#2e9e4f"];
 const BEST_PRICE_COLOR = "#22c55e";
@@ -342,6 +342,8 @@ export function PriceHistoryTab() {
           />
         </Card>
       )}
+
+      {!hasProducts && supplierId && isSupplierOnlyLoading && <AnalyticsLoadingState />}
 
       {!hasProducts && supplierId && !isSupplierOnlyLoading && !supplierOnlyFailed && filteredSupplierOnlyHistory.length === 0 && (
         <EmptyState
@@ -680,6 +682,8 @@ function ProductPriceSection({
           />
         </Card>
       )}
+
+      {isLoading && <AnalyticsLoadingState />}
 
       {!isLoading && !isError && history.length === 0 && (
         <EmptyState

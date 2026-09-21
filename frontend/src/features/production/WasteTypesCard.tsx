@@ -11,9 +11,9 @@ import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
-import { Skeleton } from "../../components/ui/skeleton";
 import { BUILT_IN_WASTE_CATEGORIES, createWasteType, updateWasteType, type ReportType, type WasteType } from "./api";
 import { WASTE_TYPES_QUERY_KEY, useWasteTypes } from "./wasteTypes";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const REPORTS: ReportType[] = ["daily", "conditionnement"];
 
@@ -100,7 +100,7 @@ export function WasteTypesCard() {
       </CardHeader>
       <CardContent className="space-y-4">
         {isLoading ? (
-          <Skeleton className="h-24 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : (
           REPORTS.map((report) => {
             const own = ownFor(report);

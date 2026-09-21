@@ -5,7 +5,6 @@ import { formatDuration } from "../../../lib/units";
 import { outlineIcon } from "../../../components/patterns/outlineIcon";
 import DelayIllustration from "../../../assets/illustrations/production-delay.svg?react";
 import { MissingState } from "./BoardStates";
-import { Skeleton } from "../../../components/ui/skeleton";
 import LineSvg from "../../../assets/icons/production/line.svg?react";
 import OutputSvg from "../../../assets/icons/production/output.svg?react";
 import YieldSvg from "../../../assets/icons/production/yield.svg?react";
@@ -13,6 +12,7 @@ import DowntimeSvg from "../../../assets/icons/production/downtime.svg?react";
 import ReleaseSvg from "../../../assets/icons/quality/release.svg?react";
 import type { BoardDay, Direction, TrendPoint } from "./api";
 import { formatNumber, prefersReducedMotion } from "./boardFormat";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 
 const LineIcon = outlineIcon(LineSvg);
 const OutputIcon = outlineIcon(OutputSvg);
@@ -120,11 +120,7 @@ export function GlanceBand({ day, isLoading, trend }: { day: BoardDay | undefine
 
   if (isLoading || !day) {
     return (
-      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-primary/10 lg:grid-cols-5">
-        {Array.from({ length: 5 }).map((_, i) => (
-          <Skeleton key={i} className="h-28 rounded-none" />
-        ))}
-      </div>
+      <AppLoader size={120} className="py-6" />
     );
   }
 

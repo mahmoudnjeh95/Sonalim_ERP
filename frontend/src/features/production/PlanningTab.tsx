@@ -9,7 +9,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
@@ -21,6 +20,7 @@ import { listPartners } from "../partners/api";
 import { listProducts, listWorkOrders } from "./api";
 import { computeProductionSuggestions, type ProductionSuggestion } from "./planning";
 import { CreateOfFromSuggestionDialog } from "./CreateOfFromSuggestionDialog";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const ORDERS_QUERY_KEY = ["sales", "orders"] as const;
 const OPPORTUNITIES_QUERY_KEY = ["crm", "opportunities"] as const;
@@ -211,14 +211,7 @@ export function PlanningTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && suggestions.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

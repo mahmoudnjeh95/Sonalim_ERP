@@ -17,7 +17,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -39,6 +38,7 @@ import MovementInIcon from "../../assets/icons/warehouse/movement-in.svg?react";
 import MovementOutIcon from "../../assets/icons/warehouse/movement-out.svg?react";
 import { adjustStock, listLocations, listProducts, listStockMoves, listUoms, type StockMove, type StockMoveType } from "./api";
 import { listWorkOrders } from "../production/api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const adjustSchema = z.object({
   product_id: z.string().min(1, "Required"),
@@ -341,14 +341,7 @@ export function StockHistoryTab() {
             <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
           </TableHeader>
           <TableBody>
-            {isLoading &&
-              Array.from({ length: 4 }).map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={visibleColumns.length}>
-                    <Skeleton className="h-5 w-full" />
-                  </TableCell>
-                </TableRow>
-              ))}
+            {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
             {!isLoading && filteredMoves.length === 0 && (
               <TableRow>
                 <TableCell colSpan={visibleColumns.length} className="p-0">

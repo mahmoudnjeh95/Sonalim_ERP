@@ -574,7 +574,7 @@ export function ProductionDashboardTab() {
             {alerts.length === 0 && consolidationsPending ? (
               // No alerts yet is not "all clear": most of them are computed from
               // the consolidations that are still on their way.
-              <Skeleton className="h-44 w-full" />
+              <AppLoader size={96} className="py-4" />
             ) : alerts.length === 0 ? (
               <EmptyState
                 icon={<ClipboardCheck className="h-5 w-5" />}
@@ -667,11 +667,7 @@ export function ProductionDashboardTab() {
         </CardHeader>
         <CardContent>
           {consolidationsPending ? (
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <Skeleton className="h-20 w-full" />
-              <Skeleton className="h-20 w-full" />
-              <Skeleton className="h-20 w-full" />
-            </div>
+            <AppLoader size={96} className="py-4" />
           ) : produced <= 0 ? (
             <EmptyState
               icon={<Droplets className="h-5 w-5" />}

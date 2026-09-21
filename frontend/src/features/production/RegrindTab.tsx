@@ -22,7 +22,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -59,6 +58,7 @@ import {
   type ScrapRecord,
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const completeBatchSchema = z.object({
   location_id: z.string().min(1, "Required"),
@@ -1003,14 +1003,7 @@ export function RegrindTab() {
               <ColumnFilterRow cells={scrapTable.visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={scrapTable.visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={scrapTable.visibleColumns.length} />}
               {!isLoading && filteredScrapRecords.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={scrapTable.visibleColumns.length} className="p-0">

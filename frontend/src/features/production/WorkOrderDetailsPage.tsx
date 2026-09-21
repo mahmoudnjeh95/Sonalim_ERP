@@ -23,7 +23,6 @@ import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
@@ -65,6 +64,7 @@ import { NonConformityDetailDialog } from "../qc/NonConformityDetailDialog";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners } from "../partners/api";
 import { UTILITY_UNITS, formatDuration, formatQuantity, productUnit } from "../../lib/units";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 export function WorkOrderDetailsPage() {
   const { workOrderId = "" } = useParams();
@@ -208,10 +208,7 @@ export function WorkOrderDetailsPage() {
 
   if (isLoading) {
     return (
-      <div className="space-y-3">
-        <Skeleton className="h-20 w-full" />
-        <Skeleton className="h-64 w-full" />
-      </div>
+      <AppLoader className="py-8" />
     );
   }
 

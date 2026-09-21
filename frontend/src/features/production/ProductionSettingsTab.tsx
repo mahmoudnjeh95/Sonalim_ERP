@@ -13,7 +13,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
-import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import {
@@ -30,6 +29,7 @@ import { listFollowUpPolicies, setFollowUpPolicy } from "../qc/api";
 import { DOWNTIME_OPTION_KIND } from "./downtimeOptions";
 import { DashboardSettingsCard } from "./DashboardSettingsCard";
 import { WasteTypesCard } from "./WasteTypesCard";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const REGRIND_DEFAULTS_QUERY_KEY = ["production", "regrind-defaults"] as const;
@@ -189,7 +189,7 @@ function OptionListCard({
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading ? (
-          <Skeleton className="h-24 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : mine.length === 0 ? (
           <EmptyState
             icon={<Icon className="h-5 w-5" />}
@@ -337,7 +337,7 @@ function RegrindDefaultsCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading ? (
-          <Skeleton className="h-12 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : current === null ? (
           <EmptyState
             icon={<Recycle className="h-5 w-5" />}
@@ -424,7 +424,7 @@ function FollowUpPolicyCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading ? (
-          <Skeleton className="h-20 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : policies.length === 0 ? (
           <EmptyState
             icon={<CalendarClock className="h-5 w-5" />}
@@ -540,7 +540,7 @@ function PackagingToleranceCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading ? (
-          <Skeleton className="h-20 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : tolerances.length === 0 ? (
           <EmptyState
             icon={<PackageCheck className="h-5 w-5" />}
