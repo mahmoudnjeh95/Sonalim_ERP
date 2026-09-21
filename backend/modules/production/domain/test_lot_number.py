@@ -2,7 +2,7 @@ import datetime
 
 import pytest
 
-from modules.production.domain.lot_number import suggest_lot_number
+from modules.production.domain.lot_number import default_lot_number, suggest_lot_number, team_letter
 
 D = datetime.date
 
@@ -52,3 +52,37 @@ def test_there_is_nothing_to_follow_without_an_earlier_lot():
 
 def test_a_report_dated_before_the_last_lot_gets_no_guess():
     assert suggest_lot_number(last_lot="4187SNL", last_date=D(2026, 7, 5), report_date=D(2026, 7, 4)) is None
+
+
+def test_the_default_lot_is_team_year_digit_day_of_year_and_company_code():
+    assert default_lot_number(team="B", report_date=D(2026, 1, 1)) == "B6001SNL"
+    assert default_lot_number(team="B", report_date=D(2026, 1, 30)) == "B6030SNL"
+    assert default_lot_number(team="C", report_date=D(2026, 9, 21)) == "C6264SNL"
+    assert default_lot_number(team="A", report_date=D(2026, 12, 31)) == "A6365SNL"
+
+
+def test_the_default_lot_counts_the_extra_day_of_a_leap_year():
+    assert default_lot_number(team="D", report_date=D(2028, 12, 31)) == "D8366SNL"
+    assert default_lot_number(team="D", report_date=D(2028, 3, 1)) == "D8061SNL"
+
+
+def test_the_year_is_its_last_digit():
+    assert default_lot_number(team="A", report_date=D(2030, 2, 1)) == "A0032SNL"
+
+
+@pytest.mark.parametrize(
+    "team, letter",
+    [("A", "A"), ("b", "B"), (" C ", "C"), ("Équipe B", "B"), ("Team D", "D"), ("équipe-c", "C"), ("Equipe A.", None)],
+)
+def test_the_team_letter_is_read_from_what_the_team_typed(team, letter):
+    assert team_letter(team) == letter
+
+
+@pytest.mark.parametrize("team", [None, "", "   ", "E", "AB", "Alpha", "Équipe 2", "Équipe B nuit"])
+def test_no_team_letter_when_the_team_does_not_name_one_of_a_to_d(team):
+    assert team_letter(team) is None
+
+
+def test_there_is_no_default_lot_without_a_team_letter():
+    assert default_lot_number(team=None, report_date=D(2026, 9, 21)) is None
+    assert default_lot_number(team="Alpha", report_date=D(2026, 9, 21)) is None

@@ -85,10 +85,11 @@ def test_what_the_team_typed_is_kept(db, env):
     assert (row["packets_counted"], row["finished_goods_location_id"], row["packaging_location_id"]) == (50, env["other"], env["other"])
 
 
-def test_a_row_with_neither_run_nor_of_is_refused_on_save(db, env):
-    service, shift_id, _, _ = _shift_with_run(db, env)
+def test_a_row_with_no_production_on_the_shift_is_refused_on_save(db, env):
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=DAY, shift="night"))["id"]
     refused = _save_packing(service, env, shift_id, [{"carton_quantity": 3}])
-    assert isinstance(refused, Err) and refused.code == "INVALID_VALUE"
+    assert isinstance(refused, Err) and refused.code == "PRODUCTION_FIRST"
 
 
 def test_packaging_kept_in_different_stores_is_refused(db, env):
@@ -100,11 +101,12 @@ def test_packaging_kept_in_different_stores_is_refused(db, env):
     assert isinstance(refused, Err) and refused.code == "PACKAGING_STORES_DIFFER"
 
 
-def test_submitting_needs_the_run(db, env):
+def test_submitting_needs_a_product(db, env):
     service, shift_id, of_id, _ = _shift_with_run(db, env)
+    db.execute("UPDATE production.work_orders SET product_id = NULL WHERE id = %s", (of_id,))
     _ok(_save_packing(service, env, shift_id, [{"of_id": of_id, "packets_counted": 10, "finished_goods_location_id": env["fg"]}]))
     refused = service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="packing")
-    assert isinstance(refused, Err) and refused.code == "RUN_REQUIRED"
+    assert isinstance(refused, Err) and refused.code == "PRODUCT_REQUIRED"
 
 
 def test_submitting_names_a_product_without_a_default_store(db, env):

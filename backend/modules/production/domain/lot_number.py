@@ -8,6 +8,10 @@ maintenance days included.
 
 The app only ever *suggests* the next one. Nothing here decides a lot number: a plant
 that numbers differently, or skipped one, types its own and the suggestion follows.
+
+A shift's own lot is written from what the shift records -- its team, its date and the
+plant's code (`B6030SNL`: team B, 2026, the 30th day of the year) -- and only fills the
+box a person is free to overwrite.
 """
 from __future__ import annotations
 
@@ -15,6 +19,13 @@ import datetime
 import re
 
 _LOT = re.compile(r"^(\d+)([A-Za-z]*)$")
+
+# The plant's code on every lot, after the counter.
+COMPANY_CODE = "SNL"
+
+# The team's letter is the last word of what was typed in the header ("B", "Équipe B"); a
+# name that ends in anything else names no team this rule knows.
+_TEAM_LETTER = re.compile(r"(?:^|[^0-9A-Za-z])([A-Da-d])$")
 
 
 def suggest_lot_number(
@@ -40,3 +51,19 @@ def suggest_lot_number(
         return None
     digits, suffix = match.groups()
     return f"{int(digits) + elapsed:0{len(digits)}d}{suffix}"
+
+
+def team_letter(team: str | None) -> str | None:
+    """The team's letter, A to D, read from the header's free text; None when it names none."""
+    match = _TEAM_LETTER.search((team or "").strip())
+    return match.group(1).upper() if match else None
+
+
+def default_lot_number(*, team: str | None, report_date: datetime.date) -> str | None:
+    """The lot a shift's rows start with: team letter, last digit of the year, day of the
+    year over three digits, then the plant's code. None while the team names no letter --
+    a letter is never guessed."""
+    letter = team_letter(team)
+    if letter is None:
+        return None
+    return f"{letter}{report_date.year % 10}{report_date.timetuple().tm_yday:03d}{COMPANY_CODE}"

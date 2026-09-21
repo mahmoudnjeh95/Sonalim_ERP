@@ -41,6 +41,7 @@ _PACKING_COLUMNS = (
     "packets_counted", "snapshot_net_weight_grams", "snapshot_packets_per_carton", "film_supplier_id",
     "carton_supplier_id", "tape_supplier_id", "downtime_note", "scotch_quantity", "scotch_product_id",
     "scotch_supplier_id", "ruban_quantity", "ruban_product_id", "ruban_supplier_id", "waste_carton_quantity",
+    "product_id",
 )
 
 
@@ -83,10 +84,13 @@ def _finished_goods_store(connection: psycopg.Connection, tenant_id: str, row: d
         return stored
     if not stored:
         return line_store
-    product_id = connection.execute(
-        "SELECT product_id FROM production.work_orders WHERE id = %s AND tenant_id = %s", (row["of_id"], tenant_id)
-    ).fetchone()
-    product = CoreService(connection).get_product(tenant_id, product_id[0]) if product_id and product_id[0] else None
+    product_id = row.get("product_id") or (
+        connection.execute(
+            "SELECT product_id FROM production.work_orders WHERE id = %s AND tenant_id = %s", (row["of_id"], tenant_id)
+        ).fetchone()
+        or (None,)
+    )[0]
+    product = CoreService(connection).get_product(tenant_id, product_id) if product_id else None
     return line_store if product is not None and stored == product.default_location_id else stored
 
 
@@ -152,12 +156,13 @@ def materialize_shift(
                 """
                 INSERT INTO production.production_reports
                     (id, tenant_id, of_id, report_type, team, work_center_id, report_date, status, revision,
-                     created_by, submitted_at, shift, equipment_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, 'submitted', 1, %s, NOW(), %s, %s)
+                     created_by, submitted_at, shift, equipment_id, shift_report_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'submitted', 1, %s, NOW(), %s, %s, %s)
                 """,
                 (
                     row["id"], tenant_id, row["of_id"], report_type, shift["team"], shift["work_center_id"],
                     shift["report_date"], shift["created_by"] or actor_id, shift["shift"], row["equipment_id"] or stage_machine[report_type],
+                    shift_report_id,
                 ),
             )
 

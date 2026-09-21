@@ -13,7 +13,7 @@ import { Cell, ShiftGrid, type GridRow, type OptionMap } from "./ShiftGrid";
 import { RevisionHistory } from "./RevisionHistory";
 import { StatusNode } from "./StatusNode";
 import type { PartDef, SectionDef } from "./sectionConfig";
-import { hasData, rowCount, toDraft, toPayload, type Draft } from "./shiftModel";
+import { followLot, hasData, partDefaults, rowCount, toDraft, toPayload, type Draft } from "./shiftModel";
 import {
   declareSectionEmpty,
   saveShiftSection,
@@ -60,17 +60,24 @@ export function SectionCard({
   const locked = !canEdit || shift.status === "validated";
 
   // An editable section opens with one blank line in each table; a locked one shows what was handed in.
-  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked));
+  const lotNumber = shift.default_lot_number ?? null;
+  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber));
   const [dirty, setDirty] = useState(false);
 
   // What the server holds is the truth: when it changes (a save, a validator's return),
   // the grids follow it and the section is clean again.
   const serverKey = `${state.revision}|${state.status}|${locked}|${JSON.stringify(state.payload ?? {})}`;
   useEffect(() => {
-    setDraft(toDraft(def, state.payload, !locked));
+    setDraft(toDraft(def, state.payload, !locked, lotNumber));
     setDirty(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverKey]);
+
+  // Naming the team gives the shift a lot: lines still untouched pick it up. Not an edit, so not unsaved.
+  useEffect(() => {
+    if (!locked) setDraft((current) => followLot(def, current, lotNumber));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lotNumber]);
 
   const filled = hasData(def, draft);
   const count = rowCount(def, draft);
@@ -200,6 +207,7 @@ export function SectionCard({
                   onChange={(value) => edit(part.payloadKey, value)}
                   options={options}
                   disabled={locked || busy}
+                  defaults={partDefaults(part, lotNumber)}
                 />
               ))}
 
@@ -242,6 +250,7 @@ export function Part({
   onChange,
   options,
   disabled,
+  defaults,
 }: {
   part: PartDef;
   sectionKey: string;
@@ -249,6 +258,8 @@ export function Part({
   onChange: (value: GridRow[] | Row) => void;
   options: OptionMap;
   disabled: boolean;
+  /** What a line added to a table starts with. */
+  defaults?: Row;
 }) {
   const label = useLabel();
   const idPrefix = `${sectionKey}-${part.payloadKey}`;
@@ -283,6 +294,7 @@ export function Part({
           disabled={disabled}
           addLabel={part.addLabel ? label(part.addLabel) : label(T.addRow)}
           child={part.child}
+          defaults={defaults}
           idPrefix={idPrefix}
           storageKey={idPrefix}
           keepOne

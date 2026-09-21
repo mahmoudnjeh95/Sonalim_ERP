@@ -1,6 +1,6 @@
-import type { SectionDef } from "./sectionConfig";
+import type { PartDef, SectionDef } from "./sectionConfig";
 import type { GridRow } from "./ShiftGrid";
-import { blankRow, isBlankRow, newKey } from "./ShiftGrid";
+import { blankRow, isBlankRow, newKey, withDefaults } from "./ShiftGrid";
 import type { Row, SectionPayload } from "./shiftApi";
 
 /** What a section's grids hold while the team edits: a list per row part, a record per single part. */
@@ -18,11 +18,22 @@ function toGridRows(rows: unknown, childKey?: string): GridRow[] {
   });
 }
 
+/** What a line added to this table starts with: the shift's lot, in a table that has a lot to write. */
+export function partDefaults(part: PartDef, lotNumber: string | null | undefined): Row {
+  return lotNumber && part.shape === "rows" && part.columns.some((c) => c.key === "lot_number") ? { lot_number: lotNumber } : {};
+}
+
 /**
  * The server's payload, shaped for editing. With `withBlankLine`, a table that holds
- * nothing starts with one empty line to type in (the grids of an editable section).
+ * nothing starts with one empty line to type in (the grids of an editable section),
+ * carrying the shift's lot when it has one.
  */
-export function toDraft(def: SectionDef, payload: SectionPayload | undefined, withBlankLine = false): Draft {
+export function toDraft(
+  def: SectionDef,
+  payload: SectionPayload | undefined,
+  withBlankLine = false,
+  lotNumber?: string | null,
+): Draft {
   const draft: Draft = {};
   for (const part of def.parts) {
     const stored = payload?.[part.payloadKey];
@@ -31,9 +42,26 @@ export function toDraft(def: SectionDef, payload: SectionPayload | undefined, wi
       continue;
     }
     const rows = toGridRows(stored, part.child?.payloadKey);
-    draft[part.payloadKey] = rows.length === 0 && withBlankLine ? [blankRow(part.child?.payloadKey)] : rows;
+    draft[part.payloadKey] =
+      rows.length === 0 && withBlankLine ? [blankRow(part.child?.payloadKey, partDefaults(part, lotNumber))] : rows;
   }
   return draft;
+}
+
+/**
+ * The shift's lot changed (the team was named or renamed): the lines nobody has typed in
+ * follow it. A line somebody started typing keeps what it has.
+ */
+export function followLot(def: SectionDef, draft: Draft, lotNumber: string | null | undefined): Draft {
+  const next: Draft = { ...draft };
+  for (const part of def.parts) {
+    if (part.shape !== "rows") continue;
+    const defaults = partDefaults(part, lotNumber);
+    next[part.payloadKey] = (draft[part.payloadKey] as GridRow[]).map((row) =>
+      isBlankRow(row) ? withDefaults(row, defaults) : row,
+    );
+  }
+  return next;
 }
 
 /** The lines somebody filled in: an untouched blank line is not part of the report. */
@@ -41,9 +69,10 @@ const filledRows = (rows: GridRow[]) => rows.filter((row) => !isBlankRow(row));
 
 function toRows(rows: GridRow[], childKey?: string): Row[] {
   return rows.map((grid) => {
-    const { _key, _fresh, ...row } = grid;
+    const { _key, _fresh, _auto, ...row } = grid;
     void _key;
     void _fresh;
+    void _auto;
     if (childKey) row[childKey] = toRows((grid[childKey] as GridRow[] | undefined) ?? []);
     return row;
   });

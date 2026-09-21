@@ -12,6 +12,7 @@ from core.tenancy import TenantContext, require_permission, require_session, use
 from modules.production.api.packaging_bom_service import PackagingBomService
 from modules.production.api.resource_type_service import ResourceTypeService
 from modules.production.api.product_classification_service import ProductClassificationService
+from modules.production.api.work_order_overview_service import WorkOrderOverviewService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
 from modules.production.api.recipe_correlation_insight_service import (
     RecipeCorrelationInsightUnavailable,
@@ -602,6 +603,20 @@ def list_work_order_yields(
 ) -> list[dict]:
     with get_connection() as connection:
         return WorkOrderYieldService(connection).list_work_order_yields(tenant.tenant_id)
+
+
+@router.get("/work-orders/overview")
+def get_work_orders_overview(
+    date: datetime.date | None = Query(default=None, description="Plant-local date. Defaults to the server's."),
+    at: datetime.time | None = Query(default=None, description="Plant-local clock time, HH:MM. Defaults to the server's."),
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> list[dict]:
+    """One light row per OF for the list: products, produced tonnes, shift counts, pending tonnes, live."""
+    now = datetime.datetime.now()
+    with get_connection() as connection:
+        return WorkOrderOverviewService(connection).overview(
+            tenant_id=tenant.tenant_id, date=date or now.date(), at=at or now.time().replace(second=0, microsecond=0)
+        )
 
 
 @router.get("/work-orders/recipe-correlation")
@@ -2882,11 +2897,16 @@ def list_shift_reports(
     report_date: datetime.date | None = None,
     work_center_id: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
+    of_id: str | None = Query(default=None, description="Only the shifts that worked on this work order."),
     tenant: TenantContext = Depends(require_permission("production.shift.view")),
 ) -> list[dict]:
     with get_connection() as connection:
         return ShiftReportService(connection).list_shifts(
-            tenant_id=tenant.tenant_id, report_date=report_date, work_center_id=work_center_id, status=status_filter
+            tenant_id=tenant.tenant_id,
+            report_date=report_date,
+            work_center_id=work_center_id,
+            status=status_filter,
+            of_id=of_id,
         )
 
 

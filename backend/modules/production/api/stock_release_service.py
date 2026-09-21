@@ -59,7 +59,7 @@ class StockReleaseService:
         """
         rows = self._connection.execute(
             """
-            SELECT w.product_id, c.carton_quantity, c.waste_carton_quantity, c.packets_counted, c.snapshot_packets_per_carton
+            SELECT COALESCE(c.product_id, w.product_id), c.carton_quantity, c.waste_carton_quantity, c.packets_counted, c.snapshot_packets_per_carton
             FROM production.conditionnement_reports c
             JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
             JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id

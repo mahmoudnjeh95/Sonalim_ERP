@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
 import { CalendarDays, ClipboardList, Lock, RotateCcw, ShieldCheck } from "lucide-react";
@@ -71,9 +72,11 @@ export function ShiftReportTab() {
   const queryClient = useQueryClient();
   const canView = hasPermission("production.shift.view");
 
-  const [date, setDate] = useState(todayIso);
-  const [workCenterId, setWorkCenterId] = useState("");
-  const [shiftName, setShiftName] = useState("");
+  // A link from an OF page names the line, date and shift to open; without one it opens on today and the clock's shift.
+  const [params] = useSearchParams();
+  const [date, setDate] = useState(() => params.get("date") || todayIso());
+  const [workCenterId, setWorkCenterId] = useState(() => params.get("line") ?? "");
+  const [shiftName, setShiftName] = useState(() => params.get("shift") ?? "");
   const [openKeys, setOpenKeys] = useState<Set<SectionKey>>(new Set());
 
   // ---- reference data -------------------------------------------------------

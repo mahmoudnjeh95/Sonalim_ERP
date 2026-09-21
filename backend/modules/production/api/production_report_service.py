@@ -15,6 +15,7 @@ from modules.production.api.downtime_line_store import (
     load_downtime_lines,
     replace_downtime_lines,
 )
+from modules.production.api.report_product import finished_product_of_report
 from modules.production.api.report_stock_service import ReportStockService
 from modules.production.api.semolina_line_store import (
     delete_semolina_lines,
@@ -626,10 +627,13 @@ class ProductionReportService:
 
             from modules.production.api.conditionnement_service import freeze_packaging_parameters
 
+            # The report's own product: one work order can pack several.
+            finished_product_id = finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=report_id)
+
             # Before anything is posted: the ecart this report will be judged on
             # has to be pinned to the packaging it was actually validated against.
             effects["packaging_parameters"] = freeze_packaging_parameters(
-                self._connection, tenant_id=tenant_id, report_id=report_id, product_id=work_order[0], detail=detail
+                self._connection, tenant_id=tenant_id, report_id=report_id, product_id=finished_product_id, detail=detail
             )
 
             posted = stock.post_conditionnement_report(
@@ -637,7 +641,7 @@ class ProductionReportService:
                 actor_id=actor_id,
                 header=header,
                 detail=detail,
-                finished_product_id=work_order[0],
+                finished_product_id=finished_product_id,
                 correlation_id=correlation_id,
                 packets_per_carton=effects["packaging_parameters"]["packets_per_carton"],  # type: ignore[index]
             )
@@ -732,7 +736,8 @@ class ProductionReportService:
             )
             undone = stock.post_conditionnement_report(
                 tenant_id=tenant_id, actor_id=actor_id, header=header, detail=detail,
-                finished_product_id=work_order[0], correlation_id=correlation_id, reverse=True,
+                finished_product_id=finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=header.id),
+                correlation_id=correlation_id, reverse=True,
                 packets_per_carton=snapshot_packets_per_carton,
             )
         if isinstance(undone, Err):
@@ -1141,7 +1146,8 @@ class ProductionReportService:
             )
             posted = stock.post_conditionnement_report(
                 tenant_id=tenant_id, actor_id=actor_id, header=header, detail=detail,
-                finished_product_id=work_order[0], correlation_id=correlation_id,
+                finished_product_id=finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=report_id),
+                correlation_id=correlation_id,
                 packets_per_carton=snapshot_packets_per_carton,
             )
         if isinstance(posted, Err):

@@ -198,6 +198,7 @@ _PACKING = RowSet(
     columns=(
         Col("of_id", "of"),
         Col("run_id", "run_ref"),
+        Col("product_id"),
         *_text("equipment_id", "packing_type", "film_type"),
         _num("finished_product_quantity"),
         _num("packets_counted"),
@@ -697,8 +698,8 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
         return validate_waste_products(lines)
     elif section_key == "packing":
         for index, row in enumerate(payload.get("rows") or [], start=1):
-            if not row.get("run_id"):
-                return Err("RUN_REQUIRED", f"packing row {index}: pick the production this lot comes from")
+            if not row.get("product_id"):
+                return Err("PRODUCT_REQUIRED", f"packing row {index}: pick the product this lot is made of")
             if float(row.get("packets_counted") or 0) > 0 and not row.get("finished_goods_location_id"):
                 return Err(
                     "NO_DEFAULT_LOCATION",

@@ -15,23 +15,36 @@ export interface Option {
 }
 export type OptionMap = Record<OptionSource, Option[]>;
 
-/** A row being edited: the backend's row plus a client-only key (and a flag for a row just added). */
-export type GridRow = Row & { _key: string; _fresh?: boolean };
+/**
+ * A row being edited: the backend's row plus client-only fields -- a key, a flag for a row
+ * just added, and the fields that hold a default nobody has typed over (`_auto`).
+ */
+export type GridRow = Row & { _key: string; _fresh?: boolean; _auto?: string[] };
 
 export const newKey = () => Math.random().toString(36).slice(2, 10);
 
-/** A line nobody has typed in: no figure in any field (client keys and an empty child list do not count). */
+/**
+ * A line nobody has typed in: no figure in any field. Client keys, an empty child list and a
+ * default nobody has typed over do not count -- a lot the screen wrote is not somebody's entry.
+ */
 export function isBlankRow(row: GridRow): boolean {
   return Object.entries(row).every(([key, value]) => {
-    if (key.startsWith("_")) return true;
+    if (key.startsWith("_") || row._auto?.includes(key)) return true;
     if (Array.isArray(value)) return value.length === 0;
     return value === null || value === undefined || value === "";
   });
 }
 
+/** A row that starts with `defaults` in it; they stay the screen's, not the team's, until a cell is typed in. */
+export function withDefaults(row: GridRow, defaults: Row): GridRow {
+  const keys = Object.keys(defaults);
+  const cleared = Object.fromEntries((row._auto ?? []).map((key) => [key, null]));
+  return { ...row, ...cleared, ...defaults, _auto: keys.length > 0 ? keys : undefined };
+}
+
 /** A fresh empty line, with an empty child list when the table has child lines. */
-export function blankRow(childKey?: string): GridRow {
-  const row: GridRow = { _key: newKey(), _fresh: true };
+export function blankRow(childKey?: string, defaults: Row = {}): GridRow {
+  const row: GridRow = withDefaults({ _key: newKey(), _fresh: true }, defaults);
   if (childKey) row[childKey] = [];
   return row;
 }
@@ -217,7 +230,7 @@ export function Cell({
     case "readonly":
       return (
         <div id={id} aria-label={name} className="flex h-8 w-full items-center px-2 text-xs text-muted-foreground">
-          {asText(value) || "—"}
+          {(column.valueFor && row ? column.valueFor(row, options) : null) || asText(value) || "—"}
         </div>
       );
     case "number":
@@ -308,6 +321,7 @@ export function ShiftGrid({
   disabled,
   addLabel,
   child,
+  defaults,
   idPrefix,
   storageKey,
   keepOne,
@@ -319,6 +333,8 @@ export function ShiftGrid({
   disabled?: boolean;
   addLabel: string;
   child?: ChildDef;
+  /** What a line added here starts with (the shift's lot); the team can type over it. */
+  defaults?: Row;
   idPrefix: string;
   /** Where this grid's column widths are remembered on this device; omit to not remember. */
   storageKey?: string;
@@ -330,11 +346,17 @@ export function ShiftGrid({
   const reduceMotion = useReducedMotion();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
 
-  const setCell = (index: number, key: string, value: unknown) =>
-    onChange(rows.map((row, i) => (i === index ? { ...row, _fresh: false, [key]: value } : row)));
+  const setCell = (index: number, key: string, value: unknown) => {
+    // A cell can invalidate what the server derived from it (a new product means a new OF to resolve).
+    const cleared = Object.fromEntries((columns.find((column) => column.key === key)?.resets ?? []).map((field) => [field, null]));
+    const typedOver = (row: GridRow) => row._auto?.filter((auto) => auto !== key);
+    onChange(
+      rows.map((row, i) => (i === index ? { ...row, ...cleared, _fresh: false, _auto: typedOver(row), [key]: value } : row)),
+    );
+  };
   const remove = (index: number) =>
-    onChange(keepOne && rows.length === 1 ? [blankRow(child?.payloadKey)] : rows.filter((_, i) => i !== index));
-  const add = () => onChange([...rows, blankRow(child?.payloadKey)]);
+    onChange(keepOne && rows.length === 1 ? [blankRow(child?.payloadKey, defaults)] : rows.filter((_, i) => i !== index));
+  const add = () => onChange([...rows, blankRow(child?.payloadKey, defaults)]);
   const toggle = (key: string) =>
     setExpanded((current) => {
       const next = new Set(current);

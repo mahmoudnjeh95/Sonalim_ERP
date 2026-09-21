@@ -50,7 +50,10 @@ export type OptionSource =
   | "itemsRuban"
   | "lineStates"
   | "checkStates"
-  | "partners";
+  | "partners"
+  | "finishedProducts"
+  | "shiftOrders"
+  | "packingTypes";
 
 export interface Column {
   key: string;
@@ -60,6 +63,10 @@ export interface Column {
   /** Choices that depend on the row being edited; wins over `options`. */
   optionsFor?: (row: Row, options: OptionMap) => Option[];
   required?: boolean;
+  /** For a read-only cell: what to show from the row as it is being edited, before the server has derived it. */
+  valueFor?: (row: Row, options: OptionMap) => string | null;
+  /** Fields cleared when this cell changes, so the server derives them again from the new value. */
+  resets?: readonly string[];
 }
 
 export interface ChildDef {
@@ -111,6 +118,11 @@ export function moldsForOrder(row: Row, options: OptionMap): Option[] {
   if (!type) return options.molds;
   const ofThatType = new Set(options.moldTypes.filter((m) => m.label === type).map((m) => m.value));
   return options.molds.filter((m) => ofThatType.has(m.value));
+}
+
+/** The packing type of the row's chosen product, read from the option list built from the products. */
+export function packingTypeFor(row: Row, options: OptionMap): string | null {
+  return options.packingTypes.find((option) => option.value === row.product_id)?.label ?? null;
 }
 
 export const SECTIONS: SectionDef[] = [
@@ -276,19 +288,20 @@ export const SECTIONS: SectionDef[] = [
     short: L("Packing", "Conditionnement"),
     title: L("Packing", "Conditionnement"),
     hint: L(
-      "One row per lot packed: what it drew from, what it used and what it made.",
-      "Une ligne par lot conditionné : ce qu'il a repris, ce qu'il a consommé, ce qu'il a produit.",
+      "One row per lot packed: the product, what it used and what it made.",
+      "Une ligne par lot conditionné : le produit, ce qu'il a consommé, ce qu'il a produit.",
     ),
     parts: [
       {
         payloadKey: "rows",
         shape: "rows",
-        serverDerived: ["packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id"],
+        serverDerived: ["run_id", "packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id"],
         addLabel: L("Add a lot", "Ajouter un lot"),
         columns: [
-          pick("run_id", L("From production", "De la production"), "runs", true),
+          { ...pick("product_id", L("Product", "Produit"), "finishedProducts", true), resets: ["of_id"] },
+          pick("of_id", L("Work order", "OF"), "shiftOrders"),
           text("lot_number", L("Lot", "N° lot")),
-          derived("packing_type", L("Packing type", "Type de conditionnement")),
+          { ...derived("packing_type", L("Packing type", "Type de conditionnement")), valueFor: packingTypeFor },
           pick("film_product_id", L("Film type", "Type film"), "itemsFilm"),
           { key: "film_quantity", label: L("Film (kg)", "Film (kg)"), kind: "expression" },
           pick("carton_product_id", L("Carton type", "Type carton"), "itemsCarton"),

@@ -146,6 +146,18 @@ def test_header_names_can_be_updated(db, env):
     assert (updated["team"], updated["conducteur"], updated["machiniste"]) == ("B", "Alou Traoré", "D. Samaké")
 
 
+def test_a_shift_carries_the_lot_its_rows_start_with_once_its_team_is_known(db, env):
+    shift_id = _open(db, env)
+    assert _get(db, shift_id)["default_lot_number"] is None  # no team yet, so no letter to write
+
+    _ok(ShiftReportService(db).update_header(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, fields={"team": "b"}))
+    # 2030-03-04 is the 63rd day of 2030.
+    assert _get(db, shift_id)["default_lot_number"] == "B0063SNL"
+
+    _ok(ShiftReportService(db).update_header(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, fields={"team": "Équipe nuit"}))
+    assert _get(db, shift_id)["default_lot_number"] is None
+
+
 def test_list_filters_by_date_and_status(db, env):
     _open(db, env, shift="morning")
     _open(db, env, shift="night")

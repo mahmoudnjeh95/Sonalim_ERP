@@ -21,7 +21,7 @@ class FinishedGoodsService:
     def list_finished_goods(
         self, *, tenant_id: str, date_from: str | None = None, date_to: str | None = None
     ) -> list[dict]:
-        clauses = ["r.tenant_id = %s", "r.status = 'validated'", "w.product_id IS NOT NULL"]
+        clauses = ["r.tenant_id = %s", "r.status = 'validated'", "COALESCE(c.product_id, w.product_id) IS NOT NULL"]
         params: list[object] = [tenant_id]
         if date_from is not None:
             clauses.append("r.report_date >= %s")
@@ -34,7 +34,7 @@ class FinishedGoodsService:
         rows = self._connection.execute(
             f"""
             SELECT
-                w.product_id,
+                COALESCE(c.product_id, w.product_id) AS product_id,
                 w.product_type AS pc_pl,
                 SUM(c.finished_product_quantity) AS quantity,
                 SUM(c.packets_counted) AS packets_counted
@@ -42,7 +42,7 @@ class FinishedGoodsService:
             JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
             JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
             WHERE {where}
-            GROUP BY w.product_id, w.product_type
+            GROUP BY COALESCE(c.product_id, w.product_id), w.product_type
             HAVING SUM(c.finished_product_quantity) > 0 OR SUM(c.packets_counted) > 0
             """,
             params,

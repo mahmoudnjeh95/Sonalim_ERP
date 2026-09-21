@@ -25,6 +25,7 @@ from modules.production.api.shift_sections import (
     section_is_empty,
 )
 from modules.production.api.waste_type_service import custom_waste_categories
+from modules.production.domain.lot_number import default_lot_number
 from modules.production.domain.shift_report import (
     SECTION_KEYS,
     can_declare_nothing,
@@ -101,7 +102,9 @@ class ShiftReportService:
             section["payload"] = load_section(
                 self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id, section_key=section["key"]
             )
-        return Ok({**header, "sections": sections})
+        report_date = datetime.date.fromisoformat(header["report_date"])
+        default_lot = default_lot_number(team=header["team"], report_date=report_date)
+        return Ok({**header, "default_lot_number": default_lot, "sections": sections})
 
     def list_shifts(
         self,
@@ -110,12 +113,20 @@ class ShiftReportService:
         report_date: datetime.date | None = None,
         work_center_id: str | None = None,
         status: str | None = None,
+        of_id: str | None = None,
     ) -> list[dict]:
         clauses, params = ["tenant_id = %s"], [tenant_id]
         for column, value in (("report_date", report_date), ("work_center_id", work_center_id), ("status", status)):
             if value is not None:
                 clauses.append(f"{column} = %s")
                 params.append(value)
+        if of_id is not None:
+            # The shifts that hold a production or packing row of this order.
+            clauses.append(
+                "id IN (SELECT shift_report_id FROM production.shift_runs WHERE tenant_id = %s AND of_id = %s "
+                "UNION SELECT shift_report_id FROM production.shift_packing_rows WHERE tenant_id = %s AND of_id = %s)"
+            )
+            params.extend([tenant_id, of_id, tenant_id, of_id])
         rows = self._connection.execute(
             f"SELECT {_HEADER} FROM production.shift_reports WHERE {' AND '.join(clauses)} "
             f"ORDER BY report_date DESC, shift, id",

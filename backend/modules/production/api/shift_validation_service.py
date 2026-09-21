@@ -19,6 +19,7 @@ from core.audit import record_audit
 from core.domain.result import Err, Result
 from modules.production.api.legacy_report_ledger import materialize_shift
 from modules.production.api.production_report_service import ProductionReportService
+from modules.production.api.report_product import stamp_order_products
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.shift_sections import load_section
 from modules.production.api.silo_machine_status import apply_silo_machine_status
@@ -96,6 +97,8 @@ class ShiftValidationService:
         correlation_id = correlation_id or str(ULID())
         try:
             with self._connection.transaction():
+                # An order with no product yet takes its first packing row's, before anything is posted.
+                stamp_order_products(self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id)
                 materialised = materialize_shift(
                     self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id, actor_id=actor_id
                 )

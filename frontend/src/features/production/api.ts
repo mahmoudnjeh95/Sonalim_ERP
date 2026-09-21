@@ -642,6 +642,30 @@ export function listWorkOrderYields(token: string) {
   return apiFetch<WorkOrderYield[]>("/production/work-orders/yields", { token });
 }
 
+/** What the OF list needs per order, from one light read: official figures from validated shifts, pending ones apart. */
+export interface WorkOrderOverview {
+  of_id: string;
+  /** Products of the validated packing reports (earliest first), else the order's own; empty until either exists. */
+  products: string[];
+  /** Tonnes packed in validated shifts. */
+  produced_quantity: number;
+  /** produced / planned; null when the order has no planned quantity. */
+  completion_ratio: number | null;
+  /** Null until a shift is validated. */
+  yield_ratio: number | null;
+  shifts: { validated: number; submitted: number; in_progress: number; returned: number };
+  last_shift_date: string | null;
+  /** Tonnes on shifts handed in or still being typed; never part of the official figure. */
+  pending_quantity: number;
+  live: boolean;
+}
+
+export const WORK_ORDER_OVERVIEW_QUERY_KEY = ["production", "work-orders", "overview"] as const;
+
+export function getWorkOrdersOverview(token: string, params: { date: string; at: string }) {
+  return apiFetch<WorkOrderOverview[]>(`/production/work-orders/overview?date=${params.date}&at=${params.at}`, { token });
+}
+
 // --- Team performance --------------------------------------------------------
 //
 // Output, time and waste from validated reports, bucketed by team and by
@@ -984,6 +1008,8 @@ export interface OfConsolidation {
   of_id: string;
   reference: string;
   product_id: string;
+  /** Every product the order's validated packing reports cover, earliest first; the order's own before its first one. */
+  product_ids: string[];
   status: string;
   work_center_id: string | null;
   start_date: string | null;
@@ -1705,6 +1731,15 @@ export interface WorkOrderPackagingVariance extends PackagingVariance {
   quality_available: boolean;
 }
 
+/** An order whose validated packing reports cover several products: one breakdown per product, no order-wide figure. */
+export interface MultiProductOrderVariance {
+  scope: "work_order";
+  multi_product: true;
+  of_id: string;
+  of_reference: string;
+  products: ProductPackagingVariance[];
+}
+
 export interface ProductPackagingVariance extends PackagingVariance {
   scope: "product";
   product_id: string;
@@ -1727,7 +1762,7 @@ export function getReportPackagingVariance(token: string, reportId: string) {
 
 /** Écart net — the same, less what quality pulled. */
 export function getWorkOrderPackagingVariance(token: string, workOrderId: string) {
-  return apiFetch<WorkOrderPackagingVariance>(
+  return apiFetch<WorkOrderPackagingVariance | MultiProductOrderVariance>(
     `/production/work-orders/${workOrderId}/packaging-variance`,
     { token },
   );

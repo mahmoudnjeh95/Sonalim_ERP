@@ -11,6 +11,7 @@ import { DOWNTIME_CLASSIFICATIONS, DOWNTIME_MOTIFS, DOWNTIME_TYPES } from "../Do
 import { useWasteTypes } from "../wasteTypes";
 import type { Option, OptionMap } from "./ShiftGrid";
 import type { Row, SectionKey, ShiftReport } from "./shiftApi";
+import { packingTypeLabel } from "./packingType";
 import { useLabel } from "./shiftText";
 
 /**
@@ -68,6 +69,12 @@ export function useShiftReferenceData(enabled: boolean) {
         : productList.map(asOption);
       const itemsOfKind = (kind: PackagingKind): Option[] =>
         productList.filter((p) => classOf.get(p.id)?.packaging_kind === kind).map(asOption);
+      // Products of a packing row: finished goods only (every product while classifications cannot be read).
+      const finishedProducts = classifications.data
+        ? productList.filter((p) => classOf.get(p.id)?.category === "finished_good").map(asOption)
+        : productList.map(asOption);
+      // Only orders that have a production row on this shift can be the OF of a lot.
+      const runOrderIds = new Set(rowsOf("runs", "runs").map((r) => String(r.of_id)));
 
       // Molds follow the type (PL or PC) of the work orders: a run's own row, or the shift's runs for a wash.
       const typeOfOrder = new Map(all.map((o) => [o.id, o.product_type ?? productType.get(o.product_id ?? "") ?? ""]));
@@ -85,6 +92,11 @@ export function useShiftReferenceData(enabled: boolean) {
         orders: pickable.map(orderOption),
         products: productList.map(asOption),
         productsOrMp,
+        finishedProducts,
+        shiftOrders: all.filter((o) => runOrderIds.has(o.id)).map(orderOption),
+        packingTypes: productList
+          .map((p) => ({ value: p.id, label: packingTypeLabel(p.net_weight_grams, classOf.get(p.id)?.packaging_format) }))
+          .filter((option) => option.label),
         itemsFilm: itemsOfKind("film"),
         itemsCarton: itemsOfKind("carton"),
         itemsBobine: itemsOfKind("bobine"),

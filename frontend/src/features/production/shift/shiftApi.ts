@@ -42,6 +42,8 @@ export interface ShiftReport {
   report_date: string;
   shift: string;
   team: string | null;
+  /** The lot new rows start with, from the team and the date; null until the team names a letter. Single shift only. */
+  default_lot_number?: string | null;
   conducteur: string | null;
   agent_fabrication: string | null;
   machiniste: string | null;
@@ -72,7 +74,10 @@ export const SHIFT_REPORTS_QUERY_KEY = ["production", "shift-reports"] as const;
 
 const base = "/production/shift-reports";
 
-export function listShiftReports(token: string, filters: { report_date?: string; work_center_id?: string; status?: string } = {}) {
+export function listShiftReports(
+  token: string,
+  filters: { report_date?: string; work_center_id?: string; status?: string; of_id?: string } = {},
+) {
   const params = new URLSearchParams();
   for (const [key, value] of Object.entries(filters)) if (value) params.set(key, value);
   const query = params.toString();

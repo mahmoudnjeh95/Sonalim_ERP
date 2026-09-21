@@ -32,20 +32,24 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { cn } from "../../lib/utils";
 import {
   ACTIVE_CONSOLIDATIONS_QUERY_KEY,
+  WORK_ORDER_OVERVIEW_QUERY_KEY,
   closeWorkOrder,
   getPreCloseCheck,
   getWorkOrderConsolidation,
   getWorkOrderPackagingVariance,
+  getWorkOrdersOverview,
   listMolds,
   listProducts,
   listRegrindDefaults,
   listReports,
+  listWorkCenters,
   listWorkOrders,
   resumeWorkOrder,
   startWorkOrder,
   suspendWorkOrder,
   type ProductionReport,
 } from "./api";
+import { SHIFT_REPORTS_QUERY_KEY, listShiftReports } from "./shift/shiftApi";
 import { DailyReportDialog } from "./DailyReportsTab";
 import { PackingReportDialog } from "./ConditionnementTab";
 import { ProductionFlow } from "./ProductionFlow";
@@ -95,6 +99,26 @@ export function WorkOrderDetailsPage() {
     queryFn: () => listReports(token, { of_id: workOrderId }),
     enabled: Boolean(workOrderId),
   });
+  // Every shift that worked on this order, validated or not, and what is still waiting on it.
+  const { data: shifts = [] } = useQuery({
+    queryKey: [...SHIFT_REPORTS_QUERY_KEY, "of", workOrderId],
+    queryFn: () => listShiftReports(token, { of_id: workOrderId }),
+    enabled: Boolean(workOrderId),
+    retry: false,
+  });
+  const { data: workCenters = [] } = useQuery({ queryKey: ["production", "work-centers"], queryFn: () => listWorkCenters(token) });
+  const { data: overview = [] } = useQuery({
+    queryKey: WORK_ORDER_OVERVIEW_QUERY_KEY,
+    queryFn: () => {
+      const now = new Date();
+      const pad = (n: number) => String(n).padStart(2, "0");
+      return getWorkOrdersOverview(token, {
+        date: `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`,
+        at: `${pad(now.getHours())}:${pad(now.getMinutes())}`,
+      });
+    },
+  });
+  const pendingQuantity = overview.find((row) => row.of_id === workOrderId)?.pending_quantity ?? 0;
   const { data: qualityReports = [] } = useQuery({
     queryKey: ["qc", "quality-reports", "of", workOrderId],
     queryFn: () => listQualityReports(token, { of_id: workOrderId }),
@@ -231,7 +255,13 @@ export function WorkOrderDetailsPage() {
   // recycled back into the mix — rather than against the schedule.
   const transformation = consolidation?.transformation_ratio ?? 0;
   // Everything the OF consumes and produces is counted in its product's own unit.
-  const productUom = productUnit(order?.product_id, products, uoms);
+  // An order can pack several products: their common unit, and a bare number when they differ.
+  const orderUnits = new Set(
+    (consolidation?.product_ids?.length ? consolidation.product_ids : order?.product_id ? [order.product_id] : []).map(
+      (id) => productUnit(id, products, uoms) ?? "",
+    ),
+  );
+  const productUom = orderUnits.size === 1 && [...orderUnits][0] ? [...orderUnits][0] : null;
   // Each consolidated figure is in its own product's unit. Null where the
   // validated reports named different products, and the figure then shows bare.
   const semolinaUom = productUnit(consolidation?.raw_material.semolina_product_id, products, uoms);
@@ -430,6 +460,12 @@ export function WorkOrderDetailsPage() {
               {t("production.conditionnement.field.packetsCounted")}:{" "}
               {formatQuantity(consolidation?.packets_counted, productUom)}
             </p>
+            {/* What is handed in or still being typed: shown beside the official figure, never inside it. */}
+            {pendingQuantity > 0 && (
+              <p className="text-xs text-muted-foreground">
+                + {formatQuantity(pendingQuantity, "t")} {t("production.ofDetails.pending")}
+              </p>
+            )}
           </CardContent>
         </Card>
       </motion.div>
@@ -441,13 +477,25 @@ export function WorkOrderDetailsPage() {
         <Card>
           <CardHeader>
             <CardTitle>{t("production.ofDetails.packagingVariance.title")}</CardTitle>
+            {"multi_product" in packagingVariance && (
+              <p className="mt-0.5 text-sm text-muted-foreground">{t("production.packagingVariance.perProduct")}</p>
+            )}
           </CardHeader>
-          <CardContent className="space-y-2">
-            <PackagingVariancePanel variance={packagingVariance} net dispositionSummary={dispositionSummary} />
-            {packagingVariance.parameters_varied && (
-              <p className="text-xs text-muted-foreground">
-                {t("production.packagingVariance.parametersVaried")}
-              </p>
+          <CardContent className="space-y-4">
+            {"multi_product" in packagingVariance ? (
+              packagingVariance.products.map((entry) => (
+                <div key={entry.product_id} className="space-y-2">
+                  <p className="text-sm font-medium">{productName(entry.product_id)}</p>
+                  <PackagingVariancePanel variance={entry} net dispositionSummary={dispositionSummary} />
+                </div>
+              ))
+            ) : (
+              <>
+                <PackagingVariancePanel variance={packagingVariance} net dispositionSummary={dispositionSummary} />
+                {packagingVariance.parameters_varied && (
+                  <p className="text-xs text-muted-foreground">{t("production.packagingVariance.parametersVaried")}</p>
+                )}
+              </>
             )}
           </CardContent>
         </Card>
@@ -540,52 +588,43 @@ export function WorkOrderDetailsPage() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+        {/* Every shift that worked on this order, validated or not. A row opens that shift in the shift
+            screen, where it is read and, if it is still open, filled in. */}
         <Card>
           <CardHeader>
-            <CardTitle>{t("production.ofDetails.reports.title")}</CardTitle>
-            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.reports.subtitle")}</p>
+            <CardTitle>{t("production.ofDetails.shifts.title")}</CardTitle>
+            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.shifts.subtitle")}</p>
           </CardHeader>
-          <CardContent className={reports.length === 0 ? "p-0" : "space-y-2"}>
-            {reports.length === 0 ? (
+          <CardContent className={shifts.length === 0 ? "p-0" : "space-y-2"}>
+            {shifts.length === 0 ? (
               <EmptyState
                 icon={<ClipboardList className="h-5 w-5" />}
-                title={t("production.ofDetails.reports.empty.title")}
-                description={t("production.ofDetails.reports.empty.description")}
+                title={t("production.ofDetails.shifts.title")}
+                description={t("production.ofDetails.shifts.empty")}
               />
             ) : (
-              reports.map((report: ProductionReport) => (
-                // Opens right here rather than navigating to the Production
-                // tab, so closing it leaves the user on this OF's page.
-                <motion.button
-                  key={report.id}
-                  type="button"
-                  onClick={() => setOpenReport(report)}
-                  whileHover={{ y: -1 }}
-                  transition={{ duration: 0.15 }}
+              shifts.map((shift) => (
+                <Link
+                  key={shift.id}
+                  to={`/production?tab=shift-report&line=${encodeURIComponent(shift.work_center_id)}&date=${shift.report_date}&shift=${encodeURIComponent(shift.shift)}`}
+                  title={t("production.ofDetails.shifts.open")}
                   className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/40"
                 >
                   <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/15 bg-primary/10 text-primary">
-                    {reportStatusIcon(report.status)}
+                    {reportStatusIcon(shift.status === "open" ? "draft" : shift.status === "returned" ? "rejected" : shift.status)}
                   </div>
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium">{report.report_date}</span>
-                      <Badge variant="outline">
-                        {t(
-                          (report.report_type === "daily"
-                            ? "production.validation.source.daily"
-                            : "production.validation.source.conditionnement") as Parameters<typeof t>[0],
-                        )}
-                      </Badge>
-                      {report.shift && <span className="text-xs text-muted-foreground">{report.shift}</span>}
+                      <span className="text-sm font-medium tabular-nums">{shift.report_date}</span>
+                      <Badge variant="outline">{shift.shift}</Badge>
+                      <span className="text-xs text-muted-foreground">
+                        {workCenters.find((wc) => wc.id === shift.work_center_id)?.name ?? "—"}
+                      </span>
                     </div>
                   </div>
-                  <StatusBadge status={report.status} />
-                </motion.button>
+                  <StatusBadge status={shift.status} />
+                </Link>
               ))
-            )}
-            {reports.length > 0 && (
-              <p className="text-xs text-muted-foreground">{t("production.ofDetails.reports.openHint")}</p>
             )}
           </CardContent>
         </Card>

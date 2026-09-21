@@ -86,6 +86,27 @@ class OfConsolidationService:
             return Err("NOT_FOUND", f"work order {of_id} not found")
         reference, product_id, planned_quantity, status, work_center_id, start_date, closed_at = work_order
 
+        # Every product the order's validated packing reports cover, earliest first: one order can
+        # pack several. Before its first validated report it has only its own product, if any.
+        packed_products = [
+            row[0]
+            for row in self._connection.execute(
+                """
+                SELECT COALESCE(c.product_id, w.product_id)
+                FROM production.production_reports r
+                JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+                JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
+                LEFT JOIN production.shift_packing_rows p ON p.id = r.id AND p.tenant_id = r.tenant_id
+                WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'conditionnement' AND r.status = 'validated'
+                GROUP BY 1
+                ORDER BY MIN(r.report_date), MIN(p.line_order) NULLS LAST, MIN(r.created_at), 1
+                """,
+                (tenant_id, of_id),
+            ).fetchall()
+            if row[0] is not None
+        ]
+        product_ids = packed_products or ([product_id] if product_id else [])
+
         daily = self._daily_totals(tenant_id=tenant_id, of_id=of_id)
         packing = self._conditionnement_totals(tenant_id=tenant_id, of_id=of_id)
         quality = self._quality_summary(tenant_id=tenant_id, of_id=of_id)
@@ -106,6 +127,7 @@ class OfConsolidationService:
                 "of_id": of_id,
                 "reference": reference,
                 "product_id": product_id,
+                "product_ids": product_ids,
                 "status": status,
                 "work_center_id": work_center_id,
                 "start_date": start_date.isoformat() if start_date is not None else None,
