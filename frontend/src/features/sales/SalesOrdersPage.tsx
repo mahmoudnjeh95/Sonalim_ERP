@@ -61,7 +61,7 @@ const PRODUCT_TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
 }
 
 export function SalesOrdersPage() {
@@ -278,7 +278,7 @@ export function SalesOrdersPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label={t("sales.stat.total")} value={orders.length} icon={<ShoppingCart className="h-5 w-5" />} />
         <StatCard label={t("sales.stat.confirmed")} value={confirmedCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
-        <StatCard label={t("sales.stat.pipelineValue")} value={Math.round(totalValue)} icon={<ShoppingCart className="h-5 w-5" />} accent="accent" prefix="$" />
+        <StatCard label={t("sales.stat.pipelineValue")} value={Math.round(totalValue)} icon={<ShoppingCart className="h-5 w-5" />} accent="accent" unit="F CFA" />
       </div>
 
       <Card>

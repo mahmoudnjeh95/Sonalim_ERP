@@ -12,7 +12,7 @@ import { listLocations, listProducts, listStock, listUoms } from "../../warehous
 import { DASHBOARD_SETTINGS_QUERY_KEY, getDashboardSettings, type StoreRole } from "./api";
 import { BlockError, MissingState } from "./BoardStates";
 import { ReleaseStockDialog } from "./ReleaseStockDialog";
-import { AppLoader } from "../../../components/patterns/AppLoader";
+import { Skeleton } from "../../../components/ui/skeleton";
 
 const PalletIcon = outlineIcon(PalletSvg);
 
@@ -58,7 +58,7 @@ export function StockToday() {
   );
 
   if (failed) return shell(<BlockError onRetry={() => queries.forEach((q) => void q.refetch())} />);
-  if (loading || !settings.data || !stock.data || !locations.data || !products.data || !uoms.data) return shell(<AppLoader size={96} className="py-4" />);
+  if (loading || !settings.data || !stock.data || !locations.data || !products.data || !uoms.data) return shell(<Skeleton className="h-40 w-full" />);
 
   const roles = new Map<string, StoreRole>(settings.data.store_roles.map((r) => [r.location_id, r.role]));
   if (roles.size === 0) {

@@ -10,7 +10,7 @@ import QualityInspection from "../../../assets/illustrations/quality-inspection.
 import { listNonConformities, listQualityTeamPerformance } from "../../qc/api";
 import { formatNumber } from "./boardFormat";
 import { BlockError, MissingState } from "./BoardStates";
-import { AppLoader } from "../../../components/patterns/AppLoader";
+import { Skeleton } from "../../../components/ui/skeleton";
 
 const InspectionIcon = outlineIcon(InspectionSvg);
 const NonconformityIcon = outlineIcon(NonconformitySvg);
@@ -59,7 +59,11 @@ export function QualityBlock({ date }: { date: string }) {
   }
   if (conformity.isLoading || ncs.isLoading || !conformity.data || !ncs.data) {
     return (
-      <AppLoader size={120} className="py-6" />
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-3" role="status" aria-label={t("app.loading")}>
+        {Array.from({ length: 3 }).map((_, i) => (
+          <Skeleton key={i} className="h-32" />
+        ))}
+      </div>
     );
   }
 

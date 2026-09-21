@@ -12,7 +12,7 @@ import DowntimeSvg from "../../../assets/icons/production/downtime.svg?react";
 import ReleaseSvg from "../../../assets/icons/quality/release.svg?react";
 import type { BoardDay, Direction, TrendPoint } from "./api";
 import { formatNumber, prefersReducedMotion } from "./boardFormat";
-import { AppLoader } from "../../../components/patterns/AppLoader";
+import { Skeleton } from "../../../components/ui/skeleton";
 
 const LineIcon = outlineIcon(LineSvg);
 const OutputIcon = outlineIcon(OutputSvg);
@@ -120,7 +120,11 @@ export function GlanceBand({ day, isLoading, trend }: { day: BoardDay | undefine
 
   if (isLoading || !day) {
     return (
-      <AppLoader size={120} className="py-6" />
+      <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl bg-primary/10 lg:grid-cols-5" role="status" aria-label={t("app.loading")}>
+        {Array.from({ length: 5 }).map((_, i) => (
+          <Skeleton key={i} className="h-[134px] rounded-none" />
+        ))}
+      </div>
     );
   }
 

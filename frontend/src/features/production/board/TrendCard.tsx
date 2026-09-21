@@ -12,7 +12,7 @@ import DelayIllustration from "../../../assets/illustrations/production-delay.sv
 import { getBoardTrend, type Granularity } from "./api";
 import { addDays, formatDay, formatNumber } from "./boardFormat";
 import { BlockError, MissingState } from "./BoardStates";
-import { AppLoader } from "../../../components/patterns/AppLoader";
+import { Skeleton } from "../../../components/ui/skeleton";
 
 const YieldIcon = outlineIcon(YieldSvg);
 
@@ -124,7 +124,7 @@ export function TrendCard({ date }: { date: string }) {
       {trend.isError ? (
         <BlockError onRetry={() => void trend.refetch()} />
       ) : trend.isLoading ? (
-        <AppLoader size={120} className="h-56" />
+        <Skeleton className="h-56 w-full" />
       ) : !hasData ? (
         <MissingState illustration={<DelayIllustration className="h-24 w-auto" />} title={t("production.board.trend.empty.title")} description={t("production.board.trend.empty.desc")} />
       ) : (

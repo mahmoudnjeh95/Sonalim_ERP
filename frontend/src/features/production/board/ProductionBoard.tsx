@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { motion, useReducedMotion } from "framer-motion";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../../lib/auth";
@@ -15,12 +16,15 @@ import { RankingCards } from "./RankingCards";
 import { StockToday } from "./StockToday";
 import { TrendCard } from "./TrendCard";
 import { AppLoader } from "../../../components/patterns/AppLoader";
+import { Skeleton } from "../../../components/ui/skeleton";
 
 /**
  * The production board a manager opens in the morning: what happened
  * yesterday, what stands on the lines right now, and what waits to be
- * released. Each block loads and fails on its own, so one slow or broken read
- * never blanks the page.
+ * released. Each block fails on its own, so one broken read never blanks the
+ * page. The first load shows the branded loader once for the whole board (the
+ * blocks stay mounted behind it so all their reads run in parallel); after that
+ * a block that is still waiting, or a day change, only shows a quiet skeleton.
  */
 export function ProductionBoard() {
   const { session } = useAuth();
@@ -57,6 +61,16 @@ export function ProductionBoard() {
   const weekParams = { date_from: addDays(date, -6), date_to: date, granularity: "day" as const };
   const week = useQuery({ queryKey: ["production", "board", "trend", weekParams], queryFn: () => getBoardTrend(token, weekParams) });
 
+  // The board only counts as "booting" until its two primary reads have answered once. Later
+  // refetches and day changes never bring the loader back.
+  const primaryLoading = lines.isLoading || day.isLoading;
+  const [booted, setBooted] = useState(false);
+  useEffect(() => {
+    if (!primaryLoading) setBooted(true);
+  }, [primaryLoading]);
+  const booting = !booted && primaryLoading;
+  const reduceMotion = useReducedMotion();
+
   const dateLabel = formatDay(date, { weekday: "long", day: "numeric", month: "long" });
 
   return (
@@ -85,32 +99,41 @@ export function ProductionBoard() {
         </div>
       </div>
 
-      {day.isError ? <BlockError onRetry={() => void day.refetch()} /> : <GlanceBand day={day.data} isLoading={day.isLoading} trend={week.data?.current.points} />}
+      {booting && <AppLoader fullScreen label={t("production.board.loading")} />}
 
-      <section>
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-base font-semibold text-primary">{t("production.board.lines.title")}</h2>
-          <p className="text-xs text-muted-foreground">{t("production.board.lines.subtitle")}</p>
-        </div>
-        {lines.isError ? (
-          <BlockError onRetry={() => void lines.refetch()} />
-        ) : lines.isLoading || !lines.data ? (
-          <AppLoader className="mt-6 py-8" />
-        ) : (
-          <LinesBoard board={lines.data} day={day.data} dayIsLoading={day.isLoading} live={live.data} />
-        )}
-      </section>
+      <motion.div
+        initial={false}
+        animate={{ opacity: booting ? 0 : 1, y: booting ? 8 : 0 }}
+        transition={{ duration: reduceMotion ? 0 : 0.35, ease: "easeOut" }}
+        className={cn("space-y-4", booting && "hidden")}
+      >
+        {day.isError ? <BlockError onRetry={() => void day.refetch()} /> : <GlanceBand day={day.data} isLoading={day.isLoading} trend={week.data?.current.points} />}
 
-      <StockToday />
+        <section>
+          <div className="flex flex-wrap items-baseline justify-between gap-2">
+            <h2 className="text-base font-semibold text-primary">{t("production.board.lines.title")}</h2>
+            <p className="text-xs text-muted-foreground">{t("production.board.lines.subtitle")}</p>
+          </div>
+          {lines.isError ? (
+            <BlockError onRetry={() => void lines.refetch()} />
+          ) : lines.isLoading || !lines.data ? (
+            <Skeleton className="mt-3 h-52 w-full" />
+          ) : (
+            <LinesBoard board={lines.data} day={day.data} dayIsLoading={day.isLoading} live={live.data} />
+          )}
+        </section>
 
-      <TrendCard date={date} />
+        <StockToday />
 
-      {day.data ? <RankingCards day={day.data} lines={lines.data?.lines} /> : null}
+        <TrendCard date={date} />
 
-      <section className="space-y-2">
-        <h2 className="text-base font-semibold text-primary">{t("production.board.quality.title")}</h2>
-        <QualityBlock date={date} />
-      </section>
+        {day.data ? <RankingCards day={day.data} lines={lines.data?.lines} /> : null}
+
+        <section className="space-y-2">
+          <h2 className="text-base font-semibold text-primary">{t("production.board.quality.title")}</h2>
+          <QualityBlock date={date} />
+        </section>
+      </motion.div>
     </div>
   );
 }
