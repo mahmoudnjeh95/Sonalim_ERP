@@ -3,7 +3,7 @@ name: Build and Deploy
 on:
   push:
     branches:
-      - fix/folder-restructure
+      - huge_production_migration
   workflow_dispatch:
 
 permissions:
