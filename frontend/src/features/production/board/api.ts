@@ -18,12 +18,12 @@ export interface BoardMachine {
   stage: Stage | null;
 }
 
-export interface RosterEntry {
-  shift: string;
+export interface TeamStatusEntry {
   team: string;
-  /** null until the plant has set the shift's hours. */
-  start_time: string | null;
-  end_time: string | null;
+  /** null for the team resting that day. */
+  shift: string | null;
+  /** null when no report exists yet for that slot. */
+  status: LiveStatus | null;
   is_current: boolean;
 }
 
@@ -46,7 +46,7 @@ export interface BoardLine {
   ofs: BoardOf[];
   /** Every machine declared on the line: in stage order, the ones with no stage last. */
   machines: BoardMachine[];
-  roster: RosterEntry[];
+  team_status: TeamStatusEntry[];
 }
 
 export interface ShiftWindowRow {
@@ -64,8 +64,11 @@ export interface BoardLines {
   lines: BoardLine[];
 }
 
-export function getBoardLines(token: string, at: string) {
-  return apiFetch<BoardLines>(`/production/dashboard/lines?at=${encodeURIComponent(at)}`, { token });
+export function getBoardLines(token: string, at: string, date: string) {
+  return apiFetch<BoardLines>(
+    `/production/dashboard/lines?at=${encodeURIComponent(at)}&date=${encodeURIComponent(date)}`,
+    { token },
+  );
 }
 
 // --- One day ----------------------------------------------------------------
@@ -243,7 +246,7 @@ export type StoreRole = "line" | "final";
 
 export interface DashboardSettings {
   shift_windows: ShiftWindowRow[];
-  roster: { work_center_id: string; shift: string; team: string }[];
+  team_rotation: { team: string; anchor_date: string; anchor_stop: number }[];
   store_roles: { location_id: string; role: StoreRole }[];
 }
 
@@ -261,6 +264,7 @@ function replaceSection<T>(token: string, section: string, items: T[]) {
 
 export const replaceShiftWindows = (token: string, items: DashboardSettings["shift_windows"]) =>
   replaceSection(token, "shift-windows", items);
-export const replaceRoster = (token: string, items: DashboardSettings["roster"]) => replaceSection(token, "roster", items);
+export const replaceTeamRotation = (token: string, items: DashboardSettings["team_rotation"]) =>
+  replaceSection(token, "team-rotation", items);
 export const replaceStoreRoles = (token: string, items: DashboardSettings["store_roles"]) =>
   replaceSection(token, "store-roles", items);
