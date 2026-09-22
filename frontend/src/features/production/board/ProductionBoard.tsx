@@ -43,8 +43,8 @@ export function ProductionBoard() {
   }, []);
 
   const lines = useQuery({
-    queryKey: ["production", "board", "lines"],
-    queryFn: () => getBoardLines(token, clockTime(new Date())),
+    queryKey: ["production", "board", "lines", date],
+    queryFn: () => getBoardLines(token, clockTime(new Date()), date),
     refetchInterval: 60_000,
   });
   const day = useQuery({ queryKey: ["production", "board", "day", date], queryFn: () => getBoardDay(token, date) });

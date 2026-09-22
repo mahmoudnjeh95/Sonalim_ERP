@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ChevronRight, UserRound } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
@@ -30,8 +30,8 @@ import type {
   LiveLine,
   LiveStatus,
   MachineStatus,
-  RosterEntry,
   Stage,
+  TeamStatusEntry,
 } from "./api";
 import { formatDay, formatNumber, minutesOfDay, prefersReducedMotion, shiftColor } from "./boardFormat";
 import { MissingState } from "./BoardStates";
@@ -114,19 +114,25 @@ function ShiftStrip({ board }: { board: BoardLines }) {
 
 // --- Roster -----------------------------------------------------------------
 
-function RosterPills({ roster }: { roster: RosterEntry[] }) {
+const TEAM_STATUS_TONE: Record<"none" | LiveStatus, string> = {
+  none: "bg-muted text-muted-foreground",
+  open: "bg-muted text-muted-foreground",
+  submitted: "bg-primary/10 text-primary",
+  validated: "bg-success/10 text-success",
+  returned: "bg-destructive-soft text-destructive",
+};
+
+function TeamStatusPills({ teamStatus }: { teamStatus: TeamStatusEntry[] }) {
   return (
     <div className="flex items-start gap-1">
-      {roster.map((entry, index) => (
-        <div key={entry.shift} className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground", entry.is_current && "board-team-now")} title={entry.shift}>
-          <span
-            className={cn("board-avatar flex h-[26px] w-[26px] items-center justify-center rounded-full", entry.is_current ? "bg-warning-soft" : "bg-muted")}
-            style={{ color: shiftColor(index) }}
-          >
-            <UserRound className="h-4 w-4" strokeWidth={2.4} aria-hidden="true" />
-          </span>
-          <b className={cn("max-w-full truncate text-[11.5px]", entry.is_current ? "text-warning" : "text-foreground")}>{entry.team}</b>
-          {entry.start_time && entry.end_time ? <span>{entry.start_time.slice(0, 2)}–{entry.end_time.slice(0, 2)}</span> : null}
+      {teamStatus.map((entry) => (
+        <div
+          key={entry.team}
+          className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground", entry.is_current && "board-team-now")}
+          title={entry.shift ?? undefined}
+        >
+          <span className={cn("board-avatar h-[26px] w-[26px] rounded-full", TEAM_STATUS_TONE[entry.status ?? "none"])} aria-hidden="true" />
+          <b className="max-w-full truncate text-[11.5px] text-foreground">{entry.team}</b>
         </div>
       ))}
     </div>
@@ -364,8 +370,8 @@ function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen, live, live
             {(of.state === "maintenance" || of.state === "down") && troubleName ? ` ${t("production.board.state.on")} ${troubleName}` : ""}
           </p>
         </div>
-        {line.roster.length ? (
-          <RosterPills roster={line.roster} />
+        {line.team_status.length ? (
+          <TeamStatusPills teamStatus={line.team_status} />
         ) : (
           <p className="max-w-[12rem] text-xs text-muted-foreground">{t("production.board.roster.notSet.title")}</p>
         )}
