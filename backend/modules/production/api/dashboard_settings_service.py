@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 import psycopg
 
 from core.audit import record_audit
@@ -9,6 +11,7 @@ from modules.production.domain.dashboard import (
     ShiftWindow,
     shift_length_minutes,
     validate_shift_window,
+    validate_team_rotation,
 )
 
 
@@ -48,9 +51,8 @@ class DashboardSettingsService:
             "WHERE tenant_id = %s ORDER BY start_time, shift",
             (tenant_id,),
         ).fetchall()
-        roster = self._connection.execute(
-            "SELECT work_center_id, shift, team FROM production.line_team_roster "
-            "WHERE tenant_id = %s ORDER BY work_center_id, shift",
+        rotation = self._connection.execute(
+            "SELECT team, anchor_date, anchor_stop FROM production.team_rotation WHERE tenant_id = %s ORDER BY anchor_stop",
             (tenant_id,),
         ).fetchall()
         roles = self._connection.execute(
@@ -69,7 +71,7 @@ class DashboardSettingsService:
                 }
                 for s, a, b in windows
             ],
-            "roster": [{"work_center_id": w, "shift": s, "team": t} for w, s, t in roster],
+            "team_rotation": [{"team": t, "anchor_date": d.isoformat(), "anchor_stop": s} for t, d, s in rotation],
             "store_roles": [{"location_id": l, "role": r} for l, r in roles],
         }
 
@@ -100,29 +102,37 @@ class DashboardSettingsService:
         self._audit(tenant_id, actor_id, "shift_windows", result)
         return Ok(result)
 
-    def replace_roster(self, *, tenant_id: str, actor_id: str, entries: list[dict]) -> Result[list[dict]]:
-        seen: set[tuple[str, str]] = set()
+    def replace_team_rotation(self, *, tenant_id: str, actor_id: str, entries: list[dict]) -> Result[list[dict]]:
+        num_shifts = len(self.list_shift_windows(tenant_id=tenant_id))
+        if num_shifts == 0:
+            return Err("NO_SHIFTS_CONFIGURED", "configure the plant's shifts before the team rotation")
+
         cleaned = []
         for entry in entries:
-            work_center_id = (entry.get("work_center_id") or "").strip()
-            shift = (entry.get("shift") or "").strip()
             team = (entry.get("team") or "").strip()
-            if not (work_center_id and shift and team):
-                return Err("INVALID_ENTRY", "a roster entry needs a line, a shift and a team")
-            key = (work_center_id, shift.lower())
-            if key in seen:
-                return Err("DUPLICATE_ENTRY", f"line {work_center_id} has two teams on shift {shift!r}")
-            seen.add(key)
-            cleaned.append({"work_center_id": work_center_id, "shift": shift, "team": team})
+            raw_date = entry.get("anchor_date")
+            try:
+                anchor_date = raw_date if isinstance(raw_date, datetime.date) else datetime.date.fromisoformat(str(raw_date))
+            except (TypeError, ValueError):
+                return Err("INVALID_ENTRY", "a rotation entry needs a valid anchor date")
+            anchor_stop = entry.get("anchor_stop")
+            if not team or not isinstance(anchor_stop, int):
+                return Err("INVALID_ENTRY", "a rotation entry needs a team and its stop in the cycle")
+            cleaned.append({"team": team, "anchor_date": anchor_date, "anchor_stop": anchor_stop})
 
-        self._connection.execute("DELETE FROM production.line_team_roster WHERE tenant_id = %s", (tenant_id,))
+        check = validate_team_rotation(cleaned, num_shifts=num_shifts)
+        if isinstance(check, Err):
+            return check
+
+        self._connection.execute("DELETE FROM production.team_rotation WHERE tenant_id = %s", (tenant_id,))
         for row in cleaned:
             self._connection.execute(
-                "INSERT INTO production.line_team_roster (tenant_id, work_center_id, shift, team) VALUES (%s, %s, %s, %s)",
-                (tenant_id, row["work_center_id"], row["shift"], row["team"]),
+                "INSERT INTO production.team_rotation (tenant_id, team, anchor_date, anchor_stop) VALUES (%s, %s, %s, %s)",
+                (tenant_id, row["team"], row["anchor_date"], row["anchor_stop"]),
             )
-        self._audit(tenant_id, actor_id, "roster", cleaned)
-        return Ok(cleaned)
+        result = [{"team": r["team"], "anchor_date": r["anchor_date"].isoformat(), "anchor_stop": r["anchor_stop"]} for r in cleaned]
+        self._audit(tenant_id, actor_id, "team_rotation", result)
+        return Ok(result)
 
     def replace_store_roles(self, *, tenant_id: str, actor_id: str, entries: list[dict]) -> Result[list[dict]]:
         return self._replace_keyed(

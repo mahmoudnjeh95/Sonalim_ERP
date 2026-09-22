@@ -32,7 +32,7 @@ def test_a_tenant_that_configured_nothing_gets_empty_lists(db):
     # Nothing about machines: their lines, names, states and stages are read from maintenance.
     assert DashboardSettingsService(db).get_settings(tenant_id=TENANT) == {
         "shift_windows": [],
-        "roster": [],
+        "team_rotation": [],
         "store_roles": [],
     }
 
@@ -80,33 +80,55 @@ def test_shift_windows_reject_a_zero_length_shift_and_a_repeated_name(db, actor)
     assert isinstance(twice, Err) and twice.code == "DUPLICATE_ENTRY"
 
 
-def test_roster_round_trip_and_one_team_per_line_and_shift(db, actor):
+def test_team_rotation_needs_shifts_configured_first(db, actor):
+    result = DashboardSettingsService(db).replace_team_rotation(
+        tenant_id=TENANT, actor_id=actor, entries=[{"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 0}]
+    )
+    assert isinstance(result, Err) and result.code == "NO_SHIFTS_CONFIGURED"
+
+
+def test_team_rotation_round_trip(db, actor):
     service = DashboardSettingsService(db)
-    entries = [
-        {"work_center_id": "wc-1", "shift": "Shift 1", "team": "A"},
-        {"work_center_id": "wc-1", "shift": "Shift 2", "team": "B"},
-        {"work_center_id": "wc-2", "shift": "Shift 1", "team": "C"},
-    ]
-    assert isinstance(service.replace_roster(tenant_id=TENANT, actor_id=actor, entries=entries), Ok)
-    assert service.get_settings(tenant_id=TENANT)["roster"] == entries
-
-    clash = service.replace_roster(
+    service.replace_shift_windows(
         tenant_id=TENANT, actor_id=actor,
-        entries=[
-            {"work_center_id": "wc-1", "shift": "Shift 1", "team": "A"},
-            {"work_center_id": "wc-1", "shift": "shift 1", "team": "B"},
-        ],
+        windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
     )
-    assert isinstance(clash, Err) and clash.code == "DUPLICATE_ENTRY"
-    # A refused replacement leaves what was there untouched.
-    assert service.get_settings(tenant_id=TENANT)["roster"] == entries
+    entries = [
+        {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+        {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+        {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 2},
+    ]
+    assert isinstance(service.replace_team_rotation(tenant_id=TENANT, actor_id=actor, entries=entries), Ok)
+    stored = service.get_settings(tenant_id=TENANT)["team_rotation"]
+    assert {(r["team"], r["anchor_date"], r["anchor_stop"]) for r in stored} == {
+        ("B", "2026-09-19", 0), ("C", "2026-09-19", 1), ("A", "2026-09-19", 2),
+    }
 
 
-def test_roster_entry_needs_line_shift_and_team(db, actor):
-    result = DashboardSettingsService(db).replace_roster(
-        tenant_id=TENANT, actor_id=actor, entries=[{"work_center_id": "wc-1", "shift": "Shift 1", "team": " "}]
+def test_team_rotation_rejects_the_wrong_number_of_teams(db, actor):
+    service = DashboardSettingsService(db)
+    service.replace_shift_windows(
+        tenant_id=TENANT, actor_id=actor,
+        windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
     )
-    assert isinstance(result, Err) and result.code == "INVALID_ENTRY"
+    result = service.replace_team_rotation(
+        tenant_id=TENANT, actor_id=actor, entries=[{"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 0}]
+    )
+    assert isinstance(result, Err) and result.code == "WRONG_TEAM_COUNT"
+
+
+def test_replacing_team_rotation_drops_what_it_leaves_out(db, actor):
+    service = DashboardSettingsService(db)
+    service.replace_shift_windows(tenant_id=TENANT, actor_id=actor, windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0))])
+    service.replace_team_rotation(
+        tenant_id=TENANT, actor_id=actor,
+        entries=[{"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 0}, {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 1}],
+    )
+    service.replace_team_rotation(
+        tenant_id=TENANT, actor_id=actor,
+        entries=[{"team": "C", "anchor_date": "2026-09-20", "anchor_stop": 0}, {"team": "D", "anchor_date": "2026-09-20", "anchor_stop": 1}],
+    )
+    assert {r["team"] for r in service.get_settings(tenant_id=TENANT)["team_rotation"]} == {"C", "D"}
 
 
 def test_store_role_is_line_or_final_and_a_store_has_one_role(db, actor):

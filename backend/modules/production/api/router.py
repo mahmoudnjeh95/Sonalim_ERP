@@ -2609,14 +2609,14 @@ class ReplaceShiftWindowsRequest(BaseModel):
     items: list[ShiftWindowRequest]
 
 
-class RosterEntryRequest(BaseModel):
-    work_center_id: str
-    shift: str
+class TeamRotationEntryRequest(BaseModel):
     team: str
+    anchor_date: datetime.date
+    anchor_stop: int
 
 
-class ReplaceRosterRequest(BaseModel):
-    items: list[RosterEntryRequest]
+class ReplaceTeamRotationRequest(BaseModel):
+    items: list[TeamRotationEntryRequest]
 
 
 class StoreRoleRequest(BaseModel):
@@ -2658,14 +2658,16 @@ def replace_shift_windows(
         return _settings_result(connection, result)
 
 
-@router.put("/dashboard/settings/roster")
-def replace_line_roster(
-    body: ReplaceRosterRequest,
+@router.put("/dashboard/settings/team-rotation")
+def replace_team_rotation(
+    body: ReplaceTeamRotationRequest,
     tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
 ) -> list[dict]:
     with get_connection() as connection:
-        result = DashboardSettingsService(connection).replace_roster(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, entries=[i.model_dump() for i in body.items]
+        result = DashboardSettingsService(connection).replace_team_rotation(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            entries=[{"team": i.team, "anchor_date": i.anchor_date.isoformat(), "anchor_stop": i.anchor_stop} for i in body.items],
         )
         return _settings_result(connection, result)
 
