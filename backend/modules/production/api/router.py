@@ -2687,14 +2687,19 @@ def replace_store_roles(
 @router.get("/dashboard/lines")
 def get_dashboard_lines(
     at: datetime.time | None = Query(default=None, description="Plant-local clock time, HH:MM. Defaults to the server's."),
+    date: datetime.date | None = Query(default=None, description="Which day's board to show. Defaults to the server's today."),
     tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
 ) -> dict:
     """The live board: each line with the OFs open on it, every machine declared
-    on it (with its stage once the plant has set one), and its roster with the
-    team on shift at `at`."""
+    on it (with its stage once the plant has set one), and the 4-team rotation
+    for `date`, each team's slot coloured by that line's shift report."""
     with get_connection() as connection:
+        today = datetime.date.today()
         return DashboardLinesService(connection).get_lines(
-            tenant_id=tenant.tenant_id, at=at or datetime.datetime.now().time().replace(second=0, microsecond=0)
+            tenant_id=tenant.tenant_id,
+            at=at or datetime.datetime.now().time().replace(second=0, microsecond=0),
+            date=date or today,
+            today=today,
         )
 
 

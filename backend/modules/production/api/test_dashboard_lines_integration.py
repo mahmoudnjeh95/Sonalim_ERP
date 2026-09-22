@@ -68,8 +68,8 @@ def _of(db, env, line_id, status, reference="OF-1"):
     return of_id
 
 
-def _lines(db, at=T(8, 4)):
-    return DashboardLinesService(db).get_lines(tenant_id=TENANT, at=at)
+def _lines(db, at=T(8, 4), date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 19)):
+    return DashboardLinesService(db).get_lines(tenant_id=TENANT, at=at, date=date, today=today)
 
 
 def _by_code(payload):
@@ -164,7 +164,14 @@ def test_staged_machines_come_in_stage_order_and_machines_with_no_stage_stay_on_
     ]
 
 
-def test_roster_lists_every_shift_and_flags_the_current_one(db, env):
+def test_team_status_is_empty_when_no_rotation_is_configured(db, env):
+    _line(db, "L1")
+    payload = _lines(db)
+    assert payload["current_shift"] is None
+    assert _by_code(payload)["L1"]["team_status"] == []
+
+
+def test_team_status_lists_every_team_with_the_shift_it_is_on_and_flags_the_current_one(db, env):
     line_id = _line(db, "L1")
     settings = DashboardSettingsService(db)
     settings.replace_shift_windows(
@@ -175,37 +182,51 @@ def test_roster_lists_every_shift_and_flags_the_current_one(db, env):
             ShiftWindow(shift="Shift 3", start=T(23, 0), end=T(7, 0)),
         ],
     )
-    settings.replace_roster(
+    settings.replace_team_rotation(
         tenant_id=TENANT, actor_id=env["actor"],
         entries=[
-            {"work_center_id": line_id, "shift": "Shift 1", "team": "A"},
-            {"work_center_id": line_id, "shift": "Shift 2", "team": "B"},
-            {"work_center_id": line_id, "shift": "Shift 3", "team": "C"},
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+            {"team": "D", "anchor_date": "2026-09-19", "anchor_stop": 2},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 3},
         ],
     )
-    payload = _lines(db, at=T(8, 4))
+    payload = _lines(db, at=T(8, 4), date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 19))
     assert payload["current_shift"]["shift"] == "Shift 1"
-    assert [(w["shift"], w["start_time"], w["end_time"]) for w in payload["shift_windows"]] == [
-        ("Shift 1", "07:00", "15:00"), ("Shift 2", "15:00", "23:00"), ("Shift 3", "23:00", "07:00"),
-    ]
-    roster = _by_code(payload)["L1"]["roster"]
-    assert [(r["shift"], r["team"], r["is_current"]) for r in roster] == [
-        ("Shift 1", "A", True), ("Shift 2", "B", False), ("Shift 3", "C", False),
-    ]
-    assert roster[0]["start_time"] == "07:00" and roster[2]["end_time"] == "07:00"
-
-    overnight = _lines(db, at=T(1, 30))
-    assert overnight["current_shift"]["shift"] == "Shift 3"
-    assert [r["is_current"] for r in _by_code(overnight)["L1"]["roster"]] == [False, False, True]
+    team_status = _by_code(payload)["L1"]["team_status"]
+    assert {(e["team"], e["shift"], e["is_current"]) for e in team_status} == {
+        ("B", "Shift 1", True), ("C", "Shift 2", False), ("D", "Shift 3", False), ("A", None, False),
+    }
+    # The rotation moves forward: three days later a different team is on Shift 1.
+    later = _by_code(_lines(db, at=T(8, 4), date=datetime.date(2026, 9, 22), today=datetime.date(2026, 9, 22)))["L1"]["team_status"]
+    assert {(e["team"], e["shift"]) for e in later} == {
+        ("C", "Shift 1"), ("D", "Shift 2"), ("A", "Shift 3"), ("B", None),
+    }
 
 
-def test_nothing_is_current_when_no_shift_windows_are_configured(db, env):
+def test_team_status_colour_follows_the_shift_report_for_that_slot(db, env):
     line_id = _line(db, "L1")
-    DashboardSettingsService(db).replace_roster(
-        tenant_id=TENANT, actor_id=env["actor"], entries=[{"work_center_id": line_id, "shift": "Shift 1", "team": "A"}]
+    settings = DashboardSettingsService(db)
+    settings.replace_shift_windows(
+        tenant_id=TENANT, actor_id=env["actor"],
+        windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
     )
-    payload = _lines(db)
-    assert payload["current_shift"] is None
-    roster = _by_code(payload)["L1"]["roster"]
-    assert [(r["team"], r["is_current"], r["start_time"]) for r in roster] == [("A", False, None)]
+    settings.replace_team_rotation(
+        tenant_id=TENANT, actor_id=env["actor"],
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 2},
+        ],
+    )
+    for shift, report_status in (("Shift 1", "validated"), ("Shift 2", "returned")):
+        db.execute(
+            "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 19), shift, report_status),
+        )
+    # Viewed as a past day (today is the 20th): the colours reflect the reports, nothing blinks.
+    team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))["L1"]["team_status"]
+    assert {(e["team"], e["status"]) for e in team_status} == {("B", "validated"), ("C", "returned"), ("A", None)}
+    assert all(not e["is_current"] for e in team_status)
 
