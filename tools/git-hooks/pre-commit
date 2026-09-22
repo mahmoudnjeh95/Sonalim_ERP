@@ -1,0 +1,27 @@
+#!/bin/sh
+# Refuses a commit that stages a database backup/export, even via `git add -f`.
+#
+# .gitignore already keeps these out of a plain `git add -A`; this hook is the
+# second layer for the case where a data file was force-added or was already
+# tracked. It exists because deploy.yml now builds and deploys on every push to
+# huge_production_migration, so anything committed here can reach the live
+# server -- see docs/go-live-data-reset.md.
+#
+# One-time setup (per machine): git config core.hooksPath tools/git-hooks
+#
+# Deliberate exception, not an oversight: a commit can still include one of
+# these paths on purpose with `git commit --no-verify`.
+
+pattern='\.(dump|dump\.gz|pgdump|sql\.gz|bak)$'
+
+staged=$(git diff --cached --name-only --diff-filter=ACM | grep -iE "$pattern")
+
+if [ -n "$staged" ]; then
+    echo "Refusing to commit what looks like a database backup/export:" >&2
+    echo "$staged" | sed 's/^/  /' >&2
+    echo "" >&2
+    echo "If this is intentional, commit with --no-verify." >&2
+    exit 1
+fi
+
+exit 0
