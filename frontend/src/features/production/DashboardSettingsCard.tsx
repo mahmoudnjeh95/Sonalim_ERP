@@ -11,14 +11,13 @@ import { Input } from "../../components/ui/input";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { listLocations } from "../warehouse/api";
-import { listWorkCenters } from "./api";
 import {
   DASHBOARD_SETTINGS_QUERY_KEY,
   MANAGE_DASHBOARD_SETTINGS_PERMISSION,
   getDashboardSettings,
-  replaceRoster,
   replaceShiftWindows,
   replaceStoreRoles,
+  replaceTeamRotation,
   type DashboardSettings,
   type StoreRole,
 } from "./board/api";
@@ -107,59 +106,68 @@ function ShiftHoursForm({ shifts, initial, canEdit }: { shifts: string[]; initia
   );
 }
 
-// --- Roster -----------------------------------------------------------------
+// --- Team rotation -----------------------------------------------------------
 
-function RosterForm({ lines, shifts, teams, initial, canEdit }: { lines: { id: string; name: string }[]; shifts: string[]; teams: string[]; initial: DashboardSettings["roster"]; canEdit: boolean }) {
+/**
+ * The 4-team rotation: on a reference date, which team is on which shift.
+ * The team left over from that date's picks is resting, computed, not chosen.
+ */
+function TeamRotationForm({ shifts, teams, initial, canEdit }: { shifts: string[]; teams: string[]; initial: DashboardSettings["team_rotation"]; canEdit: boolean }) {
   const { t } = useI18n();
-  const [draft, setDraft] = useState<Record<string, string>>(() => Object.fromEntries(initial.map((r) => [`${r.work_center_id}|${r.shift}`, r.team])));
-  const save = useSaveSection(replaceRoster);
+  const [referenceDate, setReferenceDate] = useState(() => initial[0]?.anchor_date ?? new Date().toISOString().slice(0, 10));
+  const [draft, setDraft] = useState<Record<string, string>>(() => {
+    const teamByStop = Object.fromEntries(initial.map((r) => [r.anchor_stop, r.team]));
+    return Object.fromEntries(shifts.map((shift, index) => [shift, teamByStop[index] ?? ""]));
+  });
+  const save = useSaveSection(replaceTeamRotation);
+
+  const chosen = shifts.map((shift) => draft[shift]).filter(Boolean);
+  const resting = teams.find((team) => !chosen.includes(team));
+  const canSave = teams.length === shifts.length + 1 && chosen.length === shifts.length && new Set(chosen).size === chosen.length && resting !== undefined;
 
   return (
     <Section
-      title={t("production.board.settings.roster")}
-      canEdit={canEdit && shifts.length > 0}
+      title={t("production.board.settings.teamRotation")}
+      hint={t("production.board.settings.teamRotation.hint")}
+      canEdit={canEdit && canSave}
       saving={save.isPending}
       onSave={() =>
-        save.mutate(
-          lines.flatMap((line) =>
-            shifts
-              .filter((shift) => draft[`${line.id}|${shift}`])
-              .map((shift) => ({ work_center_id: line.id, shift, team: draft[`${line.id}|${shift}`] })),
-          ),
-        )
+        save.mutate([
+          ...shifts.map((shift, index) => ({ team: draft[shift], anchor_date: referenceDate, anchor_stop: index })),
+          { team: resting as string, anchor_date: referenceDate, anchor_stop: shifts.length },
+        ])
       }
     >
       {shifts.length === 0 ? (
         <p className="text-sm text-muted-foreground">{t("production.board.settings.noShifts")}</p>
+      ) : teams.length !== shifts.length + 1 ? (
+        <p className="text-sm text-muted-foreground">
+          {t("production.board.settings.teamRotation.wrongCount")} ({shifts.length + 1})
+        </p>
       ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs text-muted-foreground">
-                <th className="py-1 pr-3 font-medium">{t("production.board.rank.line")}</th>
-                {shifts.map((shift) => (
-                  <th key={shift} className="px-1 py-1 font-medium">{shift}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {lines.map((line) => (
-                <tr key={line.id} className="border-t border-border/60">
-                  <td className="py-1.5 pr-3 font-medium">{line.name}</td>
-                  {shifts.map((shift) => (
-                    <td key={shift} className="px-1 py-1.5">
-                      <Select disabled={!canEdit} value={draft[`${line.id}|${shift}`] ?? ""} onChange={(e) => setDraft({ ...draft, [`${line.id}|${shift}`]: e.target.value })}>
-                        <option value="">{t("production.board.settings.noTeam")}</option>
-                        {teams.map((team) => (
-                          <option key={team} value={team}>{team}</option>
-                        ))}
-                      </Select>
-                    </td>
+        <div className="space-y-3">
+          <label className="block text-xs text-muted-foreground">
+            {t("production.board.settings.teamRotation.referenceDate")}
+            <Input type="date" disabled={!canEdit} value={referenceDate} onChange={(e) => setReferenceDate(e.target.value)} className="mt-1 w-40" />
+          </label>
+          <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {shifts.map((shift) => (
+              <div key={shift} className="rounded-lg border border-border p-3">
+                <p className="mb-2 text-sm font-medium">{shift}</p>
+                <Select disabled={!canEdit} value={draft[shift] ?? ""} onChange={(e) => setDraft({ ...draft, [shift]: e.target.value })}>
+                  <option value="">{t("production.board.settings.noTeam")}</option>
+                  {teams.map((team) => (
+                    <option key={team} value={team}>{team}</option>
                   ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                </Select>
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {resting
+              ? `${t("production.board.settings.teamRotation.resting")}: ${resting}`
+              : t("production.board.settings.teamRotation.incomplete")}
+          </p>
         </div>
       )}
     </Section>
@@ -235,12 +243,11 @@ export function DashboardSettingsCard() {
 
   const settings = useQuery({ queryKey: DASHBOARD_SETTINGS_QUERY_KEY, queryFn: () => getDashboardSettings(token) });
   const options = useQuery({ queryKey: [...REPORT_OPTIONS_QUERY_KEY, "all"], queryFn: () => listReportOptions(token, true) });
-  const lines = useQuery({ queryKey: ["production", "work-centers"], queryFn: () => listWorkCenters(token) });
   const locations = useQuery({ queryKey: ["warehouse", "locations"], queryFn: () => listLocations(token) });
 
   const storeSave = useSaveSection(replaceStoreRoles);
 
-  const ready = settings.data && options.data && lines.data && locations.data;
+  const ready = settings.data && options.data && locations.data;
   const activeOf = (kind: "shift" | "team") => (options.data ?? []).filter((o) => o.kind === kind && o.is_active).map((o) => o.label);
 
   return (
@@ -258,7 +265,13 @@ export function DashboardSettingsCard() {
         ) : (
           <>
             <ShiftHoursForm key={`h-${JSON.stringify(settings.data!.shift_windows)}`} shifts={activeOf("shift")} initial={settings.data!.shift_windows} canEdit={canEdit} />
-            <RosterForm key={`r-${JSON.stringify(settings.data!.roster)}`} lines={lines.data!.map((l) => ({ id: l.id, name: l.name }))} shifts={activeOf("shift")} teams={activeOf("team")} initial={settings.data!.roster} canEdit={canEdit} />
+            <TeamRotationForm
+              key={`tr-${JSON.stringify(settings.data!.team_rotation)}`}
+              shifts={[...settings.data!.shift_windows].sort((a, b) => a.start_time.localeCompare(b.start_time)).map((w) => w.shift)}
+              teams={activeOf("team")}
+              initial={settings.data!.team_rotation}
+              canEdit={canEdit}
+            />
             <AssignForm<StoreRole>
               key={`t-${JSON.stringify(settings.data!.store_roles)}`}
               title={t("production.board.settings.stores")}
