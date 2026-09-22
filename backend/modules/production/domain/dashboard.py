@@ -100,3 +100,55 @@ def direction(current: float, previous: float | None, *, decimals: int) -> str |
     if now < before:
         return "down"
     return "flat"
+
+
+def team_rotation_schedule(
+    *, shifts: list[str], rotation: list[tuple[str, datetime.date, int]], date: datetime.date
+) -> list[dict]:
+    """Where each team in the 4-team rotation stands on `date`: which of
+    `shifts` it is on, or `None` when it is that team's turn to rest.
+
+    `shifts` are the plant's configured shifts, in cycle order (stop 0 is the
+    first shift of the day, `len(shifts)` is Rest) -- callers pass them sorted
+    by start time, the same order the rest of the board already sorts shifts
+    in. `rotation` is one `(team, anchor_date, anchor_stop)` per team:
+    `anchor_stop` is where that team stood in the cycle on `anchor_date`. Every
+    team advances one stop for every day that passes (or goes back one for
+    every day before `anchor_date`); the whole calendar is built from that one
+    recorded anchor, nothing else is guessed.
+    """
+    stops = len(shifts) + 1
+    schedule = []
+    for team, anchor_date, anchor_stop in rotation:
+        stop = (anchor_stop + (date - anchor_date).days) % stops
+        schedule.append({"team": team, "shift": shifts[stop] if stop < len(shifts) else None})
+    return schedule
+
+
+def validate_team_rotation(entries: list[dict], *, num_shifts: int) -> Result[None]:
+    """A plant-wide team rotation needs exactly one team per stop in the cycle:
+    one for each configured shift, plus one resting. Every team shares the same
+    anchor date; nothing here guesses at a team name or a stop left out."""
+    stops = num_shifts + 1
+    if len(entries) != stops:
+        return Err("WRONG_TEAM_COUNT", f"the rotation needs exactly {stops} teams (one per shift, plus rest)")
+    anchor_dates = {entry["anchor_date"] for entry in entries}
+    if len(anchor_dates) != 1:
+        return Err("INVALID_ENTRY", "every team must share the same anchor date")
+    seen_teams: set[str] = set()
+    seen_stops: set[int] = set()
+    for entry in entries:
+        team = entry["team"].strip()
+        stop = entry["anchor_stop"]
+        if not team:
+            return Err("INVALID_ENTRY", "a rotation entry needs a team")
+        if not (0 <= stop < stops):
+            return Err("INVALID_ENTRY", f"anchor_stop must be between 0 and {stops - 1}")
+        key = team.lower()
+        if key in seen_teams:
+            return Err("DUPLICATE_ENTRY", f"team {team!r} appears twice")
+        seen_teams.add(key)
+        if stop in seen_stops:
+            return Err("DUPLICATE_ENTRY", f"two teams share stop {stop}")
+        seen_stops.add(stop)
+    return Ok(None)
