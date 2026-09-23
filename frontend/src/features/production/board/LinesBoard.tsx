@@ -131,7 +131,7 @@ function TeamStatusPills({ teamStatus }: { teamStatus: TeamStatusEntry[] }) {
           className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground", entry.is_current && "board-team-now")}
           title={entry.shift ?? undefined}
         >
-          <span className={cn("board-avatar h-[26px] w-[26px] rounded-full", TEAM_STATUS_TONE[entry.status ?? "none"])} aria-hidden="true" />
+          <span className={cn("board-avatar h-[26px] w-[26px] rounded-full border-2 border-current", TEAM_STATUS_TONE[entry.status ?? "none"])} aria-hidden="true" />
           <b className="max-w-full truncate text-[11.5px] text-foreground">{entry.team}</b>
         </div>
       ))}
@@ -350,11 +350,18 @@ function OfDetails({ figures }: { figures: DayOf }) {
   );
 }
 
-function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen, live, liveLine }: { of: BoardOf; line: BoardLine; figures: DayOf | undefined; dayIsLoading: boolean; unit: string | null; defaultOpen: boolean; live: BoardLive | undefined; liveLine: LiveLine | undefined }) {
+function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen, live, liveLine, viewingDate, today }: { of: BoardOf; line: BoardLine; figures: DayOf | undefined; dayIsLoading: boolean; unit: string | null; defaultOpen: boolean; live: BoardLive | undefined; liveLine: LiveLine | undefined; viewingDate: string; today: string }) {
   const { t } = useI18n();
   const [open, setOpen] = useState(defaultOpen);
   // The machine behind the line's colour: a down machine outranks one in maintenance.
   const troubleName = line.machines.find((m) => m.status === (of.state === "down" ? "down" : "maintenance"))?.code ?? null;
+
+  // Filter teams: on past days, only show teams with reports; on today, show all 4 teams
+  const filteredTeamStatus = line.team_status.filter((entry) => {
+    if (viewingDate === today) return true; // Show all teams on today
+    // On past days: show only teams that filed reports or the resting team
+    return entry.status !== null || entry.shift === null;
+  });
 
   return (
     <div className={cn("overflow-hidden rounded-xl border border-l-[5px] border-border bg-white shadow-soft", STATE_BORDER[of.state])}>
@@ -370,8 +377,8 @@ function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen, live, live
             {(of.state === "maintenance" || of.state === "down") && troubleName ? ` ${t("production.board.state.on")} ${troubleName}` : ""}
           </p>
         </div>
-        {line.team_status.length ? (
-          <TeamStatusPills teamStatus={line.team_status} />
+        {filteredTeamStatus.length ? (
+          <TeamStatusPills teamStatus={filteredTeamStatus} />
         ) : (
           <p className="max-w-[12rem] text-xs text-muted-foreground">{t("production.board.roster.notSet.title")}</p>
         )}
@@ -421,10 +428,11 @@ function OfCard({ of, line, figures, dayIsLoading, unit, defaultOpen, live, live
  * made now, so a line with nothing running is not drawn at all. Several OFs on
  * one line are stacked, one card each.
  */
-export function LinesBoard({ board, day, dayIsLoading, live }: { board: BoardLines; day: BoardDay | undefined; dayIsLoading: boolean; live: BoardLive | undefined }) {
+export function LinesBoard({ board, day, dayIsLoading, live, today }: { board: BoardLines; day: BoardDay | undefined; dayIsLoading: boolean; live: BoardLive | undefined; today: string }) {
   const { t } = useI18n();
   const figuresByOf = new Map((day?.ofs ?? []).map((o) => [o.of_id, o]));
   const active = board.lines.filter((line) => line.ofs.length > 0);
+  const viewingDate = day?.date ?? today;
   let first = true;
 
   if (active.length === 0) {
@@ -458,6 +466,8 @@ export function LinesBoard({ board, day, dayIsLoading, live }: { board: BoardLin
                 defaultOpen={open}
                 live={live}
                 liveLine={live?.lines.find((l) => l.work_center_id === line.work_center_id)}
+                viewingDate={viewingDate}
+                today={today}
               />
             );
           }),

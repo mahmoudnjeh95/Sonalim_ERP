@@ -119,7 +119,7 @@ export function ProductionBoard() {
           ) : lines.isLoading || !lines.data ? (
             <Skeleton className="mt-3 h-52 w-full" />
           ) : (
-            <LinesBoard board={lines.data} day={day.data} dayIsLoading={day.isLoading} live={live.data} />
+            <LinesBoard board={lines.data} day={day.data} dayIsLoading={day.isLoading} live={live.data} today={today} />
           )}
         </section>
 
