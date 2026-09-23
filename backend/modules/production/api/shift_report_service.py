@@ -143,7 +143,7 @@ class ShiftReportService:
             return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
         rows = self._connection.execute(
             """
-            SELECT revision, snapshot, reason, actor_id, created_at
+            SELECT revision, snapshot, reason, actor_id, created_at, edited_by_validator
             FROM production.shift_section_revisions
             WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s
             ORDER BY revision DESC
@@ -152,8 +152,11 @@ class ShiftReportService:
         ).fetchall()
         return Ok(
             [
-                {"revision": rev, "snapshot": snap, "reason": reason, "actor_id": actor, "created_at": _iso(at)}
-                for rev, snap, reason, actor, at in rows
+                {
+                    "revision": rev, "snapshot": snap, "reason": reason, "actor_id": actor, "created_at": _iso(at),
+                    "edited_by_validator": by_validator,
+                }
+                for rev, snap, reason, actor, at, by_validator in rows
             ]
         )
 
@@ -409,66 +412,6 @@ class ShiftReportService:
             entity_type="shift_report",
             entity_id=shift_report_id,
             payload={"section": section_key, "revision": revision},
-        )
-        return Ok(self._section_result(tenant_id, shift_report_id, section_key))
-
-    def edit_section_as_validator(
-        self,
-        *,
-        tenant_id: str,
-        actor_id: str,
-        shift_report_id: str,
-        section_key: str,
-        payload: dict,
-        reason: str | None = None,
-    ) -> Result[dict]:
-        """A validator edits an already-submitted section and marks the revision as edited_by_validator.
-
-        This bypasses the normal team-edit flow: the section stays 'submitted', revision is frozen with
-        edited_by_validator=TRUE, and the next frontend baseline refresh skips CHANGED_SINCE_OPENED
-        to allow re-editing without forcing a new version bump.
-        """
-        found = self._load_shift(tenant_id, shift_report_id)
-        if isinstance(found, Err):
-            return found
-        header, sections = found.value
-        section = next((s for s in sections if s["key"] == section_key), None)
-        if not section:
-            return Err("NOT_FOUND", f"section {section_key} not found")
-        if section["status"] != "submitted":
-            return Err("INVALID_STATE", f"can only validator-edit a submitted section, this is {section['status']}")
-
-        saved = save_section_rows(
-            self._connection,
-            tenant_id=tenant_id,
-            shift_report_id=shift_report_id,
-            section_key=section_key,
-            payload=payload,
-            custom_waste_categories={
-                report_type: custom_waste_categories(self._connection, tenant_id=tenant_id, report_type=report_type)
-                for report_type in ("daily", "conditionnement")
-            },
-        )
-        if isinstance(saved, Err):
-            return saved
-
-        revision = self._freeze_revision(tenant_id, actor_id, shift_report_id, section_key, reason, edited_by_validator=True)
-        self._connection.execute(
-            """
-            UPDATE production.shift_report_sections
-            SET status = 'submitted', revision = %s, revised_after_submit = TRUE, updated_at = NOW()
-            WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s
-            """,
-            (revision, shift_report_id, tenant_id, section_key),
-        )
-        record_audit(
-            self._connection,
-            tenant_id=tenant_id,
-            actor_id=actor_id,
-            action="shift_report.section_edited_by_validator",
-            entity_type="shift_report",
-            entity_id=shift_report_id,
-            payload={"section": section_key, "revision": revision, "reason": reason},
         )
         return Ok(self._section_result(tenant_id, shift_report_id, section_key))
 

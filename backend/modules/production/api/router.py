@@ -2987,15 +2987,20 @@ def submit_shift_report_section(
         return _shift_result(connection, result)
 
 
+class ValidatorEditSectionRequest(BaseModel):
+    payload: dict
+    reason: str
+
+
 @router.put("/shift-reports/{shift_report_id}/sections/{section_key}/validator-edit")
 def validator_edit_shift_report_section(
     shift_report_id: str,
     section_key: str,
-    body: SaveShiftSectionRequest,
-    tenant: TenantContext = Depends(require_permission("production.validate_reports")),
+    body: ValidatorEditSectionRequest,
+    tenant: TenantContext = Depends(require_permission("production.shift.validate")),
 ) -> dict:
     with get_connection() as connection:
-        result = ShiftReportService(connection).edit_section_as_validator(
+        result = ShiftValidationService(connection).edit_section_as_validator(
             tenant_id=tenant.tenant_id,
             actor_id=tenant.user_id,
             shift_report_id=shift_report_id,

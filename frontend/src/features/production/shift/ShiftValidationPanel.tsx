@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, ClipboardCheck, RotateCcw } from "lucide-react";
+import { CircleCheck, ClipboardCheck, Pencil, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
@@ -14,13 +14,14 @@ import { Part } from "./SectionCard";
 import type { OptionMap } from "./ShiftGrid";
 import { StatusNode } from "./StatusNode";
 import { SECTIONS, type SectionDef } from "./sectionConfig";
-import { toDraft } from "./shiftModel";
+import { toDraft, toPayload, type Draft } from "./shiftModel";
 import {
   SHIFT_REPORTS_QUERY_KEY,
   getShiftReport,
   listShiftReports,
   rejectShiftSections,
   validateShiftReport,
+  validatorEditSection,
   type SectionKey,
   type SectionState,
 } from "./shiftApi";
@@ -240,10 +241,10 @@ function ShiftReviewDialog({
                   ticked={ticked.has(def.key)}
                   onTick={() => toggleTick(def.key)}
                   shiftId={shiftId}
-                  onEdit={(key) => {
-                    // Open edit dialog for this section
-                    setEditingSection(key);
-                  }}
+                  // Refetching the shift refreshes each section's revision, which is what the next
+                  // Approve sends as seen_revisions -- so the validator's own edit never trips
+                  // CHANGED_SINCE_OPENED, while anyone else's still does.
+                  onEdited={() => queryClient.invalidateQueries({ queryKey: [...SHIFT_REPORTS_QUERY_KEY, "review", shiftId] })}
                 />
               );
             })}
@@ -292,7 +293,7 @@ function ReviewSection({
   ticked,
   onTick,
   shiftId,
-  onEdit,
+  onEdited,
 }: {
   def: SectionDef;
   state: SectionState;
@@ -302,15 +303,43 @@ function ReviewSection({
   ticked: boolean;
   onTick: () => void;
   shiftId: string;
-  onEdit: (sectionKey: string) => void;
+  onEdited: () => void;
 }) {
+  const { session } = useAuth();
+  const token = session!.token;
   const label = useLabel();
-  const draft = useMemo(() => toDraft(def, state.payload), [def, state.payload]);
   const Icon = def.icon;
   const empty = state.status === "nothing_to_report";
 
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload));
+  const [reason, setReason] = useState("");
+
+  // What the server holds is the truth: after a correction lands, the grids follow it.
+  useEffect(() => {
+    setDraft(toDraft(def, state.payload));
+  }, [def, state.payload]);
+
+  const save = useMutation({
+    mutationFn: () => validatorEditSection(token, shiftId, def.key, toPayload(def, draft), reason.trim()),
+    onSuccess: () => {
+      toast.success(label(T.correctionSaved));
+      setEditing(false);
+      setReason("");
+      onEdited();
+    },
+    onError: (error: unknown) =>
+      toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined }),
+  });
+
+  const toggleEditing = () => {
+    if (editing) setDraft(toDraft(def, state.payload)); // cancelling drops the unsaved correction
+    else if (!open) onToggle();
+    setEditing(!editing);
+  };
+
   return (
-    <section className={cn("overflow-hidden rounded-lg border", ticked ? "border-destructive/50" : "border-border")}>
+    <section className={cn("overflow-hidden rounded-lg border", ticked ? "border-destructive/50" : editing ? "border-primary/50" : "border-border")}>
       <div className="flex items-center gap-3 bg-muted/50 px-3 py-2">
         <label className="flex items-center gap-2 text-xs text-muted-foreground" title={label(T.tickToSendBack)}>
           <input type="checkbox" checked={ticked} onChange={onTick} className="h-4 w-4 accent-[#123B6D]" aria-label={`${label(T.tickToSendBack)}: ${label(def.title)}`} />
@@ -326,9 +355,9 @@ function ReviewSection({
           <StatusNode status={state.status} size={18} />
         </button>
         {state.status === "submitted" && (
-          <Button size="sm" variant="ghost" onClick={() => onEdit(def.key)} className="gap-1.5">
+          <Button size="sm" variant="ghost" onClick={toggleEditing} className="gap-1.5" disabled={save.isPending}>
             <Pencil className="h-3.5 w-3.5" />
-            Edit
+            {editing ? label(T.cancelCorrection) : label(T.editSection)}
           </Button>
         )}
       </div>
@@ -337,21 +366,36 @@ function ReviewSection({
           {empty ? (
             <p className="text-sm text-muted-foreground">{label(T.nothingSection)}</p>
           ) : (
-            def.parts.map((part) => (
-              <Part
-                key={part.payloadKey}
-                part={part}
-                sectionKey={`review-${def.key}`}
-                value={draft[part.payloadKey]}
-                onChange={() => undefined}
-                options={options}
-                disabled
-              />
-            ))
+            <>
+              {def.parts.map((part) => (
+                <Part
+                  key={part.payloadKey}
+                  part={part}
+                  sectionKey={`review-${def.key}`}
+                  value={draft[part.payloadKey]}
+                  onChange={(value) => setDraft((current) => ({ ...current, [part.payloadKey]: value }))}
+                  options={options}
+                  disabled={!editing}
+                />
+              ))}
+              {editing && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5">
+                  <Input
+                    value={reason}
+                    onChange={(e) => setReason(e.target.value)}
+                    placeholder={label(T.editSectionReason)}
+                    aria-label={label(T.editSectionReason)}
+                    className="min-w-[16rem] flex-1"
+                  />
+                  <Button size="sm" onClick={() => save.mutate()} disabled={save.isPending || !reason.trim()}>
+                    {save.isPending ? label(T.savingCorrection) : label(T.saveCorrection)}
+                  </Button>
+                </div>
+              )}
+            </>
           )}
         </div>
       )}
     </section>
   );
 }
-

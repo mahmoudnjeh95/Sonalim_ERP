@@ -114,6 +114,13 @@ export const T = {
   tickToSendBack: L("Tick to send back", "Cocher pour renvoyer"),
   sendBackReason: L("Why are they sent back?", "Pourquoi les renvoyer ?"),
   sendBackReasonHint: L("The team sees this on each returned section.", "L'équipe le voit sur chaque section renvoyée."),
+  editSection: L("Edit this section", "Modifier cette section"),
+  cancelCorrection: L("Cancel correction", "Annuler la correction"),
+  editSectionReason: L("Why are you correcting this?", "Pourquoi corrigez-vous ceci ?"),
+  saveCorrection: L("Save correction", "Enregistrer la correction"),
+  savingCorrection: L("Saving…", "Enregistrement…"),
+  correctionSaved: L("Correction saved", "Correction enregistrée"),
+  editedByValidator: L("Edited by validator", "Modifié par le validateur"),
   shortfallTitle: L("Stock is short for this shift", "Le stock est insuffisant pour ce shift"),
   shortfallHint: L(
     "The shift uses more than the stock holds. Explain why, then approve again.",

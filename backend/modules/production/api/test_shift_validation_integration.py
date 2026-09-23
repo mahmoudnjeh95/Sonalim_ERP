@@ -408,3 +408,133 @@ def test_the_shift_shows_the_packaging_frozen_and_tonnage_settled_at_validation(
 # test_rerunning_the_legacy_conversion... removed: Task 3 rewrite eliminates the materialize_shift bridge
 # so this test's premise (old-shaped rows written by validation) no longer applies. The convert_legacy_reports()
 # SQL function still exists for the one-time migration, but validation no longer feeds it. Task 8 will handle cleanup.
+
+
+# ---- a validator's own correction, mid-review ----------------------------------
+
+
+def _runs_with_semolina(db, shift_id, quantity) -> dict:
+    """The shift's saved runs payload, with the first run's semoule changed -- ids kept,
+    so the packing row that points at the run still points at it."""
+    runs = _shift(db, shift_id)["sections"][0]["payload"]["runs"]
+    runs[0]["semolina_lines"][0]["quantity"] = quantity
+    return {"runs": runs}
+
+
+def _validator_edit(db, env, shift_id, *, section_key="runs", payload=None, reason="corrected the semoule quantity"):
+    return ShiftValidationService(db).edit_section_as_validator(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=section_key,
+        payload=payload if payload is not None else _runs_with_semolina(db, shift_id, 1200), reason=reason,
+    )
+
+
+def test_validator_can_edit_a_submitted_section_with_a_reason(db, env):
+    shift_id = _submitted_shift(db, env)
+
+    edited = _ok(_validator_edit(db, env, shift_id))
+
+    assert edited["status"] == "submitted"  # stays submitted, not draft
+    assert edited["shift_status"] == "submitted"
+    stored = _shift(db, shift_id)["sections"][0]["payload"]["runs"][0]
+    assert float(stored["semolina_lines"][0]["quantity"]) == 1200
+    history = _ok(ShiftReportService(db).list_revisions(tenant_id=TENANT, shift_report_id=shift_id, section_key="runs"))
+    assert history[0]["reason"] == "corrected the semoule quantity"
+    assert history[0]["edited_by_validator"] is True
+    audit = db.execute(
+        "SELECT payload FROM core.audit_log WHERE entity_id = %s AND action = 'shift_report.section_edited_by_validator'",
+        (shift_id,),
+    ).fetchone()
+    assert audit is not None and audit[0]["reason"] == "corrected the semoule quantity"
+
+
+def test_validator_edit_requires_a_reason(db, env):
+    shift_id = _submitted_shift(db, env)
+    for reason in ("", "   "):
+        result = _validator_edit(db, env, shift_id, reason=reason)
+        assert isinstance(result, Err) and result.code == "MISSING_REASON"
+
+
+def test_validator_edit_refused_when_shift_is_not_submitted(db, env):
+    shift_id = _submitted_shift(db, env)
+    payload = _runs_with_semolina(db, shift_id, 1200)
+    _ok(_validate(db, env, shift_id))  # now 'validated'
+    result = _validator_edit(db, env, shift_id, payload=payload, reason="too late")
+    assert isinstance(result, Err) and result.code == "INVALID_TRANSITION"
+
+
+def test_validator_edit_refused_on_a_shift_still_being_filled(db, env):
+    shift_id = _ok(ShiftReportService(db).open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
+                                                     report_date=DAY, shift="evening"))["id"]
+    result = _validator_edit(db, env, shift_id, payload={"runs": [_run(env, _of(db, env))]}, reason="not in review yet")
+    assert isinstance(result, Err) and result.code == "INVALID_TRANSITION"
+
+
+def test_validator_edit_rejects_unknown_section(db, env):
+    shift_id = _submitted_shift(db, env)
+    result = _validator_edit(db, env, shift_id, section_key="not_a_section", payload={}, reason="typo")
+    assert isinstance(result, Err) and result.code == "INVALID_SECTION"
+
+
+def test_validator_edit_does_not_trip_changed_since_opened_on_own_edit(db, env):
+    shift_id = _submitted_shift(db, env)
+    seen = {s["key"]: s["revision"] for s in _shift(db, shift_id)["sections"]}
+
+    _ok(_validator_edit(db, env, shift_id, payload=_runs_with_semolina(db, shift_id, 1100), reason="fix"))
+
+    # The baseline from before the edit still fails -- the guard is real. The frontend
+    # refreshes seen_revisions after its own edit before the next Approve.
+    stale = _validate(db, env, shift_id, seen_revisions=seen)
+    assert isinstance(stale, Err) and stale.code == "CHANGED_SINCE_OPENED"
+    refreshed = {s["key"]: s["revision"] for s in _shift(db, shift_id)["sections"]}
+    _ok(_validate(db, env, shift_id, seen_revisions=refreshed))
+
+
+def test_validator_edit_by_someone_else_still_trips_changed_since_opened(db, env):
+    """A concurrent edit after the reviewer opened the shift must still refuse their Approve."""
+    shift_id = _submitted_shift(db, env)
+    seen = {s["key"]: s["revision"] for s in _shift(db, shift_id)["sections"]}
+    _ok(_validator_edit(db, env, shift_id, payload=_runs_with_semolina(db, shift_id, 1300), reason="someone else's fix"))
+
+    result = _validate(db, env, shift_id, seen_revisions=seen)
+    assert isinstance(result, Err) and result.code == "CHANGED_SINCE_OPENED"
+
+
+def test_validator_edit_flag_stays_on_its_own_revision(db, env):
+    """A later team revision does not inherit the flag, and the edited one keeps it."""
+    shift_id = _submitted_shift(db, env)
+    _ok(_validator_edit(db, env, shift_id))
+    _ok(ShiftValidationService(db).reject_sections(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id,
+                                                   section_keys=["runs"], reason="recount"))
+    _ok(ShiftReportService(db).save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id,
+                                            section_key="runs", payload=_runs_with_semolina(db, shift_id, 1250), reason="team recount"))
+    _ok(ShiftReportService(db).submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs"))
+
+    history = _ok(ShiftReportService(db).list_revisions(tenant_id=TENANT, shift_report_id=shift_id, section_key="runs"))
+    flagged = [h["revision"] for h in history if h["edited_by_validator"]]
+    assert len(flagged) == 1
+    assert history[0]["edited_by_validator"] is False
+    assert next(h for h in history if h["edited_by_validator"])["reason"] == "corrected the semoule quantity"
+
+
+# ---- where packed goods land ----------------------------------------------------
+
+
+def test_packed_goods_wait_in_the_line_store_and_the_shift_records_it(db, env):
+    """A row that carries the product's own store (what the screen pre-fills) means "not chosen":
+    with a line store configured, the goods wait there until released, and the shift shows it."""
+    line = str(ULID())
+    db.execute("INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'SV-LINE', 'Stock ligne')", (line, TENANT))
+    db.execute("UPDATE core.products SET default_location_id = %s WHERE id = %s", (env["fg_location"], env["product"]))
+    _ok(DashboardSettingsService(db).replace_store_roles(
+        tenant_id=TENANT, actor_id=env["actor"], entries=[{"location_id": line, "role": "line"}]
+    ))
+    shift_id = _submitted_shift(db, env)
+
+    _ok(_validate(db, env, shift_id))
+
+    env["line"] = line
+    assert _on_hand(db, env, "product", "line") > 0
+    assert _on_hand(db, env, "product", "fg_location") == 0
+    packing_id = next(s for s in _shift(db, shift_id)["sections"] if s["key"] == "packing")["payload"]["rows"][0]["id"]
+    stored = db.execute("SELECT finished_goods_location_id FROM production.shift_packing_rows WHERE id = %s", (packing_id,)).fetchone()[0]
+    assert stored == line

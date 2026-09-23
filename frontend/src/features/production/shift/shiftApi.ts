@@ -64,6 +64,7 @@ export interface SectionRevision {
   reason: string | null;
   actor_id: string | null;
   created_at: string;
+  edited_by_validator: boolean;
 }
 
 export type HeaderFields = Partial<
@@ -101,6 +102,11 @@ export function updateShiftHeader(token: string, id: string, fields: HeaderField
 
 export function saveShiftSection(token: string, id: string, key: SectionKey, payload: SectionPayload, reason?: string) {
   return apiFetch<SectionState>(`${base}/${id}/sections/${key}`, { method: "PUT", body: { payload, reason }, token });
+}
+
+/** A validator's correction to a submitted section, mid-review; the reason is required. */
+export function validatorEditSection(token: string, id: string, key: SectionKey, payload: SectionPayload, reason: string) {
+  return apiFetch<SectionState>(`${base}/${id}/sections/${key}/validator-edit`, { method: "PUT", body: { payload, reason }, token });
 }
 
 export function submitShiftSection(token: string, id: string, key: SectionKey) {

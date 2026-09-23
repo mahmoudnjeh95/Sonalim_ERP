@@ -16,12 +16,13 @@ from psycopg.types.json import Jsonb
 from ulid import ULID
 
 from core.audit import record_audit
-from core.domain.result import Err, Result
+from core.domain.result import Err, Ok, Result
 from modules.production.api.report_product import stamp_order_products
 from modules.production.api.shift_report_service import ShiftReportService
-from modules.production.api.shift_sections import load_section
+from modules.production.api.shift_sections import load_section, save_section_rows
 from modules.production.api.shift_stock_service import ShiftStockService
 from modules.production.api.silo_machine_status import apply_silo_machine_status
+from modules.production.api.waste_type_service import custom_waste_categories
 from modules.production.domain.shift_report import SECTION_KEYS
 
 
@@ -201,6 +202,75 @@ class ShiftValidationService:
             "VALUES (%s, %s, %s, '*', %s, %s, 'validated', %s)",
             (str(ULID()), tenant_id, shift_report_id, revision, Jsonb(snapshot), actor_id),
         )
+
+    # ---- a validator's own correction ----------------------------------------
+
+    def edit_section_as_validator(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        shift_report_id: str,
+        section_key: str,
+        payload: dict,
+        reason: str,
+    ) -> Result[dict]:
+        """A validator's in-place fix to a submitted section, mid-review.
+
+        Distinct from sending the section back (reject_sections) and from the team's own
+        save (ShiftReportService.save_section, gated only by `status != 'validated'`): this
+        gate is narrower -- only while the shift is `submitted`. The section keeps its
+        status; the revision it freezes is tagged `edited_by_validator` at write time.
+        """
+        if section_key not in SECTION_KEYS:
+            return Err("INVALID_SECTION", f"unknown section {section_key!r}")
+        if not (reason or "").strip():
+            return Err("MISSING_REASON", "editing a section as validator must record why")
+        status = self._locked_status(tenant_id, shift_report_id)
+        if status is None:
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+        if status != "submitted":
+            return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be edited by a validator")
+        section = next(
+            (s for s in self._shifts.list_section_states(tenant_id=tenant_id, shift_report_id=shift_report_id) if s["key"] == section_key),
+            None,
+        )
+        if section is None or section["status"] != "submitted":
+            # "Nothing to report" has no rows to correct; giving it rows would contradict its status.
+            return Err("INVALID_TRANSITION", "only a section the team submitted with content can be corrected")
+
+        saved = save_section_rows(
+            self._connection,
+            tenant_id=tenant_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=payload,
+            custom_waste_categories={
+                report_type: custom_waste_categories(self._connection, tenant_id=tenant_id, report_type=report_type)
+                for report_type in ("daily", "conditionnement")
+            },
+        )
+        if isinstance(saved, Err):
+            return saved
+
+        revision = self._shifts._freeze_revision(
+            tenant_id, actor_id, shift_report_id, section_key, reason.strip(), edited_by_validator=True
+        )
+        self._connection.execute(
+            "UPDATE production.shift_report_sections SET revision = %s, updated_at = NOW() "
+            "WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s",
+            (revision, shift_report_id, tenant_id, section_key),
+        )
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="shift_report.section_edited_by_validator",
+            entity_type="shift_report",
+            entity_id=shift_report_id,
+            payload={"section": section_key, "revision": revision, "reason": reason.strip()},
+        )
+        return Ok(self._shifts._section_result(tenant_id, shift_report_id, section_key))
 
     # ---- reject ------------------------------------------------------------
 

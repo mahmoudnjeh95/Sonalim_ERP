@@ -1793,13 +1793,3 @@ export function setPackagingTolerance(token: string, input: PackagingTolerance) 
     body: input,
   });
 }
-
-// --- Validator edit --------------------------------------------------------
-
-export function saveValidatorEditSection(token: string, shiftReportId: string, sectionKey: string, payload: Record<string, unknown>, reason?: string) {
-  return apiFetch(`/production/shift-reports/${shiftReportId}/sections/${sectionKey}/validator-edit`, {
-    method: "PUT",
-    token,
-    body: { payload, reason },
-  });
-}

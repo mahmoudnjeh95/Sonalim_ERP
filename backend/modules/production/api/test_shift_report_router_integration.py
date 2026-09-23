@@ -196,3 +196,33 @@ def test_an_unknown_shift_is_a_404_for_every_validation_action(world):
     for path, body in (("validate", {}), ("reject", {"sections": ["energy"], "reason": "x"}), ("reverse", {"reason": "x"})):
         response = client.post(f"/production/shift-reports/nope/{path}", json=body)
         assert response.status_code == 404, (path, response.text)
+
+
+def test_a_validator_edit_needs_the_validate_right_and_a_reason(world):
+    world["grant"]("production.shift.view", "production.shift.edit.energy")
+    shift_id = _open(world)
+    client = world["client"]
+    client.put(f"/production/shift-reports/{shift_id}/sections/energy", json={"payload": {"energy": {"fuel_quantity": 5}}})
+    client.post(f"/production/shift-reports/{shift_id}/sections/energy/submit")
+    url = f"/production/shift-reports/{shift_id}/sections/energy/validator-edit"
+    fix = {"payload": {"energy": {"fuel_quantity": 50}}, "reason": "decimal slipped"}
+
+    # A section right is not enough: the edit is a reviewer's act.
+    assert client.put(url, json=fix).status_code == 403
+
+    world["grant"]("production.shift.validate")
+    early = client.put(url, json=fix)  # the shift is still being filled in
+    assert early.status_code == 409 and early.json()["detail"]["code"] == "INVALID_TRANSITION"
+
+    world["db"].execute("UPDATE production.shift_reports SET status = 'submitted' WHERE id = %s", (shift_id,))
+    no_reason = client.put(url, json={**fix, "reason": "  "})
+    assert no_reason.status_code == 400 and no_reason.json()["detail"]["code"] == "MISSING_REASON"
+    unknown = client.put(f"/production/shift-reports/{shift_id}/sections/reels/validator-edit", json=fix)
+    assert unknown.status_code == 400 and unknown.json()["detail"]["code"] == "INVALID_SECTION"  # as reject_sections
+
+    edited = client.put(url, json=fix)
+    assert edited.status_code == 200, edited.text
+    assert edited.json()["status"] == "submitted"
+    revisions = client.get(f"/production/shift-reports/{shift_id}/sections/energy/revisions").json()
+    assert revisions[0]["edited_by_validator"] is True and revisions[0]["reason"] == "decimal slipped"
+    assert revisions[1]["edited_by_validator"] is False
