@@ -239,6 +239,11 @@ function ShiftReviewDialog({
                   onToggle={() => toggleOpen(def.key)}
                   ticked={ticked.has(def.key)}
                   onTick={() => toggleTick(def.key)}
+                  shiftId={shiftId}
+                  onEdit={(key) => {
+                    // Open edit dialog for this section
+                    setEditingSection(key);
+                  }}
                 />
               );
             })}
@@ -286,6 +291,8 @@ function ReviewSection({
   onToggle,
   ticked,
   onTick,
+  shiftId,
+  onEdit,
 }: {
   def: SectionDef;
   state: SectionState;
@@ -294,6 +301,8 @@ function ReviewSection({
   onToggle: () => void;
   ticked: boolean;
   onTick: () => void;
+  shiftId: string;
+  onEdit: (sectionKey: string) => void;
 }) {
   const label = useLabel();
   const draft = useMemo(() => toDraft(def, state.payload), [def, state.payload]);
@@ -316,6 +325,12 @@ function ReviewSection({
           )}
           <StatusNode status={state.status} size={18} />
         </button>
+        {state.status === "submitted" && (
+          <Button size="sm" variant="ghost" onClick={() => onEdit(def.key)} className="gap-1.5">
+            <Pencil className="h-3.5 w-3.5" />
+            Edit
+          </Button>
+        )}
       </div>
       {open && (
         <div className="space-y-3 px-3 py-3">

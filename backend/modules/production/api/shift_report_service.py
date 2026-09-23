@@ -267,7 +267,8 @@ class ShiftReportService:
         return Ok((header, _section_dict(row)))
 
     def _freeze_revision(
-        self, tenant_id: str, actor_id: str, shift_report_id: str, section_key: str, reason: str | None
+        self, tenant_id: str, actor_id: str, shift_report_id: str, section_key: str, reason: str | None,
+        edited_by_validator: bool = False
     ) -> int:
         """Snapshot the section as it stands now under the next revision number."""
         revision = self._connection.execute(
@@ -281,10 +282,10 @@ class ShiftReportService:
         self._connection.execute(
             """
             INSERT INTO production.shift_section_revisions
-                (id, tenant_id, shift_report_id, section_key, revision, snapshot, reason, actor_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (id, tenant_id, shift_report_id, section_key, revision, snapshot, reason, actor_id, edited_by_validator)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (str(ULID()), tenant_id, shift_report_id, section_key, revision, Jsonb(snapshot), reason, actor_id),
+            (str(ULID()), tenant_id, shift_report_id, section_key, revision, Jsonb(snapshot), reason, actor_id, edited_by_validator),
         )
         return revision
 
@@ -408,6 +409,66 @@ class ShiftReportService:
             entity_type="shift_report",
             entity_id=shift_report_id,
             payload={"section": section_key, "revision": revision},
+        )
+        return Ok(self._section_result(tenant_id, shift_report_id, section_key))
+
+    def edit_section_as_validator(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        shift_report_id: str,
+        section_key: str,
+        payload: dict,
+        reason: str | None = None,
+    ) -> Result[dict]:
+        """A validator edits an already-submitted section and marks the revision as edited_by_validator.
+
+        This bypasses the normal team-edit flow: the section stays 'submitted', revision is frozen with
+        edited_by_validator=TRUE, and the next frontend baseline refresh skips CHANGED_SINCE_OPENED
+        to allow re-editing without forcing a new version bump.
+        """
+        found = self._load_shift(tenant_id, shift_report_id)
+        if isinstance(found, Err):
+            return found
+        header, sections = found.value
+        section = next((s for s in sections if s["key"] == section_key), None)
+        if not section:
+            return Err("NOT_FOUND", f"section {section_key} not found")
+        if section["status"] != "submitted":
+            return Err("INVALID_STATE", f"can only validator-edit a submitted section, this is {section['status']}")
+
+        saved = save_section_rows(
+            self._connection,
+            tenant_id=tenant_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=payload,
+            custom_waste_categories={
+                report_type: custom_waste_categories(self._connection, tenant_id=tenant_id, report_type=report_type)
+                for report_type in ("daily", "conditionnement")
+            },
+        )
+        if isinstance(saved, Err):
+            return saved
+
+        revision = self._freeze_revision(tenant_id, actor_id, shift_report_id, section_key, reason, edited_by_validator=True)
+        self._connection.execute(
+            """
+            UPDATE production.shift_report_sections
+            SET status = 'submitted', revision = %s, revised_after_submit = TRUE, updated_at = NOW()
+            WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s
+            """,
+            (revision, shift_report_id, tenant_id, section_key),
+        )
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="shift_report.section_edited_by_validator",
+            entity_type="shift_report",
+            entity_id=shift_report_id,
+            payload={"section": section_key, "revision": revision, "reason": reason},
         )
         return Ok(self._section_result(tenant_id, shift_report_id, section_key))
 

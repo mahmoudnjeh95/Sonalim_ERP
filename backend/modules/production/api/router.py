@@ -2987,6 +2987,25 @@ def submit_shift_report_section(
         return _shift_result(connection, result)
 
 
+@router.put("/shift-reports/{shift_report_id}/sections/{section_key}/validator-edit")
+def validator_edit_shift_report_section(
+    shift_report_id: str,
+    section_key: str,
+    body: SaveShiftSectionRequest,
+    tenant: TenantContext = Depends(require_permission("production.validate_reports")),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftReportService(connection).edit_section_as_validator(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=body.payload,
+            reason=body.reason,
+        )
+        return _shift_result(connection, result)
+
+
 @router.post("/shift-reports/{shift_report_id}/sections/{section_key}/nothing-to-report")
 def declare_shift_report_section_empty(
     shift_report_id: str, section_key: str, tenant: TenantContext = Depends(_require_section_edit)
