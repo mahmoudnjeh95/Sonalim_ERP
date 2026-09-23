@@ -184,3 +184,100 @@ def test_record_regrind_noop_when_quantity_zero(db, env):
     result = ShiftStockService(db).record_regrind(tenant_id=TENANT, actor_id=env["actor"], run=run, regrind_work_center_id=None)
     assert isinstance(result, Ok), getattr(result, "message", "")
     assert result.value == {"scrap_record_id": None, "regrind_work_order_id": None}
+
+
+def test_post_packing_receives_finished_and_issues_packaging_and_registers_lot(db, env):
+    uom_row = db.execute("SELECT uom_id FROM core.products WHERE id = %s", (env["product"],)).fetchone()
+    finished = str(ULID())
+    film = str(ULID())
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id, net_weight_grams, packets_per_carton) "
+        "VALUES (%s, %s, 'TEST-FINISHED', 'Test finished', %s, 500, 20)",
+        (finished, TENANT, uom_row[0]),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TEST-FILM', 'Test film', %s)",
+        (film, TENANT, uom_row[0]),
+    )
+    fg_store, pack_store = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'TEST-FG', 'Test FG store')",
+        (fg_store, TENANT),
+    )
+    db.execute(
+        "INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'TEST-PACK', 'Test pack store')",
+        (pack_store, TENANT),
+    )
+    of_id = _open_of(db, env).id
+
+    StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=film, location_id=pack_store, quantity=1000,
+        correlation_id=str(ULID()), reference="test-seed", actor_id=env["actor"],
+    )
+
+    packing_row = {
+        "id": str(ULID()), "of_id": of_id, "carton_quantity": 10, "packets_counted": 200,
+        "waste_carton_quantity": 0, "film_quantity": 5, "carton_product_id": None,
+        "film_product_id": film, "scotch_product_id": None, "ruban_product_id": None,
+        "scotch_quantity": 0, "ruban_quantity": 0,
+        "packaging_location_id": pack_store, "finished_goods_location_id": fg_store,
+        "lot_number": "LOT-TEST-1", "dlc_date": None,
+    }
+
+    service = ShiftStockService(db)
+    snapshot = service.freeze_packing_snapshot(tenant_id=TENANT, packing_row=packing_row, finished_product_id=finished)
+    packing_row["snapshot_net_weight_grams"] = snapshot["net_weight_grams"]
+    packing_row["snapshot_packets_per_carton"] = snapshot["packets_per_carton"]
+
+    result = service.post_packing(
+        tenant_id=TENANT, actor_id=env["actor"], packing_row=packing_row,
+        finished_product_id=finished, correlation_id=str(ULID()),
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")
+    movements = {m["product_id"]: m for m in result.value["movements"]}
+    # carton tier present (packets_per_carton=20) -> carton_quantity(10)*20 = 200 packets = 100kg = 0.1t
+    assert movements[finished]["direction"] == "in"
+    assert movements[film]["direction"] == "out"
+    assert movements[film]["quantity"] == 5
+
+    lot = service.register_lot(
+        tenant_id=TENANT, actor_id=env["actor"], packing_row=packing_row,
+        finished_product_id=finished, report_date=datetime.date(2026, 9, 1),
+    )
+    assert isinstance(lot, Ok), getattr(lot, "message", "")
+    assert lot.value is not None
+
+
+def test_reverse_run_undoes_stock_and_removes_open_regrind_batch(db, env):
+    regrind_output = str(ULID())
+    uom_row = db.execute("SELECT uom_id FROM core.products WHERE id = %s", (env["product"],)).fetchone()
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TEST-REBROYAT-2', 'Test rebroyat 2', %s)",
+        (regrind_output, TENANT, uom_row[0]),
+    )
+    of_id = _open_of(db, env).id
+    db.execute(
+        "INSERT INTO production.regrind_defaults (id, tenant_id, input_product_id, output_product_id) "
+        "VALUES (%s, %s, NULL, %s)",
+        (str(ULID()), TENANT, regrind_output),
+    )
+
+    run = {
+        "id": str(ULID()), "of_id": of_id, "work_center_id": env["work_center"], "regrind_quantity": 8.0,
+        "semolina_lines": [], "raw_material_location_id": None,
+    }
+    service = ShiftStockService(db)
+    posted = service.post_run(tenant_id=TENANT, actor_id=env["actor"], run=run, correlation_id=str(ULID()))
+    assert isinstance(posted, Ok), getattr(posted, "message", "")
+    regrind = service.record_regrind(tenant_id=TENANT, actor_id=env["actor"], run=run, regrind_work_center_id=None)
+    assert isinstance(regrind, Ok), getattr(regrind, "message", "")
+    assert regrind.value["regrind_work_order_id"] is not None
+
+    reversed_result = service.reverse_run(tenant_id=TENANT, actor_id=env["actor"], run=run, correlation_id=str(ULID()))
+    assert isinstance(reversed_result, Ok), getattr(reversed_result, "message", "")
+    assert reversed_result.value["removed_scrap_records"] == 1
+
+    remaining_order = db.execute(
+        "SELECT 1 FROM production.work_orders WHERE id = %s", (regrind.value["regrind_work_order_id"],)
+    ).fetchone()
+    assert remaining_order is None
