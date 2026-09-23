@@ -164,14 +164,16 @@ def test_validating_posts_the_shifts_stock_once_and_freezes_the_shift(db, env):
     assert all(s["revised_after_submit"] is False for s in validated["sections"])
 
 
-def test_validation_uses_the_row_ids_as_the_report_ids(db, env):
+def test_validation_uses_the_row_ids_as_the_stock_move_source(db, env):
     shift_id = _submitted_shift(db, env)
     shift = _shift(db, shift_id)
     run_id = shift["sections"][0]["payload"]["runs"][0]["id"]
     packing_id = next(s for s in shift["sections"] if s["key"] == "packing")["payload"]["rows"][0]["id"]
     _ok(_validate(db, env, shift_id))
-    statuses = dict(db.execute("SELECT id, status FROM production.production_reports WHERE id = ANY(%s)", ([run_id, packing_id],)).fetchall())
-    assert statuses == {run_id: "validated", packing_id: "validated"}
+    source_types = dict(db.execute(
+        "SELECT source_id, source_type FROM warehouse.stock_moves WHERE source_id = ANY(%s)", ([run_id, packing_id],)
+    ).fetchall())
+    assert source_types == {run_id: "production.shift_run", packing_id: "production.shift_packing_row"}
     moved = {r[0] for r in db.execute("SELECT DISTINCT source_id FROM warehouse.stock_moves WHERE source_id = ANY(%s)", ([run_id, packing_id],)).fetchall()}
     assert moved == {run_id, packing_id}
 
@@ -238,7 +240,7 @@ def test_a_failing_row_leaves_the_whole_shift_untouched(db, env):
     assert isinstance(result, Err) and result.code == "SHORTFALL_COMMENT_REQUIRED"
     assert _on_hand(db, env, "semolina") == semolina_before, "the run's semoule must not have been taken"
     assert db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE tenant_id = %s", (TENANT,)).fetchone()[0] == moves_before
-    assert db.execute("SELECT count(*) FROM production.production_reports WHERE id = %s", (run_id,)).fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE source_id = %s", (run_id,)).fetchone()[0] == 0
     assert _shift(db, shift_id)["status"] == "submitted"
 
     # Explained, the same shift now validates: the refusal left nothing behind to trip over.
@@ -246,37 +248,39 @@ def test_a_failing_row_leaves_the_whole_shift_untouched(db, env):
     assert _on_hand(db, env, "semolina") == semolina_before - 1000
 
 
-# ---- what the old readers will see -------------------------------------------
+# ---- multi-run shifts --------------------------------------------------------
 
 
-def test_energy_is_split_across_the_runs_by_production_time(db, env):
+def test_a_shift_with_two_runs_validates_and_posts_each_runs_own_stock(db, env):
+    """A PC-style mold-change shift: two runs, two products, each posts its own
+    consumption. (This used to also assert an energy split across runs -- that
+    was legacy_report_ledger's own presentation-time computation for the old
+    daily_reports reader and is not part of ShiftStockService; energy stays a
+    single whole-shift figure on shift_energy. See Task 6/6b.)"""
     service = ShiftReportService(db)
     shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=DAY, shift="afternoon"))["id"]
     first, second = _of(db, env), _of(db, env)
+    semolina_before = _on_hand(db, env, "semolina")
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
-                             payload={"runs": [_run(env, first, minutes=260), _run(env, second, minutes=160)]}))
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="energy",
-                             payload={"energy": {"fuel_quantity": 1000, "electricity_quantity": 2000, "gasoil_quantity": 50, "generator_hours": 4}}))
+                             payload={"runs": [_run(env, first, minutes=260, semolina=400), _run(env, second, minutes=160, semolina=300)]}))
     for key in SECTION_KEYS:
-        if key in ("runs", "energy"):
+        if key == "runs":
             _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
         else:
             _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
     _ok(_validate(db, env, shift_id))
 
-    rows = db.execute(
-        """
-        SELECT d.production_minutes, d.fuel_quantity, d.electricity_quantity, d.gasoil_quantity, d.generator_hours
-        FROM production.daily_reports d JOIN production.shift_runs r ON r.id = d.report_id
-        WHERE r.shift_report_id = %s ORDER BY r.line_order
-        """,
-        (shift_id,),
-    ).fetchall()
-    assert [row[0] for row in rows] == [260, 160]
-    assert sum(float(row[1]) for row in rows) == pytest.approx(1000)
-    assert sum(float(row[2]) for row in rows) == pytest.approx(2000)
-    assert float(rows[0][1]) == pytest.approx(1000 * 260 / 420, abs=1e-5)
-    assert sum(float(row[4]) for row in rows) == pytest.approx(4)
+    run_ids = [row[0] for row in db.execute(
+        "SELECT id FROM production.shift_runs WHERE shift_report_id = %s ORDER BY line_order", (shift_id,)
+    ).fetchall()]
+    assert len(run_ids) == 2
+    moved = {r[0]: r[1] for r in db.execute(
+        "SELECT source_id, quantity FROM warehouse.stock_moves WHERE source_id = ANY(%s) AND direction = 'out'",
+        (run_ids,),
+    ).fetchall()}
+    assert float(moved[run_ids[0]]) == 400
+    assert float(moved[run_ids[1]]) == 300
+    assert _on_hand(db, env, "semolina") == semolina_before - 700
 
 
 def test_stops_and_waste_reach_the_reports_they_belong_to(db, env):

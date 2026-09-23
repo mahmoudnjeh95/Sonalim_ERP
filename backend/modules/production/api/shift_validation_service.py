@@ -4,8 +4,8 @@ Validation posts stock, and it must never post half a shift. The whole act runs 
 a savepoint: any refusal from any row rolls the shift back to exactly how it was, no
 matter what the caller does with the connection afterwards.
 
-The stock rules themselves are the existing ones (`ProductionReportService`); see
-`legacy_report_ledger` for how a shift is presented to them.
+The stock rules live in `ShiftStockService`, reading and writing the shift's own
+tables directly -- no old-shaped rows are materialised any more.
 """
 from __future__ import annotations
 
@@ -17,11 +17,10 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Result
-from modules.production.api.legacy_report_ledger import materialize_shift
-from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.report_product import stamp_order_products
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.shift_sections import load_section
+from modules.production.api.shift_stock_service import ShiftStockService
 from modules.production.api.silo_machine_status import apply_silo_machine_status
 from modules.production.domain.shift_report import SECTION_KEYS
 
@@ -32,6 +31,14 @@ class _Abort(Exception):
     def __init__(self, err: Err) -> None:
         super().__init__(err.message)
         self.err = err
+
+
+def _rows(connection: psycopg.Connection, tenant_id: str, key: str, table: str, by: str = "shift_report_id") -> list[dict]:
+    cursor = connection.execute(
+        f"SELECT * FROM production.{table} WHERE {by} = %s AND tenant_id = %s ORDER BY line_order, id", (key, tenant_id)
+    )
+    names = [d.name for d in cursor.description]
+    return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
 class ShiftValidationService:
@@ -46,22 +53,12 @@ class ShiftValidationService:
         ).fetchone()
         return row[0] if row else None
 
-    def _report_ids(self, tenant_id: str, shift_report_id: str) -> tuple[list[str], list[str]]:
-        runs = [
-            r[0]
-            for r in self._connection.execute(
-                "SELECT id FROM production.shift_runs WHERE shift_report_id = %s AND tenant_id = %s ORDER BY line_order, id",
-                (shift_report_id, tenant_id),
-            ).fetchall()
-        ]
-        packing = [
-            r[0]
-            for r in self._connection.execute(
-                "SELECT id FROM production.shift_packing_rows WHERE shift_report_id = %s AND tenant_id = %s ORDER BY line_order, id",
-                (shift_report_id, tenant_id),
-            ).fetchall()
-        ]
-        return runs, packing
+    def _locked_status_and_date(self, tenant_id: str, shift_report_id: str) -> tuple[str, object] | None:
+        row = self._connection.execute(
+            "SELECT status, report_date FROM production.shift_reports WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (shift_report_id, tenant_id),
+        ).fetchone()
+        return (row[0], row[1]) if row else None
 
     # ---- validate ----------------------------------------------------------
 
@@ -82,9 +79,10 @@ class ShiftValidationService:
         If any section has moved on since, validation is refused, so nothing is
         approved that the validator has not seen.
         """
-        status = self._locked_status(tenant_id, shift_report_id)
-        if status is None:
+        locked = self._locked_status_and_date(tenant_id, shift_report_id)
+        if locked is None:
             return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+        status, shift_date = locked
         if status != "submitted":
             return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be validated")
 
@@ -99,38 +97,60 @@ class ShiftValidationService:
             with self._connection.transaction():
                 # An order with no product yet takes its first packing row's, before anything is posted.
                 stamp_order_products(self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id)
-                materialised = materialize_shift(
-                    self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id, actor_id=actor_id
-                )
-                if isinstance(materialised, Err):
-                    raise _Abort(materialised)
-                reports = ProductionReportService(self._connection)
-                for report_id, _report_type in materialised.value:
-                    result = reports.validate_report(
-                        tenant_id=tenant_id,
-                        actor_id=actor_id,
-                        report_id=report_id,
-                        correlation_id=correlation_id,
-                        shortfall_comment=shortfall_comment,
-                        regrind_work_center_id=regrind_work_center_id,
-                    )
-                    if isinstance(result, Err):
-                        raise _Abort(result)
 
-                # Validation freezes the packaging and settles the packed tonnage in the ledger; copy
-                # those figures back so the shift shows exactly what the readers count.
-                self._connection.execute(
-                    """
-                    UPDATE production.shift_packing_rows p
-                    SET snapshot_net_weight_grams = c.snapshot_net_weight_grams,
-                        snapshot_packets_per_carton = c.snapshot_packets_per_carton,
-                        finished_product_quantity = c.finished_product_quantity,
-                        finished_goods_location_id = c.finished_goods_location_id
-                    FROM production.conditionnement_reports c
-                    WHERE c.report_id = p.id AND p.shift_report_id = %s AND p.tenant_id = %s
-                    """,
+                runs = _rows(self._connection, tenant_id, shift_report_id, "shift_runs")
+                packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
+                if not runs and not packing:
+                    raise _Abort(Err("NOTHING_TO_VALIDATE", "the shift has no production run and no packing row to validate"))
+
+                open_stop = self._connection.execute(
+                    "SELECT 1 FROM production.machine_stops WHERE shift_report_id = %s AND tenant_id = %s AND ended_at IS NULL LIMIT 1",
                     (shift_report_id, tenant_id),
-                )
+                ).fetchone()
+                if open_stop is not None:
+                    raise _Abort(Err("OPEN_STOP", "a machine stop is still ongoing; end it before validating the shift"))
+
+                stock = ShiftStockService(self._connection)
+                shortfalls: list[dict] = []
+                for run in runs:
+                    run["semolina_lines"] = _rows(self._connection, tenant_id, run["id"], "shift_run_semolina_lines", by="run_id")
+                    shortfalls += stock.run_shortfalls(tenant_id=tenant_id, run=run)
+                for row in packing:
+                    shortfalls += stock.packing_shortfalls(tenant_id=tenant_id, packing_row=row)
+                if shortfalls and not (shortfall_comment or "").strip():
+                    raise _Abort(Err(
+                        "SHORTFALL_COMMENT_REQUIRED",
+                        "this shift consumes more than the stock figure holds; validating it needs a comment explaining why",
+                    ))
+
+                for run in runs:
+                    posted = stock.post_run(tenant_id=tenant_id, actor_id=actor_id, run=run, correlation_id=correlation_id)
+                    if isinstance(posted, Err):
+                        raise _Abort(posted)
+                    regrind = stock.record_regrind(tenant_id=tenant_id, actor_id=actor_id, run=run, regrind_work_center_id=regrind_work_center_id)
+                    if isinstance(regrind, Err):
+                        raise _Abort(regrind)
+
+                order_products = {
+                    row[0]: row[1]
+                    for row in self._connection.execute(
+                        "SELECT id, product_id FROM production.work_orders WHERE tenant_id = %s AND id = ANY(%s)",
+                        (tenant_id, list({p["of_id"] for p in packing})),
+                    ).fetchall()
+                } if packing else {}
+                for row in packing:
+                    finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
+                    if finished_product_id is None:
+                        raise _Abort(Err("NOT_FOUND", f"work order {row['of_id']} has no product to pack"))
+                    snapshot = stock.freeze_packing_snapshot(tenant_id=tenant_id, packing_row=row, finished_product_id=finished_product_id)
+                    row["snapshot_packets_per_carton"] = snapshot["packets_per_carton"]
+                    posted = stock.post_packing(tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id, correlation_id=correlation_id)
+                    if isinstance(posted, Err):
+                        raise _Abort(posted)
+                    lot = stock.register_lot(tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id, report_date=shift_date)
+                    if isinstance(lot, Err):
+                        raise _Abort(lot)
+
                 self._connection.execute(
                     "UPDATE production.shift_reports SET status = 'validated', validated_by = %s, validated_at = NOW(), "
                     "rejection_reason = NULL, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
@@ -153,7 +173,7 @@ class ShiftValidationService:
                     entity_type="shift_report",
                     entity_id=shift_report_id,
                     payload={
-                        "reports": [report_id for report_id, _ in materialised.value],
+                        "reports": [r["id"] for r in runs] + [p["id"] for p in packing],
                         "section_revisions": {k: s["revision"] for k, s in sections.items()},
                         "shortfall_comment": shortfall_comment,
                     },
@@ -245,24 +265,30 @@ class ShiftValidationService:
             return Err("INVALID_TRANSITION", f"a shift that is {status} has nothing to reverse")
 
         correlation_id = correlation_id or str(ULID())
-        runs, packing = self._report_ids(tenant_id, shift_report_id)
         try:
             with self._connection.transaction():
-                reports = ProductionReportService(self._connection)
-                # Packing first: a packing report points at the daily report it drew from.
-                for report_id in [*packing, *runs]:
-                    exists = self._connection.execute(
-                        "SELECT 1 FROM production.production_reports WHERE id = %s AND tenant_id = %s", (report_id, tenant_id)
-                    ).fetchone()
-                    if exists is None:
-                        continue
-                    result = reports.delete_report(
-                        tenant_id=tenant_id,
-                        actor_id=actor_id,
-                        report_id=report_id,
-                        reason=reason.strip(),
-                        correlation_id=correlation_id,
-                        force=force,
+                stock = ShiftStockService(self._connection)
+                packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
+                runs = _rows(self._connection, tenant_id, shift_report_id, "shift_runs")
+                order_products = {
+                    row[0]: row[1]
+                    for row in self._connection.execute(
+                        "SELECT id, product_id FROM production.work_orders WHERE tenant_id = %s AND id = ANY(%s)",
+                        (tenant_id, list({p["of_id"] for p in packing})),
+                    ).fetchall()
+                } if packing else {}
+                # Packing first: mirrors the old ordering ("a packing report points at the daily report it drew from").
+                for row in packing:
+                    finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
+                    result = stock.reverse_packing(
+                        tenant_id=tenant_id, actor_id=actor_id, packing_row=row,
+                        finished_product_id=finished_product_id, correlation_id=correlation_id,
+                    )
+                    if isinstance(result, Err):
+                        raise _Abort(result)
+                for run in runs:
+                    result = stock.reverse_run(
+                        tenant_id=tenant_id, actor_id=actor_id, run=run, correlation_id=correlation_id, force=force,
                     )
                     if isinstance(result, Err):
                         raise _Abort(result)
@@ -284,7 +310,7 @@ class ShiftValidationService:
                     action="shift_report.reversed",
                     entity_type="shift_report",
                     entity_id=shift_report_id,
-                    payload={"reason": reason.strip(), "forced": force, "reports": [*runs, *packing]},
+                    payload={"reason": reason.strip(), "forced": force, "reports": [r["id"] for r in runs] + [p["id"] for p in packing]},
                 )
         except _Abort as abort:
             return abort.err
