@@ -21,6 +21,7 @@ from modules.production.api.recipe_correlation_insight_service import (
 from modules.production.api import ia_assistant_service
 from modules.production.api.team_performance_service import GRAINS, TeamPerformanceService
 from modules.production.api.machine_performance_service import MachinePerformanceService
+from modules.production.api.stops_analytics_service import StopsAnalyticsService
 from modules.production.api.consumption_report_service import CATEGORIES, ConsumptionReportService
 from modules.production.api.consumption_report_export import build_consumption_workbook
 from modules.production.api.daily_recap_export import build_daily_recap_workbook, fetch_period_rows, resolve_period
@@ -1975,6 +1976,17 @@ def list_downtime_breakdown(
         return TeamPerformanceService(connection).list_downtime_breakdown(
             tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to
         )
+
+
+@router.get("/analytics/stops")
+def list_stops_analytics(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """Every stop of a validated shift, at full detail, for the Downtime analytics tab."""
+    with get_connection() as connection:
+        return StopsAnalyticsService(connection).list_stops(tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to)
 
 
 def _validate_consumption_category(category: str | None) -> None:
