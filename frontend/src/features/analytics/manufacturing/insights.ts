@@ -57,6 +57,8 @@ export interface Formatters {
   stage: (stage: WasteCategory) => string;
   /** A stored downtime motif as the person reads it: translated if built in, as typed if the plant added it. */
   motif: (motif: string) => string;
+  classification: (value: string) => string;
+  downtimeType: (value: string) => string;
 }
 
 export interface InsightInput {

@@ -38,6 +38,8 @@ export function useFormatters(machineLabel: (equipmentId: string) => string): Fo
       machine: machineLabel,
       stage: (stage: WasteCategory) => wasteLabel(stage),
       motif: (motif: string) => downtimeLabel(t, "motif", motif),
+      classification: (value: string) => downtimeLabel(t, "classification", value),
+      downtimeType: (value: string) => downtimeLabel(t, "type", value),
     }),
     // language is not read directly but changes what formatNumber/t return.
     // eslint-disable-next-line react-hooks/exhaustive-deps

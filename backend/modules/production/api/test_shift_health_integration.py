@@ -105,6 +105,25 @@ def test_return_rate_counts_returns_even_after_the_team_resubmits(db, env):
     assert by_key["waste_production"]["return_rate_pct"] == 0.0
 
 
+def test_a_return_with_no_audit_entry_still_counts_once(db, env):
+    """A shift converted from a rejected legacy report is 'returned' with no audit entry;
+    a returned section that also has one is not counted twice."""
+    legacy = _submitted_shift(db, env, shift="morning")
+    db.execute(
+        "UPDATE production.shift_report_sections SET status = 'returned', return_reason = 'legacy' "
+        "WHERE shift_report_id = %s AND section_key = 'packing'",
+        (legacy,),
+    )
+    both = _submitted_shift(db, env, shift="afternoon")
+    _ok(ShiftValidationService(db).reject_sections(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=both, section_keys=["packing"], reason="recount",
+    ))
+
+    by_key = {row["section_key"]: row for row in _health(db)["return_rate_by_section"]}
+
+    assert (by_key["packing"]["returned_count"], by_key["packing"]["total_count"]) == (2, 2)
+
+
 def test_a_section_saved_with_a_reason_is_not_a_return(db, env):
     """Revision reasons are edit notes (team or validator), not returns."""
     shift_id = _submitted_shift(db, env)

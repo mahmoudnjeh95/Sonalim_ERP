@@ -65,7 +65,9 @@ class ShiftHealthService:
         }
 
         # A return leaves no revision and its return_reason is cleared once the team
-        # answers, so the audit entry reject_sections writes is the lasting record.
+        # answers, so the audit entry reject_sections writes is the lasting record. A
+        # section still marked returned counts too: shifts converted from rejected
+        # legacy reports are returned with no audit entry. Each (shift, section) once.
         # Only shifts handed in at least once (submitted_at set) can have been sent back.
         handed_in = int(self._connection.execute(
             f"SELECT count(*) FROM production.shift_reports WHERE {where} AND submitted_at IS NOT NULL", params
@@ -73,15 +75,22 @@ class ShiftHealthService:
         returned_counts = dict(
             self._connection.execute(
                 f"""
-                SELECT section.key, count(DISTINCT s.id)
-                FROM core.audit_log a
-                JOIN production.shift_reports s ON s.id = a.entity_id AND s.tenant_id = a.tenant_id
-                CROSS JOIN LATERAL jsonb_array_elements_text(a.payload -> 'sections') AS section(key)
+                SELECT returned.section_key, count(DISTINCT returned.shift_report_id)
+                FROM (
+                    SELECT a.entity_id AS shift_report_id, section.key AS section_key
+                    FROM core.audit_log a
+                    CROSS JOIN LATERAL jsonb_array_elements_text(a.payload -> 'sections') AS section(key)
+                    WHERE a.tenant_id = %s AND a.action = 'shift_report.sections_returned' AND a.entity_type = 'shift_report'
+                    UNION
+                    SELECT shift_report_id, section_key
+                    FROM production.shift_report_sections
+                    WHERE tenant_id = %s AND status = 'returned'
+                ) returned
+                JOIN production.shift_reports s ON s.id = returned.shift_report_id
                 WHERE {s_where} AND s.submitted_at IS NOT NULL
-                  AND a.action = 'shift_report.sections_returned' AND a.entity_type = 'shift_report'
-                GROUP BY section.key
+                GROUP BY returned.section_key
                 """,
-                s_params,
+                [tenant_id, tenant_id, *s_params],
             ).fetchall()
         )
         return_rate_by_section = [
