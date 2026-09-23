@@ -112,7 +112,7 @@ function ShiftStrip({ board }: { board: BoardLines }) {
   );
 }
 
-// --- Roster -----------------------------------------------------------------
+// --- Team status --------------------------------------------------------------
 
 const TEAM_STATUS_TONE: Record<"none" | LiveStatus, string> = {
   none: "bg-muted text-muted-foreground",

@@ -247,6 +247,9 @@ export type StoreRole = "line" | "final";
 export interface DashboardSettings {
   shift_windows: ShiftWindowRow[];
   team_rotation: { team: string; anchor_date: string; anchor_stop: number }[];
+  /** The plant's shifts, in cycle order (stop 0 is the first shift of the day) — the one
+   * resolved order the settings screen and the board both read the rotation's stops through. */
+  shift_order: string[];
   store_roles: { location_id: string; role: StoreRole }[];
 }
 

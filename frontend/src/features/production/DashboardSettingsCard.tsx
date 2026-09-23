@@ -266,8 +266,8 @@ export function DashboardSettingsCard() {
           <>
             <ShiftHoursForm key={`h-${JSON.stringify(settings.data!.shift_windows)}`} shifts={activeOf("shift")} initial={settings.data!.shift_windows} canEdit={canEdit} />
             <TeamRotationForm
-              key={`tr-${JSON.stringify(settings.data!.team_rotation)}`}
-              shifts={[...settings.data!.shift_windows].sort((a, b) => a.start_time.localeCompare(b.start_time)).map((w) => w.shift)}
+              key={`tr-${JSON.stringify(settings.data!.team_rotation)}-${JSON.stringify(settings.data!.shift_order)}`}
+              shifts={settings.data!.shift_order}
               teams={activeOf("team")}
               initial={settings.data!.team_rotation}
               canEdit={canEdit}

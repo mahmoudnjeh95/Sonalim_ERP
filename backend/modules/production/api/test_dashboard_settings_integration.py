@@ -11,6 +11,7 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
+from core.report_options import ReportOptionsService
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
 from modules.production.domain.dashboard import ShiftWindow
 
@@ -28,11 +29,20 @@ def actor(db):
     return actor_id
 
 
+def _team(db, actor, *labels: str) -> None:
+    """Register each label as an active team in Report Options -- what a rotation's
+    team names are validated against."""
+    for label in labels:
+        result = ReportOptionsService(db).create_option(tenant_id=TENANT, actor_id=actor, kind="team", label=label)
+        assert isinstance(result, Ok), getattr(result, "message", "")
+
+
 def test_a_tenant_that_configured_nothing_gets_empty_lists(db):
     # Nothing about machines: their lines, names, states and stages are read from maintenance.
     assert DashboardSettingsService(db).get_settings(tenant_id=TENANT) == {
         "shift_windows": [],
         "team_rotation": [],
+        "shift_order": [],
         "store_roles": [],
     }
 
@@ -93,6 +103,7 @@ def test_team_rotation_round_trip(db, actor):
         tenant_id=TENANT, actor_id=actor,
         windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
     )
+    _team(db, actor, "B", "C", "A")
     entries = [
         {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
         {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
@@ -111,6 +122,7 @@ def test_team_rotation_rejects_the_wrong_number_of_teams(db, actor):
         tenant_id=TENANT, actor_id=actor,
         windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
     )
+    _team(db, actor, "A")
     result = service.replace_team_rotation(
         tenant_id=TENANT, actor_id=actor, entries=[{"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 0}]
     )
@@ -120,6 +132,7 @@ def test_team_rotation_rejects_the_wrong_number_of_teams(db, actor):
 def test_replacing_team_rotation_drops_what_it_leaves_out(db, actor):
     service = DashboardSettingsService(db)
     service.replace_shift_windows(tenant_id=TENANT, actor_id=actor, windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0))])
+    _team(db, actor, "A", "B", "C", "D")
     service.replace_team_rotation(
         tenant_id=TENANT, actor_id=actor,
         entries=[{"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 0}, {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 1}],
@@ -129,6 +142,39 @@ def test_replacing_team_rotation_drops_what_it_leaves_out(db, actor):
         entries=[{"team": "C", "anchor_date": "2026-09-20", "anchor_stop": 0}, {"team": "D", "anchor_date": "2026-09-20", "anchor_stop": 1}],
     )
     assert {r["team"] for r in service.get_settings(tenant_id=TENANT)["team_rotation"]} == {"C", "D"}
+
+
+def test_team_rotation_rejects_a_team_that_is_not_an_active_report_option(db, actor):
+    service = DashboardSettingsService(db)
+    service.replace_shift_windows(
+        tenant_id=TENANT, actor_id=actor,
+        windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
+    )
+    _team(db, actor, "B", "C")
+    # "A" was never created as a team option -- a typo, or a name nobody added.
+    unknown = service.replace_team_rotation(
+        tenant_id=TENANT, actor_id=actor,
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 2},
+        ],
+    )
+    assert isinstance(unknown, Err) and unknown.code == "UNKNOWN_TEAM"
+
+    # A team retired after its rotation was saved is refused the same way.
+    _team(db, actor, "A")
+    option = next(o for o in ReportOptionsService(db).list_options(tenant_id=TENANT, kind="team") if o["label"] == "A")
+    ReportOptionsService(db).update_option(tenant_id=TENANT, actor_id=actor, option_id=option["id"], is_active=False)
+    inactive = service.replace_team_rotation(
+        tenant_id=TENANT, actor_id=actor,
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 2},
+        ],
+    )
+    assert isinstance(inactive, Err) and inactive.code == "UNKNOWN_TEAM"
 
 
 def test_store_role_is_line_or_final_and_a_store_has_one_role(db, actor):

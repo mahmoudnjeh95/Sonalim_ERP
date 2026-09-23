@@ -10,6 +10,7 @@ from modules.production.domain.dashboard import (
     STORE_ROLES,
     ShiftWindow,
     shift_length_minutes,
+    shift_order,
     validate_shift_window,
     validate_team_rotation,
 )
@@ -72,6 +73,9 @@ class DashboardSettingsService:
                 for s, a, b in windows
             ],
             "team_rotation": [{"team": t, "anchor_date": d.isoformat(), "anchor_stop": s} for t, d, s in rotation],
+            # The resolved shift-name breakdown, in cycle order -- the one sort the
+            # settings screen and the board both read the rotation's stops through.
+            "shift_order": shift_order(self.list_shift_windows(tenant_id=tenant_id)),
             "store_roles": [{"location_id": l, "role": r} for l, r in roles],
         }
 
@@ -119,6 +123,17 @@ class DashboardSettingsService:
             if not team or not isinstance(anchor_stop, int):
                 return Err("INVALID_ENTRY", "a rotation entry needs a team and its stop in the cycle")
             cleaned.append({"team": team, "anchor_date": anchor_date, "anchor_stop": anchor_stop})
+
+        active_teams = {
+            row[0]
+            for row in self._connection.execute(
+                "SELECT label FROM core.report_options WHERE tenant_id = %s AND kind = 'team' AND is_active = true",
+                (tenant_id,),
+            ).fetchall()
+        }
+        for row in cleaned:
+            if row["team"] not in active_teams:
+                return Err("UNKNOWN_TEAM", f"{row['team']!r} is not an active team (Report Options)")
 
         check = validate_team_rotation(cleaned, num_shifts=num_shifts)
         if isinstance(check, Err):

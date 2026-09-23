@@ -38,6 +38,15 @@ def validate_shift_window(*, shift: str, start: datetime.time, end: datetime.tim
     return Ok(None)
 
 
+def shift_order(windows: list[ShiftWindow]) -> list[str]:
+    """The plant's shifts, in cycle order (stop 0 is the first shift of the day).
+
+    Every reader of the team rotation -- the board, the settings screen -- has to
+    agree on this same order, or a stop number written under one ordering gets
+    read back under another. This is the one place it is computed."""
+    return [w.shift for w in sorted(windows, key=lambda w: (w.start, w.shift))]
+
+
 def shift_length_minutes(window: ShiftWindow) -> int:
     """How long a shift runs, in minutes. A window whose end is before its start runs
     through midnight (22:00 to 07:00 is nine hours), which is what the modulo is for."""

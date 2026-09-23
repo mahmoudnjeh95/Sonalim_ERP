@@ -6,7 +6,7 @@ import psycopg
 
 from modules.maintenance.api.equipment_service import PRODUCTION_STAGES, EquipmentService
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
-from modules.production.domain.dashboard import current_shift, line_state, team_rotation_schedule
+from modules.production.domain.dashboard import current_shift, line_state, shift_order, team_rotation_schedule
 
 # An OF that still has work to do on its line. `planned` has not started and
 # `closed`/`cancelled` are over, so none of them is "on the line" right now.
@@ -42,7 +42,7 @@ class DashboardLinesService:
         settings = DashboardSettingsService(self._connection)
         windows = settings.list_shift_windows(tenant_id=tenant_id)
         sorted_windows = sorted(windows, key=lambda w: (w.start, w.shift))
-        sorted_shifts = [w.shift for w in sorted_windows]
+        sorted_shifts = shift_order(windows)
         running = current_shift(windows, at)
         is_today = date == today
 
@@ -50,10 +50,17 @@ class DashboardLinesService:
             "SELECT team, anchor_date, anchor_stop FROM production.team_rotation WHERE tenant_id = %s ORDER BY team",
             (tenant_id,),
         ).fetchall()
-        schedule = sorted(
-            team_rotation_schedule(shifts=sorted_shifts, rotation=rotation_rows, date=date),
-            key=lambda e: e["team"].lower(),
-        )
+        # A rotation saved under a different shift count no longer numbers stops the
+        # way `sorted_shifts` does (e.g. 3 shifts -> 2 collapses stop 3 onto stop 0),
+        # so treat a mismatch exactly like no rotation configured rather than show a
+        # schedule that silently mislabels teams.
+        if rotation_rows and len(rotation_rows) != len(sorted_shifts) + 1:
+            schedule: list[dict] = []
+        else:
+            schedule = sorted(
+                team_rotation_schedule(shifts=sorted_shifts, rotation=rotation_rows, date=date),
+                key=lambda e: e["team"].lower(),
+            )
 
         report_status_by_line: dict[str, dict[str, str]] = {}
         for work_center_id, shift, report_status in self._connection.execute(

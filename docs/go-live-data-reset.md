@@ -24,7 +24,7 @@ run at startup and keep the data.
 - **Zeroes:** every quantity in `warehouse.stock_items` (rows stay) and the OF-/OFR-/NC-
   counters, so the first real order is `OF-1`.
 - **Keeps:** users (including `demo@sonalim-erp.local`), roles, permissions, products,
-  suppliers, warehouse locations, machines, work centers, molds, recipes, BOMs, rosters,
+  suppliers, warehouse locations, machines, work centers, molds, recipes, BOMs, team rotations,
   shift windows, report options, waste types.
 
 Safety: one transaction, no `CASCADE`, refuses to run if any table is not classified in

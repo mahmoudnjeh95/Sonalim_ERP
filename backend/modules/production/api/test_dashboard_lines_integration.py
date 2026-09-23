@@ -11,6 +11,8 @@ import datetime
 import pytest
 from ulid import ULID
 
+from core.domain.result import Ok
+from core.report_options import ReportOptionsService
 from modules.maintenance.api.equipment_service import EquipmentService
 from modules.production.api.dashboard_lines_service import DashboardLinesService
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
@@ -74,6 +76,14 @@ def _lines(db, at=T(8, 4), date=datetime.date(2026, 9, 19), today=datetime.date(
 
 def _by_code(payload):
     return {line["code"]: line for line in payload["lines"]}
+
+
+def _team(db, actor, *labels: str) -> None:
+    """Register each label as an active team in Report Options -- what a rotation's
+    team names are validated against."""
+    for label in labels:
+        result = ReportOptionsService(db).create_option(tenant_id=TENANT, actor_id=actor, kind="team", label=label)
+        assert isinstance(result, Ok), getattr(result, "message", "")
 
 
 def test_a_line_with_no_open_of_carries_an_empty_list_of_ofs(db, env):
@@ -182,6 +192,7 @@ def test_team_status_lists_every_team_with_the_shift_it_is_on_and_flags_the_curr
             ShiftWindow(shift="Shift 3", start=T(23, 0), end=T(7, 0)),
         ],
     )
+    _team(db, env["actor"], "B", "C", "D", "A")
     settings.replace_team_rotation(
         tenant_id=TENANT, actor_id=env["actor"],
         entries=[
@@ -211,6 +222,7 @@ def test_team_status_colour_follows_the_shift_report_for_that_slot(db, env):
         tenant_id=TENANT, actor_id=env["actor"],
         windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
     )
+    _team(db, env["actor"], "B", "C", "A")
     settings.replace_team_rotation(
         tenant_id=TENANT, actor_id=env["actor"],
         entries=[
@@ -229,4 +241,95 @@ def test_team_status_colour_follows_the_shift_report_for_that_slot(db, env):
     team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))["L1"]["team_status"]
     assert {(e["team"], e["status"]) for e in team_status} == {("B", "validated"), ("C", "returned"), ("A", None)}
     assert all(not e["is_current"] for e in team_status)
+
+
+def test_team_status_shows_submitted_and_open_reports(db, env):
+    line_id = _line(db, "L1")
+    settings = DashboardSettingsService(db)
+    settings.replace_shift_windows(
+        tenant_id=TENANT, actor_id=env["actor"],
+        windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)), ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0))],
+    )
+    _team(db, env["actor"], "B", "C", "A")
+    settings.replace_team_rotation(
+        tenant_id=TENANT, actor_id=env["actor"],
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 2},
+        ],
+    )
+    for shift, report_status in (("Shift 1", "submitted"), ("Shift 2", "open")):
+        db.execute(
+            "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 19), shift, report_status),
+        )
+    team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))["L1"]["team_status"]
+    assert {(e["team"], e["status"]) for e in team_status} == {("B", "submitted"), ("C", "open"), ("A", None)}
+
+
+def test_team_status_is_isolated_per_line_for_the_same_team_and_date(db, env):
+    line1, line2 = _line(db, "L1"), _line(db, "L2")
+    settings = DashboardSettingsService(db)
+    settings.replace_shift_windows(
+        tenant_id=TENANT, actor_id=env["actor"], windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0))],
+    )
+    _team(db, env["actor"], "B", "A")
+    settings.replace_team_rotation(
+        tenant_id=TENANT, actor_id=env["actor"],
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 1},
+        ],
+    )
+    db.execute(
+        "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (str(ULID()), TENANT, line1, datetime.date(2026, 9, 19), "Shift 1", "validated"),
+    )
+    db.execute(
+        "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s)",
+        (str(ULID()), TENANT, line2, datetime.date(2026, 9, 19), "Shift 1", "submitted"),
+    )
+    payload = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))
+    team_b_on_l1 = next(e for e in payload["L1"]["team_status"] if e["team"] == "B")
+    team_b_on_l2 = next(e for e in payload["L2"]["team_status"] if e["team"] == "B")
+    assert team_b_on_l1["status"] == "validated"
+    assert team_b_on_l2["status"] == "submitted"
+
+
+def test_team_status_is_empty_when_the_rotation_no_longer_matches_the_shift_count(db, env):
+    _line(db, "L1")
+    settings = DashboardSettingsService(db)
+    settings.replace_shift_windows(
+        tenant_id=TENANT, actor_id=env["actor"],
+        windows=[
+            ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)),
+            ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0)),
+            ShiftWindow(shift="Shift 3", start=T(23, 0), end=T(7, 0)),
+        ],
+    )
+    _team(db, env["actor"], "B", "C", "D", "A")
+    settings.replace_team_rotation(
+        tenant_id=TENANT, actor_id=env["actor"],
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+            {"team": "D", "anchor_date": "2026-09-19", "anchor_stop": 2},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 3},
+        ],
+    )
+    # The shift count changes after the rotation was saved (e.g. a shift is removed); the
+    # stored stops no longer number the same cycle, so the board must not guess a schedule.
+    settings.replace_shift_windows(
+        tenant_id=TENANT, actor_id=env["actor"],
+        windows=[
+            ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)),
+            ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0)),
+        ],
+    )
+    team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 19)))["L1"]["team_status"]
+    assert team_status == []
 
