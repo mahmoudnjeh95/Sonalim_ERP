@@ -114,12 +114,12 @@ function ShiftStrip({ board }: { board: BoardLines }) {
 
 // --- Team status --------------------------------------------------------------
 
-const TEAM_STATUS_TONE: Record<"none" | LiveStatus, string> = {
-  none: "bg-muted text-muted-foreground",
-  open: "bg-muted text-muted-foreground",
-  submitted: "bg-primary/10 text-primary",
-  validated: "bg-success/10 text-success",
-  returned: "bg-destructive-soft text-destructive",
+const TEAM_STATUS_BORDER: Record<"none" | LiveStatus, string> = {
+  none: "border-muted-foreground",
+  open: "border-muted-foreground",
+  submitted: "border-primary",
+  validated: "border-success",
+  returned: "border-destructive",
 };
 
 function TeamStatusPills({ teamStatus }: { teamStatus: TeamStatusEntry[] }) {
@@ -131,7 +131,7 @@ function TeamStatusPills({ teamStatus }: { teamStatus: TeamStatusEntry[] }) {
           className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground", entry.is_current && "board-team-now")}
           title={entry.shift ?? undefined}
         >
-          <span className={cn("board-avatar h-[26px] w-[26px] rounded-full border-2 border-current", TEAM_STATUS_TONE[entry.status ?? "none"])} aria-hidden="true" />
+          <span className={cn("board-avatar h-[26px] w-[26px] rounded-full border-2 bg-white", TEAM_STATUS_BORDER[entry.status ?? "none"])} aria-hidden="true" />
           <b className="max-w-full truncate text-[11.5px] text-foreground">{entry.team}</b>
         </div>
       ))}
