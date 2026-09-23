@@ -23,6 +23,7 @@ from modules.production.api.team_performance_service import GRAINS, TeamPerforma
 from modules.production.api.machine_performance_service import MachinePerformanceService
 from modules.production.api.stops_analytics_service import StopsAnalyticsService
 from modules.production.api.energy_analytics_service import EnergyAnalyticsService
+from modules.production.api.shift_health_service import ShiftHealthService
 from modules.production.api.consumption_report_service import CATEGORIES, ConsumptionReportService
 from modules.production.api.consumption_report_export import build_consumption_workbook
 from modules.production.api.daily_recap_export import build_daily_recap_workbook, fetch_period_rows, resolve_period
@@ -2002,6 +2003,17 @@ def list_energy_analytics(
         return EnergyAnalyticsService(connection).list_energy(
             tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to, work_center_id=work_center_id
         )
+
+
+@router.get("/analytics/shift-health")
+def get_shift_health_analytics(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """Submission funnel, time-to-validate, return rate and completeness, for the Shift Health tab."""
+    with get_connection() as connection:
+        return ShiftHealthService(connection).get_shift_health(tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to)
 
 
 def _validate_consumption_category(category: str | None) -> None:
