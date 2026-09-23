@@ -906,6 +906,66 @@ export function listDowntimeBreakdown(token: string, params: { date_from?: strin
   return apiFetch<DowntimeBreakdownRow[]>(`/production/reports/downtime-breakdown${suffix}`, { token });
 }
 
+// --- Shift-era analytics ------------------------------------------------------
+//
+// Read straight from the validated shifts' own tables: one row per stop, one row per
+// shift's energy, and the reporting process's own lifecycle facts.
+
+function windowQuery(params: Record<string, string | undefined>) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value) query.set(key, value);
+  return query.toString() ? `?${query.toString()}` : "";
+}
+
+export interface StopAnalyticsRow {
+  equipment_id: string | null;
+  work_center_id: string;
+  team: string | null;
+  report_date: string;
+  started_at: string;
+  ended_at: string;
+  minutes: number;
+  downtime_type: string | null;
+  classification: string | null;
+  motif: string | null;
+  source: "live" | "added_after" | "manual" | "migrated";
+}
+
+export function listStopsAnalytics(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  return apiFetch<StopAnalyticsRow[]>(`/production/analytics/stops${windowQuery(params)}`, { token });
+}
+
+/** A blank energy field is null ("not recorded"), distinct from a recorded 0. */
+export interface EnergyAnalyticsRow {
+  report_date: string;
+  work_center_id: string;
+  team: string | null;
+  fuel_quantity: number | null;
+  gasoil_quantity: number | null;
+  gasoil_flow_rate: number | null;
+  generator_hours: number | null;
+  electricity_quantity: number | null;
+  produced_quantity: number;
+}
+
+export function listEnergyAnalytics(
+  token: string,
+  params: { date_from?: string; date_to?: string; work_center_id?: string } = {},
+) {
+  return apiFetch<EnergyAnalyticsRow[]>(`/production/analytics/energy${windowQuery(params)}`, { token });
+}
+
+export interface ShiftHealth {
+  funnel: { status: string; count: number }[];
+  time_to_validate_minutes: { median: number | null; average: number | null; sample_size: number };
+  return_rate_by_section: { section_key: string; returned_count: number; total_count: number; return_rate_pct: number | null }[];
+  completeness: { average_sections_filled: number | null; total_sections: number; shift_count: number };
+}
+
+export function getShiftHealth(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  return apiFetch<ShiftHealth>(`/production/analytics/shift-health${windowQuery(params)}`, { token });
+}
+
 // --- Recipe correlation ------------------------------------------------------
 //
 // Each shift's water dosage and flow rate against its own OF's yield —
