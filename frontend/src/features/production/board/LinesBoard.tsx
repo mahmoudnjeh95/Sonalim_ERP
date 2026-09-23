@@ -15,6 +15,10 @@ import RejectSvg from "../../../assets/icons/production/reject.svg?react";
 import ShiftSvg from "../../../assets/icons/production/shift.svg?react";
 import EmptyNoOrders from "../../../assets/illustrations/empty-states/empty-no-orders.svg?react";
 import SyncSvg from "../../../assets/animations/status/sync.svg?react";
+import Team1Blue from "../../../assets/animations/teams/team_1_blue.svg?react";
+import Team2Green from "../../../assets/animations/teams/team_2_green.svg?react";
+import Team3Orange from "../../../assets/animations/teams/team_3_orange.svg?react";
+import Team4Purple from "../../../assets/animations/teams/team_4_purple.svg?react";
 import versementImage from "../../../assets/illustrations/production/stage-melange.webp";
 import extrusionImage from "../../../assets/illustrations/production/stage-extrusion.webp";
 import conditionnementImage from "../../../assets/illustrations/production/stage-conditionnement.webp";
@@ -123,26 +127,38 @@ const TEAM_STATUS_BORDER: Record<"none" | LiveStatus, string> = {
   returned: "border-destructive text-destructive",
 };
 
+const TEAM_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
+  "Équipe A": Team1Blue,
+  "Équipe B": Team2Green,
+  "Équipe C": Team3Orange,
+  "Équipe D": Team4Purple,
+};
+
 function TeamStatusPills({ teamStatus }: { teamStatus: TeamStatusEntry[] }) {
   return (
     <div className="flex items-start gap-1">
-      {teamStatus.map((entry) => (
-        <div
-          key={entry.team}
-          className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground")}
-          title={entry.shift ?? undefined}
-        >
-          <div className="relative">
-            <span className={cn("board-avatar flex items-center justify-center h-[26px] w-[26px] rounded-full border-2 bg-white text-[11px] font-bold", TEAM_STATUS_BORDER[entry.status ?? "none"])} aria-hidden="true">
-              {entry.team.charAt(entry.team.length - 1)}
-            </span>
-            {entry.is_current && (
-              <SyncSvg className="absolute inset-0 h-[26px] w-[26px] text-primary" aria-hidden="true" />
-            )}
+      {teamStatus.map((entry) => {
+        const TeamIcon = TEAM_ICON[entry.team];
+        return (
+          <div
+            key={entry.team}
+            className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground")}
+            title={entry.shift ?? undefined}
+          >
+            <div className={cn("relative flex items-center justify-center h-[26px] w-[26px] rounded-full border-2 overflow-hidden", TEAM_STATUS_BORDER[entry.status ?? "none"])}>
+              {TeamIcon ? (
+                <TeamIcon className="h-[26px] w-[26px]" aria-hidden="true" />
+              ) : (
+                <span className="text-[11px] font-bold">{entry.team.charAt(entry.team.length - 1)}</span>
+              )}
+              {entry.is_current && (
+                <SyncSvg className="absolute inset-0 h-[26px] w-[26px] text-primary" aria-hidden="true" />
+              )}
+            </div>
+            <b className="max-w-full truncate text-[11.5px] text-foreground">{entry.team}</b>
           </div>
-          <b className="max-w-full truncate text-[11.5px] text-foreground">{entry.team}</b>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
