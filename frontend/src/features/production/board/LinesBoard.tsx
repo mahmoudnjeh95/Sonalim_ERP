@@ -14,6 +14,7 @@ import WrenchSvg from "../../../assets/icons/maintenance/wrench.svg?react";
 import RejectSvg from "../../../assets/icons/production/reject.svg?react";
 import ShiftSvg from "../../../assets/icons/production/shift.svg?react";
 import EmptyNoOrders from "../../../assets/illustrations/empty-states/empty-no-orders.svg?react";
+import SyncSvg from "../../../assets/animations/status/sync.svg?react";
 import versementImage from "../../../assets/illustrations/production/stage-melange.webp";
 import extrusionImage from "../../../assets/illustrations/production/stage-extrusion.webp";
 import conditionnementImage from "../../../assets/illustrations/production/stage-conditionnement.webp";
@@ -128,12 +129,17 @@ function TeamStatusPills({ teamStatus }: { teamStatus: TeamStatusEntry[] }) {
       {teamStatus.map((entry) => (
         <div
           key={entry.team}
-          className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground", entry.is_current && "board-team-now")}
+          className={cn("flex w-[52px] flex-col items-center text-[10.5px] text-muted-foreground")}
           title={entry.shift ?? undefined}
         >
-          <span className={cn("board-avatar flex items-center justify-center h-[26px] w-[26px] rounded-full border-2 bg-white text-[11px] font-bold", TEAM_STATUS_BORDER[entry.status ?? "none"])} aria-hidden="true">
-            {entry.team.charAt(entry.team.length - 1)}
-          </span>
+          <div className="relative">
+            <span className={cn("board-avatar flex items-center justify-center h-[26px] w-[26px] rounded-full border-2 bg-white text-[11px] font-bold", TEAM_STATUS_BORDER[entry.status ?? "none"])} aria-hidden="true">
+              {entry.team.charAt(entry.team.length - 1)}
+            </span>
+            {entry.is_current && (
+              <SyncSvg className="absolute inset-0 h-[26px] w-[26px] text-primary" aria-hidden="true" />
+            )}
+          </div>
           <b className="max-w-full truncate text-[11.5px] text-foreground">{entry.team}</b>
         </div>
       ))}
