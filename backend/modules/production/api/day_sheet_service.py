@@ -231,9 +231,15 @@ class DaySheetService:
                 # The daily form records déchet in raw kilos whatever the item's unit is.
                 daily_waste.setdefault(report_id, []).append((category, float(quantity)))
             else:
-                # Packing waste names no item on the shift screen: it is a kind and a weight in kilos.
-                # Older lines that do name an item are restated in that item's own unit.
-                amount, unit = in_base_unit(float(quantity), product_id) if product_id else (float(quantity), "kg")
+                # "product" (finished product lost while packing) is recorded the same way
+                # the daily form records finished_product_conditioning -- raw kilos, whatever
+                # the product's own unit is. Only "packaging" (and a plant's own kinds) name
+                # an item counted in its own unit: a carton lost is a carton, not a fraction
+                # of a kilo of carton -- restated through that item's own base unit.
+                if product_id and category != "product":
+                    amount, unit = in_base_unit(float(quantity), product_id)
+                else:
+                    amount, unit = float(quantity), "kg"
                 name = products.get(product_id or "", {}).get("name")
                 packing_waste.setdefault(report_id, []).append((category, product_id, name, amount, unit))
 

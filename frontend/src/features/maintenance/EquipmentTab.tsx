@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, Pencil, Plus, Settings2, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, CheckCircle2, Pencil, Plus, Settings2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -33,10 +33,12 @@ import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import {
   PRODUCTION_STAGES,
+  archiveEquipment,
   createEquipment,
   listEquipment,
   listWorkCenters,
   setEquipmentStatus,
+  unarchiveEquipment,
   updateEquipment,
   type Equipment,
   type EquipmentStatus,
@@ -156,8 +158,31 @@ export function EquipmentTab() {
     },
   });
 
-  const operationalCount = equipment.filter((m) => m.status === "operational").length;
-  const attentionCount = equipment.filter((m) => m.status !== "operational").length;
+  const archiveMutation = useMutation({
+    mutationFn: (id: string) => archiveEquipment(token, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: EQUIPMENT_QUERY_KEY });
+      toast.success(t("maintenance.equipment.archived"));
+    },
+    onError: (error) => {
+      toast.error(t("maintenance.equipment.archiveError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const unarchiveMutation = useMutation({
+    mutationFn: (id: string) => unarchiveEquipment(token, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: EQUIPMENT_QUERY_KEY });
+      toast.success(t("maintenance.equipment.unarchived"));
+    },
+    onError: (error) => {
+      toast.error(t("maintenance.equipment.unarchiveError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const activeEquipment = equipment.filter((m) => !m.archived_at);
+  const operationalCount = activeEquipment.filter((m) => m.status === "operational").length;
+  const attentionCount = activeEquipment.filter((m) => m.status !== "operational").length;
   const statusFilteredEquipment = statusFilter === "all" ? equipment : equipment.filter((m) => m.status === statusFilter);
   const stageFilteredEquipment =
     stageFilter === "all"
@@ -228,12 +253,17 @@ export function EquipmentTab() {
       key: "status",
       header: t("maintenance.equipment.column.status"),
       defaultWidth: 160,
-      cell: (item) => (
-        <Badge variant={STATUS_VARIANT[item.status]} dot>
-          {STATUS_LABEL[item.status]}
-        </Badge>
-      ),
-      sortValue: (item) => item.status,
+      cell: (item) =>
+        item.archived_at ? (
+          <Badge variant="outline" dot>
+            {t("maintenance.equipment.archived.badge")}
+          </Badge>
+        ) : (
+          <Badge variant={STATUS_VARIANT[item.status]} dot>
+            {STATUS_LABEL[item.status]}
+          </Badge>
+        ),
+      sortValue: (item) => (item.archived_at ? "archived" : item.status),
     },
     {
       key: "action",
@@ -242,25 +272,45 @@ export function EquipmentTab() {
       alwaysVisible: true,
       headerClassName: "text-right",
       cellClassName: "space-x-2 text-right",
-      cell: (item) => (
-        <>
-          <Button size="sm" variant="outline" onClick={() => openEditDialog(item)}>
-            <Pencil className="h-3.5 w-3.5" />
-            {t("maintenance.equipment.edit")}
+      cell: (item) =>
+        item.archived_at ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => unarchiveMutation.mutate(item.id)}
+            disabled={unarchiveMutation.isPending && unarchiveMutation.variables === item.id}
+          >
+            <ArchiveRestore className="h-3.5 w-3.5" />
+            {t("maintenance.equipment.unarchive")}
           </Button>
-          {NEXT_STATUS[item.status].map((status) => (
+        ) : (
+          <>
+            <Button size="sm" variant="outline" onClick={() => openEditDialog(item)}>
+              <Pencil className="h-3.5 w-3.5" />
+              {t("maintenance.equipment.edit")}
+            </Button>
+            {NEXT_STATUS[item.status].map((status) => (
+              <Button
+                key={status}
+                size="sm"
+                variant="outline"
+                onClick={() => transitionMutation.mutate({ id: item.id, status })}
+                disabled={transitionMutation.isPending && transitionMutation.variables?.id === item.id}
+              >
+                {STATUS_LABEL[status]}
+              </Button>
+            ))}
             <Button
-              key={status}
               size="sm"
               variant="outline"
-              onClick={() => transitionMutation.mutate({ id: item.id, status })}
-              disabled={transitionMutation.isPending && transitionMutation.variables?.id === item.id}
+              onClick={() => archiveMutation.mutate(item.id)}
+              disabled={archiveMutation.isPending && archiveMutation.variables === item.id}
             >
-              {STATUS_LABEL[status]}
+              <Archive className="h-3.5 w-3.5" />
+              {t("maintenance.equipment.archive")}
             </Button>
-          ))}
-        </>
-      ),
+          </>
+        ),
     },
   ];
   const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
@@ -270,7 +320,7 @@ export function EquipmentTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatCard label={t("maintenance.equipment.stat.total")} value={equipment.length} icon={<Settings2 className="h-5 w-5" />} />
+        <StatCard label={t("maintenance.equipment.stat.total")} value={activeEquipment.length} icon={<Settings2 className="h-5 w-5" />} />
         <StatCard label={t("maintenance.equipment.stat.operational")} value={operationalCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
         <StatCard label={t("maintenance.equipment.stat.attention")} value={attentionCount} icon={<AlertTriangle className="h-5 w-5" />} accent="warning" />
       </div>

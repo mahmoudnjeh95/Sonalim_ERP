@@ -112,3 +112,60 @@ def test_the_stage_is_in_the_audit_trail_of_a_registration_and_of_an_edit(db, ac
     )
     assert payloads["equipment.created"]["production_stage"] == "versement"
     assert payloads["equipment.updated"]["production_stage"] == "extrusion"
+
+
+def test_archiving_a_machine_sets_archived_at_and_it_stays_listed(db, actor):
+    service = EquipmentService(db)
+    machine = _create(db, actor).value
+
+    archived = service.archive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+    assert isinstance(archived, Ok) and archived.value.archived_at is not None
+
+    listed = service.list_equipment(tenant_id=TENANT, work_center_id=LINE)
+    assert [e.id for e in listed] == [machine.id]
+
+
+def test_unarchiving_a_machine_clears_archived_at(db, actor):
+    service = EquipmentService(db)
+    machine = _create(db, actor).value
+    service.archive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+
+    unarchived = service.unarchive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+    assert isinstance(unarchived, Ok) and unarchived.value.archived_at is None
+
+
+def test_archiving_an_unknown_machine_is_not_found(db, actor):
+    result = EquipmentService(db).archive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id="missing")
+    assert isinstance(result, Err) and result.code == "NOT_FOUND"
+
+
+def test_archiving_an_already_archived_machine_is_refused(db, actor):
+    service = EquipmentService(db)
+    machine = _create(db, actor).value
+    service.archive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+
+    result = service.archive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+    assert isinstance(result, Err) and result.code == "ALREADY_ARCHIVED"
+
+
+def test_unarchiving_a_machine_that_was_never_archived_is_refused(db, actor):
+    machine = _create(db, actor).value
+
+    result = EquipmentService(db).unarchive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+    assert isinstance(result, Err) and result.code == "NOT_ARCHIVED"
+
+
+def test_archive_and_unarchive_are_in_the_audit_trail(db, actor):
+    service = EquipmentService(db)
+    machine = _create(db, actor).value
+    service.archive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+    service.unarchive_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+
+    actions = [
+        row[0]
+        for row in db.execute(
+            "SELECT action FROM core.audit_log WHERE tenant_id = %s AND entity_id = %s ORDER BY occurred_at",
+            (TENANT, machine.id),
+        ).fetchall()
+    ]
+    assert actions[-2:] == ["equipment.archived", "equipment.unarchived"]

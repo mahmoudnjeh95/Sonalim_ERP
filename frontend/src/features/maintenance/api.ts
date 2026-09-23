@@ -18,6 +18,8 @@ export interface Equipment {
   status: EquipmentStatus;
   /** null for a machine that works at none of the stages. */
   production_stage: ProductionStage | null;
+  /** Set when the machine is retired from the active registry. */
+  archived_at: string | null;
 }
 
 export interface CreateEquipmentInput {
@@ -49,4 +51,12 @@ export function updateEquipment(token: string, equipmentId: string, input: Updat
 
 export function setEquipmentStatus(token: string, equipmentId: string, status: EquipmentStatus) {
   return apiFetch<Equipment>(`/maintenance/equipment/${equipmentId}/status`, { method: "POST", token, body: { status } });
+}
+
+export function archiveEquipment(token: string, equipmentId: string) {
+  return apiFetch<Equipment>(`/maintenance/equipment/${equipmentId}/archive`, { method: "POST", token });
+}
+
+export function unarchiveEquipment(token: string, equipmentId: string) {
+  return apiFetch<Equipment>(`/maintenance/equipment/${equipmentId}/unarchive`, { method: "POST", token });
 }

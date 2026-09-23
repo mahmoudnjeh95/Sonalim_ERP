@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import psycopg
 from ulid import ULID
 
@@ -15,7 +17,7 @@ from modules.maintenance.domain.equipment import (
 
 __all__ = ["PRODUCTION_STAGES", "UNSET", "EquipmentService"]
 
-_COLUMNS = "id, work_center_id, code, name, status, production_stage"
+_COLUMNS = "id, work_center_id, code, name, status, production_stage, archived_at"
 
 
 class _Unset:
@@ -29,7 +31,9 @@ UNSET = _Unset()
 
 
 def _equipment(row) -> Equipment:
-    return Equipment(id=row[0], work_center_id=row[1], code=row[2], name=row[3], status=row[4], production_stage=row[5])
+    return Equipment(
+        id=row[0], work_center_id=row[1], code=row[2], name=row[3], status=row[4], production_stage=row[5], archived_at=row[6]
+    )
 
 
 class EquipmentService:
@@ -182,3 +186,48 @@ class EquipmentService:
             payload={"from_status": equipment.status, "to_status": new_status},
         )
         return result
+
+    def archive_equipment(self, *, tenant_id: str, actor_id: str, equipment_id: str) -> Result[Equipment]:
+        return self._set_archived(
+            tenant_id=tenant_id, actor_id=actor_id, equipment_id=equipment_id, archive=True, action="equipment.archived"
+        )
+
+    def unarchive_equipment(self, *, tenant_id: str, actor_id: str, equipment_id: str) -> Result[Equipment]:
+        return self._set_archived(
+            tenant_id=tenant_id, actor_id=actor_id, equipment_id=equipment_id, archive=False, action="equipment.unarchived"
+        )
+
+    def _set_archived(
+        self, *, tenant_id: str, actor_id: str, equipment_id: str, archive: bool, action: str
+    ) -> Result[Equipment]:
+        row = self._connection.execute(
+            f"SELECT {_COLUMNS} FROM maintenance.equipment WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (equipment_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"equipment {equipment_id} not found")
+
+        current = _equipment(row)
+        if archive and current.archived_at is not None:
+            return Err("ALREADY_ARCHIVED", f"equipment {equipment_id} is already archived")
+        if not archive and current.archived_at is None:
+            return Err("NOT_ARCHIVED", f"equipment {equipment_id} is not archived")
+
+        if archive:
+            archived_at = self._connection.execute(
+                "UPDATE maintenance.equipment SET archived_at = NOW() WHERE id = %s RETURNING archived_at",
+                (equipment_id,),
+            ).fetchone()[0]
+        else:
+            self._connection.execute("UPDATE maintenance.equipment SET archived_at = NULL WHERE id = %s", (equipment_id,))
+            archived_at = None
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action=action,
+            entity_type="equipment",
+            entity_id=equipment_id,
+            payload={"archived_at": archived_at.isoformat() if archived_at is not None else None},
+        )
+        return Ok(replace(current, archived_at=archived_at))

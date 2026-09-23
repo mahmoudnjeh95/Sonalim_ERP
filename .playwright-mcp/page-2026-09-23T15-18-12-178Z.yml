@@ -1,0 +1,131 @@
+- generic [ref=f1e2]:
+  - generic [ref=f1e3]:
+    - img "Sonalim ERP startup" [ref=f1e4]:
+      - generic [ref=f1e15]:
+        - generic [ref=f1e16]: Sonalim ERP
+        - generic [ref=f1e17]: PRODUCTION • QUALITÉ • PERFORMANCE
+      - generic [ref=f1e25]: Démarrage de l'application...
+      - generic [ref=f1e27]: Initialisation des modules Sonalim ERP
+    - generic [ref=f1e28]: Starting up…
+  - generic [ref=f1e29]:
+    - complementary [ref=f1e30]:
+      - generic [ref=f1e31]:
+        - generic [ref=f1e32]: SE
+        - generic [ref=f1e33]:
+          - paragraph [ref=f1e34]: Sonalim ERP
+          - paragraph [ref=f1e35]: demo
+        - generic [ref=f1e36]:
+          - button "en" [ref=f1e37] [cursor=pointer]
+          - button "fr" [ref=f1e39] [cursor=pointer]
+      - navigation [ref=f1e40]:
+        - generic [ref=f1e41]:
+          - paragraph [ref=f1e42]: Human resources
+          - link "Human resources" [ref=f1e44] [cursor=pointer]:
+            - /url: /hr
+        - generic [ref=f1e50]:
+          - paragraph [ref=f1e51]: CRM
+          - generic [ref=f1e52]:
+            - link "Dashboard" [ref=f1e53] [cursor=pointer]:
+              - /url: /crm
+            - link "Leads" [ref=f1e60] [cursor=pointer]:
+              - /url: /crm/leads
+            - link "Partners" [ref=f1e66] [cursor=pointer]:
+              - /url: /crm/partners
+            - link "Opportunities" [ref=f1e72] [cursor=pointer]:
+              - /url: /crm/opportunities
+            - link "Agenda" [ref=f1e78] [cursor=pointer]:
+              - /url: /crm/activities
+            - link "Pipeline" [ref=f1e82] [cursor=pointer]:
+              - /url: /crm/pipeline
+        - generic [ref=f1e88]:
+          - paragraph [ref=f1e89]: Operations
+          - generic [ref=f1e90]:
+            - link "Dashboard" [ref=f1e91] [cursor=pointer]:
+              - /url: /production/dashboard
+            - link "Manufacturing Order" [ref=f1e98] [cursor=pointer]:
+              - /url: /production
+            - link "IA Assistance" [ref=f1e105] [cursor=pointer]:
+              - /url: /production/ia-assistant
+        - generic [ref=f1e110]:
+          - paragraph [ref=f1e111]: Quality
+          - link "Quality" [ref=f1e113] [cursor=pointer]:
+            - /url: /quality
+        - generic [ref=f1e118]:
+          - paragraph [ref=f1e119]: Analytics
+          - link "Analytics" [ref=f1e121] [cursor=pointer]:
+            - /url: /analytics
+        - generic [ref=f1e126]:
+          - paragraph [ref=f1e127]: Maintenance
+          - link "Maintenance" [ref=f1e129] [cursor=pointer]:
+            - /url: /maintenance
+        - generic [ref=f1e133]:
+          - paragraph [ref=f1e134]: Products & Services
+          - generic [ref=f1e135]:
+            - link "Warehouse" [ref=f1e136] [cursor=pointer]:
+              - /url: /warehouse
+            - link "Products" [ref=f1e141] [cursor=pointer]:
+              - /url: /products
+            - link "Inventories" [ref=f1e149] [cursor=pointer]:
+              - /url: /inventories
+            - link "Shipments" [ref=f1e154] [cursor=pointer]:
+              - /url: /shipments
+            - link "Purchase Orders" [ref=f1e161] [cursor=pointer]:
+              - /url: /procurement
+        - generic [ref=f1e166]:
+          - paragraph [ref=f1e167]: Commerce
+          - generic [ref=f1e168]:
+            - link "Sales" [ref=f1e169] [cursor=pointer]:
+              - /url: /sales
+            - link "Finance" [ref=f1e175] [cursor=pointer]:
+              - /url: /finance
+        - generic [ref=f1e180]:
+          - paragraph [ref=f1e181]: Administration
+          - generic [ref=f1e182]:
+            - link "Users" [ref=f1e183] [cursor=pointer]:
+              - /url: /admin/users
+            - link "Roles" [ref=f1e188] [cursor=pointer]:
+              - /url: /admin/roles
+            - link "Activity Log" [ref=f1e193] [cursor=pointer]:
+              - /url: /admin/activity-log
+      - generic [ref=f1e199]:
+        - link "Settings" [ref=f1e200] [cursor=pointer]:
+          - /url: /settings
+        - generic [ref=f1e205]:
+          - generic [ref=f1e210]:
+            - paragraph [ref=f1e211]: demo@sonalim-erp.local
+            - paragraph [ref=f1e212]: Signed in
+          - button "Sign out" [ref=f1e213] [cursor=pointer]
+        - button "Collapse" [ref=f1e217] [cursor=pointer]
+    - main [ref=f1e222]:
+      - generic [ref=f1e224]:
+        - generic [ref=f1e225]:
+          - heading "Manufacturing Order" [level=1] [ref=f1e226]
+          - paragraph [ref=f1e227]: Work orders, packaging BOMs, and product classifications.
+        - tablist [ref=f1e229]:
+          - tab "Work orders" [ref=f1e230] [cursor=pointer]
+          - tab "Planning" [ref=f1e235] [cursor=pointer]
+          - tab "Shift report" [selected] [ref=f1e241] [cursor=pointer]
+          - tab "Day sheet & recap" [ref=f1e247] [cursor=pointer]
+          - tab "Validation center" [ref=f1e252] [cursor=pointer]
+          - tab "Recipes" [ref=f1e257] [cursor=pointer]
+          - tab "Regrind" [ref=f1e261] [cursor=pointer]
+          - tab "Work centers" [ref=f1e270] [cursor=pointer]
+          - tab "Molds" [ref=f1e274] [cursor=pointer]
+          - tab "Packaging BOMs" [ref=f1e280] [cursor=pointer]
+          - tab "Classifications" [ref=f1e292] [cursor=pointer]
+          - tab "Settings" [ref=f1e297] [cursor=pointer]
+        - generic [ref=f1e303]:
+          - generic [ref=f1e304]:
+            - heading "Shift report" [level=2] [ref=f1e305]
+            - paragraph [ref=f1e309]: One report per line and shift. Fill each section as the paper fiche, then hand it in.
+          - generic [ref=f1e312]:
+            - generic [ref=f1e313]:
+              - text: Date
+              - textbox "Date" [ref=f1e315]: 2026-09-23
+            - generic [ref=f1e316]:
+              - text: Line
+              - combobox "Line" [ref=f1e318]
+            - generic [ref=f1e319]:
+              - text: Shift
+              - combobox "Shift" [ref=f1e321]
+  - region "Notifications alt+T"

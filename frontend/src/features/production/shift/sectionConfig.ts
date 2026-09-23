@@ -48,6 +48,7 @@ export type OptionSource =
   | "itemsBobine"
   | "itemsScotch"
   | "itemsRuban"
+  | "packedProducts"
   | "lineStates"
   | "checkStates"
   | "partners"
@@ -123,6 +124,18 @@ export function moldsForOrder(row: Row, options: OptionMap): Option[] {
 /** The packing type of the row's chosen product, read from the option list built from the products. */
 export function packingTypeFor(row: Row, options: OptionMap): string | null {
   return options.packingTypes.find((option) => option.value === row.product_id)?.label ?? null;
+}
+
+/**
+ * The item a packing-waste row can name, by its Type: a product already packed this
+ * shift (Produit), or one of the packaging supplies (Emballage) -- two pools too
+ * different to offer from one flat list. A plant-defined kind is treated as
+ * Emballage, the broader of the two pools, so it is never left with nothing to pick.
+ */
+export function wastePackingItemOptions(row: Row, options: OptionMap): Option[] {
+  if (row.category === "product") return options.packedProducts;
+  if (!row.category) return [];
+  return [...options.itemsFilm, ...options.itemsCarton, ...options.itemsBobine, ...options.itemsScotch, ...options.itemsRuban];
 }
 
 export const SECTIONS: SectionDef[] = [
@@ -353,7 +366,8 @@ export const SECTIONS: SectionDef[] = [
         addLabel: L("Add waste", "Ajouter un déchet"),
         columns: [
           when("occurred_at", L("Time", "Heure")),
-          pick("category", L("Kind", "Type"), "wastePacking", true),
+          { ...pick("category", L("Kind", "Type"), "wastePacking", true), resets: ["product_id"] },
+          { ...pick("product_id", L("Item lost", "Article perdu"), "packedProducts", true), optionsFor: wastePackingItemOptions },
           num("quantity", L("Quantity (kg)", "Quantité (kg)")),
           text("note", L("Cause", "Cause")),
         ],

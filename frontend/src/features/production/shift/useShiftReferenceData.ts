@@ -75,6 +75,9 @@ export function useShiftReferenceData(enabled: boolean) {
         : productList.map(asOption);
       // Only orders that have a production row on this shift can be the OF of a lot.
       const runOrderIds = new Set(rowsOf("runs", "runs").map((r) => String(r.of_id)));
+      // Products already packed this shift -- what a "Produit" packing-waste line may name.
+      const packedProductIds = new Set(rowsOf("packing", "rows").map((r) => String(r.product_id)).filter(Boolean));
+      const packedProducts = [...packedProductIds].map((id) => ({ value: id, label: productName.get(id) ?? id }));
 
       // Molds follow the type (PL or PC) of the work orders: a run's own row, or the shift's runs for a wash.
       const typeOfOrder = new Map(all.map((o) => [o.id, o.product_type ?? productType.get(o.product_id ?? "") ?? ""]));
@@ -102,6 +105,7 @@ export function useShiftReferenceData(enabled: boolean) {
         itemsBobine: itemsOfKind("bobine"),
         itemsScotch: itemsOfKind("scotch"),
         itemsRuban: itemsOfKind("ruban"),
+        packedProducts,
         locations: (locations.data ?? []).map((l) => ({ value: l.id, label: l.name })),
         molds: moldList.map(moldOption),
         moldsForShift: moldList.filter((m) => runTypes.size === 0 || runTypes.has(m.type)).map(moldOption),

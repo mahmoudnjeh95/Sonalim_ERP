@@ -39,6 +39,7 @@ def _serialize_equipment(equipment: Equipment) -> dict:
         "name": equipment.name,
         "status": equipment.status,
         "production_stage": equipment.production_stage,
+        "archived_at": equipment.archived_at.isoformat() if equipment.archived_at is not None else None,
     }
 
 
@@ -111,6 +112,38 @@ def transition_equipment_status(
         result = service.transition_status(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, equipment_id=equipment_id, new_status=body.status
         )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return _serialize_equipment(result.value)
+
+
+@router.post("/equipment/{equipment_id}/archive")
+def archive_equipment(
+    equipment_id: str,
+    tenant: TenantContext = Depends(require_permission("maintenance.manage_equipment")),
+) -> dict:
+    with get_connection() as connection:
+        service = EquipmentService(connection)
+        result = service.archive_equipment(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, equipment_id=equipment_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return _serialize_equipment(result.value)
+
+
+@router.post("/equipment/{equipment_id}/unarchive")
+def unarchive_equipment(
+    equipment_id: str,
+    tenant: TenantContext = Depends(require_permission("maintenance.manage_equipment")),
+) -> dict:
+    with get_connection() as connection:
+        service = EquipmentService(connection)
+        result = service.unarchive_equipment(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, equipment_id=equipment_id)
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT

@@ -240,6 +240,19 @@ def test_daily_waste_is_in_raw_kilos_per_kind_and_packing_waste_keeps_the_items_
     assert (packing_waste["Carton"]["unit"], packing_waste["Carton"]["total"]) == ("ea", 3)
 
 
+def test_product_lost_while_packing_stays_in_raw_kilos_even_when_an_item_is_named(db, env):
+    """`product` (finished product lost while packing) is filled in on the shift's
+    Conditionnement form the same way `finished_product_conditioning` is on the
+    Daily form: a weight in kilos, whatever the item's own unit is. Naming the item
+    (semolina here, whose own unit is a tonne, ratio 1000) must not scale the kilos
+    the team actually weighed into a wrong number of tonnes."""
+    of_id = _open_of(db, env)
+    _packing(db, env, of_id, waste_lines=(WasteLine(category="product", product_id=env["semolina"], quantity=2),))
+    sheet = _sheet(db, env)
+    row = next(r for r in sheet["rows"] if r["key"] == "packing_waste" and r["ref"] == "product")
+    assert (row["unit"], row["total"]) == ("kg", 2)
+
+
 def test_packaging_rows_are_in_the_items_own_base_unit(db, env):
     of_id = _open_of(db, env)
     _packing(db, env, of_id, film_quantity=104, carton_quantity=1235, scotch_quantity=11, waste_carton_quantity=3, ruban_quantity=1)

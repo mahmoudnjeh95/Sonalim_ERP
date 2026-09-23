@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass, replace
 
 from core.domain.result import Err, Ok, Result
@@ -26,6 +27,9 @@ class Equipment:
     # None for a machine that works at none of the stages (a grinder off the main
     # flow, say) and for every machine registered before the field existed.
     production_stage: str | None = None
+    # Set when the machine is retired from the active registry; unset to bring
+    # it back. None for every equipment row, always, until first archived.
+    archived_at: datetime.datetime | None = None
 
 
 def validate_equipment_code(code: str) -> Result[None]:
