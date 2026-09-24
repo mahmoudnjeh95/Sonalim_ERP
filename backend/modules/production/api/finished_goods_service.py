@@ -9,7 +9,7 @@ class FinishedGoodsService:
     and the packet tally (packets_counted) that Phase 5 actually posts to
     stock, per product and per PC/PL line.
 
-    Sourced from production.conditionnement_reports, the same table and the
+    Sourced from production.shift_packing_rows, the same table and the
     same validated-only convention as ConsumptionReportService and
     of_consolidation_service.OfConsolidationService -- this is that same
     figure grouped by product and by date range instead of by one OF.
@@ -21,29 +21,29 @@ class FinishedGoodsService:
     def list_finished_goods(
         self, *, tenant_id: str, date_from: str | None = None, date_to: str | None = None
     ) -> list[dict]:
-        clauses = ["r.tenant_id = %s", "r.status = 'validated'", "COALESCE(c.product_id, w.product_id) IS NOT NULL"]
+        clauses = ["s.tenant_id = %s", "s.status = 'validated'", "COALESCE(p.product_id, w.product_id) IS NOT NULL"]
         params: list[object] = [tenant_id]
         if date_from is not None:
-            clauses.append("r.report_date >= %s")
+            clauses.append("s.report_date >= %s")
             params.append(date_from)
         if date_to is not None:
-            clauses.append("r.report_date <= %s")
+            clauses.append("s.report_date <= %s")
             params.append(date_to)
         where = " AND ".join(clauses)
 
         rows = self._connection.execute(
             f"""
             SELECT
-                COALESCE(c.product_id, w.product_id) AS product_id,
+                COALESCE(p.product_id, w.product_id) AS product_id,
                 w.product_type AS pc_pl,
-                SUM(c.finished_product_quantity) AS quantity,
-                SUM(c.packets_counted) AS packets_counted
-            FROM production.conditionnement_reports c
-            JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
-            JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
+                SUM(p.finished_product_quantity) AS quantity,
+                SUM(p.packets_counted) AS packets_counted
+            FROM production.shift_packing_rows p
+            JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
+            JOIN production.work_orders w ON w.id = p.of_id AND w.tenant_id = p.tenant_id
             WHERE {where}
-            GROUP BY COALESCE(c.product_id, w.product_id), w.product_type
-            HAVING SUM(c.finished_product_quantity) > 0 OR SUM(c.packets_counted) > 0
+            GROUP BY COALESCE(p.product_id, w.product_id), w.product_type
+            HAVING SUM(p.finished_product_quantity) > 0 OR SUM(p.packets_counted) > 0
             """,
             params,
         ).fetchall()
