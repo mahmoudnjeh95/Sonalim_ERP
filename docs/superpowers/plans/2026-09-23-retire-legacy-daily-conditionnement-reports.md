@@ -37,7 +37,7 @@ Each task leaves the app in a working, testable state. The old system keeps func
 New files:
 - `backend/modules/production/api/shift_stock_service.py` — the new engine: `ShiftStockService` class with `validate_shift_production(...)` (posts stock/regrind/scrap for runs) and `validate_shift_packing(...)` (posts stock/DLC-lot for packing rows), plus `reverse_run(...)` / `reverse_packing_row(...)` for undoing a single row's effects. Mirrors `ProductionReportService.validate_report`/`delete_report`'s daily/conditionnement branches, but reads `shift_runs`/`shift_packing_rows` directly instead of `daily_reports`/`conditionnement_reports`.
 - `backend/modules/production/api/test_shift_stock_service_integration.py` — integration tests for the new engine, real Postgres.
-- `backend/modules/production/migrations/0058_production_drop_legacy_reports.sql` — drops the old tables (Task 8 only).
+- `backend/modules/production/migrations/0059_production_drop_legacy_reports.sql` (renumber if taken — confirm at Task 8 time) — drops the old tables (Task 8 only).
 
 Modified files:
 - `backend/modules/production/api/shift_validation_service.py` — `validate_shift`, `reverse_shift` call `ShiftStockService` instead of `materialize_shift` + `ProductionReportService`.
@@ -1238,6 +1238,38 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ---
 
+### Task 4b: Read-only legacy-report copy at validation (done — see ledger)
+
+**Amendment, added 2026-09-24 (ledgered ruling, see `.superpowers/sdd/2026-09-23-retire-legacy-daily-conditionnement-reports/progress.md`):**
+Task 3 stopped writing `production_reports`/`daily_reports`/`conditionnement_reports` entirely, which broke 22 reader-service tests (BLOCKER A) across ~18 files that still query those tables directly. Rather than porting all 18 readers before Task 3 could be considered "done", `ShiftValidationService.validate_shift` now also calls `legacy_report_ledger.materialize_shift` and marks the resulting rows `validated` directly (no `submitted` step, no stock posted from them — `ShiftStockService` already posted the real stock in the same transaction). `reverse_shift` deletes the copy. This is **already implemented and committed** (`d32b689`); full production suite back to baseline (839 passed, 6 pre-existing failures). No action needed here — this section exists so a reader of the plan (not just the ledger) understands why old tables are still being written after Task 3.
+
+This copy is temporary scaffolding, exactly like `legacy_report_ledger.py` itself was described as in its own module docstring ("deliberately transitional... once the old tables become views over the shift tables, this module goes away"). Tasks 4c–4r below port each reader off it, one at a time; Task 8 drops the old tables (and this copy-writing code) only once every reader is ported and a grep confirms zero remaining references.
+
+**Do not remove the `materialize_shift` call from `validate_shift`/`reverse_shift` until every reader task below is complete** — removing it early reintroduces the 22 test failures this task fixed.
+
+---
+
+### Tasks 4c–4r: Port each remaining reader off the legacy-report copy
+
+**Context:** `grep -rln "production\.production_reports\|production\.daily_reports\|production\.conditionnement_reports\|production\.report_downtime_lines\|production\.report_waste_lines\|production\.report_semolina_lines\|ProductionReportService\|legacy_report_ledger" backend/modules/production/api/*.py --include="*.py"` (excluding `test_*.py`, `legacy_report_ledger.py`, `production_report_service.py`, `conditionnement_service.py`, `downtime_line_store.py`, `waste_line_store.py`, `semolina_line_store.py`, `shift_stock_service.py`, and `shift_validation_service.py` themselves — those are the machinery, not readers) found these reader files still on old tables, as of 2026-09-24:
+
+`dashboard_day_service.py`, `consumption_report_service.py`, `finished_goods_service.py`, `lot_suggestion_service.py`, `machine_performance_service.py`, `mp_consumption_service.py`, `of_consolidation_service.py`, `packaging_variance_service.py`, `recipe_check_service.py`, `report_period_service.py`, `report_product.py`, `stock_release_service.py`, `team_performance_service.py`, `work_order_overview_service.py`, `work_order_yield_service.py`, `dashboard_live_service.py`, `packing_product_validation_service.py`, plus `router.py` and `service.py` (wiring/re-exports touching several of the above — resolve per-file, not as their own task).
+
+`day_sheet_service.py` was already ported directly in Task 4 above (no dependency on the Task 4b copy) — do not re-port it here.
+
+**Each reader gets its own task, following Task 4's proven shape:**
+1. Read the reader file in full; note every `FROM`/`JOIN` against `production_reports`/`daily_reports`/`conditionnement_reports`/`report_*_lines`, and what shape (columns, grouping) each query expects.
+2. Read its test file; note fixtures that seed data by inserting into old tables directly (as opposed to going through `ShiftReportService` + `ShiftValidationService`) — these must switch to seeding via the real shift-table path.
+3. Rewrite the query against `shift_runs`/`shift_packing_rows`/`shift_waste_lines`/`machine_stops`/`shift_run_semolina_lines`/`shift_energy`, preserving the exact output shape the reader's callers expect (same pattern as Task 4 Step 3–4: dataclasses/return contracts unchanged, only the SQL source changes). Where a query needs a value the old ledger computed at materialize-time and shift tables don't store (e.g. `of_consolidation_service.py`'s per-run energy split — see Task 6's finding below), decide per-file whether the shift-table figure is an acceptable equivalent (usually a whole-shift total instead of a proportional split) or whether it needs a ledgered ruling.
+4. Run that file's test suite (baseline first — confirm green before touching anything — then green after the port).
+5. Commit per reader: `refactor(production): read <X> from shift tables instead of legacy reports`.
+
+**Do this one reader at a time, smallest/most isolated first** (suggested order, cheapest to hardest based on old-table hit count found 2026-09-24): `report_period_service.py` (1 hit), `lot_suggestion_service.py`/`stock_release_service.py`/`report_product.py` (2 hits each), `finished_goods_service.py`/`consumption_report_service.py`/`mp_consumption_service.py` (3 hits each), `recipe_check_service.py`/`work_order_overview_service.py` (4 hits each), `machine_performance_service.py`/`work_order_yield_service.py` (7 hits each), `packaging_variance_service.py` (10 hits — also see original Task 7 Step 3's note on `PackagingVarianceService.for_report`), `of_consolidation_service.py` (13 hits — see Task 6's energy-split finding below), `dashboard_day_service.py`/`team_performance_service.py` (~20 hits each, largest), then `dashboard_live_service.py` and `packing_product_validation_service.py` (found via the 22-test BLOCKER A failure list, not yet hit-counted — count before starting), then `router.py`/`service.py` last (touch multiple readers' wiring, safest once the services they route to are already ported).
+
+Re-run the full `pytest modules/production -q` baseline after each reader's commit — the count of passing tests should only ever go up or stay flat, never regress, until the very last reader is ported (at which point BLOCKER A's 22 fixed tests and this task's own tests converge).
+
+---
+
 ### Task 5: Remove old routes, permissions, and module registration
 
 **Files:**
@@ -1283,10 +1315,12 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ### Task 6: Confirm and scope analytics services' dependency on old tables
 
+**Amended 2026-09-24:** this task's scope is now covered by Tasks 4c–4r above — `of_consolidation_service.py` is explicitly listed there with the energy-split finding below carried forward. Keep this task as the record of that finding; do not re-investigate, port `of_consolidation_service.py` as one of the Tasks 4c–4r reader tasks using the decision below.
+
 **Files:**
 - Read-only investigation, no changes in this task unless the finding is trivial (see Step 3).
 
-**Interfaces:** none produced; this task's output is a decision recorded in the plan (Step 3) that Task 7/8 depend on.
+**Interfaces:** none produced; this task's output is a decision recorded in the plan (Step 3) that Tasks 4c–4r / 7 / 8 depend on.
 
 **Amended during Task 3 execution (ledgered ruling):** `of_consolidation_service.py` was found reading `production.daily_reports` for per-run `fuel_quantity`/`gasoil_quantity`/`electricity_quantity`/`generator_hours` — a fourth file with the same class of gap as the three named below, missed by the original survey. Added to this task's scope. Concretely: `shift_energy` already holds the *whole-shift* totals (never split by run — the per-run split was `legacy_report_ledger.materialize_shift`'s own `split_proportionally` call, a presentation-time computation for the old reader, not stored anywhere on the shift tables themselves). Porting `of_consolidation_service.py` means either (a) it reads `shift_energy` directly and sums/uses whole-shift totals instead of a per-run split, if its consumers don't actually need the per-run granularity, or (b) `ShiftStockService`/`ShiftValidationService` needs to persist a per-run energy split onto `shift_runs` (e.g. new columns) if per-run granularity is a real product requirement. Step 1 below must determine which.
 
@@ -1310,6 +1344,8 @@ This task has no code changes and no commit of its own — its finding feeds dir
 ---
 
 ### Task 7: Remove/rewrite the 25 dependent backend test files
+
+**Amended 2026-09-24:** run this task only after every reader in Tasks 4c–4r is ported (their own test files are handled inside those tasks, not here — skip any file already rewritten there).
 
 **Files:**
 - Investigate and modify/delete as needed: `test_report_flow_integration.py`, `test_conditionnement_flow_integration.py`, `test_report_reversal_integration.py`, `test_shift_legacy_conversion_integration.py`, `test_downtime_lines_integration.py`, `test_waste_lines_integration.py`, `test_packaging_variance_integration.py`, `domain/test_production_report.py`, plus others found by the grep below. (`test_shift_validation_integration.py` and `test_day_sheet_integration.py` were already handled in Tasks 3–4 — skip them here.)
@@ -1348,12 +1384,19 @@ Co-Authored-By: Claude Sonnet 5 <noreply@anthropic.com>"
 
 ### Task 8: Drop the old schema and delete the old backend service files
 
+**Amended 2026-09-24:** additionally gated on every reader task in Tasks 4c–4r being complete. `ShiftValidationService.validate_shift`/`reverse_shift`'s `materialize_shift` call (added in Task 4b) must be removed as part of this task's Step 1/2 — it is the last remaining caller of `legacy_report_ledger.materialize_shift` once every reader is ported, and deleting `legacy_report_ledger.py` without first removing that call would break validation outright (not just a reader — the write path itself).
+
 **Files:**
-- Create: `backend/modules/production/migrations/0058_production_drop_legacy_reports.sql`
+- Modify: `backend/modules/production/api/shift_validation_service.py` (remove the `materialize_shift` call and the now-dead old-row-deletion block from `reverse_shift`, added in Task 4b — see that section's docstring note)
+- Create: `backend/modules/production/migrations/0059_production_drop_legacy_reports.sql` (renumber from `0058` — `0058_production_section_validator_edit.sql` already exists on this branch; confirm the actual next free number with `ls backend/modules/production/migrations/ | sort | tail -5` before writing the file, do not assume 0059 is still free)
 - Delete: `backend/modules/production/api/production_report_service.py`, `conditionnement_service.py`, `report_stock_service.py`, `legacy_report_ledger.py`, `downtime_line_store.py`, `waste_line_store.py`, `semolina_line_store.py`
 - Delete: `backend/scripts/fix_daily_report_regrind_product.py`, `fix_daily_report_scrap_product.py`, `fix_daily_report_water_quantities.py`, `fix_daily_report_water_quantity_of34.py`
 
-**Interfaces:** none; this is pure removal, gated on Tasks 3–7 all being green first.
+**Interfaces:** none; this is pure removal, gated on Tasks 3, 4b, 4c–4r, 5, 6, 7 all being green first.
+
+- [ ] **Step 0: Remove the `materialize_shift` call from `ShiftValidationService`**
+
+With every reader ported (Tasks 4c–4r complete), the read-only copy from Task 4b is no longer read by anything. Remove the `materialize_shift(...)` call and the `UPDATE production.production_reports SET status = 'validated' ...` statement from `validate_shift`, and the old-row `DELETE` block from `reverse_shift` (both added in Task 4b). Run `test_shift_validation_integration.py` and confirm `test_a_validated_shift_appears_in_production_reports_as_validated_and_reversal_removes_it` (added in Task 4b) now needs deleting too, since the behavior it tests is being intentionally removed — delete that test in this step, not before.
 
 - [ ] **Step 1: Confirm nothing still imports the files slated for deletion**
 
@@ -1379,7 +1422,7 @@ git rm backend/scripts/fix_daily_report_water_quantity_of34.py
 - [ ] **Step 3: Write the drop migration**
 
 ```sql
--- backend/modules/production/migrations/0058_production_drop_legacy_reports.sql
+-- backend/modules/production/migrations/0059_production_drop_legacy_reports.sql (renumber if 0059 is taken by then)
 --
 -- The old Daily/Conditionnement report system (production.production_reports and
 -- its detail tables) is retired: every read and write path now runs on the shift
