@@ -36,7 +36,9 @@ import { MOVE_TYPE_VARIANT, formatMoveReference, signedMoveQuantity, useMoveType
 import { rowEnterProps } from "../../components/motion/rowMotion";
 import MovementInIcon from "../../assets/icons/warehouse/movement-in.svg?react";
 import MovementOutIcon from "../../assets/icons/warehouse/movement-out.svg?react";
-import { adjustStock, listLocations, listProducts, listStockMoves, listUoms, type StockMove, type StockMoveType } from "./api";
+import { adjustStock, listLocations, listStockMoves, listUoms, type StockMove, type StockMoveType } from "./api";
+import { ProductSelect } from "../../components/patterns/ProductSelect";
+import { useProductCatalog } from "../products/catalog";
 import { listWorkOrders } from "../production/api";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
@@ -49,7 +51,6 @@ const adjustSchema = z.object({
 type AdjustForm = z.infer<typeof adjustSchema>;
 
 const MOVES_QUERY_KEY = ["warehouse", "stock", "moves"] as const;
-const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 type MoveTypeFilter = "all" | StockMoveType;
 
@@ -70,7 +71,7 @@ export function StockHistoryTab() {
   const REFERENCE_KIND_LABEL = useReferenceKindLabels();
 
   const { data: moves = [], isLoading } = useQuery({ queryKey: MOVES_QUERY_KEY, queryFn: () => listStockMoves(token) });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { catalog, products } = useProductCatalog();
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   // Best-effort: a role without production.view_work_orders just doesn't get the
   // "work order" row in the move-detail dialog, rather than an error anywhere.
@@ -266,14 +267,7 @@ export function StockHistoryTab() {
             <form className="space-y-4" onSubmit={handleSubmit((input) => adjustMutation.mutate(input))}>
               <div className="space-y-1.5">
                 <Label htmlFor="adjust_product_id">{t("warehouse.stockHistory.field.product")}</Label>
-                <Select id="adjust_product_id" {...register("product_id")}>
-                  <option value="">—</option>
-                  {products.map((product) => (
-                    <option key={product.id} value={product.id}>
-                      {product.name}
-                    </option>
-                  ))}
-                </Select>
+                <ProductSelect id="adjust_product_id" products={catalog} {...register("product_id")} />
                 {errors.product_id && <p className="text-sm text-destructive">{errors.product_id.message}</p>}
               </div>
               <div className="space-y-1.5">

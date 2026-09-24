@@ -28,7 +28,9 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listPartners, type Partner } from "../partners/api";
-import { listProducts, listUoms, listLocations, listSuggestedVendors, type Location, type Product, type SuggestedVendor } from "../warehouse/api";
+import { listUoms, listLocations, listSuggestedVendors, type Location, type SuggestedVendor } from "../warehouse/api";
+import { ProductSelect } from "../../components/patterns/ProductSelect";
+import { PRODUCTS_QUERY_KEY, useProductCatalog, type CatalogProduct } from "../products/catalog";
 import { productRequiresIntegerQuantity } from "../../lib/units";
 import { listCurrencies, type Currency } from "../settings/exchangeRatesApi";
 import { createProduct } from "../products/api";
@@ -58,7 +60,6 @@ import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const QUERY_KEY = ["procurement", "purchase-orders"] as const;
 const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
-const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 
@@ -217,7 +218,7 @@ export function PurchaseOrdersPage() {
     queryFn: () => listPurchaseOrders(token, statusFilter === "all" ? undefined : statusFilter),
   });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { catalog: products } = useProductCatalog();
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: currencies = [] } = useQuery({ queryKey: ["core", "currencies"], queryFn: () => listCurrencies(token) });
@@ -904,15 +905,17 @@ function ProductLineSelect({
   onSelectProduct,
 }: {
   registration: UseFormRegisterReturn;
-  products: Product[];
+  products: CatalogProduct[];
   currentValue: string;
   onRequestNewProduct: () => void;
   onSelectProduct: (productId: string) => void;
 }) {
   const { t } = useI18n();
   return (
-    <Select
+    <ProductSelect
       {...registration}
+      products={products}
+      trailing={<option value={NEW_PRODUCT_OPTION}>{t("procurement.addNewProduct")}</option>}
       onChange={(e) => {
         if (e.target.value === NEW_PRODUCT_OPTION) {
           e.target.value = currentValue;
@@ -922,15 +925,7 @@ function ProductLineSelect({
         registration.onChange(e);
         onSelectProduct(e.target.value);
       }}
-    >
-      <option value="">—</option>
-      {products.map((product) => (
-        <option key={product.id} value={product.id}>
-          {product.name}
-        </option>
-      ))}
-      <option value={NEW_PRODUCT_OPTION}>{t("procurement.addNewProduct")}</option>
-    </Select>
+    />
   );
 }
 

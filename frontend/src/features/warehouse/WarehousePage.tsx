@@ -1,15 +1,17 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChart3, Boxes, History as HistoryIcon, ListTree, Package } from "lucide-react";
+import { BarChart3, Boxes, History as HistoryIcon, LayoutDashboard, ListTree, Package } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
 import { StockTab } from "./StockTab";
+import { WarehouseOverviewTab } from "./WarehouseOverviewTab";
 import { AnalysisTab } from "./AnalysisTab";
 import { FinishedGoodsAnalysisTab } from "./FinishedGoodsAnalysisTab";
 import { HistoryTab } from "./HistoryTab";
 import { StockHistoryTab } from "./StockHistoryTab";
 
 const TABS = [
+  { value: "overview", labelKey: "warehouse.tabs.overview", icon: LayoutDashboard, Component: WarehouseOverviewTab },
   { value: "stock", labelKey: "warehouse.tabs.stock", icon: Boxes, Component: StockTab },
   { value: "analysis", labelKey: "warehouse.tabs.analysis", icon: BarChart3, Component: AnalysisTab },
   { value: "finished-goods-analysis", labelKey: "warehouse.tabs.finishedGoodsAnalysis", icon: Package, Component: FinishedGoodsAnalysisTab },
@@ -21,7 +23,7 @@ type TabValue = (typeof TABS)[number]["value"];
 
 export function WarehousePage() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<TabValue>("stock");
+  const [tab, setTab] = useState<TabValue>("overview");
   const ActiveTab = TABS.find((t) => t.value === tab)!.Component;
 
   return (
