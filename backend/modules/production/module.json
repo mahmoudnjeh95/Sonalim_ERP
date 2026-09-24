@@ -74,8 +74,6 @@
     "production.shift.edit.packet_checks",
     "production.shift.edit.waste_packing",
     "production.shift.edit.energy",
-    "production.manage_reports",
-    "production.validate_reports",
     "production.admin_reports",
     "production.use_ia_assistant"
   ]
