@@ -18,6 +18,8 @@ from modules.production.api.of_consolidation_service import OfConsolidationServi
 from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.regrind_service import RegrindDefaultsService
 from modules.production.api.service import WorkOrderService
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
 from modules.production.api.waste_type_service import WasteTypeService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
 from modules.production.domain.production_report import (
@@ -27,8 +29,8 @@ from modules.production.domain.production_report import (
     SemolinaLine,
     WasteLine,
 )
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.qc.api.quality_service import QualityReportService
-from modules.qc.domain.quality import QualityReportDetail
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-consolidation"
@@ -566,18 +568,57 @@ def test_an_active_order_with_no_validated_reports_has_no_teams(db, env, of):
 # --- quality comes from qc, through its service -----------------------------
 
 
-def test_quality_conformity_comes_from_the_qc_module(db, env, of):
-    packing = _packing(db, env, of, date=datetime.date(2026, 9, 1))
-    quality = QualityReportService(db)
-    created = quality.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.id,
-        detail=QualityReportDetail(conforming_cartons=90, non_conforming_cartons=10, defect_details="bad seal"),
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
+
+
+def _qc_report(db, env, of, *, date, **line_fields) -> str:
+    """A validated packing shift for this OF, and a draft QC report on it with its
+    one conformity line filled in. QC inspects shift reports, not the legacy
+    conditionnement report, so the quality tests build their own shift."""
+    # Validating the shift posts the packed pasta to the product's default location.
+    db.execute(
+        "UPDATE core.products SET default_location_id = %s WHERE id = %s AND tenant_id = %s",
+        (env["location"], env["product"], TENANT),
     )
-    assert isinstance(created, Ok), getattr(created, "message", "")
-    report = created.value["report"]
-    quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    shifts = ShiftReportService(db)
+    shift_id = _ok(shifts.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=date, shift="afternoon",
+    ))["id"]
+    _ok(shifts.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="packing",
+        payload={"rows": [{
+            "of_id": of.id, "product_id": env["product"], "equipment_id": env["equipment"],
+            "finished_product_quantity": 900, "packets_counted": 1,
+        }]},
+    ))
+    for key in SECTION_KEYS:
+        if key == "packing":
+            _ok(shifts.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(shifts.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+
+    quality = QualityReportService(db)
+    created = _ok(quality.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    report_id = created["report"].id
+    _ok(quality.update_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report_id,
+        lines=[{"shift_packing_row_id": created["lines"][0].shift_packing_row_id, **line_fields}],
+    ))
+    return report_id
+
+
+def test_quality_conformity_comes_from_the_qc_module(db, env, of):
+    report_id = _qc_report(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        conforming_cartons=90, non_conforming_cartons=10, defect_details="bad seal",
+    )
+    quality = QualityReportService(db)
+    quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id)
     quality.validate_report(
-        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())
     )
 
     result = _consolidate(db, of)["quality"]
@@ -588,13 +629,8 @@ def test_quality_conformity_comes_from_the_qc_module(db, env, of):
 
 
 def test_an_unvalidated_quality_report_does_not_count(db, env, of):
-    packing = _packing(db, env, of, date=datetime.date(2026, 9, 1))
-    quality = QualityReportService(db)
-    created = quality.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.id,
-        detail=QualityReportDetail(conforming_cartons=90),
-    )
-    quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=created.value["report"].id)
+    report_id = _qc_report(db, env, of, date=datetime.date(2026, 9, 1), conforming_cartons=90)
+    QualityReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id)
 
     result = _consolidate(db, of)["quality"]
     assert result["validated_report_count"] == 0
@@ -608,21 +644,20 @@ def test_a_validated_defect_with_no_case_raised_is_flagged(db, env, of):
     conformity percentage alone cannot show. `pending_nc_reports` is what lets a
     screen warn about it, and it must clear once the case is actually raised.
     """
-    packing = _packing(db, env, of, date=datetime.date(2026, 9, 1))
-    quality = QualityReportService(db)
-    created = quality.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.id,
-        detail=QualityReportDetail(conforming_cartons=90, non_conforming_cartons=10, defect_details="bad seal"),
+    report_id = _qc_report(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        conforming_cartons=90, non_conforming_cartons=10, defect_details="bad seal",
     )
-    report = created.value["report"]
-    quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
+    quality = QualityReportService(db)
+    quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id)
     quality.validate_report(
-        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())
     )
 
+    line_id = quality._load_lines(tenant_id=TENANT, report_id=report_id)[0].id
     result = _consolidate(db, of)["quality"]
     assert result["pending_nc_reports"] == [
-        {"report_id": report.id, "report_date": "2026-09-01", "non_conforming_cartons": 10.0}
+        {"conformity_line_id": line_id, "report_id": report_id, "report_date": "2026-09-01", "non_conforming_cartons": 10.0}
     ]
 
     from modules.qc.api.non_conformity_service import NonConformityService
@@ -638,7 +673,7 @@ def test_a_validated_defect_with_no_case_raised_is_flagged(db, env, of):
     raised = NonConformityService(db).raise_non_conformity(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, product_id=env["product"],
         quantity=1, source_location_id=env["location"], quarantine_location_id=quarantine,
-        defect_type="bad seal", correlation_id=str(ULID()), quality_report_id=report.id,
+        defect_type="bad seal", correlation_id=str(ULID()), quality_report_id=report_id,
     )
     assert isinstance(raised, Ok), getattr(raised, "message", "")
 

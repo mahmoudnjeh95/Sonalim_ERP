@@ -8,11 +8,11 @@ from pydantic import BaseModel
 from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.result import Err
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.api.quality_service import FollowUpPolicyService, FollowUpService, QualityReportService
 from modules.qc.domain.non_conformity import DispositionLine, NonConformity
-from modules.qc.domain.quality import FollowUp, QualityReport, QualityReportDetail
+from modules.qc.domain.quality import ConformityLine, FollowUp, QualityReport, QualityReportDetail
 
 router = APIRouter(prefix="/qc", tags=["qc"])
 
@@ -27,20 +27,18 @@ def _err_status(code: str) -> int:
         "OUTSIDE_WINDOW",
         "LOCATION_NOT_BLOCKED",
         "NON_CONFORMITY_ATTACHED",
+        "SHIFT_NOT_VALIDATED",
     ):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
 
 
+def _is_quality_admin(connection, tenant: TenantContext) -> bool:
+    """Admins correct a report in place at any status -- parameters included."""
+    return user_has_permission(connection, user_id=tenant.user_id, permission="qc.admin_quality_reports")
+
+
 class QualityDetailRequest(BaseModel):
-    pre_dryer_index: float | None = None
-    humidity_percentage: float | None = None
-    cooling_index: float | None = None
-    pf_index: float | None = None
-    sumo_index: float | None = None
-    conforming_cartons: float = 0
-    non_conforming_cartons: float = 0
-    defect_details: str | None = None
     comments: str | None = None
     corrective_action: str | None = None
 
@@ -48,30 +46,43 @@ class QualityDetailRequest(BaseModel):
         return QualityReportDetail(**self.model_dump())
 
 
+class ConformityLineRequest(BaseModel):
+    shift_packing_row_id: str
+    conforming_cartons: float = 0
+    non_conforming_cartons: float = 0
+    defect_details: str | None = None
+
+
 class CreateQualityReportRequest(BaseModel):
-    # The conditionnement (packaging) run this report inspects. of_id, the
-    # report date, shift and team are all derived from it -- see
-    # QualityReportService._resolve_conditionnement -- never asked here.
-    conditionnement_report_id: str
-    detail: QualityDetailRequest = QualityDetailRequest()
+    # The shift report this report inspects. report_date/shift/team are all
+    # derived from it -- see QualityReportService._resolve_shift.
+    shift_report_id: str
 
 
 class UpdateQualityReportRequest(BaseModel):
-    detail: QualityDetailRequest
+    lines: list[ConformityLineRequest] = []
+    detail: QualityDetailRequest | None = None
 
 
 class AdminUpdateQualityReportRequest(BaseModel):
+    lines: list[ConformityLineRequest] | None = None
     detail: QualityDetailRequest | None = None
-    # Re-linking to a different conditionnement report re-derives of_id,
-    # team, shift and report_date together -- see admin_update_report.
-    conditionnement_report_id: str | None = None
+    # Re-linking to a different shift report re-derives team, shift and
+    # report_date together -- see admin_update_report.
+    shift_report_id: str | None = None
     reason: str | None = None
 
 
 class ValidateQualityReportRequest(BaseModel):
+    # No product_id: follow-ups are opened per conformity line, each of which
+    # already carries its own product.
     correlation_id: str
-    # Resolved by the caller from the OF, so qc never reads production's tables.
-    product_id: str | None = None
+
+
+class ParameterEntryRequest(BaseModel):
+    group_key: str
+    entry_label: str | None = None
+    fields: dict = {}
 
 
 class RejectRequest(BaseModel):
@@ -88,6 +99,8 @@ class RecordObservationRequest(BaseModel):
     observed_on: datetime.date
     observation: str | None = None
     result: str | None = None
+    # The line (product) the observation is about; its own window and OF apply.
+    conformity_line_id: str | None = None
 
 
 class TransitionFollowUpRequest(BaseModel):
@@ -142,10 +155,7 @@ def create_quality_report(
 ) -> dict:
     with get_connection() as connection:
         result = QualityReportService(connection).create_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            conditionnement_report_id=body.conditionnement_report_id,
-            detail=body.detail.to_detail(),
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, shift_report_id=body.shift_report_id,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -156,41 +166,25 @@ def create_quality_report(
 
 @router.get("/quality-reports")
 def list_quality_reports(
-    of_id: str | None = None,
     status_filter: str | None = Query(default=None, alias="status"),
     tenant: TenantContext = Depends(require_permission("qc.view_quality_reports")),
 ) -> list[dict]:
     with get_connection() as connection:
-        reports = QualityReportService(connection).list_reports(
-            tenant_id=tenant.tenant_id, of_id=of_id, status=status_filter
-        )
+        reports = QualityReportService(connection).list_reports(tenant_id=tenant.tenant_id, status=status_filter)
     return [_serialize_report(report) for report in reports]
 
 
-@router.get("/conditionnement-reports")
-def list_inspectable_conditionnement_reports(
-    of_id: str | None = None,
+@router.get("/shift-reports")
+def list_inspectable_shift_reports(
     tenant: TenantContext = Depends(require_permission("qc.view_quality_reports")),
 ) -> list[dict]:
-    """Conditionnement reports with no quality report yet, enriched with the
-    hint figures (packets, cartons, regrind) the create-report form shows
-    once one is picked."""
+    """Validated shift reports with no quality report yet."""
     with get_connection() as connection:
-        rows = QualityReportService(connection).list_inspectable_conditionnement_reports(
-            tenant_id=tenant.tenant_id, of_id=of_id
-        )
+        rows = QualityReportService(connection).list_inspectable_shift_reports(tenant_id=tenant.tenant_id)
     return [
         {
-            "conditionnement_report_id": row["conditionnement_report_id"],
-            "of_id": row["of_id"],
-            "report_date": row["report_date"].isoformat(),
-            "shift": row["shift"],
-            "team": row["team"],
-            "status": row["status"],
-            "packets_counted": row["packets_counted"],
-            "carton_quantity": row["carton_quantity"],
-            "finished_product_quantity": row["finished_product_quantity"],
-            "regrind_quantity": row["regrind_quantity"],
+            "shift_report_id": row["shift_report_id"], "work_center_id": row["work_center_id"],
+            "report_date": row["report_date"], "shift": row["shift"], "team": row["team"],
         }
         for row in rows
     ]
@@ -211,25 +205,6 @@ def list_quality_team_performance(
         )
     with get_connection() as connection:
         return QualityReportService(connection).team_conformity(
-            tenant_id=tenant.tenant_id, grain=grain, date_from=date_from, date_to=date_to
-        )
-
-
-@router.get("/quality-reports/index-trend")
-def list_quality_index_trend(
-    grain: str = Query(default="week"),
-    date_from: str | None = Query(default=None),
-    date_to: str | None = Query(default=None),
-    tenant: TenantContext = Depends(require_permission("qc.view_quality_reports")),
-) -> list[dict]:
-    """Average process indices from validated reports, bucketed by period."""
-    if grain not in QualityReportService.GRAINS:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "INVALID_GRAIN", "message": f"grain must be one of {QualityReportService.GRAINS}"},
-        )
-    with get_connection() as connection:
-        return QualityReportService(connection).index_trend(
             tenant_id=tenant.tenant_id, grain=grain, date_from=date_from, date_to=date_to
         )
 
@@ -255,7 +230,9 @@ def update_quality_report(
 ) -> dict:
     with get_connection() as connection:
         result = QualityReportService(connection).update_draft(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id, detail=body.detail.to_detail()
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id,
+            lines=[line.model_dump() for line in body.lines],
+            detail=body.detail.to_detail() if body.detail is not None else None,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -276,8 +253,9 @@ def admin_update_quality_report(
             tenant_id=tenant.tenant_id,
             actor_id=tenant.user_id,
             report_id=report_id,
+            lines=[line.model_dump() for line in body.lines] if body.lines is not None else None,
             detail=body.detail.to_detail() if body.detail is not None else None,
-            conditionnement_report_id=body.conditionnement_report_id,
+            shift_report_id=body.shift_report_id,
             reason=body.reason,
         )
         if isinstance(result, Err):
@@ -332,7 +310,6 @@ def validate_quality_report(
             actor_id=tenant.user_id,
             report_id=report_id,
             correlation_id=body.correlation_id,
-            product_id=body.product_id,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -340,9 +317,16 @@ def validate_quality_report(
         connection.commit()
     value = result.value
     return {
-        **_serialize_report_with_detail(value),
-        "follow_up_id": value["follow_up_id"],
-        "window_ends_on": value["window_ends_on"].isoformat(),
+        "report": _serialize_report(value["report"]),
+        "lines": [_serialize_line(line) for line in value["lines"]],
+        "follow_ups": [
+            {
+                "follow_up_id": f["follow_up_id"],
+                "of_id": f["of_id"],
+                "window_ends_on": f["window_ends_on"].isoformat(),
+            }
+            for f in value["follow_ups"]
+        ],
     }
 
 
@@ -376,6 +360,54 @@ def revise_quality_report(
             raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
         connection.commit()
     return _serialize_report(result.value)
+
+
+# --- Contrôle des paramètres -------------------------------------------------
+
+
+@router.get("/quality-reports/{report_id}/parameters")
+def list_parameters(
+    report_id: str, tenant: TenantContext = Depends(require_permission("qc.view_quality_reports"))
+) -> list[dict]:
+    with get_connection() as connection:
+        return QualityReportService(connection).list_parameters(tenant_id=tenant.tenant_id, report_id=report_id)
+
+
+@router.post("/quality-reports/{report_id}/parameters", status_code=status.HTTP_201_CREATED)
+def save_parameter_entry(
+    report_id: str,
+    body: ParameterEntryRequest,
+    tenant: TenantContext = Depends(require_permission("qc.manage_quality_reports")),
+) -> dict:
+    with get_connection() as connection:
+        result = QualityReportService(connection).save_parameter_entry(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id,
+            group_key=body.group_key, entry_label=body.entry_label, fields=body.fields,
+            allow_non_draft=_is_quality_admin(connection, tenant),
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+        connection.commit()
+    return result.value
+
+
+@router.delete("/quality-reports/{report_id}/parameters/{entry_id}")
+def delete_parameter_entry(
+    report_id: str,
+    entry_id: str,
+    tenant: TenantContext = Depends(require_permission("qc.manage_quality_reports")),
+) -> dict:
+    with get_connection() as connection:
+        result = QualityReportService(connection).delete_parameter_entry(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id, entry_id=entry_id,
+            allow_non_draft=_is_quality_admin(connection, tenant),
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+        connection.commit()
+    return {"deleted": entry_id}
 
 
 # --- follow-up window -------------------------------------------------------
@@ -436,6 +468,7 @@ def record_observation(
             observed_on=body.observed_on,
             observation=body.observation,
             result=body.result,
+            conformity_line_id=body.conformity_line_id,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -627,9 +660,7 @@ def admin_update_non_conformity(
 def _serialize_report(report: QualityReport) -> dict:
     return {
         "id": report.id,
-        "of_id": report.of_id,
-        "product_id": report.product_id,
-        "conditionnement_report_id": report.conditionnement_report_id,
+        "shift_report_id": report.shift_report_id,
         "report_date": report.report_date.isoformat(),
         "status": report.status,
         "revision": report.revision,
@@ -644,23 +675,28 @@ def _serialize_report(report: QualityReport) -> dict:
 
 
 def _serialize_detail(detail: QualityReportDetail) -> dict:
+    return {"comments": detail.comments, "corrective_action": detail.corrective_action}
+
+
+def _serialize_line(line: ConformityLine) -> dict:
     return {
-        "pre_dryer_index": detail.pre_dryer_index,
-        "humidity_percentage": detail.humidity_percentage,
-        "cooling_index": detail.cooling_index,
-        "pf_index": detail.pf_index,
-        "sumo_index": detail.sumo_index,
-        "conforming_cartons": detail.conforming_cartons,
-        "non_conforming_cartons": detail.non_conforming_cartons,
-        "defect_details": detail.defect_details,
-        "comments": detail.comments,
-        "corrective_action": detail.corrective_action,
+        "id": line.id,
+        "shift_packing_row_id": line.shift_packing_row_id,
+        "of_id": line.of_id,
+        "product_id": line.product_id,
+        "conforming_cartons": line.conforming_cartons,
+        "non_conforming_cartons": line.non_conforming_cartons,
+        "defect_details": line.defect_details,
     }
 
 
 def _serialize_report_with_detail(value: dict) -> dict:
     detail = value.get("detail")
-    return {**_serialize_report(value["report"]), "detail": _serialize_detail(detail) if detail is not None else None}
+    return {
+        **_serialize_report(value["report"]),
+        "detail": _serialize_detail(detail) if detail is not None else None,
+        "lines": [_serialize_line(line) for line in value.get("lines", [])],
+    }
 
 
 def _serialize_follow_up(follow_up: FollowUp) -> dict:
@@ -668,6 +704,7 @@ def _serialize_follow_up(follow_up: FollowUp) -> dict:
         "id": follow_up.id,
         "quality_report_id": follow_up.quality_report_id,
         "of_id": follow_up.of_id,
+        "conformity_line_id": follow_up.conformity_line_id,
         "window_ends_on": follow_up.window_ends_on.isoformat(),
         "observed_on": follow_up.observed_on.isoformat(),
         "status": follow_up.status,

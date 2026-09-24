@@ -119,11 +119,21 @@ export function WorkOrderDetailsPage() {
     },
   });
   const pendingQuantity = overview.find((row) => row.of_id === workOrderId)?.pending_quantity ?? 0;
-  const { data: qualityReports = [] } = useQuery({
-    queryKey: ["qc", "quality-reports", "of", workOrderId],
-    queryFn: () => listQualityReports(token, { of_id: workOrderId }),
+  // A QC report no longer belongs to one OF: it follows a shift, and its
+  // conformity lines each name their own OF. The list endpoint has no OF
+  // filter, so keep the reports whose shift worked on this order (the shift
+  // list above is already OF-scoped server-side), plus any report a pending
+  // NC points at.
+  const { data: allQualityReports = [] } = useQuery({
+    queryKey: ["qc", "quality-reports"],
+    queryFn: () => listQualityReports(token),
     enabled: Boolean(workOrderId),
   });
+  const ofShiftIds = new Set(shifts.map((s) => s.id));
+  const pendingNcReportIds = new Set((consolidation?.quality.pending_nc_reports ?? []).map((p) => p.report_id));
+  const qualityReports = allQualityReports.filter(
+    (r) => ofShiftIds.has(r.shift_report_id) || pendingNcReportIds.has(r.id),
+  );
   const { data: nonConformities = [] } = useQuery({
     queryKey: ["qc", "non-conformities", "of", workOrderId],
     queryFn: () => listNonConformities(token, { of_id: workOrderId }),
@@ -172,7 +182,6 @@ export function WorkOrderDetailsPage() {
   const [openQualityReport, setOpenQualityReport] = useState<QualityReport | null>(null);
   const [openNc, setOpenNc] = useState<NonConformity | null>(null);
   const orderProduct = order ? products.find((p) => p.id === order.product_id) : undefined;
-  const packetsPerCarton = orderProduct?.packets_per_carton && orderProduct.packets_per_carton > 0 ? orderProduct.packets_per_carton : null;
 
   function invalidate() {
     for (const key of [
@@ -665,7 +674,7 @@ export function WorkOrderDetailsPage() {
                     const report = qualityReports.find((r) => r.id === pending.report_id);
                     return (
                       <button
-                        key={pending.report_id}
+                        key={pending.conformity_line_id}
                         type="button"
                         onClick={() => report && setOpenQualityReport(report)}
                         className="flex w-full items-center justify-between gap-2 rounded-md border border-destructive/20 bg-background px-2.5 py-1.5 text-left text-xs transition-colors hover:border-destructive/40 hover:bg-muted/40"
@@ -799,8 +808,6 @@ export function WorkOrderDetailsPage() {
           key={openQualityReport.id}
           report={openQualityReport}
           reference={order.reference}
-          packetsPerCarton={packetsPerCarton}
-          productId={order.product_id ?? undefined}
           onClose={() => setOpenQualityReport(null)}
         />
       )}

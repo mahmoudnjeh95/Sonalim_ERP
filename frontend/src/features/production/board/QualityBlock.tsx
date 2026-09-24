@@ -8,7 +8,7 @@ import InspectionSvg from "../../../assets/icons/quality/inspection.svg?react";
 import NonconformitySvg from "../../../assets/icons/quality/nonconformity.svg?react";
 import ReleaseSvg from "../../../assets/icons/quality/release.svg?react";
 import QualityInspection from "../../../assets/illustrations/quality-inspection.svg?react";
-import { listInspectableConditionnementReports, listNonConformities, listQualityTeamPerformance } from "../../qc/api";
+import { listInspectableShiftReports, listNonConformities, listQualityTeamPerformance } from "../../qc/api";
 import { formatNumber } from "./boardFormat";
 import { BlockError, MissingState } from "./BoardStates";
 import { Skeleton } from "../../../components/ui/skeleton";
@@ -48,8 +48,8 @@ export function QualityBlock({ date }: { date: string }) {
   });
   const ncs = useQuery({ queryKey: ["qc", "non-conformities"], queryFn: () => listNonConformities(token) });
   const inspectable = useQuery({
-    queryKey: ["qc", "inspectable-conditionnement"],
-    queryFn: () => listInspectableConditionnementReports(token),
+    queryKey: ["qc", "shift-reports"],
+    queryFn: () => listInspectableShiftReports(token),
   });
 
   if (conformity.isError || ncs.isError || inspectable.isError) {
