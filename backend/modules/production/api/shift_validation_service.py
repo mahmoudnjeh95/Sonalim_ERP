@@ -5,7 +5,13 @@ a savepoint: any refusal from any row rolls the shift back to exactly how it was
 matter what the caller does with the connection afterwards.
 
 The stock rules live in `ShiftStockService`, reading and writing the shift's own
-tables directly -- no old-shaped rows are materialised any more.
+tables directly. ~18 reader services still query the old production_reports/
+daily_reports/conditionnement_reports tables directly; until each is ported to the
+shift tables, validation also writes a read-only copy there via
+`legacy_report_ledger.materialize_shift`, marked validated straight away (no
+'submitted' step, since nothing here reads that status) -- it posts no stock of its
+own, ShiftStockService already did. Reversal deletes the copy. Task 8 drops these
+tables once every reader has moved.
 """
 from __future__ import annotations
 
@@ -17,6 +23,7 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from modules.production.api.legacy_report_ledger import materialize_shift
 from modules.production.api.report_product import stamp_order_products
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.shift_sections import load_section, save_section_rows
@@ -169,6 +176,17 @@ class ShiftValidationService:
                     lot = stock.register_lot(tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id, report_date=shift_date)
                     if isinstance(lot, Err):
                         raise _Abort(lot)
+
+                materialized = materialize_shift(
+                    self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id, actor_id=actor_id,
+                )
+                if isinstance(materialized, Err):
+                    raise _Abort(materialized)
+                self._connection.execute(
+                    "UPDATE production.production_reports SET status = 'validated', validated_by = %s, validated_at = NOW() "
+                    "WHERE tenant_id = %s AND id = ANY(%s)",
+                    (actor_id, tenant_id, [report_id for report_id, _report_type in materialized.value]),
+                )
 
                 self._connection.execute(
                     "UPDATE production.shift_reports SET status = 'validated', validated_by = %s, validated_at = NOW(), "
@@ -380,6 +398,17 @@ class ShiftValidationService:
                     )
                     if isinstance(result, Err):
                         raise _Abort(result)
+
+                report_ids = [r["id"] for r in runs] + [p["id"] for p in packing]
+                # The copy is validated, not submitted, so _delete_old_rows' own guard (refusing to
+                # delete a validated row out from under a caller) would trip on our own rows here;
+                # this reversal is the one caller allowed to remove a validated copy.
+                for table in ("report_waste_lines", "report_semolina_lines", "report_downtime_lines"):
+                    self._connection.execute(f"DELETE FROM production.{table} WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+                self._connection.execute("DELETE FROM production.conditionnement_reports WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+                self._connection.execute("DELETE FROM production.daily_reports WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+                self._connection.execute("DELETE FROM production.report_revisions WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+                self._connection.execute("DELETE FROM production.production_reports WHERE tenant_id = %s AND id = ANY(%s)", (tenant_id, report_ids))
 
                 self._connection.execute(
                     "UPDATE production.shift_report_sections SET status = 'returned', return_reason = %s, updated_at = NOW() "

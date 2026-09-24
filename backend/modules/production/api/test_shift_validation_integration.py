@@ -180,6 +180,38 @@ def test_validation_uses_the_row_ids_as_the_stock_move_source(db, env):
     assert moved == {run_id, packing_id}
 
 
+def test_a_validated_shift_appears_in_production_reports_as_validated_and_reversal_removes_it(db, env):
+    """~18 reader services still query production_reports/daily_reports/conditionnement_reports
+    directly. Until each is ported to the shift tables, validation writes a read-only copy
+    there (no stock posted from it -- ShiftStockService already posted the real stock) so
+    those readers keep working; reversal deletes the copy."""
+    shift_id = _submitted_shift(db, env)
+    shift = _shift(db, shift_id)
+    run_id = shift["sections"][0]["payload"]["runs"][0]["id"]
+    packing_id = next(s for s in shift["sections"] if s["key"] == "packing")["payload"]["rows"][0]["id"]
+    moves_before = db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE tenant_id = %s", (TENANT,)).fetchone()[0]
+
+    _ok(_validate(db, env, shift_id))
+
+    rows = dict(db.execute(
+        "SELECT id, status FROM production.production_reports WHERE tenant_id = %s AND id = ANY(%s)",
+        (TENANT, [run_id, packing_id]),
+    ).fetchall())
+    assert rows == {run_id: "validated", packing_id: "validated"}
+    assert db.execute("SELECT count(*) FROM production.daily_reports WHERE report_id = %s", (run_id,)).fetchone()[0] == 1
+    assert db.execute("SELECT count(*) FROM production.conditionnement_reports WHERE report_id = %s", (packing_id,)).fetchone()[0] == 1
+    # The copy posts no stock of its own: everything moved came from ShiftStockService.
+    assert db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE tenant_id = %s", (TENANT,)).fetchone()[0] > moves_before
+
+    _ok(ShiftValidationService(db).reverse_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="test"))
+
+    left = db.execute(
+        "SELECT count(*) FROM production.production_reports WHERE tenant_id = %s AND id = ANY(%s)",
+        (TENANT, [run_id, packing_id]),
+    ).fetchone()[0]
+    assert left == 0
+
+
 def test_a_shift_must_be_submitted_and_can_only_be_validated_once(db, env):
     service = ShiftReportService(db)
     open_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=DAY, shift="night"))["id"]
