@@ -140,12 +140,15 @@ class EquipmentService:
             )
         )
 
-    def list_equipment(self, *, tenant_id: str, work_center_id: str | None = None) -> list[Equipment]:
+    def list_equipment(
+        self, *, tenant_id: str, work_center_id: str | None = None, include_archived: bool = False
+    ) -> list[Equipment]:
+        archived_clause = "" if include_archived else "AND archived_at IS NULL"
         if work_center_id is not None:
             rows = self._connection.execute(
                 f"""
                 SELECT {_COLUMNS} FROM maintenance.equipment
-                WHERE tenant_id = %s AND work_center_id = %s ORDER BY created_at DESC
+                WHERE tenant_id = %s AND work_center_id = %s {archived_clause} ORDER BY created_at DESC
                 """,
                 (tenant_id, work_center_id),
             ).fetchall()
@@ -153,7 +156,7 @@ class EquipmentService:
             rows = self._connection.execute(
                 f"""
                 SELECT {_COLUMNS} FROM maintenance.equipment
-                WHERE tenant_id = %s ORDER BY created_at DESC
+                WHERE tenant_id = %s {archived_clause} ORDER BY created_at DESC
                 """,
                 (tenant_id,),
             ).fetchall()

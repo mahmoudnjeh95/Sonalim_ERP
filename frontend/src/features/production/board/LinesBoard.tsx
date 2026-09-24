@@ -8,6 +8,7 @@ import { formatDuration } from "../../../lib/units";
 import { cn } from "../../../lib/utils";
 import { StatusAnimation } from "../../../components/patterns/StatusAnimation";
 import { outlineIcon } from "../../../components/patterns/outlineIcon";
+import { Button } from "../../../components/ui/button";
 import { Skeleton } from "../../../components/ui/skeleton";
 import MachineSvg from "../../../assets/icons/maintenance/machine.svg?react";
 import WrenchSvg from "../../../assets/icons/maintenance/wrench.svg?react";
@@ -357,9 +358,16 @@ function OfDetails({ figures }: { figures: DayOf }) {
         {figures.stops.length ? (
           <ul className="space-y-0.5">
             {figures.stops.slice(0, 3).map((s, i) => (
-              <li key={`${s.motif}-${s.team}-${i}`} className="flex gap-2">
+              <li key={`${s.motif}-${s.team}-${i}`} className="flex items-center gap-2">
                 <span className="truncate">{s.motif ? downtimeLabel(t, "motif", s.motif) : "—"}{s.team ? ` (${s.team})` : ""}</span>
-                <span className="ml-auto tabular-nums">{formatDuration(s.minutes)}</span>
+                {s.minutes >= 60 ? (
+                  <span className="rounded bg-destructive-soft px-1 text-[10px] font-semibold text-destructive">
+                    &gt;1h
+                  </span>
+                ) : null}
+                <span className={cn("ml-auto tabular-nums", s.minutes >= 60 && "font-semibold text-destructive")}>
+                  {formatDuration(s.minutes)}
+                </span>
               </li>
             ))}
           </ul>
@@ -466,6 +474,16 @@ export function LinesBoard({ board, day, dayIsLoading, live, today }: { board: B
           illustration={<EmptyNoOrders className="h-16 w-16" />}
           title={t("production.board.lines.empty.title")}
           description={t("production.board.lines.empty.desc")}
+          action={
+            <div className="flex flex-wrap items-center justify-center gap-2">
+              <Button asChild variant="outline" size="sm">
+                <Link to="/production?tab=planning">{t("production.board.lines.empty.actionPlan")}</Link>
+              </Button>
+              <Button asChild size="sm">
+                <Link to="/production?tab=work-orders">{t("production.board.lines.empty.actionWorkOrders")}</Link>
+              </Button>
+            </div>
+          }
         />
       </div>
     );

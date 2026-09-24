@@ -72,7 +72,9 @@ def list_equipment(
 ) -> list[dict]:
     with get_connection() as connection:
         service = EquipmentService(connection)
-        equipment = service.list_equipment(tenant_id=tenant.tenant_id, work_center_id=work_center_id)
+        equipment = service.list_equipment(
+            tenant_id=tenant.tenant_id, work_center_id=work_center_id, include_archived=True
+        )
     return [_serialize_equipment(e) for e in equipment]
 
 

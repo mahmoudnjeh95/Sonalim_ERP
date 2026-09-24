@@ -1,3 +1,4 @@
+import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { useAuth } from "../../../lib/auth";
@@ -7,7 +8,7 @@ import InspectionSvg from "../../../assets/icons/quality/inspection.svg?react";
 import NonconformitySvg from "../../../assets/icons/quality/nonconformity.svg?react";
 import ReleaseSvg from "../../../assets/icons/quality/release.svg?react";
 import QualityInspection from "../../../assets/illustrations/quality-inspection.svg?react";
-import { listNonConformities, listQualityTeamPerformance } from "../../qc/api";
+import { listInspectableConditionnementReports, listNonConformities, listQualityTeamPerformance } from "../../qc/api";
 import { formatNumber } from "./boardFormat";
 import { BlockError, MissingState } from "./BoardStates";
 import { Skeleton } from "../../../components/ui/skeleton";
@@ -46,18 +47,23 @@ export function QualityBlock({ date }: { date: string }) {
     queryFn: () => listQualityTeamPerformance(token, { grain: "day", date_from: date, date_to: date }),
   });
   const ncs = useQuery({ queryKey: ["qc", "non-conformities"], queryFn: () => listNonConformities(token) });
+  const inspectable = useQuery({
+    queryKey: ["qc", "inspectable-conditionnement"],
+    queryFn: () => listInspectableConditionnementReports(token),
+  });
 
-  if (conformity.isError || ncs.isError) {
+  if (conformity.isError || ncs.isError || inspectable.isError) {
     return (
       <BlockError
         onRetry={() => {
           void conformity.refetch();
           void ncs.refetch();
+          void inspectable.refetch();
         }}
       />
     );
   }
-  if (conformity.isLoading || ncs.isLoading || !conformity.data || !ncs.data) {
+  if (conformity.isLoading || ncs.isLoading || inspectable.isLoading || !conformity.data || !ncs.data) {
     return (
       <div className="grid grid-cols-1 gap-3 md:grid-cols-3" role="status" aria-label={t("app.loading")}>
         {Array.from({ length: 3 }).map((_, i) => (
@@ -72,6 +78,7 @@ export function QualityBlock({ date }: { date: string }) {
   const inspected = good + bad;
   const opened = ncs.data.filter((nc) => nc.raised_at?.startsWith(date)).length;
   const stillOpen = ncs.data.filter((nc) => nc.status !== "closed").length;
+  const pendingCount = inspectable.data?.length ?? 0;
 
   return (
     <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
@@ -98,13 +105,23 @@ export function QualityBlock({ date }: { date: string }) {
         <p className="text-2xl font-bold text-primary tabular-nums">
           {opened} <span className="text-sm font-normal text-muted-foreground">{t("production.board.quality.ncOpened")}</span>
         </p>
-        <p className="text-sm text-muted-foreground">
-          {stillOpen} {t("production.board.quality.ncOpen")}
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-sm text-muted-foreground">
+            {stillOpen} {t("production.board.quality.ncOpen")}
+          </p>
+          <Link to="/quality" className="text-xs font-medium text-primary hover:underline">
+            {t("production.board.quality.viewQc")} &rarr;
+          </Link>
+        </div>
       </Card>
 
-      <Card icon={<ReleaseIcon className="h-4 w-4" aria-hidden="true" />} label={t("production.board.quality.lots.title")}>
-        <p className="text-sm text-muted-foreground">{t("production.board.quality.lots.missing")}</p>
+      <Card icon={<ReleaseIcon className="h-4 w-4" aria-hidden="true" />} label={t("production.board.quality.pendingClearance")}>
+        <p className="text-2xl font-bold text-primary tabular-nums">
+          {pendingCount} <span className="text-sm font-normal text-muted-foreground">{t("production.board.quality.pendingClearanceDesc")}</span>
+        </p>
+        <Link to="/quality" className="mt-1 inline-flex items-center text-xs font-medium text-primary hover:underline">
+          {t("production.board.quality.viewQc")} &rarr;
+        </Link>
       </Card>
     </div>
   );

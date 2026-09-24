@@ -28,6 +28,77 @@ const SERIES = [
   { key: "finishedPrevious", label: "production.board.trend.finishedPrevious", color: GOLD, dashed: true },
 ] as const;
 
+interface CustomTooltipProps {
+  active?: boolean;
+  payload?: Array<{
+    name: string;
+    value: number | null;
+    color: string;
+    dataKey: string;
+  }>;
+  label?: string;
+  unit: string;
+}
+
+function CustomTrendTooltip({ active, payload, label, unit }: CustomTooltipProps) {
+  const { t } = useI18n();
+  if (!active || !payload || !payload.length) return null;
+
+  const semCurrent = payload.find((p) => p.dataKey === "semolinaCurrent")?.value;
+  const semPrev = payload.find((p) => p.dataKey === "semolinaPrevious")?.value;
+  const finCurrent = payload.find((p) => p.dataKey === "finishedCurrent")?.value;
+  const finPrev = payload.find((p) => p.dataKey === "finishedPrevious")?.value;
+
+  const calcDelta = (curr: number | null | undefined, prev: number | null | undefined) => {
+    if (curr == null || prev == null || prev === 0) return null;
+    const diff = curr - prev;
+    const pct = (diff / prev) * 100;
+    return { diff, pct };
+  };
+
+  const semDelta = calcDelta(semCurrent, semPrev);
+  const finDelta = calcDelta(finCurrent, finPrev);
+
+  return (
+    <div className="rounded-xl border border-border/80 bg-white/95 p-3 shadow-lg backdrop-blur-sm text-xs space-y-2">
+      <p className="font-semibold text-primary border-b border-border/60 pb-1">{label}</p>
+      <div className="space-y-1">
+        {payload.map((entry) => (
+          <div key={entry.dataKey} className="flex items-center justify-between gap-4">
+            <span className="flex items-center gap-1.5 font-medium" style={{ color: entry.color }}>
+              <span className="h-2 w-2 rounded-full" style={{ backgroundColor: entry.color }} />
+              {entry.name}
+            </span>
+            <span className="font-bold tabular-nums text-foreground">
+              {typeof entry.value === "number" ? `${formatNumber(entry.value, 1)} ${unit}` : "—"}
+            </span>
+          </div>
+        ))}
+      </div>
+      {(semDelta || finDelta) && (
+        <div className="border-t border-border/60 pt-1 text-[11px] text-muted-foreground space-y-0.5">
+          {semDelta && (
+            <p className="flex justify-between gap-2">
+              <span>{t("production.board.trend.semolinaCurrent")} {t("production.board.trend.delta")}:</span>
+              <span className={cn("font-medium tabular-nums", semDelta.pct >= 0 ? "text-success" : "text-destructive")}>
+                {semDelta.pct >= 0 ? "+" : ""}{formatNumber(semDelta.pct, 1)}%
+              </span>
+            </p>
+          )}
+          {finDelta && (
+            <p className="flex justify-between gap-2">
+              <span>{t("production.board.trend.finishedCurrent")} {t("production.board.trend.delta")}:</span>
+              <span className={cn("font-medium tabular-nums", finDelta.pct >= 0 ? "text-success" : "text-destructive")}>
+                {finDelta.pct >= 0 ? "+" : ""}{formatNumber(finDelta.pct, 1)}%
+              </span>
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /**
  * Semoule poured (rebroyat included) against finished product, for the chosen
  * period and the equal-length period just before it. A stretch nobody reported
@@ -134,7 +205,7 @@ export function TrendCard({ date }: { date: string }) {
               <CartesianGrid stroke="#e8eef5" vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#5b6b80" }} tickLine={false} axisLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "#8a99ab" }} tickLine={false} axisLine={false} width={44} domain={["auto", "auto"]} />
-              <Tooltip formatter={(value) => (typeof value === "number" ? formatNumber(value, 1) : "—")} />
+              <Tooltip content={<CustomTrendTooltip unit={trend.data?.unit ?? ""} />} />
               {SERIES.filter((s) => !hidden[s.key]).map((s) => (
                 <Line key={s.key} type="monotone" dataKey={s.key} name={t(s.label as TranslationKey)} stroke={s.color} strokeWidth={2.4} strokeDasharray={s.dashed ? "6 5" : undefined} strokeOpacity={s.dashed ? 0.7 : 1} dot={s.dashed ? false : { r: 3, fill: "#fff", stroke: s.color, strokeWidth: 2 }} connectNulls={false} isAnimationActive />
               ))}

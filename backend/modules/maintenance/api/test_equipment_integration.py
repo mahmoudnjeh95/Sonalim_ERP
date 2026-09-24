@@ -114,7 +114,7 @@ def test_the_stage_is_in_the_audit_trail_of_a_registration_and_of_an_edit(db, ac
     assert payloads["equipment.updated"]["production_stage"] == "extrusion"
 
 
-def test_archiving_a_machine_sets_archived_at_and_it_stays_listed(db, actor):
+def test_archiving_a_machine_hides_it_from_the_default_listing(db, actor):
     service = EquipmentService(db)
     machine = _create(db, actor).value
 
@@ -122,7 +122,10 @@ def test_archiving_a_machine_sets_archived_at_and_it_stays_listed(db, actor):
     assert isinstance(archived, Ok) and archived.value.archived_at is not None
 
     listed = service.list_equipment(tenant_id=TENANT, work_center_id=LINE)
-    assert [e.id for e in listed] == [machine.id]
+    assert [e.id for e in listed] == []
+
+    listed_with_archived = service.list_equipment(tenant_id=TENANT, work_center_id=LINE, include_archived=True)
+    assert [e.id for e in listed_with_archived] == [machine.id]
 
 
 def test_unarchiving_a_machine_clears_archived_at(db, actor):

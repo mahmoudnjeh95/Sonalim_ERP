@@ -120,19 +120,13 @@ function ColumnHeader({ column, mode }: { column: DaySheetColumn; mode: Mode }) 
       {mode === "day" && (
         <div className="text-xs font-normal text-muted-foreground">{column.teams.join(", ") || "—"}</div>
       )}
-      <div className="mt-1 flex flex-wrap justify-end gap-1">
-        <Badge variant="default" className="px-1.5 py-0 text-[0.65rem]">
-          {t("production.daySheet.dailyShort")} {column.reports.daily.validated}
-        </Badge>
-        <Badge variant="default" className="px-1.5 py-0 text-[0.65rem]">
-          {t("production.daySheet.packingShort")} {column.reports.conditionnement.validated}
-        </Badge>
-        {pending > 0 && (
+      {pending > 0 && (
+        <div className="mt-1 flex flex-wrap justify-end gap-1">
           <Badge variant="warning" className="px-1.5 py-0 text-[0.65rem]">
             {pending} {t("production.daySheet.notValidated")}
           </Badge>
-        )}
-      </div>
+        </div>
+      )}
     </TableHead>
   );
 }

@@ -13,6 +13,7 @@ import ReleaseSvg from "../../../assets/icons/quality/release.svg?react";
 import type { BoardDay, Direction, TrendPoint } from "./api";
 import { formatNumber, prefersReducedMotion } from "./boardFormat";
 import { Skeleton } from "../../../components/ui/skeleton";
+import { cn } from "../../../lib/utils";
 
 const LineIcon = outlineIcon(LineSvg);
 const OutputIcon = outlineIcon(OutputSvg);
@@ -115,7 +116,7 @@ interface Tile {
  * judged: a yield going down is not marked bad, because no target says what
  * a good yield is.
  */
-export function GlanceBand({ day, isLoading, trend }: { day: BoardDay | undefined; isLoading: boolean; trend: TrendPoint[] | undefined }) {
+export function GlanceBand({ day, isLoading, trend, isToday }: { day: BoardDay | undefined; isLoading: boolean; trend: TrendPoint[] | undefined; isToday?: boolean }) {
   const { t } = useI18n();
 
   if (isLoading || !day) {
@@ -133,7 +134,7 @@ export function GlanceBand({ day, isLoading, trend }: { day: BoardDay | undefine
       <MissingState
         compact
         illustration={<DelayIllustration className="h-16 w-auto" />}
-        title={t("production.board.of.noReport")}
+        title={isToday ? t("production.board.todayInProgress") : t("production.board.of.noReport")}
         description={t("production.board.trend.empty.desc")}
       />
     );
@@ -158,20 +159,35 @@ export function GlanceBand({ day, isLoading, trend }: { day: BoardDay | undefine
 
   return (
     <div className="grid grid-cols-2 overflow-hidden rounded-xl bg-gradient-to-br from-[#173A63] to-[#2F6FA8] text-white shadow-soft lg:grid-cols-5">
-      {tiles.map((tile) => (
-        <div key={tile.key} className="border-b border-r border-white/15 p-4 last:border-r-0 lg:border-b-0">
-          <div className="flex items-center gap-2 text-xs text-blue-100">
-            <tile.Icon className="h-4 w-4 text-accent" aria-hidden="true" />
-            {tile.label}
+      {tiles.map((tile, idx) => {
+        const isLastOdd = idx === tiles.length - 1 && tiles.length % 2 !== 0;
+        return (
+          <div
+            key={tile.key}
+            className={cn(
+              "border-b border-r border-white/15 p-4 last:border-r-0 lg:border-b-0",
+              isLastOdd && "col-span-2 lg:col-span-1",
+              tile.key === "downtime" && tile.value >= 60 && "bg-destructive/20",
+            )}
+          >
+            <div className="flex items-center gap-2 text-xs text-blue-100">
+              <tile.Icon className="h-4 w-4 text-accent" aria-hidden="true" />
+              {tile.label}
+              {tile.key === "downtime" && tile.value >= 60 ? (
+                <span className="ml-auto rounded bg-destructive/60 px-1 py-0.2 text-[10px] font-semibold text-white">
+                  &gt;1h
+                </span>
+              ) : null}
+            </div>
+            <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums">
+              <AnimatedNumber value={tile.value} decimals={tile.decimals} format={tile.format} />
+              {tile.unit ? <span className="ml-1 text-sm font-medium text-blue-100">{tile.unit}</span> : null}
+            </p>
+            <DirectionText direction={tile.direction} />
+            {tile.series ? <Spark values={tile.series} /> : null}
           </div>
-          <p className="mt-1 text-2xl font-bold tracking-tight tabular-nums">
-            <AnimatedNumber value={tile.value} decimals={tile.decimals} format={tile.format} />
-            {tile.unit ? <span className="ml-1 text-sm font-medium text-blue-100">{tile.unit}</span> : null}
-          </p>
-          <DirectionText direction={tile.direction} />
-          {tile.series ? <Spark values={tile.series} /> : null}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
