@@ -158,6 +158,26 @@ class ShiftStockService:
                 shortfalls.append({"product_id": product_id, "location_id": packing_row["packaging_location_id"], "quantity": quantity})
         return shortfalls
 
+    def finished_goods_store(self, *, tenant_id: str, packing_row: dict, finished_product_id: str | None) -> str | None:
+        """Where a packing row's finished goods are posted.
+
+        Packed goods wait in the line store until they are released. A row filled in before the line
+        store was set carries the product's own store (the screen filled it in), so an empty store or
+        the product's own store is read as "not chosen" and follows the line store. Any other store
+        was chosen on purpose and is kept.
+        """
+        from core.api.service import CoreService
+        from modules.production.api.dashboard_settings_service import DashboardSettingsService
+
+        stored = packing_row.get("finished_goods_location_id")
+        line_store = DashboardSettingsService(self._connection).line_store_id(tenant_id=tenant_id)
+        if line_store is None:
+            return stored
+        if not stored:
+            return line_store
+        product = CoreService(self._connection).get_product(tenant_id, finished_product_id) if finished_product_id else None
+        return line_store if product is not None and stored == product.default_location_id else stored
+
     def freeze_packing_snapshot(self, *, tenant_id: str, packing_row: dict, finished_product_id: str) -> dict:
         """Pin the packaging parameters a packing row is judged on, once, at
         validation. Ports conditionnement_service.freeze_packaging_parameters.

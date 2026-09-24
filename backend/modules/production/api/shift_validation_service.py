@@ -42,6 +42,16 @@ def _rows(connection: psycopg.Connection, tenant_id: str, key: str, table: str, 
     return [dict(zip(names, row)) for row in cursor.fetchall()]
 
 
+def _runs(connection: psycopg.Connection, tenant_id: str, shift_report_id: str) -> list[dict]:
+    """The shift's runs with their semoule lines attached -- the shape ShiftStockService posts
+    and reverses. Validation and reversal must read runs the same way, or a reversal puts back
+    less than validation took."""
+    runs = _rows(connection, tenant_id, shift_report_id, "shift_runs")
+    for run in runs:
+        run["semolina_lines"] = _rows(connection, tenant_id, run["id"], "shift_run_semolina_lines", by="run_id")
+    return runs
+
+
 class ShiftValidationService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
@@ -99,7 +109,7 @@ class ShiftValidationService:
                 # An order with no product yet takes its first packing row's, before anything is posted.
                 stamp_order_products(self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id)
 
-                runs = _rows(self._connection, tenant_id, shift_report_id, "shift_runs")
+                runs = _runs(self._connection, tenant_id, shift_report_id)
                 packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
                 if not runs and not packing:
                     raise _Abort(Err("NOTHING_TO_VALIDATE", "the shift has no production run and no packing row to validate"))
@@ -114,7 +124,6 @@ class ShiftValidationService:
                 stock = ShiftStockService(self._connection)
                 shortfalls: list[dict] = []
                 for run in runs:
-                    run["semolina_lines"] = _rows(self._connection, tenant_id, run["id"], "shift_run_semolina_lines", by="run_id")
                     shortfalls += stock.run_shortfalls(tenant_id=tenant_id, run=run)
                 for row in packing:
                     shortfalls += stock.packing_shortfalls(tenant_id=tenant_id, packing_row=row)
@@ -143,6 +152,15 @@ class ShiftValidationService:
                     finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
                     if finished_product_id is None:
                         raise _Abort(Err("NOT_FOUND", f"work order {row['of_id']} has no product to pack"))
+                    # The store is settled once, here, and kept on the row: reversal reads it back
+                    # and must hand the goods back from exactly where they were posted.
+                    row["finished_goods_location_id"] = stock.finished_goods_store(
+                        tenant_id=tenant_id, packing_row=row, finished_product_id=finished_product_id
+                    )
+                    self._connection.execute(
+                        "UPDATE production.shift_packing_rows SET finished_goods_location_id = %s WHERE id = %s AND tenant_id = %s",
+                        (row["finished_goods_location_id"], row["id"], tenant_id),
+                    )
                     snapshot = stock.freeze_packing_snapshot(tenant_id=tenant_id, packing_row=row, finished_product_id=finished_product_id)
                     row["snapshot_packets_per_carton"] = snapshot["packets_per_carton"]
                     posted = stock.post_packing(tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id, correlation_id=correlation_id)
@@ -339,7 +357,7 @@ class ShiftValidationService:
             with self._connection.transaction():
                 stock = ShiftStockService(self._connection)
                 packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
-                runs = _rows(self._connection, tenant_id, shift_report_id, "shift_runs")
+                runs = _runs(self._connection, tenant_id, shift_report_id)
                 order_products = {
                     row[0]: row[1]
                     for row in self._connection.execute(

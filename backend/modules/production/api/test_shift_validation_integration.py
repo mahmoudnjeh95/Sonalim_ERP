@@ -11,6 +11,8 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
+from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.regrind_service import RegrindDefaultsService, RegrindService
 from modules.production.api.service import WorkOrderService
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.shift_validation_service import ShiftValidationService
@@ -275,7 +277,7 @@ def test_a_shift_with_two_runs_validates_and_posts_each_runs_own_stock(db, env):
     ).fetchall()]
     assert len(run_ids) == 2
     moved = {r[0]: r[1] for r in db.execute(
-        "SELECT source_id, quantity FROM warehouse.stock_moves WHERE source_id = ANY(%s) AND direction = 'out'",
+        "SELECT source_id, quantity FROM warehouse.stock_moves WHERE source_id = ANY(%s) AND move_type = 'production_consumption'",
         (run_ids,),
     ).fetchall()}
     assert float(moved[run_ids[0]]) == 400
@@ -283,7 +285,11 @@ def test_a_shift_with_two_runs_validates_and_posts_each_runs_own_stock(db, env):
     assert _on_hand(db, env, "semolina") == semolina_before - 700
 
 
-def test_stops_and_waste_reach_the_reports_they_belong_to(db, env):
+def test_stops_and_waste_stay_on_the_shift_and_post_no_stock(db, env):
+    """Stops and waste are records, not stock: validation posts nothing for them and leaves
+    them exactly as the team entered them. (The old ledger copied them onto per-run
+    report_downtime_lines/report_waste_lines, attaching unassigned waste to the first run;
+    the shift tables are now the only copy, and readers attribute them -- see Task 4.)"""
     stops = {"stops": [
         {"started_at": "2030-06-07T08:55:00+00:00", "ended_at": "2030-06-07T09:06:00+00:00", "motif": "extruder_failure",
          "corrective_action": "Nettoyage"},
@@ -293,14 +299,22 @@ def test_stops_and_waste_reach_the_reports_they_belong_to(db, env):
                           {"category": "kneading", "quantity": 1.5, "product_id": env["semolina"]}]
     }
     shift_id = _submitted_shift(db, env, extra={"stops": stops, "waste_production": waste})
+    semolina_before = _on_hand(db, env, "semolina")
     _ok(_validate(db, env, shift_id))
     run_id = _shift(db, shift_id)["sections"][0]["payload"]["runs"][0]["id"]
-    minutes, motif, note = db.execute(
-        "SELECT minutes, motif, note FROM production.report_downtime_lines WHERE report_id = %s", (run_id,)
+
+    started, ended, motif, action = db.execute(
+        "SELECT started_at, ended_at, motif, corrective_action FROM production.machine_stops WHERE shift_report_id = %s",
+        (shift_id,),
     ).fetchone()
-    assert (minutes, motif) == (11, "extruder_failure") and "Nettoyage" in note
-    kinds = dict(db.execute("SELECT category, quantity FROM production.report_waste_lines WHERE report_id = %s", (run_id,)).fetchall())
-    assert {k: float(v) for k, v in kinds.items()} == {"press": 6.4, "kneading": 1.5}  # the unassigned line joined the first run
+    assert (ended - started).total_seconds() == 11 * 60
+    assert (motif, action) == ("extruder_failure", "Nettoyage")
+    lines = {row[0]: (row[1], float(row[2])) for row in db.execute(
+        "SELECT category, run_id, quantity FROM production.shift_waste_lines WHERE shift_report_id = %s", (shift_id,)
+    ).fetchall()}
+    assert lines == {"press": (run_id, 6.4), "kneading": (None, 1.5)}
+    # Only the run's semoule left the silo; the 7.9 kg of waste moved nothing.
+    assert _on_hand(db, env, "semolina") == semolina_before - 1000
 
 
 # ---- rejecting ----------------------------------------------------------------
@@ -408,6 +422,88 @@ def test_the_shift_shows_the_packaging_frozen_and_tonnage_settled_at_validation(
 # test_rerunning_the_legacy_conversion... removed: Task 3 rewrite eliminates the materialize_shift bridge
 # so this test's premise (old-shaped rows written by validation) no longer applies. The convert_legacy_reports()
 # SQL function still exists for the one-time migration, but validation no longer feeds it. Task 8 will handle cleanup.
+
+
+# ---- reversing: two runs, and a rebroyat batch already ground ------------------
+
+
+def test_reversing_a_two_run_shift_puts_back_each_runs_semoule(db, env):
+    """A mold change splits the shift into two runs; reversal must undo both, not just the first."""
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=DAY, shift="night"))["id"]
+    first, second = _of(db, env), _of(db, env)
+    semolina_before = _on_hand(db, env, "semolina")
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
+                             payload={"runs": [_run(env, first, minutes=260, semolina=400), _run(env, second, minutes=160, semolina=300)]}))
+    for key in SECTION_KEYS:
+        if key == "runs":
+            _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(_validate(db, env, shift_id))
+    assert _on_hand(db, env, "semolina") == semolina_before - 700
+
+    _ok(ShiftValidationService(db).reverse_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="mold change entered twice"))
+
+    assert _on_hand(db, env, "semolina") == semolina_before
+
+
+def _rebroyat(db, env) -> str:
+    """Rebroyat cannot open its own OF without knowing what the regrind yields."""
+    rebroyat = str(ULID())
+    uom = db.execute("SELECT uom_id FROM core.products WHERE id = %s", (env["product"],)).fetchone()[0]
+    db.execute("INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'SV-REBROYAT', 'Rebroyat', %s)",
+               (rebroyat, TENANT, uom))
+    _ok(RegrindDefaultsService(db).set_default(tenant_id=TENANT, actor_id=env["actor"], output_product_id=rebroyat))
+    return rebroyat
+
+
+def _close_the_regrind_batch(db, env, actual_output_quantity=38) -> str:
+    batch_of_id = db.execute(
+        "SELECT work_order_id FROM production.regrind_batches WHERE tenant_id = %s AND actual_output_quantity IS NULL", (TENANT,)
+    ).fetchone()[0]
+    _ok(RegrindService(db).assign_batch(tenant_id=TENANT, actor_id=env["actor"], work_order_id=batch_of_id, team="Équipe A"))
+    _ok(RegrindService(db).complete_batch(
+        tenant_id=TENANT, actor_id=env["actor"], work_order_id=batch_of_id, correlation_id=str(ULID()),
+        location_id=env["location"], actual_output_quantity=actual_output_quantity,
+    ))
+    return batch_of_id
+
+
+def test_a_ground_rebroyat_batch_blocks_reversing_the_shift_and_leaves_it_validated(db, env):
+    """Its output is physically in stock; reversing the shift underneath it would leave stock nobody can explain."""
+    _rebroyat(db, env)
+    shift_id = _submitted_shift(db, env, runs=None, packing=False)
+    run_id = _shift(db, shift_id)["sections"][0]["payload"]["runs"][0]["id"]
+    db.execute("UPDATE production.shift_runs SET regrind_quantity = 40 WHERE id = %s", (run_id,))
+    _ok(_validate(db, env, shift_id))
+    _close_the_regrind_batch(db, env)
+    semolina_after_validation = _on_hand(db, env, "semolina")
+
+    result = ShiftValidationService(db).reverse_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="too late")
+
+    assert isinstance(result, Err) and result.code == "REGRIND_ALREADY_COMPLETED"
+    assert _shift(db, shift_id)["status"] == "validated"
+    assert _on_hand(db, env, "semolina") == semolina_after_validation, "the refusal must not leave half a reversal behind"
+
+
+def test_force_reversing_hands_back_the_ground_rebroyat_and_removes_its_order(db, env):
+    rebroyat = _rebroyat(db, env)
+    shift_id = _submitted_shift(db, env, runs=None, packing=False)
+    run_id = _shift(db, shift_id)["sections"][0]["payload"]["runs"][0]["id"]
+    db.execute("UPDATE production.shift_runs SET regrind_quantity = 40 WHERE id = %s", (run_id,))
+    semolina_before = _on_hand(db, env, "semolina")
+    _ok(_validate(db, env, shift_id))
+    batch_of_id = _close_the_regrind_batch(db, env, actual_output_quantity=38)
+    env["rebroyat"] = rebroyat
+    assert _on_hand(db, env, "rebroyat") == 38
+
+    _ok(ShiftValidationService(db).reverse_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="wrong line", force=True))
+
+    assert _on_hand(db, env, "rebroyat") == 0
+    assert _on_hand(db, env, "semolina") == semolina_before
+    assert db.execute("SELECT count(*) FROM production.work_orders WHERE id = %s", (batch_of_id,)).fetchone()[0] == 0
+    assert db.execute("SELECT count(*) FROM production.scrap_records WHERE tenant_id = %s", (TENANT,)).fetchone()[0] == 0
 
 
 # ---- a validator's own correction, mid-review ----------------------------------
