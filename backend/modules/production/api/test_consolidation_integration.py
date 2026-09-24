@@ -654,11 +654,10 @@ def test_a_validated_defect_with_no_case_raised_is_flagged(db, env, of):
         tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())
     )
 
-    # TODO(Task 6): pending_nc_reports is reshaped per conformity line by the
-    # get_conformity_summary rewrite; this expected value is still the old shape.
+    line_id = quality._load_lines(tenant_id=TENANT, report_id=report_id)[0].id
     result = _consolidate(db, of)["quality"]
     assert result["pending_nc_reports"] == [
-        {"report_id": report_id, "report_date": "2026-09-01", "non_conforming_cartons": 10.0}
+        {"conformity_line_id": line_id, "report_date": "2026-09-01", "non_conforming_cartons": 10.0}
     ]
 
     from modules.qc.api.non_conformity_service import NonConformityService

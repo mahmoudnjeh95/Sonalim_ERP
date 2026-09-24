@@ -195,29 +195,93 @@ class QualityReportService:
             "lines": self._load_lines(tenant_id=tenant_id, report_id=report_id),
         }
 
-    GRAINS = ("day", "week", "month", "year")
-
-    # get_conformity_summary / team_conformity / index_trend read the old
-    # per-report conformity columns, which no longer exist. They are rewritten
-    # against conformity lines and parameter entries in the next task; until
-    # then they refuse loudly rather than query dropped columns.
-
     def get_conformity_summary(self, *, tenant_id: str, of_id: str) -> dict:
-        raise NotImplementedError("rewritten in the next task")
+        """How an OF's quality came out, summed over its validated reports' conformity lines.
+
+        Only validated reports count -- a draft or rejected quality report is a
+        claim, not a verdict. A shift can pack several OFs, so only this OF's
+        lines are summed, never the whole report.
+        """
+        row = self._connection.execute(
+            """
+            SELECT count(DISTINCT r.id), COALESCE(SUM(l.conforming_cartons), 0), COALESCE(SUM(l.non_conforming_cartons), 0)
+            FROM qc.quality_conformity_lines l
+            JOIN qc.quality_reports r ON r.id = l.report_id AND r.tenant_id = l.tenant_id
+            WHERE l.tenant_id = %s AND l.of_id = %s AND r.status = 'validated'
+            """,
+            (tenant_id, of_id),
+        ).fetchone()
+        report_count, conforming, non_conforming = int(row[0]), float(row[1]), float(row[2])
+        total = conforming + non_conforming
+        return {
+            "validated_report_count": report_count,
+            "conforming_cartons": conforming,
+            "non_conforming_cartons": non_conforming,
+            "conformity_rate": (conforming / total) if total > 0 else None,
+            "pending_nc_reports": self._reports_needing_nc(tenant_id=tenant_id, of_id=of_id),
+        }
+
+    def _reports_needing_nc(self, *, tenant_id: str, of_id: str) -> list[dict]:
+        """Validated conformity lines that logged a defect but never got an NC raised for it.
+
+        Keyed by conformity line, not report: a report spans several products,
+        so "the report" does not say which product's defect is unaddressed.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT l.id, r.report_date, l.non_conforming_cartons
+            FROM qc.quality_conformity_lines l
+            JOIN qc.quality_reports r ON r.id = l.report_id AND r.tenant_id = l.tenant_id
+            WHERE l.tenant_id = %s AND l.of_id = %s AND r.status = 'validated'
+              AND l.non_conforming_cartons > 0
+              AND NOT EXISTS (
+                  SELECT 1 FROM qc.non_conformities n
+                  WHERE n.tenant_id = l.tenant_id AND n.quality_report_id = l.report_id AND n.product_id = l.product_id
+              )
+            ORDER BY r.report_date DESC
+            """,
+            (tenant_id, of_id),
+        ).fetchall()
+        return [
+            {"conformity_line_id": line_id, "report_date": report_date.isoformat(), "non_conforming_cartons": float(qty)}
+            for line_id, report_date, qty in rows
+        ]
+
+    GRAINS = ("day", "week", "month", "year")
 
     def team_conformity(
         self, *, tenant_id: str, grain: str, date_from: str | None = None, date_to: str | None = None
     ) -> list[dict]:
+        """Validated conformity per team per calendar bucket, summed over conformity lines."""
         if grain not in self.GRAINS:
             raise ValueError(f"grain must be one of {self.GRAINS}")
-        raise NotImplementedError("rewritten in the next task")
-
-    def index_trend(
-        self, *, tenant_id: str, grain: str, date_from: str | None = None, date_to: str | None = None
-    ) -> list[dict]:
-        if grain not in self.GRAINS:
-            raise ValueError(f"grain must be one of {self.GRAINS}")
-        raise NotImplementedError("rewritten in the next task")
+        clauses = ["r.tenant_id = %s", "r.status = 'validated'"]
+        params: list[object] = [grain, tenant_id]
+        if date_from is not None:
+            clauses.append("r.report_date >= %s")
+            params.append(date_from)
+        if date_to is not None:
+            clauses.append("r.report_date <= %s")
+            params.append(date_to)
+        rows = self._connection.execute(
+            f"""
+            SELECT r.team, date_trunc(%s, r.report_date)::date AS period, count(DISTINCT r.id) AS report_count,
+                   COALESCE(SUM(l.conforming_cartons), 0), COALESCE(SUM(l.non_conforming_cartons), 0)
+            FROM qc.quality_reports r
+            JOIN qc.quality_conformity_lines l ON l.report_id = r.id AND l.tenant_id = r.tenant_id
+            WHERE {' AND '.join(clauses)}
+            GROUP BY r.team, period
+            ORDER BY period, r.team
+            """,
+            params,
+        ).fetchall()
+        return [
+            {
+                "team": team, "period": period.isoformat(), "report_count": int(count),
+                "conforming_cartons": float(c), "non_conforming_cartons": float(nc),
+            }
+            for team, period, count, c, nc in rows
+        ]
 
     def list_reports(self, *, tenant_id: str, status: str | None = None) -> list[QualityReport]:
         clauses = ["tenant_id = %s"]
