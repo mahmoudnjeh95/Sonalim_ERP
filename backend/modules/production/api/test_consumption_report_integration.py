@@ -1,10 +1,10 @@
 """Integration test for the monthly consumption-by-supplier report.
 
 Exercises the whole point of the feature: film/carton/scotch/ruban from a
-validated conditionnement report and gasoil/fuel from a validated daily
-report land in one grouped-by-category/month/supplier list, and a packaging
-row with matching procurement order history gets costed from it while
-gasoil/fuel -- which carry no product reference at all -- do not.
+validated shift's packing row and gasoil/fuel from its energy section land in
+one grouped-by-category/month/supplier list, and a packaging row with
+matching procurement order history gets costed from it while gasoil/fuel --
+which carry no product reference at all -- do not.
 """
 from __future__ import annotations
 
@@ -15,11 +15,11 @@ from ulid import ULID
 
 from core.domain.result import Ok
 from modules.procurement.api.service import PurchaseOrderService
-from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.api.consumption_report_service import ConsumptionReportService
-from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import ConditionnementReportDetail, DailyReportDetail
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-consumption"
@@ -82,44 +82,56 @@ def env(db):
     }
 
 
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
+
+
 @pytest.fixture
 def of(db, env):
     service = WorkOrderService(db)
-    created = service.create_work_order(
+    created = _ok(service.create_work_order(
         tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
         product_id=env["product"], planned_quantity=1000, product_type="PC",
-    )
-    assert isinstance(created, Ok), getattr(created, "message", "")
-    service.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=created.value.id)
-    return created.value
+    ))
+    service.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=created.id)
+    return created
+
+
+def _validated_shift(db, env, of_id, report_date, *, packing=None, energy=None) -> str:
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=report_date, shift="morning",
+    ))["id"]
+    filled: dict = {}
+    if packing is not None:
+        filled["packing"] = {"rows": [{"of_id": of_id, "equipment_id": env["equipment"], "finished_product_quantity": 100, "packets_counted": 100, **packing}]}
+    if energy is not None:
+        filled["energy"] = {"energy": energy}
+    for key in SECTION_KEYS:
+        if key in filled:
+            _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key, payload=filled[key]))
+            _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    return shift_id
 
 
 def test_groups_by_category_month_and_supplier_and_costs_what_it_can(db, env, of):
     report_date = datetime.date(2026, 4, 15)
 
-    cond = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
-        report_date=report_date, shift="morning", equipment_id=env["equipment"],
-        detail=ConditionnementReportDetail(
-            film_quantity=40, film_product_id=env["film"], film_supplier_id=env["supplier"],
-            carton_quantity=20, carton_product_id=env["carton"], carton_supplier_id=env["supplier"],
-            scotch_quantity=5, scotch_product_id=env["scotch"], scotch_supplier_id=env["supplier"],
-            ruban_quantity=3, ruban_product_id=env["ruban"], ruban_supplier_id=env["supplier"],
-            packaging_location_id=env["location"], finished_goods_location_id=env["location"],
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    validated_cond = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    assert isinstance(validated_cond, Ok), getattr(validated_cond, "message", "")
-
-    daily = ProductionReportService(db).create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        equipment_id=env["equipment"], shift="morning",
-        detail=DailyReportDetail(gasoil_quantity=100, gasoil_supplier_id=env["supplier"], fuel_quantity=50, fuel_supplier_id=env["supplier"]),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    validated_daily = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    assert isinstance(validated_daily, Ok), getattr(validated_daily, "message", "")
+    _validated_shift(
+        db, env, of.id, report_date,
+        packing={
+            "film_quantity": 40, "film_product_id": env["film"], "film_supplier_id": env["supplier"],
+            "carton_quantity": 20, "carton_product_id": env["carton"], "carton_supplier_id": env["supplier"],
+            "scotch_quantity": 5, "scotch_product_id": env["scotch"], "scotch_supplier_id": env["supplier"],
+            "ruban_quantity": 3, "ruban_product_id": env["ruban"], "ruban_supplier_id": env["supplier"],
+            "packaging_location_id": env["location"], "finished_goods_location_id": env["location"],
+        },
+        energy={"gasoil_quantity": 100, "gasoil_supplier_id": env["supplier"], "fuel_quantity": 50, "fuel_supplier_id": env["supplier"]},
+    )
 
     # Procurement order history exists for film only -- carton/scotch/ruban and
     # gasoil/fuel should still show up, just unpriced.
@@ -169,16 +181,13 @@ def test_a_price_with_no_exchange_rate_stays_unpriced(db, env, of):
     # A currency with order history but no rate on file (unlike EUR, seeded in
     # `env`) must not be shown under the wrong currency -- left unpriced instead.
     report_date = datetime.date(2026, 6, 12)
-    cond = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
-        report_date=report_date, shift="morning", equipment_id=env["equipment"],
-        detail=ConditionnementReportDetail(
-            film_quantity=10, film_product_id=env["film"], film_supplier_id=env["supplier"],
-            packaging_location_id=env["location"], finished_goods_location_id=env["location"],
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
+    _validated_shift(
+        db, env, of.id, report_date,
+        packing={
+            "film_quantity": 10, "film_product_id": env["film"], "film_supplier_id": env["supplier"],
+            "packaging_location_id": env["location"], "finished_goods_location_id": env["location"],
+        },
+    )
 
     po = PurchaseOrderService(db).create_purchase_order(
         tenant_id=TENANT, actor_id=env["actor"], supplier_id=env["supplier"],
@@ -198,17 +207,14 @@ def test_a_price_with_no_exchange_rate_stays_unpriced(db, env, of):
 
 def test_category_filter_narrows_the_result(db, env, of):
     report_date = datetime.date(2026, 5, 10)
-    cond = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
-        report_date=report_date, shift="morning", equipment_id=env["equipment"],
-        detail=ConditionnementReportDetail(
-            film_quantity=10, film_product_id=env["film"], film_supplier_id=env["supplier"],
-            scotch_quantity=2, scotch_product_id=env["scotch"], scotch_supplier_id=env["supplier"],
-            packaging_location_id=env["location"], finished_goods_location_id=env["location"],
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
+    _validated_shift(
+        db, env, of.id, report_date,
+        packing={
+            "film_quantity": 10, "film_product_id": env["film"], "film_supplier_id": env["supplier"],
+            "scotch_quantity": 2, "scotch_product_id": env["scotch"], "scotch_supplier_id": env["supplier"],
+            "packaging_location_id": env["location"], "finished_goods_location_id": env["location"],
+        },
+    )
 
     rows = ConsumptionReportService(db).list_monthly_consumption_by_supplier(
         tenant_id=TENANT, date_from="2026-05-01", date_to="2026-05-31", category="film",

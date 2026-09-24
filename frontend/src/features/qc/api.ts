@@ -13,11 +13,7 @@ export type QualityReportStatus = "draft" | "submitted" | "validated" | "rejecte
 
 export interface QualityReport {
   id: string;
-  of_id: string;
-  // The conditionnement (packaging) run this report inspects. `team`, `shift`
-  // and `report_date` are all derived from it server-side -- never entered
-  // independently -- so this is a real production team, never a QC-only label.
-  conditionnement_report_id: string | null;
+  shift_report_id: string;
   report_date: string;
   status: QualityReportStatus;
   revision: number;
@@ -31,53 +27,42 @@ export interface QualityReport {
 }
 
 export interface QualityReportDetail {
-  pre_dryer_index: number | null;
-  humidity_percentage: number | null;
-  cooling_index: number | null;
-  pf_index: number | null;
-  sumo_index: number | null;
-  conforming_cartons: number;
-  non_conforming_cartons: number;
-  defect_details: string | null;
   comments: string | null;
   corrective_action: string | null;
 }
 
+export interface ConformityLine {
+  id: string;
+  shift_packing_row_id: string;
+  of_id: string;
+  product_id: string;
+  conforming_cartons: number;
+  non_conforming_cartons: number;
+  defect_details: string | null;
+}
+
 export interface QualityReportWithDetail extends QualityReport {
   detail: QualityReportDetail | null;
+  lines: ConformityLine[];
 }
 
-export interface ValidatedQualityReport extends QualityReportWithDetail {
-  follow_up_id: string;
-  window_ends_on: string;
-}
-
-export interface CreateQualityReportInput {
-  conditionnement_report_id: string;
-  detail?: Partial<QualityReportDetail>;
-}
-
-// A conditionnement report not yet inspected, enriched with the figures the
-// create-report form shows as a hint before the inspector types anything --
-// see QualityReportService.list_inspectable_conditionnement_reports.
-export interface InspectableConditionnementReport {
-  conditionnement_report_id: string;
-  of_id: string;
+export interface InspectableShiftReport {
+  shift_report_id: string;
+  work_center_id: string;
   report_date: string;
   shift: string | null;
   team: string | null;
-  status: string;
-  packets_counted: number;
-  carton_quantity: number;
-  finished_product_quantity: number;
-  regrind_quantity: number | null;
 }
 
-export function listInspectableConditionnementReports(token: string, params: { of_id?: string } = {}) {
-  const query = new URLSearchParams();
-  if (params.of_id) query.set("of_id", params.of_id);
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return apiFetch<InspectableConditionnementReport[]>(`/qc/conditionnement-reports${suffix}`, { token });
+export interface ParameterEntry {
+  id: string;
+  group_key: string;
+  entry_label: string | null;
+  fields: Record<string, number | string | null>;
+}
+
+export function listInspectableShiftReports(token: string) {
+  return apiFetch<InspectableShiftReport[]>("/qc/shift-reports", { token });
 }
 
 // --- Team conformity ---------------------------------------------------------
@@ -106,35 +91,13 @@ export function listQualityTeamPerformance(
   return apiFetch<TeamConformityRow[]>(`/qc/quality-reports/team-performance?${query.toString()}`, { token });
 }
 
-export interface QualityIndexTrendRow {
-  period: string;
-  report_count: number;
-  pre_dryer_index: number | null;
-  humidity_percentage: number | null;
-  cooling_index: number | null;
-  pf_index: number | null;
-  sumo_index: number | null;
-}
-
-/** Plant-wide, not by team -- these are leading process indices, not a
- * ranking. A period's average is null (not dragged to zero) when no
- * validated report in it recorded that particular index. */
-export function listQualityIndexTrend(
-  token: string,
-  params: { grain: PerformanceGrain; date_from?: string; date_to?: string },
-) {
-  const query = new URLSearchParams({ grain: params.grain });
-  if (params.date_from) query.set("date_from", params.date_from);
-  if (params.date_to) query.set("date_to", params.date_to);
-  return apiFetch<QualityIndexTrendRow[]>(`/qc/quality-reports/index-trend?${query.toString()}`, { token });
-}
-
+// No OF filter: a report follows a shift, and each of its conformity lines
+// names its own OF. Scope to an OF client-side (see WorkOrderDetailsPage).
 export function listQualityReports(
   token: string,
-  params: { of_id?: string; status?: QualityReportStatus } = {},
+  params: { status?: QualityReportStatus } = {},
 ) {
   const query = new URLSearchParams();
-  if (params.of_id) query.set("of_id", params.of_id);
   if (params.status) query.set("status", params.status);
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return apiFetch<QualityReport[]>(`/qc/quality-reports${suffix}`, { token });
@@ -144,15 +107,19 @@ export function getQualityReport(token: string, reportId: string) {
   return apiFetch<QualityReportWithDetail>(`/qc/quality-reports/${reportId}`, { token });
 }
 
-export function createQualityReport(token: string, input: CreateQualityReportInput) {
-  return apiFetch<QualityReportWithDetail>("/qc/quality-reports", { method: "POST", token, body: input });
+export function createQualityReport(token: string, shiftReportId: string) {
+  return apiFetch<QualityReportWithDetail>("/qc/quality-reports", {
+    method: "POST", token, body: { shift_report_id: shiftReportId },
+  });
 }
 
-export function updateQualityReport(token: string, reportId: string, detail: Partial<QualityReportDetail>) {
+export function updateQualityReport(
+  token: string,
+  reportId: string,
+  input: { lines: Partial<ConformityLine>[]; detail?: Partial<QualityReportDetail> },
+) {
   return apiFetch<QualityReportWithDetail>(`/qc/quality-reports/${reportId}`, {
-    method: "PATCH",
-    token,
-    body: { detail },
+    method: "PATCH", token, body: input,
   });
 }
 
@@ -162,10 +129,11 @@ export function adminUpdateQualityReport(
   token: string,
   reportId: string,
   input: {
+    lines?: Partial<ConformityLine>[];
     detail?: Partial<QualityReportDetail>;
     // Re-linking re-derives team, shift and report_date together -- there is
     // no way to set those independently, even here.
-    conditionnement_report_id?: string;
+    shift_report_id?: string;
     reason?: string;
   },
 ) {
@@ -191,19 +159,27 @@ export function submitQualityReport(token: string, reportId: string) {
   return apiFetch<QualityReport>(`/qc/quality-reports/${reportId}/submit`, { method: "POST", token });
 }
 
-// `product_id` lets the backend apply this product's follow-up window without
-// reading production's tables.
-export function validateQualityReport(
-  token: string,
-  reportId: string,
-  correlationId: string,
-  productId?: string,
+// No product_id: follow-ups are opened per conformity line, each of which
+// already carries its own product.
+export function validateQualityReport(token: string, reportId: string, correlationId: string) {
+  return apiFetch<{ report: QualityReport; lines: ConformityLine[]; follow_ups: { follow_up_id: string; of_id: string; window_ends_on: string }[] }>(
+    `/qc/quality-reports/${reportId}/validate`,
+    { method: "POST", token, body: { correlation_id: correlationId } },
+  );
+}
+
+export function listParameters(token: string, reportId: string) {
+  return apiFetch<ParameterEntry[]>(`/qc/quality-reports/${reportId}/parameters`, { token });
+}
+
+export function saveParameterEntry(
+  token: string, reportId: string, input: { group_key: string; entry_label?: string | null; fields: Record<string, number | string | null> },
 ) {
-  return apiFetch<ValidatedQualityReport>(`/qc/quality-reports/${reportId}/validate`, {
-    method: "POST",
-    token,
-    body: { correlation_id: correlationId, product_id: productId },
-  });
+  return apiFetch<ParameterEntry>(`/qc/quality-reports/${reportId}/parameters`, { method: "POST", token, body: input });
+}
+
+export function deleteParameterEntry(token: string, reportId: string, entryId: string) {
+  return apiFetch<{ deleted: string }>(`/qc/quality-reports/${reportId}/parameters/${entryId}`, { method: "DELETE", token });
 }
 
 export function rejectQualityReport(token: string, reportId: string, reason: string) {
@@ -267,7 +243,7 @@ export function listFollowUps(
 
 export function recordObservation(
   token: string,
-  input: { quality_report_id: string; observed_on: string; observation?: string; result?: string },
+  input: { quality_report_id: string; observed_on: string; observation?: string; result?: string; conformity_line_id?: string },
 ) {
   return apiFetch<FollowUp>("/qc/follow-ups", { method: "POST", token, body: input });
 }

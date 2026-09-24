@@ -23,12 +23,13 @@ CATEGORIES = _PACKAGING_CATEGORIES + _FUEL_CATEGORIES
 class ConsumptionReportService:
     """Monthly consumption by supplier, for the packaging/fuel consumables the
     plant used to reassemble by hand from five separate spreadsheets every
-    month. Sourced entirely from data the shop floor already records on daily
-    and conditionnement reports (film/carton/scotch/ruban quantities and
-    fournisseurs, gasoil/fuel quantities and fournisseurs) -- this adds no new
-    capture, only the aggregation and costing nobody had built yet.
+    month. Sourced entirely from data the shop floor already records on the
+    shift's packing rows and energy section (film/carton/scotch/ruban
+    quantities and fournisseurs, gasoil/fuel quantities and fournisseurs --
+    the latter whole-shift, not split by run) -- this adds no new capture,
+    only the aggregation and costing nobody had built yet.
 
-    Only validated reports count, matching every other aggregate in this
+    Only validated shifts count, matching every other aggregate in this
     module (see TeamPerformanceService) -- a draft is a team's working notes,
     not a result to report a supplier's monthly consumption against.
     """
@@ -47,13 +48,13 @@ class ConsumptionReportService:
         if category is not None and category not in CATEGORIES:
             raise ValueError(f"category must be one of {CATEGORIES}")
 
-        clauses = ["r.tenant_id = %s", "r.status = 'validated'"]
+        clauses = ["s.tenant_id = %s", "s.status = 'validated'"]
         params: list[object] = [tenant_id]
         if date_from is not None:
-            clauses.append("r.report_date >= %s")
+            clauses.append("s.report_date >= %s")
             params.append(date_from)
         if date_to is not None:
-            clauses.append("r.report_date <= %s")
+            clauses.append("s.report_date <= %s")
             params.append(date_to)
         where = " AND ".join(clauses)
 
@@ -61,16 +62,16 @@ class ConsumptionReportService:
             f"""
             SELECT
                 '{name}' AS category,
-                date_trunc('month', r.report_date)::date AS month,
+                date_trunc('month', s.report_date)::date AS month,
                 w.product_type AS pc_pl,
-                c.{name}_product_id AS product_id,
-                c.{name}_supplier_id AS supplier_id,
-                SUM(c.{name}_quantity) AS quantity
-            FROM production.conditionnement_reports c
-            JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
-            LEFT JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
-            WHERE {where} AND c.{name}_quantity > 0
-            GROUP BY month, pc_pl, c.{name}_product_id, c.{name}_supplier_id
+                p.{name}_product_id AS product_id,
+                p.{name}_supplier_id AS supplier_id,
+                SUM(p.{name}_quantity) AS quantity
+            FROM production.shift_packing_rows p
+            JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
+            LEFT JOIN production.work_orders w ON w.id = p.of_id AND w.tenant_id = p.tenant_id
+            WHERE {where} AND p.{name}_quantity > 0
+            GROUP BY month, pc_pl, p.{name}_product_id, p.{name}_supplier_id
             """
             for name in _PACKAGING_CATEGORIES
         )
@@ -80,15 +81,15 @@ class ConsumptionReportService:
             f"""
             SELECT
                 '{name}' AS category,
-                date_trunc('month', r.report_date)::date AS month,
+                date_trunc('month', s.report_date)::date AS month,
                 NULL AS pc_pl,
                 NULL AS product_id,
-                d.{name}_supplier_id AS supplier_id,
-                SUM(d.{name}_quantity) AS quantity
-            FROM production.daily_reports d
-            JOIN production.production_reports r ON r.id = d.report_id AND r.tenant_id = d.tenant_id
-            WHERE {where} AND d.{name}_quantity > 0
-            GROUP BY month, d.{name}_supplier_id
+                e.{name}_supplier_id AS supplier_id,
+                SUM(e.{name}_quantity) AS quantity
+            FROM production.shift_energy e
+            JOIN production.shift_reports s ON s.id = e.shift_report_id AND s.tenant_id = e.tenant_id
+            WHERE {where} AND e.{name}_quantity > 0
+            GROUP BY month, e.{name}_supplier_id
             """
             for name in _FUEL_CATEGORIES
         )

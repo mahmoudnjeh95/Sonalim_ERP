@@ -4,8 +4,8 @@ import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
 import { Badge } from "../../components/ui/badge";
-import { Skeleton } from "../../components/ui/skeleton";
 import { getWorkOrderRecipeCheck, type RecipeFinding } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 /**
  * What went into the mix, against the formula it was meant to follow.
@@ -32,7 +32,7 @@ export function RecipeCheckPanel({
     queryFn: () => getWorkOrderRecipeCheck(session!.token, workOrderId),
   });
 
-  if (isLoading) return <Skeleton className={cn("h-24 w-full", className)} />;
+  if (isLoading) return <AppLoader size={72} className={cn("py-2", className)} />;
   if (!check) return null;
 
   const nameOf = (productId: string | null) =>

@@ -16,7 +16,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -33,6 +32,7 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { createMold, listMolds, updateMold, type Mold, type MoldType } from "./api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const newMoldSchema = z.object({
   code: z.string().min(1, "Required"),
@@ -282,14 +282,7 @@ export function MoldsTab() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && filteredMolds.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

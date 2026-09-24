@@ -2,8 +2,8 @@
 
 A work center like Line_1_PL can carry more than one machine running at once
 (maintenance.equipment), so productivity has to be checkable per machine, not
-just per line -- this pins that a report's equipment_id is what makes that
-possible, and that only validated reports count, same as every other
+just per line -- this pins that a run's equipment_id is what makes that
+possible, and that only validated shifts count, same as every other
 aggregate in this module.
 """
 from __future__ import annotations
@@ -15,9 +15,10 @@ from ulid import ULID
 
 from core.domain.result import Ok
 from modules.production.api.machine_performance_service import MachinePerformanceService
-from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import DailyReportDetail, SemolinaLine
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-machine-performance"
@@ -71,43 +72,52 @@ def env(db):
     }
 
 
-def _validated_report(db, env, *, equipment_id, report_date, semolina_quantity, production_minutes, downtime_minutes):
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
+
+
+def _of(db, env, report_date):
     orders = WorkOrderService(db)
-    created = orders.create_work_order(
+    created = _ok(orders.create_work_order(
         tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"],
         planned_quantity=1000, work_center_id=env["work_center"], start_date=report_date,
-    )
-    assert isinstance(created, Ok), getattr(created, "message", "")
-    order = created.value
-    assert isinstance(orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=order.id), Ok)
+    ))
+    _ok(orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=created.id))
+    return created.id
 
-    reports = ProductionReportService(db)
-    detail = DailyReportDetail(
-        semolina_lines=(SemolinaLine(product_id=env["product"], quantity=semolina_quantity, location_id=env["location"]),),
-        raw_material_location_id=env["location"],
-        production_minutes=production_minutes,
-    )
-    created_report = reports.create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=order.id, report_date=report_date,
-        equipment_id=equipment_id, detail=detail,
-    )
-    assert isinstance(created_report, Ok), getattr(created_report, "message", "")
-    report_id = created_report.value["report"].id
-    assert isinstance(reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id), Ok)
-    validated = reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id)
-    assert isinstance(validated, Ok), getattr(validated, "message", "")
-    return order.id
+
+def _validated_shift(db, env, *, equipment_id, report_date, semolina_quantity, production_minutes, shift="morning") -> str:
+    of_id = _of(db, env, report_date)
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=report_date, shift=shift,
+    ))["id"]
+    run = {
+        "of_id": of_id, "equipment_id": equipment_id, "start_time": "07:00", "end_time": "14:00",
+        "production_minutes": production_minutes, "finished_product_quantity": 900,
+        "raw_material_location_id": env["location"],
+        "semolina_lines": [{"product_id": env["product"], "quantity": semolina_quantity, "location_id": env["location"]}],
+    }
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    for key in SECTION_KEYS:
+        if key == "runs":
+            _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    return shift_id
 
 
 def test_two_machines_on_the_same_line_are_kept_apart(db, env):
     """The whole point: Line_1_PL running two presses must not blend into one figure."""
-    _validated_report(
+    _validated_shift(
         db, env, equipment_id=env["machine_a"], report_date=datetime.date(2026, 9, 1),
-        semolina_quantity=500, production_minutes=400, downtime_minutes=0,
+        semolina_quantity=500, production_minutes=400,
     )
-    _validated_report(
+    _validated_shift(
         db, env, equipment_id=env["machine_b"], report_date=datetime.date(2026, 9, 1),
-        semolina_quantity=300, production_minutes=350, downtime_minutes=0,
+        semolina_quantity=300, production_minutes=350, shift="afternoon",
     )
 
     rows = MachinePerformanceService(db).list_machine_performance(tenant_id=TENANT, grain="week")
@@ -119,51 +129,29 @@ def test_two_machines_on_the_same_line_are_kept_apart(db, env):
 
 
 def test_draft_reports_are_excluded(db, env):
-    orders = WorkOrderService(db)
-    created = orders.create_work_order(
-        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"],
-        planned_quantity=1000, work_center_id=env["work_center"], start_date=datetime.date(2026, 9, 15),
-    )
-    order = created.value
-    assert isinstance(orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=order.id), Ok)
-    ProductionReportService(db).create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=order.id, report_date=datetime.date(2026, 9, 15),
-        equipment_id=env["machine_a"],
-        detail=DailyReportDetail(
-            semolina_lines=(SemolinaLine(product_id=env["product"], quantity=999, location_id=env["location"]),),
-            raw_material_location_id=env["location"],
-        ),
-    )
+    of_id = _of(db, env, datetime.date(2026, 9, 15))
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=datetime.date(2026, 9, 15), shift="morning",
+    ))["id"]
+    run = {
+        "of_id": of_id, "equipment_id": env["machine_a"], "start_time": "07:00", "end_time": "14:00",
+        "production_minutes": 100, "finished_product_quantity": 900, "raw_material_location_id": env["location"],
+        "semolina_lines": [{"product_id": env["product"], "quantity": 999, "location_id": env["location"]}],
+    }
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
 
     rows = MachinePerformanceService(db).list_machine_performance(tenant_id=TENANT, grain="week")
     assert not any(r["equipment_id"] == env["machine_a"] for r in rows)
 
 
 def test_reports_with_no_machine_named_are_excluded(db, env):
-    """A report submitted before this feature existed (or, now, one that was
-    never allowed to submit without a machine) must not show up as a phantom
-    machine with no id."""
-    orders = WorkOrderService(db)
-    created = orders.create_work_order(
-        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"],
-        planned_quantity=1000, work_center_id=env["work_center"], start_date=datetime.date(2026, 9, 1),
+    """A run with no equipment_id must not show up as a phantom machine with no id."""
+    _validated_shift(
+        db, env, equipment_id=env["machine_a"], report_date=datetime.date(2026, 9, 1),
+        semolina_quantity=500, production_minutes=100,
     )
-    order = created.value
-    assert isinstance(orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=order.id), Ok)
-    # Backfill the way a pre-migration row would look: validated, no equipment_id.
-    reports = ProductionReportService(db)
-    created_report = reports.create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=order.id, report_date=datetime.date(2026, 9, 1),
-        equipment_id=env["machine_a"],
-        detail=DailyReportDetail(
-            semolina_lines=(SemolinaLine(product_id=env["product"], quantity=500, location_id=env["location"]),),
-            raw_material_location_id=env["location"],
-        ),
-    )
-    report_id = created_report.value["report"].id
-    assert isinstance(reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id), Ok)
-    assert isinstance(reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id), Ok)
-    db.execute("UPDATE production.production_reports SET equipment_id = NULL WHERE id = %s", (report_id,))
+    db.execute("UPDATE production.shift_runs SET equipment_id = NULL WHERE tenant_id = %s", (TENANT,))
 
     rows = MachinePerformanceService(db).list_machine_performance(tenant_id=TENANT, grain="week")
     assert rows == []

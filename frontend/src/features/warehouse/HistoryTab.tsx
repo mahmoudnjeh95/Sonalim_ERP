@@ -6,7 +6,6 @@ import { useI18n } from "../../lib/i18n";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
@@ -16,6 +15,7 @@ import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listAuditLog, type AuditLogEntry } from "../admin/activityLog/api";
 import { listPurchaseOrders, type PurchaseOrder } from "../procurement/api";
 import { listPartners } from "../partners/api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const HISTORY_QUERY_KEY = ["core", "audit-log", "purchase_order_receipt"] as const;
 const PURCHASE_ORDERS_QUERY_KEY = ["procurement", "purchase-orders"] as const;
@@ -185,14 +185,7 @@ export function HistoryTab() {
             <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
           </TableHeader>
           <TableBody>
-            {isLoading &&
-              Array.from({ length: 4 }).map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={visibleColumns.length}>
-                    <Skeleton className="h-5 w-full" />
-                  </TableCell>
-                </TableRow>
-              ))}
+            {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
             {!isLoading && filteredEntries.length === 0 && (
               <TableRow>
                 <TableCell colSpan={visibleColumns.length} className="p-0">

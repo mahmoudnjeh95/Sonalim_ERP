@@ -1,3 +1,5 @@
+import datetime
+
 from core.domain.result import Err, Ok
 from modules.warehouse.domain.lot import (
     Lot,
@@ -5,6 +7,7 @@ from modules.warehouse.domain.lot import (
     issue_from_lot,
     receive_into_lot,
     transition_lot,
+    validate_expiry_date,
     validate_new_lot,
 )
 
@@ -84,3 +87,18 @@ def test_issue_from_lot_beyond_on_hand_fails():
     result = issue_from_lot(stock, 6)
     assert isinstance(result, Err)
     assert result.code == "INSUFFICIENT_STOCK"
+
+
+def test_a_dlc_on_or_after_the_production_day_is_valid():
+    assert isinstance(validate_expiry_date(expiry_date=datetime.date(2029, 7, 5), produced_at="2026-07-05T00:00:00"), Ok)
+    assert isinstance(validate_expiry_date(expiry_date=datetime.date(2026, 7, 5), produced_at="2026-07-05T00:00:00"), Ok)
+
+
+def test_a_dlc_before_the_production_day_is_refused():
+    result = validate_expiry_date(expiry_date=datetime.date(2026, 7, 4), produced_at="2026-07-05T00:00:00")
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_EXPIRY"
+
+
+def test_a_lot_with_no_production_day_has_nothing_to_compare_a_dlc_against():
+    assert isinstance(validate_expiry_date(expiry_date=datetime.date(2020, 1, 1), produced_at=None), Ok)

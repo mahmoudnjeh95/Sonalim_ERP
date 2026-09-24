@@ -11,3 +11,17 @@ docker-compose.override.yml
 .claude/settings.json
 .claude/settings.local.json
 frontend/Sonalim_ERP_Professional_UI_UX_Motion_Blueprint 1.pdf
+.superpowers/
+.worktrees/
+
+# Database backups / exports (e.g. `pg_dump` before a data reset). These can hold
+# real customer/production data and must never reach the repo -- see
+# tools/git-hooks/pre-commit, which also refuses a commit that stages one of these.
+*.dump
+*.dump.gz
+*.pgdump
+*.sql.gz
+*.bak
+
+# Playwright MCP page snapshots (session scratch)
+.playwright-mcp/

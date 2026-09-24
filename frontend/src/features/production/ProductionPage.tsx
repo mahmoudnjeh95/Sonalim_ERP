@@ -1,13 +1,12 @@
-import { useSearchParams } from "react-router-dom";
+import { Navigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Boxes, Factory, LayoutDashboard, NotebookPen, Recycle, Settings, Tag } from "lucide-react";
+import { Boxes, ClipboardList, Factory, FileSpreadsheet, Recycle, Settings, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { outlineIcon } from "../../components/patterns/outlineIcon";
 import { useI18n } from "../../lib/i18n";
 import ApprovalIcon from "../../assets/icons/quality/approval.svg?react";
 import ExtrusionIcon from "../../assets/icons/production/extrusion.svg?react";
 import LabIcon from "../../assets/icons/quality/lab.svg?react";
-import PackagingIcon from "../../assets/icons/production/packaging.svg?react";
 import PlanningIcon from "../../assets/icons/production/planning.svg?react";
 import WorkOrderIcon from "../../assets/icons/production/work-order.svg?react";
 import { WorkOrdersTab } from "./WorkOrdersTab";
@@ -18,18 +17,16 @@ import { WorkCentersTab } from "./WorkCentersTab";
 import { MoldsTab } from "./MoldsTab";
 import { RecipesTab } from "./RecipesTab";
 import { RegrindTab } from "./RegrindTab";
-import { DailyReportsTab } from "./DailyReportsTab";
-import { ConditionnementTab } from "./ConditionnementTab";
+import { DaySheetTab } from "./DaySheetTab";
+import { ShiftReportTab } from "./shift/ShiftReportTab";
 import { ValidationCenterTab } from "./ValidationCenterTab";
-import { ProductionDashboardTab } from "./ProductionDashboardTab";
 import { ProductionSettingsTab } from "./ProductionSettingsTab";
 
 const TABS = [
-  { value: "dashboard", labelKey: "production.tabs.dashboard", icon: LayoutDashboard, Component: ProductionDashboardTab },
   { value: "work-orders", labelKey: "production.tabs.workOrders", icon: outlineIcon(WorkOrderIcon), Component: WorkOrdersTab },
   { value: "planning", labelKey: "production.tabs.planning", icon: outlineIcon(PlanningIcon), Component: PlanningTab },
-  { value: "daily-reports", labelKey: "production.tabs.dailyReports", icon: NotebookPen, Component: DailyReportsTab },
-  { value: "conditionnement", labelKey: "production.tabs.conditionnement", icon: outlineIcon(PackagingIcon), Component: ConditionnementTab },
+  { value: "shift-report", labelKey: "production.tabs.shiftReport", icon: ClipboardList, Component: ShiftReportTab },
+  { value: "day-sheet", labelKey: "production.tabs.daySheet", icon: FileSpreadsheet, Component: DaySheetTab },
   { value: "validation", labelKey: "production.tabs.validation", icon: outlineIcon(ApprovalIcon), Component: ValidationCenterTab },
   { value: "recipes", labelKey: "production.tabs.recipes", icon: outlineIcon(LabIcon), Component: RecipesTab },
   { value: "regrind", labelKey: "production.tabs.regrind", icon: Recycle, Component: RegrindTab },
@@ -47,8 +44,14 @@ export function ProductionPage() {
   const [searchParams, setSearchParams] = useSearchParams();
   // The tab lives in the URL so a dashboard alert, a bookmark or a shared link
   // can land straight on the right screen.
-  const requested = searchParams.get("tab") as TabValue | null;
-  const tab: TabValue = TABS.some((entry) => entry.value === requested) ? requested! : "dashboard";
+  const requested = searchParams.get("tab") as TabValue | "dashboard" | "daily-reports" | "conditionnement" | null;
+  // The dashboard moved to its own sidebar entry; keep old ?tab=dashboard links working.
+  if (requested === "dashboard") return <Navigate to="/production/dashboard" replace />;
+  // Daily and Conditionnement reports are filled in one place now, the shift report; old links land there.
+  if (requested === "daily-reports" || requested === "conditionnement") {
+    return <Navigate to="/production?tab=shift-report" replace />;
+  }
+  const tab: TabValue = TABS.some((entry) => entry.value === requested) ? requested! : "work-orders";
   const setTab = (value: TabValue) => setSearchParams({ tab: value }, { replace: true });
   const ActiveTab = TABS.find((t) => t.value === tab)!.Component;
 

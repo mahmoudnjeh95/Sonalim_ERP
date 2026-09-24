@@ -2,7 +2,7 @@
 
 The domain tests pin the arithmetic. What matters here is where the mix comes
 from, because two tables record material entering an OF and they overlap: a
-product named on a daily report must never also be counted from the OF's poured
+product named on a shift run must never also be counted from the OF's poured
 input lines, or a correct mix produces a warning.
 
 Nothing here asserts a refusal. The check is advisory by design, and the last
@@ -16,14 +16,20 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
-from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.recipe_check_service import RecipeCheckService
 from modules.production.api.regrind_service import RegrindDefaultsService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import DailyReportDetail, SemolinaLine
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-recipe-check"
+
+
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
 
 
 @pytest.fixture
@@ -98,7 +104,7 @@ def _recipe(db, env, *lines) -> str:
 
 
 def _of(db, env, *, recipe_id=None, poured_inputs=None, start_date=None):
-    created = WorkOrderService(db).create_work_order(
+    created = _ok(WorkOrderService(db).create_work_order(
         tenant_id=TENANT,
         actor_id=env["actor"],
         product_id=env["pasta"],
@@ -108,36 +114,35 @@ def _of(db, env, *, recipe_id=None, poured_inputs=None, start_date=None):
         poured_inputs=poured_inputs or [],
         poured_inputs_location_id=env["location"] if poured_inputs else None,
         start_date=start_date,
-    )
-    assert isinstance(created, Ok), getattr(created, "message", "")
-    return created.value
+    ))
+    _ok(WorkOrderService(db).start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=created.id))
+    return created
 
 
-def _daily(db, env, of, *, date, shift="morning", validate=True, **detail):
-    semolina_lines = detail.pop("semolina_lines", None)
-    if semolina_lines is None:
-        semolina_lines = (
-            SemolinaLine(
-                product_id=detail.pop("semolina_product_id", env["semoule"]),
-                quantity=detail.pop("semolina_quantity", 0),
-                location_id=env["location"],
-            ),
-        )
-    detail["semolina_lines"] = semolina_lines
-    detail.setdefault("raw_material_location_id", env["location"])
-    service = ProductionReportService(db)
-    created = service.create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=date, shift=shift,
-        equipment_id=env["equipment"],
-        detail=DailyReportDetail(**detail),
-    )
-    assert isinstance(created, Ok), getattr(created, "message", "")
-    report = created.value["report"]
-    service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
-    if validate:
-        result = service.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id)
-        assert isinstance(result, Ok), getattr(result, "message", "")
-    return report
+def _run_shift(db, env, of, *, date, shift="morning", validate=True, semolina_quantity=0,
+                regrind_input_quantity=0, regrind_input_product_id=None) -> str:
+    """A shift with one run pouring this mix, submitted (and validated unless told not to)."""
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=date, shift=shift,
+    ))["id"]
+    run = {
+        "of_id": of.id, "equipment_id": env["equipment"], "start_time": "07:00", "end_time": "14:00",
+        "production_minutes": 420, "finished_product_quantity": 900,
+        "raw_material_location_id": env["location"],
+        "semolina_lines": [{"product_id": env["semoule"], "quantity": semolina_quantity, "location_id": env["location"]}],
+        "regrind_input_quantity": regrind_input_quantity, "regrind_input_product_id": regrind_input_product_id,
+    }
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    if not validate:
+        return shift_id
+    for key in SECTION_KEYS:
+        if key == "runs":
+            _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    return shift_id
 
 
 def _check(db, of) -> dict:
@@ -153,10 +158,10 @@ def _codes(check) -> set:
 # --- where the mix comes from -----------------------------------------------
 
 
-def test_the_mix_is_read_from_validated_daily_reports(db, env):
+def test_the_mix_is_read_from_validated_shift_runs(db, env):
     recipe = _recipe(db, env, (env["semoule"], 85, 95, True), (env["rebroyat"], 5, 15, False))
     of = _of(db, env, recipe_id=recipe)
-    _daily(
+    _run_shift(
         db, env, of, date=datetime.date(2026, 9, 1),
         semolina_quantity=900, regrind_input_quantity=100, regrind_input_product_id=env["rebroyat"],
     )
@@ -166,11 +171,11 @@ def test_the_mix_is_read_from_validated_daily_reports(db, env):
     assert check["findings"] == []
 
 
-def test_a_draft_report_is_not_part_of_the_mix_yet(db, env):
-    """Only validated reports moved stock, so only they describe what was poured."""
+def test_a_draft_shift_is_not_part_of_the_mix_yet(db, env):
+    """Only validated shifts moved stock, so only they describe what was poured."""
     recipe = _recipe(db, env, (env["semoule"], 85, 95, True))
     of = _of(db, env, recipe_id=recipe)
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=900, validate=False)
+    _run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=900, validate=False)
 
     check = _check(db, of)
     assert check["mix_total"] == 0
@@ -180,11 +185,11 @@ def test_a_draft_report_is_not_part_of_the_mix_yet(db, env):
 def test_shifts_accumulate_into_one_mix(db, env):
     recipe = _recipe(db, env, (env["semoule"], 85, 95, True), (env["rebroyat"], 5, 15, False))
     of = _of(db, env, recipe_id=recipe)
-    _daily(
+    _run_shift(
         db, env, of, date=datetime.date(2026, 9, 1), shift="morning",
         semolina_quantity=450, regrind_input_quantity=50, regrind_input_product_id=env["rebroyat"],
     )
-    _daily(
+    _run_shift(
         db, env, of, date=datetime.date(2026, 9, 1), shift="afternoon",
         semolina_quantity=450, regrind_input_quantity=50, regrind_input_product_id=env["rebroyat"],
     )
@@ -194,31 +199,31 @@ def test_shifts_accumulate_into_one_mix(db, env):
     assert check["findings"] == []
 
 
-def test_poured_input_lines_supply_components_the_daily_report_cannot_record(db, env):
-    """A daily report has fields for semoule and rebroyat and nothing else, so an
+def test_poured_input_lines_supply_components_the_shift_run_cannot_record(db, env):
+    """A shift run has fields for semoule and rebroyat and nothing else, so an
     additive only ever reaches the mix through the OF's input lines."""
     recipe = _recipe(db, env, (env["semoule"], 95, 99, True), (env["additive"], 1, 5, False))
     of = _of(db, env, recipe_id=recipe, poured_inputs=[(env["additive"], 20)])
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=980)
+    _run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=980)
 
     check = _check(db, of)
     assert check["mix_total"] == 1000
     assert check["findings"] == []
 
 
-def test_a_product_on_a_report_is_not_counted_twice_from_the_input_lines(db, env):
+def test_a_product_on_a_run_is_not_counted_twice_from_the_input_lines(db, env):
     """The OF was opened declaring 900 kg of semoule and the shift then reported
     pouring the same 900. Counting both makes 1800 and turns a correct mix into a
     violation — the exact failure this rule exists to prevent."""
     recipe = _recipe(db, env, (env["semoule"], 85, 95, True), (env["rebroyat"], 5, 15, False))
     of = _of(db, env, recipe_id=recipe, poured_inputs=[(env["semoule"], 900)])
-    _daily(
+    _run_shift(
         db, env, of, date=datetime.date(2026, 9, 1),
         semolina_quantity=900, regrind_input_quantity=100, regrind_input_product_id=env["rebroyat"],
     )
 
     check = _check(db, of)
-    assert check["mix_total"] == 1000, "the report's figure, not the sum of both records"
+    assert check["mix_total"] == 1000, "the run's figure, not the sum of both records"
     assert check["findings"] == []
 
 
@@ -228,7 +233,7 @@ def test_a_product_on_a_report_is_not_counted_twice_from_the_input_lines(db, env
 def test_too_much_rebroyat_is_reported_against_its_limit(db, env):
     recipe = _recipe(db, env, (env["semoule"], 85, 95, True), (env["rebroyat"], 5, 15, False))
     of = _of(db, env, recipe_id=recipe)
-    _daily(
+    _run_shift(
         db, env, of, date=datetime.date(2026, 9, 1),
         semolina_quantity=700, regrind_input_quantity=300, regrind_input_product_id=env["rebroyat"],
     )
@@ -242,7 +247,7 @@ def test_too_much_rebroyat_is_reported_against_its_limit(db, env):
 def test_a_component_the_recipe_names_but_nobody_poured_is_reported(db, env):
     recipe = _recipe(db, env, (env["semoule"], 85, 100, True), (env["additive"], 1, 5, False))
     of = _of(db, env, recipe_id=recipe)
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
+    _run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
 
     assert ("COMPONENT_NOT_POURED", env["additive"]) in _codes(_check(db, of))
 
@@ -250,7 +255,7 @@ def test_a_component_the_recipe_names_but_nobody_poured_is_reported(db, env):
 def test_a_product_the_recipe_does_not_name_is_reported(db, env):
     recipe = _recipe(db, env, (env["semoule"], 0, 100, True))
     of = _of(db, env, recipe_id=recipe, poured_inputs=[(env["additive"], 50)])
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=950)
+    _run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=950)
 
     assert ("NOT_IN_RECIPE", env["additive"]) in _codes(_check(db, of))
 
@@ -259,7 +264,7 @@ def test_an_of_without_a_recipe_says_so_rather_than_passing(db, env):
     """An empty findings list on a screen reads as "checked, all good". An OF with
     no formula was never checked at all, and the flag is how the UI can say that."""
     of = _of(db, env)
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
+    _run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
 
     check = _check(db, of)
     assert check["has_recipe"] is False
@@ -299,15 +304,15 @@ def test_a_mix_far_outside_a_hard_limit_still_files_and_validates(db, env):
     recipe = _recipe(db, env, (env["semoule"], 95, 100, True))
     of = _of(db, env, recipe_id=recipe)
 
-    report = _daily(
+    shift_id = _run_shift(
         db, env, of, date=datetime.date(2026, 9, 1),
         semolina_quantity=500, regrind_input_quantity=500, regrind_input_product_id=env["rebroyat"],
     )
 
     stored = db.execute(
-        "SELECT status FROM production.production_reports WHERE id = %s", (report.id,)
+        "SELECT status FROM production.shift_reports WHERE id = %s", (shift_id,)
     ).fetchone()
-    assert stored[0] == "validated", "the report went all the way through"
+    assert stored[0] == "validated", "the shift went all the way through"
 
     check = _check(db, of)
     assert check["hard_finding_count"] >= 1, "and the drift is still reported"
@@ -319,12 +324,12 @@ def test_a_mix_far_outside_a_hard_limit_still_files_and_validates(db, env):
 def test_drift_summary_aggregates_hard_and_soft_ofs_by_recipe(db, env):
     recipe = _recipe(db, env, (env["semoule"], 85, 95, True), (env["rebroyat"], 5, 15, False))
     clean = _of(db, env, recipe_id=recipe)
-    _daily(
+    _run_shift(
         db, env, clean, date=datetime.date(2026, 9, 1),
         semolina_quantity=900, regrind_input_quantity=100, regrind_input_product_id=env["rebroyat"],
     )
     drifted = _of(db, env, recipe_id=recipe)
-    _daily(
+    _run_shift(
         db, env, drifted, date=datetime.date(2026, 9, 2),
         semolina_quantity=500, regrind_input_quantity=500, regrind_input_product_id=env["rebroyat"],
     )
@@ -339,7 +344,7 @@ def test_drift_summary_aggregates_hard_and_soft_ofs_by_recipe(db, env):
 
 def test_drift_summary_excludes_ofs_with_no_recipe(db, env):
     of = _of(db, env)
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
+    _run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000)
 
     rows = RecipeCheckService(db).list_recipe_drift(tenant_id=TENANT)
     assert rows == []
@@ -348,9 +353,9 @@ def test_drift_summary_excludes_ofs_with_no_recipe(db, env):
 def test_drift_summary_is_filtered_by_start_date(db, env):
     recipe = _recipe(db, env, (env["semoule"], 85, 95, True))
     in_range = _of(db, env, recipe_id=recipe, start_date=datetime.date(2026, 9, 5))
-    _daily(db, env, in_range, date=datetime.date(2026, 9, 5), semolina_quantity=1000)
+    _run_shift(db, env, in_range, date=datetime.date(2026, 9, 5), semolina_quantity=1000)
     out_of_range = _of(db, env, recipe_id=recipe, start_date=datetime.date(2026, 1, 1))
-    _daily(db, env, out_of_range, date=datetime.date(2026, 1, 1), semolina_quantity=1000)
+    _run_shift(db, env, out_of_range, date=datetime.date(2026, 1, 1), semolina_quantity=1000)
 
     rows = RecipeCheckService(db).list_recipe_drift(tenant_id=TENANT, date_from="2026-09-01", date_to="2026-09-30")
     row = next(r for r in rows if r["recipe_id"] == recipe)

@@ -18,7 +18,6 @@ import { Select } from "../../components/ui/select";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -43,6 +42,7 @@ import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { GroupHeaderRow } from "../../components/patterns/GroupHeaderRow";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
+import { QuantityExpressionInput } from "../../components/patterns/QuantityExpressionInput";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { groupRows, type GroupSpec } from "../../lib/groupRows";
@@ -52,6 +52,7 @@ import {
   correctValidatedConditionnementReport,
   createConditionnementReport,
   deleteReport,
+  getLotSuggestion,
   getReport,
   getReportPackagingVariance,
   listMachines,
@@ -63,6 +64,7 @@ import {
   updateConditionnementReport,
   type ConditionnementReportDetail,
   type DailyReportDetail,
+  type LotSuggestion,
   type Product,
   type ProductionReport,
   type ReportStatus,
@@ -73,6 +75,8 @@ import { listProductTags, type ProductTag } from "../products/api";
 import { productUnit, formatQuantity } from "../../lib/units";
 import { PackagingVariancePanel } from "./PackagingVariancePanel";
 import { OfConsolidationHint } from "./OfConsolidationHint";
+import { useWasteTypes } from "./wasteTypes";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 // A product qualifies for a packaging role (Film/Carton/Ruban) by tag, and for a
 // PC-only or PL-only variant by product_family -- see
@@ -109,7 +113,8 @@ function finishedGoodOptions(products: Product[], orderType: string | null | und
   return filtered;
 }
 
-type WasteLine = { category: "product" | "packaging"; product_id: string; quantity: number; note: string };
+// `category` is a built-in kind or the id of one the plant added.
+type WasteLine = { category: string; product_id: string; quantity: number; note: string };
 type CreateForm = {
   packets_counted: number;
   finished_goods_location_id?: string;
@@ -173,7 +178,7 @@ const EMPTY_DETAIL = {
   ruban_product_id: "",
   ruban_supplier_id: "",
   packaging_location_id: "",
-  waste_lines: [] as WasteLineForm<"product" | "packaging">[],
+  waste_lines: [] as WasteLineForm[],
   machine_speed: undefined,
   production_minutes: 0,
   downtime_minutes: 0,
@@ -243,7 +248,9 @@ export function ConditionnementTab() {
     packaging_location_id: z.string().optional(),
     waste_lines: z.array(
       z.object({
-        category: z.enum(["product", "packaging"]),
+        // A built-in kind or the id of one the plant added; the backend refuses
+        // one the packing report does not have.
+        category: z.string().min(1),
         product_id: z.string(),
         quantity: z.coerce.number().min(0),
         note: z.string(),
@@ -337,6 +344,26 @@ export function ConditionnementTab() {
     queryFn: () => listMachines(token, selectedWorkCenterId!),
     enabled: !!selectedWorkCenterId,
   });
+  // The lot the line's last one is counted on to (4187SNL and three days later is
+  // 4190SNL). It fills the box while nobody has typed a lot of their own and is
+  // replaced as the date or line changes; once the team types another it stays put,
+  // and a button offers the suggestion back.
+  const reportDate = form.watch("report_date");
+  const { data: lotSuggestion } = useQuery({
+    queryKey: ["production", "lot-suggestion", selectedWorkCenterId, reportDate],
+    queryFn: () => getLotSuggestion(token, { workCenterId: selectedWorkCenterId!, reportDate }),
+    enabled: !!selectedWorkCenterId && !!reportDate,
+  });
+  const suggestedLot = lotSuggestion?.lot_number ?? null;
+  const lastSuggestedLot = useRef<string | null>(null);
+  useEffect(() => {
+    const current = (form.getValues("lot_number") ?? "").trim();
+    if (current === "" || current === lastSuggestedLot.current) form.setValue("lot_number", suggestedLot ?? "");
+    lastSuggestedLot.current = suggestedLot;
+    // form.getValues / setValue are stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggestedLot]);
+
   // The chosen OF's daily reports, to link this packing run back to the one
   // whose output it packaged — see daily_report_id's docstring.
   const { data: dailyReports = [] } = useQuery({
@@ -686,6 +713,7 @@ export function ConditionnementTab() {
                 finishedProductId={productOfOrder(form.watch("of_id")) || form.watch("product_id") || undefined}
                 suppliers={suppliers}
                 dailyReports={dailyReports}
+                lotSuggestion={lotSuggestion}
               />
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                       {createMutation.isPending ? t("common.saving") : t("production.conditionnement.create")}
@@ -698,10 +726,7 @@ export function ConditionnementTab() {
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="space-y-2 p-6">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-9 w-full" />
-            </div>
+            <AppLoader className="py-8" />
           ) : visible.length === 0 ? (
             <EmptyState
               icon={<Boxes className="h-5 w-5" />}
@@ -843,6 +868,7 @@ export function PackingReportDialog({
 }) {
   const { session } = useAuth();
   const { t } = useI18n();
+  const { label: wasteLabel } = useWasteTypes();
   const token = session!.token;
   const queryClient = useQueryClient();
   const [reason, setReason] = useState("");
@@ -866,7 +892,9 @@ export function PackingReportDialog({
     packaging_location_id: z.string().optional(),
     waste_lines: z.array(
       z.object({
-        category: z.enum(["product", "packaging"]),
+        // A built-in kind or the id of one the plant added; the backend refuses
+        // one the packing report does not have.
+        category: z.string().min(1),
         product_id: z.string(),
         quantity: z.coerce.number().min(0),
         note: z.string(),
@@ -911,7 +939,7 @@ export function PackingReportDialog({
       shift: report.shift ?? "",
       ...EMPTY_DETAIL,
       ...(detail ?? {}),
-      waste_lines: toWasteLineForms<"product" | "packaging">(detail?.waste_lines),
+      waste_lines: toWasteLineForms(detail?.waste_lines),
       finished_goods_location_id: detail?.finished_goods_location_id ?? "",
       packaging_location_id: detail?.packaging_location_id ?? "",
       film_product_id: detail?.film_product_id ?? "",
@@ -984,7 +1012,7 @@ export function PackingReportDialog({
     // One row per déchet, each labelled with its own item and unit. Scotch
     // shows up here on its own now instead of having nowhere to go.
     ...(detail?.waste_lines ?? []).map((line) => ({
-      label: `${t(`production.waste.category.${line.category}` as Parameters<typeof t>[0])} — ${
+      label: `${wasteLabel(line.category)} — ${
         (line.product_id && products.find((p) => p.id === line.product_id)?.name) ||
         t("production.waste.unknownItem")
       }`,
@@ -1002,7 +1030,7 @@ export function PackingReportDialog({
     },
     { label: t("production.downtime.field.note"), value: detail?.downtime_note ?? "—" },
     { label: t("production.conditionnement.field.lotNumber"), value: detail?.lot_number ?? "—" },
-    { label: t("production.conditionnement.field.dlc"), value: detail?.dlc_date ?? "—" },
+    ...(detail?.dlc_date ? [{ label: t("production.conditionnement.field.dlc"), value: detail.dlc_date }] : []),
   ];
 
   const needsReason = report.status !== "draft";
@@ -1272,6 +1300,7 @@ function PackingDetailFields({
   finishedProductId,
   suppliers,
   dailyReports = [],
+  lotSuggestion,
 }: {
   form: ReturnType<typeof useForm<CreateForm>>;
   products: Product[];
@@ -1282,8 +1311,11 @@ function PackingDetailFields({
   finishedProductId: string | undefined;
   suppliers: Partner[];
   dailyReports?: ProductionReport[];
+  /** What the lot box is offered on a new report; absent while editing one that already has its lot. */
+  lotSuggestion?: LotSuggestion;
 }) {
   const { t } = useI18n();
+  const { categoriesFor } = useWasteTypes();
   const tagId = (name: string) => productTags.find((tag) => tag.name === name)?.id;
   const filmOptions = packagingRoleOptions(products, tagId("FILM"), orderType, form.watch("film_product_id"));
   const cartonOptions = packagingRoleOptions(products, tagId("CARTON"), orderType, form.watch("carton_product_id"));
@@ -1465,8 +1497,16 @@ function PackingDetailFields({
         <div className="space-y-3">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-1.5">
-              <Label htmlFor="film_quantity">{withUnit(t("production.conditionnement.field.film"), filmUnit)}</Label>
-              <Input id="film_quantity" type="number" step="any" {...form.register("film_quantity")} />
+              <Label htmlFor="film_quantity" className="flex items-center gap-1">
+                {withUnit(t("production.conditionnement.field.film"), filmUnit)}
+                <HelpTooltip text={t("production.conditionnement.help.filmSum")} />
+              </Label>
+              <QuantityExpressionInput
+                id="film_quantity"
+                unit={filmUnit}
+                value={form.watch("film_quantity")}
+                onValueChange={(value) => form.setValue("film_quantity", value, { shouldDirty: true, shouldValidate: true })}
+              />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="film_product_id">{t("production.conditionnement.field.filmProduct")}</Label>
@@ -1547,7 +1587,10 @@ function PackingDetailFields({
         <WasteLinesField
           form={form}
           name="waste_lines"
-          categories={["product", "packaging"]}
+          categories={categoriesFor(
+            "conditionnement",
+            (form.watch("waste_lines") ?? []).map((line) => line.category),
+          )}
           products={products}
           uoms={uoms}
           defaultProductFor={(category) =>
@@ -1571,10 +1614,23 @@ function PackingDetailFields({
           <div className="space-y-1.5">
             <Label htmlFor="lot_number">{t("production.conditionnement.field.lotNumber")}</Label>
             <Input id="lot_number" {...form.register("lot_number")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="dlc_date">{t("production.conditionnement.field.dlc")}</Label>
-            <Input id="dlc_date" type="date" {...form.register("dlc_date")} />
+            {lotSuggestion?.lot_number && lotSuggestion.based_on && (
+              <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+                <span>
+                  {t("production.conditionnement.lotSuggestion.from")} {lotSuggestion.based_on.lot_number} (
+                  {lotSuggestion.based_on.report_date})
+                </span>
+                {(form.watch("lot_number") ?? "").trim() !== lotSuggestion.lot_number && (
+                  <button
+                    type="button"
+                    className="font-medium text-primary underline-offset-2 hover:underline"
+                    onClick={() => form.setValue("lot_number", lotSuggestion.lot_number ?? "", { shouldDirty: true })}
+                  >
+                    {t("production.conditionnement.lotSuggestion.apply")} {lotSuggestion.lot_number}
+                  </button>
+                )}
+              </p>
+            )}
           </div>
           <div className="space-y-1.5">
             <Label htmlFor="machine_speed">{t("production.conditionnement.field.machineSpeed")} (u/min)</Label>

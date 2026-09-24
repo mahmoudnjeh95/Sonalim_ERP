@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import datetime
 
 import psycopg
@@ -12,6 +13,7 @@ from modules.warehouse.domain.lot import (
     LotStock,
     receive_into_lot,
     transition_lot,
+    validate_expiry_date,
     validate_lot_number,
     validate_new_lot,
 )
@@ -40,12 +42,26 @@ class LotService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
-    def list_lots(self, *, tenant_id: str, product_id: str | None = None) -> list[Lot]:
+    def list_lots(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str | None = None,
+        source_type: str | None = None,
+        without_expiry: bool = False,
+    ) -> list[Lot]:
+        """`source_type` and `without_expiry` narrow the list to, for instance, the finished-goods
+        lots production registered that are still waiting for their DLC."""
         clauses = ["tenant_id = %s"]
         params: list[object] = [tenant_id]
         if product_id is not None:
             clauses.append("product_id = %s")
             params.append(product_id)
+        if source_type is not None:
+            clauses.append("source_type = %s")
+            params.append(source_type)
+        if without_expiry:
+            clauses.append("expiry_date IS NULL")
         rows = self._connection.execute(
             f"SELECT {_LOT_COLUMNS} FROM warehouse.lots WHERE {' AND '.join(clauses)} ORDER BY created_at DESC", params
         ).fetchall()
@@ -234,6 +250,41 @@ class LotService:
             payload={"location_id": location_id, "quantity": quantity},
         )
         return Ok(lot)
+
+    def set_expiry(
+        self, *, tenant_id: str, actor_id: str, lot_id: str, expiry_date: datetime.date
+    ) -> Result[Lot]:
+        """Set, or correct, a lot's DLC.
+
+        Production files a finished-goods lot with its number only; the DLC is entered
+        afterwards by whoever owns it (quality). It is an audited change of its own, and
+        correcting one already set is allowed -- the trail keeps what it was.
+        """
+        row = self._connection.execute(
+            f"SELECT {_LOT_COLUMNS} FROM warehouse.lots WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (lot_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"lot {lot_id} not found")
+        lot = _row_to_lot(row)
+        validation = validate_expiry_date(expiry_date=expiry_date, produced_at=lot.produced_at)
+        if isinstance(validation, Err):
+            return validation
+
+        self._connection.execute(
+            "UPDATE warehouse.lots SET expiry_date = %s WHERE id = %s AND tenant_id = %s",
+            (expiry_date, lot_id, tenant_id),
+        )
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="lot.expiry_set",
+            entity_type="lot",
+            entity_id=lot_id,
+            payload={"lot_number": lot.lot_number, "from": lot.expiry_date, "to": expiry_date.isoformat()},
+        )
+        return Ok(dataclasses.replace(lot, expiry_date=expiry_date.isoformat()))
 
     def transition_lot_status(self, *, tenant_id: str, actor_id: str, lot_id: str, new_status: str) -> Result[Lot]:
         row = self._connection.execute(

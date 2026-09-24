@@ -149,7 +149,7 @@ export function PartnerDetailsPage() {
             <CardTitle>{t("partners.details.openPipeline")}</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
-            {new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(
+            {new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(
               opportunities.filter((o) => !["won", "lost"].includes(o.stage)).reduce((sum, o) => sum + o.amount, 0),
             )}
           </CardContent>

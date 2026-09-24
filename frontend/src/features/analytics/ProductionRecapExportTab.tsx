@@ -23,7 +23,6 @@ import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHeader, TableRow, ResizableTableHead } from "../../components/ui/table";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { StatCard } from "../../components/patterns/StatCard";
@@ -40,6 +39,7 @@ import {
 } from "../production/api";
 import { listProducts } from "../warehouse/api";
 import { listPartners } from "../partners/api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
@@ -277,13 +277,7 @@ export function ProductionRecapExportTab() {
         </CardContent>
       </Card>
 
-      {isLoading && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-24 w-full" />
-          ))}
-        </div>
-      )}
+      {isLoading && <AppLoader className="py-8" />}
 
       {!isLoading && isError && (
         <Card>

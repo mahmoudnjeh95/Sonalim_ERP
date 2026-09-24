@@ -256,18 +256,22 @@ class NonConformityService:
         `packets_per_carton`, means a caller can never reintroduce the bug of
         posting a carton count straight through as a piece count -- it doesn't
         get to choose the number at all once a quality report is attached.
+
+        The unit of an NC is (report, of_id, product_id): a shift's QC report can
+        span several products, and one shift can pack the same product for the
+        same OF on several packing rows (one line each). The NC covers all of
+        them, so the carton count is the sum over every matching line.
         """
         row = self._connection.execute(
             """
-            SELECT d.non_conforming_cartons
-            FROM qc.quality_report_details d
-            JOIN qc.quality_reports r ON r.id = d.report_id AND r.tenant_id = d.tenant_id
-            WHERE d.report_id = %s AND d.tenant_id = %s AND r.of_id = %s
+            SELECT COALESCE(SUM(l.non_conforming_cartons), 0), count(*)
+            FROM qc.quality_conformity_lines l
+            WHERE l.report_id = %s AND l.tenant_id = %s AND l.of_id = %s AND l.product_id = %s
             """,
-            (quality_report_id, tenant_id, of_id),
+            (quality_report_id, tenant_id, of_id, product_id),
         ).fetchone()
-        if row is None:
-            return Err("QUALITY_REPORT_NOT_FOUND", f"no quality report {quality_report_id} found for OF {of_id}")
+        if int(row[1]) == 0:
+            return Err("QUALITY_REPORT_NOT_FOUND", f"no conformity line on report {quality_report_id} for OF {of_id} / product {product_id}")
         non_conforming_cartons = float(row[0])
 
         product = self._core.get_product(tenant_id, product_id)

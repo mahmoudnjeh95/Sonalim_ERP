@@ -192,14 +192,27 @@ def test_analytics_payload_variable_cost_is_none_not_zero_when_mp_is_unpriced(db
     assert current["tonnage"] == pytest.approx(3.8)
 
 
-def test_analytics_payload_flags_cost_anomalies_from_purchase_history(db, env, of):
+def test_analytics_payload_ranks_receipts_priced_above_their_own_baseline(db, env, of):
     _confirm_a_receipt(db, env, quantity=100, base_cost=55_000_000, invoice_date=datetime.date(2026, 7, 1))  # 550,000/t baseline
     _confirm_a_receipt(db, env, quantity=10, base_cost=50_000_000, invoice_date=datetime.date(2026, 8, 1))  # 5,000,000/t -- an outlier
 
     payload = build_analytics_payload(db, tenant_id=TENANT, period="month", date="2026-08-15")
 
+    # The first receipt has no baseline, so only the dearer second one is listed.
     assert len(payload["anomalies"]) == 1
     anomaly = payload["anomalies"][0]
     assert anomaly["product_id"] == env["semoule"]
     assert anomaly["cost_per_unit_base"] == pytest.approx(5_000_000)
-    assert anomaly["is_cost_anomaly"] is True
+    assert anomaly["cost_deviation_pct"] > 0
+
+
+def test_a_receipt_priced_a_little_above_baseline_is_listed_without_any_cut_off(db, env, of):
+    # No percentage threshold decides what appears: any deviation above the
+    # baseline is a recorded fact, ranked by size.
+    _confirm_a_receipt(db, env, quantity=100, base_cost=55_000_000, invoice_date=datetime.date(2026, 7, 1))  # 550,000/t
+    _confirm_a_receipt(db, env, quantity=100, base_cost=55_500_000, invoice_date=datetime.date(2026, 8, 1))  # 555,000/t, about +0.9%
+
+    payload = build_analytics_payload(db, tenant_id=TENANT, period="month", date="2026-08-15")
+
+    assert len(payload["anomalies"]) == 1
+    assert 0 < payload["anomalies"][0]["cost_deviation_pct"] < 15

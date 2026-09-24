@@ -14,13 +14,14 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
-from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import ConditionnementReportDetail, DailyReportDetail, SemolinaLine
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.production_report import DailyReportDetail, SemolinaLine
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.api.quality_service import QualityReportService
-from modules.qc.domain.quality import QualityReportDetail
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-closure"
@@ -39,12 +40,14 @@ def env(db):
         (uom, TENANT),
     )
     db.execute(
-        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'CLOSE-P', 'Pasta', %s)",
-        (product, TENANT, uom),
-    )
-    db.execute(
         "INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'FG', 'Finished goods')",
         (location, TENANT),
+    )
+    # A default location, because validating a shift posts the packed pasta there.
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id, default_location_id) "
+        "VALUES (%s, %s, 'CLOSE-P', 'Pasta', %s, %s)",
+        (product, TENANT, uom, location),
     )
     db.execute(
         "INSERT INTO warehouse.locations (id, tenant_id, code, name, is_blocked) "
@@ -193,29 +196,44 @@ def test_open_quality_follow_up_warns_but_never_blocks(db, env, of):
     """The 40-day window outlives production by design."""
     _report(db, env, of, date=datetime.date(2026, 9, 1))
 
-    packing = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 1),
-        equipment_id=env["equipment"],
-        detail=ConditionnementReportDetail(),
+    # A packing shift, validated immediately -- an open shift would itself be
+    # unfinished production work, and that is not what this test is about.
+    shifts = ShiftReportService(db)
+    opened = shifts.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
+        report_date=datetime.date(2026, 9, 1), shift="morning",
     )
-    assert isinstance(packing, Ok), getattr(packing, "message", "")
-    packing_report_id = packing.value["report"].id
-    # Submitted and validated immediately -- a draft packing report would itself
-    # block closure, and that is not what this test is about.
-    reports = ProductionReportService(db)
-    assert isinstance(
-        reports.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=packing_report_id), Ok
+    assert isinstance(opened, Ok), getattr(opened, "message", "")
+    shift_id = opened.value["id"]
+    saved = shifts.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="packing",
+        payload={"rows": [{
+            "of_id": of.id, "product_id": env["product"], "equipment_id": env["equipment"],
+            "finished_product_quantity": 900, "packets_counted": 200,
+        }]},
     )
-    assert isinstance(
-        reports.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=packing_report_id), Ok
+    assert isinstance(saved, Ok), getattr(saved, "message", "")
+    for key in SECTION_KEYS:
+        if key == "packing":
+            done = shifts.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key)
+        else:
+            done = shifts.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key)
+        assert isinstance(done, Ok), getattr(done, "message", "")
+    validated = ShiftValidationService(db).validate_shift(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id
     )
+    assert isinstance(validated, Ok), getattr(validated, "message", "")
 
     quality = QualityReportService(db)
-    created = quality.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing_report_id,
-        detail=QualityReportDetail(conforming_cartons=100),
-    )
+    created = quality.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id)
+    assert isinstance(created, Ok), getattr(created, "message", "")
     report_id = created.value["report"].id
+    line = created.value["lines"][0]
+    updated = quality.update_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report_id,
+        lines=[{"shift_packing_row_id": line.shift_packing_row_id, "conforming_cartons": 100}],
+    )
+    assert isinstance(updated, Ok), getattr(updated, "message", "")
     quality.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id)
     quality.validate_report(
         tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())

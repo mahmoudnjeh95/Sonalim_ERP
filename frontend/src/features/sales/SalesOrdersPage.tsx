@@ -16,7 +16,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -39,6 +38,7 @@ import { listPartners } from "../partners/api";
 import { listProducts } from "../production/api";
 import { listProductTags } from "../products/api";
 import { confirmOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const lineSchema = z.object({
   product_id: z.string().min(1, "Required"),
@@ -61,7 +61,7 @@ const PRODUCT_TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "USD" }).format(amount);
+  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
 }
 
 export function SalesOrdersPage() {
@@ -278,7 +278,7 @@ export function SalesOrdersPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label={t("sales.stat.total")} value={orders.length} icon={<ShoppingCart className="h-5 w-5" />} />
         <StatCard label={t("sales.stat.confirmed")} value={confirmedCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
-        <StatCard label={t("sales.stat.pipelineValue")} value={Math.round(totalValue)} icon={<ShoppingCart className="h-5 w-5" />} accent="accent" prefix="$" />
+        <StatCard label={t("sales.stat.pipelineValue")} value={Math.round(totalValue)} icon={<ShoppingCart className="h-5 w-5" />} accent="accent" unit="F CFA" />
       </div>
 
       <Card>
@@ -581,14 +581,7 @@ export function SalesOrdersPage() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && filteredOrders.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

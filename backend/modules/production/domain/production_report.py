@@ -53,17 +53,12 @@ class ProductionReport:
 # `finished_product_conditioning` (PF cdt) are daily-report stages, `product` and
 # `packaging` packing-report stages, and `WASTE_CATEGORIES_BY_REPORT_TYPE` is what
 # enforces that -- a packing report cannot claim semoule was spilt before the press.
-WASTE_CATEGORIES = (
-    "raw_material",
-    "press",
-    "pouring",
-    "cross",
-    "kneading",
-    "finished_product_conditioning",
-    "product",
-    "packaging",
-)
-
+#
+# These are the built-ins. A tenant adds its own kinds in `production.waste_types`
+# (an id, a name, and the one report type it belongs to); the id is what a line
+# stores as its category, and the services pass the tenant's ids in as
+# `custom_categories`. The set stays closed -- a typo is still refused -- it is
+# just no longer the same set for every plant.
 WASTE_CATEGORIES_BY_REPORT_TYPE = {
     "daily": ("raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"),
     "conditionnement": ("product", "packaging"),
@@ -336,14 +331,20 @@ def validate_semolina_lines(lines: tuple[SemolinaLine, ...]) -> Result[None]:
     return Ok(None)
 
 
-def validate_waste_lines(lines: tuple[WasteLine, ...], *, report_type: str) -> Result[None]:
+def validate_waste_lines(
+    lines: tuple[WasteLine, ...], *, report_type: str, custom_categories: frozenset[str] = frozenset()
+) -> Result[None]:
     """Check a report's déchet list.
 
     Two rules here, and one deliberately absent:
 
     * a category the report type does not have is refused outright -- a packing
       report claiming semoule was spilt at the press describes a stage it never
-      ran, and would land in the OF's raw-material total;
+      ran, and would land in the OF's raw-material total. The report type's
+      categories are the built-ins plus `custom_categories`: the ids of the
+      tenant's own waste types *for this report type*, which the caller looks up
+      (this module reads no database). A retired type stays in that set, so a
+      report that used it can still be edited;
     * a negative quantity is not waste, it is a typo;
     * naming the item is *not* required here. It is required to submit, alongside
       the stock targets, so a team can still save a half-typed draft.
@@ -353,15 +354,17 @@ def validate_waste_lines(lines: tuple[WasteLine, ...], *, report_type: str) -> R
     notes that tell them apart. The consolidation sums them, so nothing
     downstream cares.
     """
-    allowed = WASTE_CATEGORIES_BY_REPORT_TYPE.get(report_type)
-    if allowed is None:
+    built_in = WASTE_CATEGORIES_BY_REPORT_TYPE.get(report_type)
+    if built_in is None:
         return Err("INVALID_REPORT_TYPE", f"report_type must be one of {sorted(VALID_REPORT_TYPES)}")
+    allowed = (*built_in, *custom_categories)
 
     for line in lines:
         if line.category not in allowed:
             return Err(
                 "INVALID_WASTE_CATEGORY",
-                f"a {report_type} report has no {line.category!r} waste; expected one of {list(allowed)}",
+                f"a {report_type} report has no {line.category!r} waste; "
+                f"expected one of {list(built_in)} or one of the plant's own waste types",
             )
         if line.quantity < 0:
             return Err("INVALID_QUANTITY", "a waste quantity cannot be negative")
@@ -419,12 +422,17 @@ def transition_report(report: ProductionReport, new_status: str) -> Result[Produ
     return Ok(replace(report, status=new_status))
 
 
-def validate_daily_detail(detail: DailyReportDetail) -> Result[None]:
+def validate_daily_detail(
+    detail: DailyReportDetail, *, waste_categories: frozenset[str] = frozenset()
+) -> Result[None]:
     """Check a daily report's figures for internal sense.
 
     Deliberately permissive about the plant's reality: a shift that produced
     nothing is a legitimate report, and a raw-material shortfall never blocks
     anything here — the report records what physically happened.
+
+    `waste_categories` is the tenant's own daily waste types (see
+    `validate_waste_lines`).
     """
     for field in DAILY_QUANTITY_FIELDS:
         if getattr(detail, field) < 0:
@@ -443,7 +451,7 @@ def validate_daily_detail(detail: DailyReportDetail) -> Result[None]:
     semolina_check = validate_semolina_lines(detail.semolina_lines)
     if isinstance(semolina_check, Err):
         return semolina_check
-    return validate_waste_lines(detail.waste_lines, report_type="daily")
+    return validate_waste_lines(detail.waste_lines, report_type="daily", custom_categories=waste_categories)
 
 
 CONDITIONNEMENT_QUANTITY_FIELDS = (
@@ -457,12 +465,18 @@ CONDITIONNEMENT_QUANTITY_FIELDS = (
 )
 
 
-def validate_conditionnement_detail(detail: ConditionnementReportDetail) -> Result[None]:
+def validate_conditionnement_detail(
+    detail: ConditionnementReportDetail, *, waste_categories: frozenset[str] = frozenset()
+) -> Result[None]:
     """Check a packing report's figures for internal sense.
 
     As permissive as the daily report about what the plant reports — a shift that
-    packed nothing is legitimate — but a DLC needs both halves: a lot number
-    without an expiry date, or the reverse, cannot become a usable lot.
+    packed nothing is legitimate. A lot number may be filed without its DLC: the
+    DLC is entered afterwards by quality, on the lot itself. A DLC with no lot number
+    is refused, though -- it would belong to nothing.
+
+    `waste_categories` is the tenant's own packing-report waste types (see
+    `validate_waste_lines`).
     """
     for field in CONDITIONNEMENT_QUANTITY_FIELDS:
         if getattr(detail, field) < 0:
@@ -486,10 +500,9 @@ def validate_conditionnement_detail(detail: ConditionnementReportDetail) -> Resu
             f"motif must be one of {sorted(allowed_motifs)}, got {detail.downtime_reason!r}",
         )
 
-    has_lot = bool((detail.lot_number or "").strip())
-    if has_lot != (detail.dlc_date is not None):
-        return Err("INCOMPLETE_DLC", "a lot number and its DLC date must be given together")
-    return validate_waste_lines(detail.waste_lines, report_type="conditionnement")
+    if detail.dlc_date is not None and not (detail.lot_number or "").strip():
+        return Err("INCOMPLETE_DLC", "a DLC date needs the lot number it belongs to")
+    return validate_waste_lines(detail.waste_lines, report_type="conditionnement", custom_categories=waste_categories)
 
 
 def validate_daily_stock_targets(detail: DailyReportDetail) -> Result[None]:
@@ -548,7 +561,9 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
                 return Err("MISSING_STOCK_TARGET", f"the {label} figure must name the product it consumed")
             if not (detail.packaging_location_id or "").strip():
                 return Err("MISSING_STOCK_TARGET", "packaging figures must name the store they came out of")
-    return validate_waste_products(detail.waste_lines)
+    # Packing waste is a kind and a weight in kilos, recorded as a figure rather than moved as
+    # stock, so unlike production waste it is not asked to name an item.
+    return Ok(None)
 
 
 def validate_report_header(*, report_type: str, of_id: str) -> Result[None]:

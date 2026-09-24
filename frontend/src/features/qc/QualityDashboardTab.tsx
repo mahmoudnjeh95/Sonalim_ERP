@@ -12,28 +12,15 @@ import EmptyQualityIllustration from "../../assets/illustrations/empty-states/em
 import {
   getDispositionSummary,
   listNonConformities,
-  listQualityIndexTrend,
   listQualityTeamPerformance,
   type NcDisposition,
   type NonConformitySeverity,
 } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const NC_QUERY_KEY = ["qc", "non-conformities"] as const;
 const TEAM_CONFORMITY_QUERY_KEY = ["qc", "team-performance", "dashboard-trend"] as const;
 const DISPOSITION_SUMMARY_QUERY_KEY = ["qc", "disposition-summary"] as const;
-const INDEX_TREND_QUERY_KEY = ["qc", "index-trend"] as const;
-
-// Fixed order, first five slots of the validated categorical palette (same
-// hexes as production's WASTE_CATEGORY_COLORS) -- each index gets its own
-// small chart with its own axis rather than sharing one, since these are
-// different process measurements with no guarantee of a comparable scale.
-const INDEX_CHARTS = [
-  { key: "pre_dryer_index", labelKey: "qc.dashboard.chart.indexTrend.preDryer", color: "#2a78d6" },
-  { key: "humidity_percentage", labelKey: "qc.dashboard.chart.indexTrend.humidity", color: "#eb6834" },
-  { key: "cooling_index", labelKey: "qc.dashboard.chart.indexTrend.cooling", color: "#1baf7a" },
-  { key: "pf_index", labelKey: "qc.dashboard.chart.indexTrend.pf", color: "#eda100" },
-  { key: "sumo_index", labelKey: "qc.dashboard.chart.indexTrend.sumo", color: "#e87ba4" },
-] as const;
 
 const SEVERITY_COLORS: Record<NonConformitySeverity, string> = {
   minor: "hsl(38 92% 50%)",
@@ -75,10 +62,6 @@ export function QualityDashboardTab() {
   const { data: dispositionSummary = [] } = useQuery({
     queryKey: DISPOSITION_SUMMARY_QUERY_KEY,
     queryFn: () => getDispositionSummary(token),
-  });
-  const { data: indexTrend = [] } = useQuery({
-    queryKey: [...INDEX_TREND_QUERY_KEY, range.from, range.to],
-    queryFn: () => listQualityIndexTrend(token, { grain: "week", date_from: range.from, date_to: range.to }),
   });
 
   const conformityTrend = useMemo(() => {
@@ -132,20 +115,6 @@ export function QualityDashboardTab() {
     });
   }, [dispositionSummary, t]);
 
-  // One series per index, each only the periods where that particular index
-  // was actually recorded -- a period with no reading for pf_index must not
-  // plot as zero, and connectNulls would draw a false flat line across the gap.
-  const indexSeries = useMemo(
-    () =>
-      INDEX_CHARTS.map((chart) => ({
-        ...chart,
-        data: indexTrend
-          .filter((row) => row[chart.key] !== null)
-          .map((row) => ({ period: row.period, value: row[chart.key] as number })),
-      })).filter((series) => series.data.length >= 2),
-    [indexTrend],
-  );
-
   const statusCounts = useMemo(() => {
     const counts = new Map<string, number>();
     for (const nc of nonConformities) counts.set(nc.status, (counts.get(nc.status) ?? 0) + 1);
@@ -159,10 +128,7 @@ export function QualityDashboardTab() {
 
   if (isLoading) {
     return (
-      <div className="space-y-3">
-        <div className="h-24 w-full animate-pulse rounded-lg bg-muted" />
-        <div className="h-64 w-full animate-pulse rounded-lg bg-muted" />
-      </div>
+      <AppLoader className="py-8" />
     );
   }
 
@@ -243,33 +209,6 @@ export function QualityDashboardTab() {
                 />
               </LineChart>
             </ResponsiveContainer>
-          </CardContent>
-        </Card>
-      )}
-
-      {indexSeries.length > 0 && (
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("qc.dashboard.chart.indexTrend.title")}</CardTitle>
-            <CardDescription>{t("qc.dashboard.chart.indexTrend.description")}</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {indexSeries.map((series) => (
-                <div key={series.key}>
-                  <p className="mb-1 text-sm font-medium text-foreground">{t(series.labelKey)}</p>
-                  <ResponsiveContainer width="100%" height={160}>
-                    <LineChart data={series.data}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
-                      <XAxis dataKey="period" tick={{ fontSize: 10, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} domain={["auto", "auto"]} />
-                      <Tooltip contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }} />
-                      <Line type="monotone" dataKey="value" name={t(series.labelKey)} stroke={series.color} strokeWidth={2} dot={{ r: 2 }} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              ))}
-            </div>
           </CardContent>
         </Card>
       )}

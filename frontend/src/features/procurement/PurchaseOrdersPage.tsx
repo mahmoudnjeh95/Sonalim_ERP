@@ -17,7 +17,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Badge, type BadgeProps } from "../../components/ui/badge";
 import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
 import { StatCard } from "../../components/patterns/StatCard";
@@ -55,6 +54,7 @@ import {
   type PurchaseOrderStatus,
   type UpdatePurchaseOrderInput,
 } from "./api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const QUERY_KEY = ["procurement", "purchase-orders"] as const;
 const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
@@ -854,14 +854,7 @@ export function PurchaseOrdersPage() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && filteredOrders.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

@@ -15,15 +15,15 @@ class MaterialConsumptionService:
     license + diwan + manutention) averaged over everything bought, not just
     the latest order.
 
-    Sourced from production.report_semolina_lines (0027) -- the semoule a
-    shift actually poured, one line per quality. Rebroyat poured back into
-    the mix is deliberately excluded: it was never purchased, so it has no
-    landed cost to price it against, and the plant's own MP sheet does not
-    list it either (see of_consolidation_service.py for where rebroyat is
-    accounted for instead, alongside fresh semoule, as "what the line was
-    given to work with").
+    Sourced from production.shift_run_semolina_lines -- the semoule a shift
+    actually poured, one line per quality. Rebroyat poured back into the mix
+    is deliberately excluded: it was never purchased, so it has no landed
+    cost to price it against, and the plant's own MP sheet does not list it
+    either (see of_consolidation_service.py for where rebroyat is accounted
+    for instead, alongside fresh semoule, as "what the line was given to
+    work with").
 
-    Only validated reports count, same as every other aggregate in this
+    Only validated shifts count, same as every other aggregate in this
     module (see ConsumptionReportService) -- a draft is a team's working
     notes, not a result to report a material consumption figure against.
     """
@@ -35,21 +35,22 @@ class MaterialConsumptionService:
         self, *, tenant_id: str, date_from: str | None = None, date_to: str | None = None,
         receipt_lines: list[dict] | None = None,
     ) -> list[dict]:
-        clauses = ["r.tenant_id = %s", "r.status = 'validated'", "sl.product_id IS NOT NULL", "sl.quantity > 0"]
+        clauses = ["s.tenant_id = %s", "s.status = 'validated'", "sl.product_id IS NOT NULL", "sl.quantity > 0"]
         params: list[object] = [tenant_id]
         if date_from is not None:
-            clauses.append("r.report_date >= %s")
+            clauses.append("s.report_date >= %s")
             params.append(date_from)
         if date_to is not None:
-            clauses.append("r.report_date <= %s")
+            clauses.append("s.report_date <= %s")
             params.append(date_to)
         where = " AND ".join(clauses)
 
         rows = self._connection.execute(
             f"""
             SELECT sl.product_id, SUM(sl.quantity) AS quantity
-            FROM production.report_semolina_lines sl
-            JOIN production.production_reports r ON r.id = sl.report_id AND r.tenant_id = sl.tenant_id
+            FROM production.shift_run_semolina_lines sl
+            JOIN production.shift_runs r ON r.id = sl.run_id AND r.tenant_id = sl.tenant_id
+            JOIN production.shift_reports s ON s.id = r.shift_report_id AND s.tenant_id = r.tenant_id
             WHERE {where}
             GROUP BY sl.product_id
             """,

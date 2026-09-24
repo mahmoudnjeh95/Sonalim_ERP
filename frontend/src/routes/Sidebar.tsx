@@ -106,6 +106,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.operations",
     items: [
+      { to: "/production/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
       { to: "/production", labelKey: "nav.production", icon: ProductionIcon },
       { to: "/production/ia-assistant", labelKey: "nav.iaAssistant", icon: Sparkles, permission: "production.use_ia_assistant" },
     ],

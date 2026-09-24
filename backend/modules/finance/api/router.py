@@ -14,7 +14,7 @@ router = APIRouter(prefix="/finance", tags=["finance"])
 class CreateInvoiceRequest(BaseModel):
     partner_id: str
     amount: float
-    currency: str = "USD"
+    currency: str = "XOF"
 
 
 class TransitionRequest(BaseModel):

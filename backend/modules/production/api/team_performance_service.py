@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import psycopg
 
-from modules.production.domain.production_report import WASTE_CATEGORIES_BY_REPORT_TYPE
 
 # Whatever a report can be filed under, from Production Settings — never
 # validated against a fixed enum here, so a new team the plant adds shows up
@@ -139,14 +138,13 @@ class TeamPerformanceService:
         # are already weighed in whatever the item is actually stocked in and
         # pass through unchanged. A product with no honest kg->its-unit path
         # (not weight-category, or no product named) is left in raw kilos.
-        daily_categories = list(WASTE_CATEGORIES_BY_REPORT_TYPE["daily"])
         waste_rows = self._connection.execute(
             f"""
             SELECT
                 r.team, date_trunc(%s, r.report_date)::date AS period, w.product_id,
                 COALESCE(SUM(
                     CASE
-                        WHEN w.category = ANY(%s) AND u.category = 'weight' AND u.ratio_to_base > 0
+                        WHEN r.report_type = 'daily' AND u.category = 'weight' AND u.ratio_to_base > 0
                             THEN w.quantity / u.ratio_to_base
                         ELSE w.quantity
                     END
@@ -158,7 +156,7 @@ class TeamPerformanceService:
             WHERE {where} AND w.product_id IS NOT NULL
             GROUP BY r.team, period, w.product_id
             """,
-            [params[0], daily_categories, *params[1:]],
+            params,
         ).fetchall()
         waste_by_key: dict[tuple[str | None, str], list[dict]] = {}
         for team, period, product_id, quantity in waste_rows:

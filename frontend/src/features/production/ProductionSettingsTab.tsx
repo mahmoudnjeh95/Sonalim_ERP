@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import type { LucideIcon } from "lucide-react";
-import { ArrowDown, ArrowUp, CalendarClock, OctagonPause, Plus, Recycle, RotateCcw, Trash2, Users } from "lucide-react";
+import { ArrowDown, ArrowUp, CalendarClock, OctagonPause, PackageCheck, Plus, Recycle, RotateCcw, Trash2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
@@ -13,7 +13,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
-import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import {
@@ -25,13 +24,17 @@ import {
   type ReportOption,
   type ReportOptionKind,
 } from "../../lib/reportOptions";
-import { listProducts, listRegrindDefaults, setRegrindDefault } from "./api";
+import { listPackagingTolerances, listProducts, listRegrindDefaults, setPackagingTolerance, setRegrindDefault } from "./api";
 import { listFollowUpPolicies, setFollowUpPolicy } from "../qc/api";
 import { DOWNTIME_OPTION_KIND } from "./downtimeOptions";
+import { DashboardSettingsCard } from "./DashboardSettingsCard";
+import { WasteTypesCard } from "./WasteTypesCard";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const REGRIND_DEFAULTS_QUERY_KEY = ["production", "regrind-defaults"] as const;
 const FOLLOW_UP_POLICIES_QUERY_KEY = ["qc", "follow-up-policies"] as const;
+const PACKAGING_TOLERANCES_QUERY_KEY = ["production", "packaging-tolerances"] as const;
 
 /**
  * Everything about production that used to be set with SQL.
@@ -55,6 +58,10 @@ export function ProductionSettingsTab() {
         <RegrindDefaultsCard />
         <FollowUpPolicyCard />
       </div>
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+        <PackagingToleranceCard />
+        <WasteTypesCard />
+      </div>
       {/*
         The arrêt vocabulary. The built-in values ship with the app; these lists
         are the plant's own additions, offered beside them on every arrêt line.
@@ -72,6 +79,7 @@ export function ProductionSettingsTab() {
           />
         ))}
       </div>
+      <DashboardSettingsCard />
     </div>
   );
 }
@@ -181,7 +189,7 @@ function OptionListCard({
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading ? (
-          <Skeleton className="h-24 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : mine.length === 0 ? (
           <EmptyState
             icon={<Icon className="h-5 w-5" />}
@@ -329,7 +337,7 @@ function RegrindDefaultsCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading ? (
-          <Skeleton className="h-12 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : current === null ? (
           <EmptyState
             icon={<Recycle className="h-5 w-5" />}
@@ -416,7 +424,7 @@ function FollowUpPolicyCard() {
       </CardHeader>
       <CardContent className="space-y-3">
         {isLoading ? (
-          <Skeleton className="h-20 w-full" />
+          <AppLoader size={96} className="py-4" />
         ) : policies.length === 0 ? (
           <EmptyState
             icon={<CalendarClock className="h-5 w-5" />}
@@ -472,6 +480,114 @@ function FollowUpPolicyCard() {
             className="sm:col-span-2"
             disabled={Number(windowDays) <= 0 || mutation.isPending}
           >
+            {mutation.isPending ? t("common.saving") : t("common.save")}
+          </Button>
+        </form>
+      </CardContent>
+    </Card>
+  );
+}
+
+/** The percentage at which a packaging ecart stops looking like rounding. */
+function PackagingToleranceCard() {
+  const { session } = useAuth();
+  const { t } = useI18n();
+  const token = session!.token;
+  const queryClient = useQueryClient();
+  const [product, setProduct] = useState("");
+  // Deliberately empty: a tolerance is the plant's decision, not something to suggest.
+  const [tolerance, setTolerance] = useState("");
+
+  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: tolerances = [], isLoading } = useQuery({
+    queryKey: PACKAGING_TOLERANCES_QUERY_KEY,
+    queryFn: () => listPackagingTolerances(token),
+  });
+
+  const nameOf = (productId: string | null) =>
+    productId === null
+      ? t("production.settings.followUp.allProducts")
+      : products.find((p) => p.id === productId)?.name ?? productId;
+
+  const valid = tolerance.trim() !== "" && Number(tolerance) >= 0;
+  const mutation = useMutation({
+    mutationFn: () =>
+      setPackagingTolerance(token, { product_id: product || null, tolerance_percent: Number(tolerance) }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PACKAGING_TOLERANCES_QUERY_KEY });
+      // Every screen that judges an ecart reads this tolerance, so refetch them all.
+      queryClient.invalidateQueries({ queryKey: ["production", "packaging-variance"] });
+      setProduct("");
+      setTolerance("");
+      toast.success(t("production.settings.saved"));
+    },
+    onError: (error) => {
+      toast.error(t("production.settings.saveError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
+  });
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-1.5 text-base">
+          <PackageCheck className="h-4 w-4" />
+          {t("production.settings.tolerance.title")}
+          <HelpTooltip text={t("production.settings.tolerance.help")} />
+        </CardTitle>
+        <p className="mt-0.5 text-sm text-muted-foreground">{t("production.settings.tolerance.description")}</p>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {isLoading ? (
+          <AppLoader size={96} className="py-4" />
+        ) : tolerances.length === 0 ? (
+          <EmptyState
+            icon={<PackageCheck className="h-5 w-5" />}
+            title={t("production.settings.tolerance.empty.title")}
+            description={t("production.settings.tolerance.empty.description")}
+          />
+        ) : (
+          <ul className="divide-y divide-border rounded-lg border border-border">
+            {tolerances.map((entry) => (
+              <li key={entry.product_id ?? "default"} className="flex items-center justify-between gap-3 p-2.5 text-sm">
+                <span className={entry.product_id === null ? "font-medium" : undefined}>{nameOf(entry.product_id)}</span>
+                <span className="tabular-nums text-muted-foreground">{entry.tolerance_percent} %</span>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <form
+          className="grid grid-cols-1 gap-2 sm:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (valid) mutation.mutate();
+          }}
+        >
+          <div className="space-y-1.5">
+            <Label htmlFor="tolerance_product">{t("production.settings.followUp.product")}</Label>
+            <Select id="tolerance_product" value={product} onChange={(event) => setProduct(event.target.value)}>
+              <option value="">{t("production.settings.followUp.allProducts")}</option>
+              {products.map((entry) => (
+                <option key={entry.id} value={entry.id}>
+                  {entry.name}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="tolerance_percent">{t("production.settings.tolerance.field")}</Label>
+            <Input
+              id="tolerance_percent"
+              type="number"
+              min={0}
+              step="any"
+              value={tolerance}
+              onChange={(event) => setTolerance(event.target.value)}
+            />
+          </div>
+          <Button type="submit" size="sm" className="sm:col-span-2" disabled={!valid || mutation.isPending}>
             {mutation.isPending ? t("common.saving") : t("common.save")}
           </Button>
         </form>

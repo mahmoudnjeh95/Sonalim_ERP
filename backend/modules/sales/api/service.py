@@ -234,7 +234,7 @@ class SalesOrderService:
                 "order_id": order_id,
                 "partner_id": partner_id,
                 "total_amount": result.value.total_amount,
-                "currency": "USD",
+                "currency": "XOF",
             },
         )
         record_audit(

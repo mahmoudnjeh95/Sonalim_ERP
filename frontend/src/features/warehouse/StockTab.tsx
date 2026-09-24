@@ -36,7 +36,6 @@ import { Checkbox } from "../../components/ui/checkbox";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Popover, PopoverTrigger, PopoverContent, PopoverClose } from "../../components/ui/popover";
 import {
   Dialog,
@@ -80,6 +79,7 @@ import {
   type UnitOfMeasure,
 } from "./api";
 import { getRegrindBatch, listWorkOrders, type RegrindScrapInput } from "../production/api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const reserveSchema = z.object({
   product_id: z.string().min(1, "Required"),
@@ -928,14 +928,7 @@ export function StockTab() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && visibleItems.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">
