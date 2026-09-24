@@ -1,8 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
+import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { cn } from "../../lib/utils";
+import { FINISHED_GOODS_LOT_SOURCE, listLots } from "../warehouse/api";
 import { AnalyticsEmptyState, AnalyticsErrorState, AnalyticsLoadingState } from "./AnalyticsStates";
 import { DataCoveragePanel } from "./DataCoveragePanel";
 import { MachineDowntimePanel } from "./MachineDowntimePanel";
@@ -43,6 +46,11 @@ export function AnalyticsOverviewSection() {
   const { windows, sources, ops, previousOps, quality, previousQuality, machines, breakdown, machineRecords, productRecords, orders, cost, trend } =
     overview;
   const showLoader = useMinimumLoading(sources.teamCurrent.isLoading);
+  const { session } = useAuth();
+  const dlcAwaiting = useQuery({
+    queryKey: ["analytics", "overview", "dlc-awaiting"],
+    queryFn: () => listLots(session!.token, { sourceType: FINISHED_GOODS_LOT_SOURCE, withoutExpiry: true }),
+  });
 
   const machineLabel = useCallback(
     (equipmentId: string) => {
@@ -217,6 +225,17 @@ export function AnalyticsOverviewSection() {
                     : null
                 }
                 unavailable={qualityUnavailable ?? t("analytics.kpi.quality.none")}
+                extra={
+                  dlcAwaiting.data && dlcAwaiting.data.length > 0 ? (
+                    <button
+                      type="button"
+                      onClick={() => navigate("/quality?tab=lot-dlc")}
+                      className="text-left text-primary underline-offset-2 hover:underline"
+                    >
+                      {fill(t("analytics.overview.dlcAwaiting"), { count: String(dlcAwaiting.data.length) })}
+                    </button>
+                  ) : null
+                }
               />
               <ProductionKpiCard
                 index={4}
