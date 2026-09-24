@@ -41,7 +41,7 @@ _FOLLOW_UP_INSERT_COLUMNS = """
 """
 
 
-def _row_to_report(row: tuple) -> QualityReport:
+def _row_to_report(row: tuple, *, product_id: str | None = None) -> QualityReport:
     return QualityReport(
         id=row[0],
         of_id=row[1],
@@ -56,6 +56,7 @@ def _row_to_report(row: tuple) -> QualityReport:
         validated_by=row[10],
         validated_at=row[11],
         rejection_reason=row[12],
+        product_id=product_id,
     )
 
 
@@ -406,7 +407,15 @@ class QualityReportService:
             """,
             params,
         ).fetchall()
-        return [_row_to_report(row) for row in rows]
+
+        from modules.production.api.report_product import finished_products_of_reports
+
+        # row[5] is conditionnement_report_id -- the production report a quality report
+        # inspects. A report created before that link existed has none (see the
+        # QualityReport.conditionnement_report_id docstring) and gets no product.
+        report_ids = [row[5] for row in rows if row[5] is not None]
+        products_by_report = finished_products_of_reports(self._connection, tenant_id=tenant_id, report_ids=report_ids)
+        return [_row_to_report(row, product_id=products_by_report.get(row[5])) for row in rows]
 
     # ---- writes ----------------------------------------------------------
 
@@ -421,6 +430,7 @@ class QualityReportService:
         get_conformity_summary, just in the other direction.
         """
         from modules.production.api.production_report_service import ProductionReportService
+        from modules.production.api.report_product import finished_product_of_report
 
         reports = ProductionReportService(self._connection)
         found = reports.get_report(tenant_id=tenant_id, report_id=conditionnement_report_id)
@@ -436,9 +446,12 @@ class QualityReportService:
             if daily is not None and daily["detail"] is not None:
                 regrind_quantity = daily["detail"].regrind_quantity
 
+        product_id = finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=conditionnement_report_id)
+
         return Ok(
             {
                 "of_id": header.of_id,
+                "product_id": product_id,
                 "report_date": header.report_date,
                 "shift": header.shift,
                 "team": header.team,

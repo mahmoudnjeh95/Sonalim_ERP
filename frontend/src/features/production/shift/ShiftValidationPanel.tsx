@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CircleCheck, ClipboardCheck, Pencil, RotateCcw } from "lucide-react";
+import { CircleCheck, ClipboardCheck, Pencil, RotateCcw, Zap } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
@@ -17,6 +17,7 @@ import { SECTIONS, type SectionDef } from "./sectionConfig";
 import { toDraft, toPayload, type Draft } from "./shiftModel";
 import {
   SHIFT_REPORTS_QUERY_KEY,
+  bulkValidateShiftReports,
   getShiftReport,
   listShiftReports,
   rejectShiftSections,
@@ -34,6 +35,10 @@ import { AppLoader } from "../../../components/patterns/AppLoader";
  * whole shift; sections that need fixing are sent back by name, with a reason, and the
  * rest stay handed in.
  */
+function isShiftComplete(shift: { sections: SectionState[] }): boolean {
+  return shift.sections.every((s) => s.status === "submitted" || s.status === "nothing_to_report");
+}
+
 export function ShiftValidationPanel() {
   const { session, hasPermission } = useAuth();
   const token = session!.token;
@@ -41,6 +46,7 @@ export function ShiftValidationPanel() {
   const allowed = hasPermission("production.shift.validate") && hasPermission("production.shift.view");
   const reference = useShiftReferenceData(allowed);
   const [reviewing, setReviewing] = useState<string | null>(null);
+  const queryClient = useQueryClient();
 
   const waiting = useQuery({
     queryKey: [...SHIFT_REPORTS_QUERY_KEY, "awaiting"],
@@ -48,9 +54,24 @@ export function ShiftValidationPanel() {
     enabled: allowed,
   });
 
+  const bulkApprove = useMutation({
+    mutationFn: () => {
+      const shifts = waiting.data ?? [];
+      const completeIds = shifts.filter(isShiftComplete).map((s) => s.id);
+      return bulkValidateShiftReports(token, completeIds);
+    },
+    onSuccess: (results) => {
+      toast.success(label(T.bulkApproved(results.length)));
+      queryClient.invalidateQueries({ queryKey: SHIFT_REPORTS_QUERY_KEY });
+    },
+    onError: (error: unknown) =>
+      toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined }),
+  });
+
   if (!allowed) return null;
   const lineName = new Map((reference.workCenters ?? []).map((w) => [w.id, w.name]));
   const shifts = waiting.data ?? [];
+  const completeCount = shifts.filter(isShiftComplete).length;
 
   return (
     <>
@@ -63,7 +84,21 @@ export function ShiftValidationPanel() {
             </CardTitle>
             <p className="mt-0.5 text-sm text-muted-foreground">{label(T.awaitingHint)}</p>
           </div>
-          {shifts.length > 0 && <Badge variant="primary">{shifts.length}</Badge>}
+          <div className="flex items-center gap-2">
+            {shifts.length > 0 && <Badge variant="primary">{shifts.length}</Badge>}
+            {completeCount > 0 && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => bulkApprove.mutate()}
+                disabled={bulkApprove.isPending || waiting.isLoading}
+                className="gap-1.5"
+              >
+                <Zap className="h-4 w-4" />
+                {bulkApprove.isPending ? label(T.bulkApproving) : label(T.bulkApprove)} ({completeCount})
+              </Button>
+            )}
+          </div>
         </CardHeader>
         <CardContent className="p-0">
           {waiting.isLoading ? (

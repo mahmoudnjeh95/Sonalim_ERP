@@ -207,6 +207,11 @@ export function Cell({
     case "select": {
       const list = column.optionsFor && row ? column.optionsFor(row, options) : column.options ? options[column.options] : [];
       const current = asText(value);
+      // A value the list no longer offers (a retired kind, or a classification gap): fall back to its
+      // name from the full products list rather than showing the raw id.
+      const fallbackLabel = current && !list.some((option) => option.value === current)
+        ? options.products.find((option) => option.value === current)?.label ?? current
+        : null;
       return (
         <Select
           id={id}
@@ -217,8 +222,7 @@ export function Cell({
           onChange={(event) => onChange(event.target.value || null)}
         >
           <option value="">{label(T.choose)}</option>
-          {/* A value the list no longer offers (a retired kind) stays visible instead of blanking. */}
-          {current && !list.some((option) => option.value === current) ? <option value={current}>{current}</option> : null}
+          {fallbackLabel !== null ? <option value={current}>{fallbackLabel}</option> : null}
           {list.map((option) => (
             <option key={option.value} value={option.value}>
               {option.label}
@@ -234,19 +238,27 @@ export function Cell({
         </div>
       );
     case "number":
-    case "int":
+    case "int": {
+      const scale = column.scale ?? 1;
+      const shown = scale === 1 ? asText(value) : asText(typeof value === "number" ? value * scale : value === "" || value == null ? value : Number(value) * scale);
       return (
         <Input
           id={id}
           aria-label={name}
           inputMode="decimal"
           disabled={disabled}
-          className={cn(inputClass, "w-full text-right tabular-nums", asText(value) === "0" && "text-muted-foreground")}
-          value={asText(value)}
+          className={cn(inputClass, "w-full text-right tabular-nums", shown === "0" && "text-muted-foreground")}
+          value={shown}
           // A French keyboard types a comma; the server reads a point.
-          onChange={(event) => onChange(event.target.value.replace(",", "."))}
+          onChange={(event) => {
+            const typed = event.target.value.replace(",", ".");
+            if (scale === 1) return onChange(typed);
+            const parsed = Number(typed);
+            onChange(typed === "" ? "" : Number.isFinite(parsed) ? String(parsed / scale) : typed);
+          }}
         />
       );
+    }
     case "expression":
       return (
         <div className="w-full">

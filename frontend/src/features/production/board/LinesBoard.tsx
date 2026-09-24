@@ -82,34 +82,41 @@ function StateGlyph({ state }: { state: LineState }) {
 
 // --- Shift strip ------------------------------------------------------------
 
-/** The day as one bar: each configured shift where it sits on the clock, and now. */
+/**
+ * The day as one bar: each configured shift where it sits on the clock, and now.
+ *
+ * The bar's origin is the earliest shift's start time, not midnight, so the
+ * shifts always draw left-to-right in cycle order (morning, afternoon, night)
+ * with no shift split across the two ends of the bar -- midnight almost never
+ * lines up with a shift boundary, and drawing from midnight cut whichever
+ * shift was running overnight into two separate, oddly-ordered pieces.
+ */
 function ShiftStrip({ board }: { board: BoardLines }) {
   const { t } = useI18n();
   if (board.shift_windows.length === 0) {
     return <p className="mb-3 rounded-lg border border-dashed border-border bg-white px-3 py-2 text-xs text-muted-foreground">{t("production.board.roster.noShiftTimes")}</p>;
   }
-  const now = minutesOfDay(board.at);
+  const origin = Math.min(...board.shift_windows.map((w) => minutesOfDay(w.start_time)));
+  const relative = (minutes: number) => (((minutes - origin) % 1440) + 1440) % 1440;
+  const now = relative(minutesOfDay(board.at));
   return (
     <div className="relative mb-3 mt-6 h-7 overflow-visible rounded-lg border border-border bg-white">
-      {board.shift_windows.flatMap((window) => {
-        const start = minutesOfDay(window.start_time);
-        const end = minutesOfDay(window.end_time);
-        // A shift through midnight is drawn as two pieces, one at each end of the bar.
-        const spans = start < end ? [[start, end]] : [[start, 1440], [0, end]];
+      {board.shift_windows.map((window) => {
+        const start = relative(minutesOfDay(window.start_time));
+        const rawLength = minutesOfDay(window.end_time) - minutesOfDay(window.start_time);
+        const length = ((rawLength % 1440) + 1440) % 1440 || 1440;
         const isCurrent = board.current_shift?.shift === window.shift;
-        // The label goes on the wider piece, so a night shift is named on its long half.
-        const labelled = spans.length === 2 && spans[1][1] - spans[1][0] > spans[0][1] - spans[0][0] ? 1 : 0;
-        return spans.map(([from, to], part) => (
+        return (
           <div
-            key={`${window.shift}-${part}`}
+            key={window.shift}
             className={cn("absolute inset-y-0 flex items-center gap-1 overflow-hidden border-r border-dashed border-border px-2 text-[11px]", isCurrent ? "bg-muted font-semibold text-primary" : "text-muted-foreground")}
-            style={{ left: `${(from / 1440) * 100}%`, width: `${((to - from) / 1440) * 100}%` }}
+            style={{ left: `${(start / 1440) * 100}%`, width: `${(length / 1440) * 100}%` }}
             title={`${window.shift} ${window.start_time}–${window.end_time}`}
           >
-            {part === labelled ? <ShiftIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" /> : null}
-            <span className="truncate">{part === labelled ? window.shift : ""}</span>
+            <ShiftIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+            <span className="truncate">{window.shift}</span>
           </div>
-        ));
+        );
       })}
       <div className="absolute -bottom-1 -top-1 w-0.5 bg-accent" style={{ left: `${(now / 1440) * 100}%` }}>
         <span className="absolute -top-4 -translate-x-1/2 text-[11px] font-bold text-warning">{board.at}</span>

@@ -68,6 +68,8 @@ export interface Column {
   valueFor?: (row: Row, options: OptionMap) => string | null;
   /** Fields cleared when this cell changes, so the server derives them again from the new value. */
   resets?: readonly string[];
+  /** A number column stored in one unit but typed/shown in another: value shown = stored value * scale. */
+  scale?: number;
 }
 
 export interface ChildDef {
@@ -99,7 +101,7 @@ export interface SectionDef {
 }
 
 const text = (key: string, label: Label): Column => ({ key, label, kind: "text" });
-const num = (key: string, label: Label): Column => ({ key, label, kind: "number" });
+const num = (key: string, label: Label, scale?: number): Column => ({ key, label, kind: "number", scale });
 const int = (key: string, label: Label): Column => ({ key, label, kind: "int" });
 const time = (key: string, label: Label): Column => ({ key, label, kind: "time" });
 const when = (key: string, label: Label, required = false): Column => ({ key, label, kind: "datetime", required });
@@ -126,18 +128,6 @@ export function packingTypeFor(row: Row, options: OptionMap): string | null {
   return options.packingTypes.find((option) => option.value === row.product_id)?.label ?? null;
 }
 
-/**
- * The item a packing-waste row can name, by its Type: a product already packed this
- * shift (Produit), or one of the packaging supplies (Emballage) -- two pools too
- * different to offer from one flat list. A plant-defined kind is treated as
- * Emballage, the broader of the two pools, so it is never left with nothing to pick.
- */
-export function wastePackingItemOptions(row: Row, options: OptionMap): Option[] {
-  if (row.category === "product") return options.packedProducts;
-  if (!row.category) return [];
-  return [...options.itemsFilm, ...options.itemsCarton, ...options.itemsBobine, ...options.itemsScotch, ...options.itemsRuban];
-}
-
 export const SECTIONS: SectionDef[] = [
   {
     key: "runs",
@@ -149,6 +139,28 @@ export const SECTIONS: SectionDef[] = [
       "Une ligne par production. Un changement de moule commence une nouvelle ligne.",
     ),
     parts: [
+      {
+        payloadKey: "versements",
+        shape: "rows",
+        title: L("Versement", "Versement"),
+        addLabel: L("Add a versement", "Ajouter un versement"),
+        serverDerived: ["location_id"],
+        columns: [
+          pick("product_id", L("MP versé", "MP versé"), "productsOrMp", true),
+          num("quantity", L("Quantity (t)", "Quantité (t)")),
+        ],
+      },
+      {
+        payloadKey: "rebroyat_versements",
+        shape: "rows",
+        title: L("Rebroyat", "Rebroyat"),
+        addLabel: L("Add a rebroyat versement", "Ajouter un rebroyat"),
+        serverDerived: ["location_id"],
+        columns: [
+          pick("product_id", L("Rebroyat item", "Article rebroyat"), "productsOrMp", true),
+          num("quantity", L("Quantity (t)", "Quantité (t)")),
+        ],
+      },
       {
         payloadKey: "runs",
         shape: "rows",
@@ -162,10 +174,10 @@ export const SECTIONS: SectionDef[] = [
           int("production_minutes", L("Minutes run", "Minutes de marche")),
           num("dough_quantity", L("Dough (t)", "Pâte (t)")),
           num("finished_product_quantity", L("Finished (t)", "Produit fini (t)")),
-          num("regrind_quantity", L("Regrind made (t)", "Rebroyat produit (t)")),
-          num("regrind_input_quantity", L("Regrind used (t)", "Rebroyat utilisé (t)")),
+          num("regrind_quantity", L("Regrind made (kg)", "Rebroyat produit (kg)"), 1000),
           pick("regrind_input_product_id", L("Regrind item", "Article rebroyat"), "productsOrMp"),
           pick("raw_material_location_id", L("Regrind store", "Magasin rebroyat"), "locations"),
+          num("regrind_input_quantity", L("Regrind used (t)", "Rebroyat utilisé (t)")),
           num("water_percentage", L("Water %", "% eau")),
           num("humidity_percentage", L("Humidity %", "Humidité %")),
           num("semolina_flow_rate", L("Semoule flow (t/h)", "Débit semoule (t/h)")),
@@ -202,7 +214,6 @@ export const SECTIONS: SectionDef[] = [
         addLabel: L("Add waste", "Ajouter un déchet"),
         columns: [
           pick("category", L("Kind", "Type"), "wasteProduction", true),
-          pick("product_id", L("Item lost", "Article perdu"), "productsOrMp"),
           num("quantity", L("Quantity (kg)", "Quantité (kg)")),
           pick("run_id", L("Run", "Production"), "runs"),
           when("occurred_at", L("Time", "Heure")),
@@ -366,8 +377,7 @@ export const SECTIONS: SectionDef[] = [
         addLabel: L("Add waste", "Ajouter un déchet"),
         columns: [
           when("occurred_at", L("Time", "Heure")),
-          { ...pick("category", L("Kind", "Type"), "wastePacking", true), resets: ["product_id"] },
-          { ...pick("product_id", L("Item lost", "Article perdu"), "packedProducts", true), optionsFor: wastePackingItemOptions },
+          pick("category", L("Kind", "Type"), "wastePacking", true),
           num("quantity", L("Quantity (kg)", "Quantité (kg)")),
           text("note", L("Cause", "Cause")),
         ],

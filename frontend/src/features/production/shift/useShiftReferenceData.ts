@@ -44,6 +44,13 @@ export function useShiftReferenceData(enabled: boolean) {
     [equipment.data],
   );
 
+  // Only work centers that are production lines (name starts with "line"); e.g. excludes rebroyat_01, whose
+  // output is already tracked under its own OF. A blocked line has nothing to report on, so it's hidden too.
+  const productionLines = useMemo(
+    () => (workCenters.data ?? []).filter((w) => /^line/i.test(w.name) && !w.is_blocked),
+    [workCenters.data],
+  );
+
   const reportCountByLineDate = useMemo(() => {
     const map = new Map<string, number>();
     for (const report of shiftReports.data ?? []) {
@@ -94,7 +101,7 @@ export function useShiftReferenceData(enabled: boolean) {
       const runOrderIds = new Set(rowsOf("runs", "runs").map((r) => String(r.of_id)));
       // Products already packed this shift -- what a "Produit" packing-waste line may name.
       const packedProductIds = new Set(rowsOf("packing", "rows").map((r) => String(r.product_id)).filter(Boolean));
-      const packedProducts = [...packedProductIds].map((id) => ({ value: id, label: productName.get(id) ?? id }));
+      const packedProducts = [...packedProductIds].map((id) => ({ value: id, label: productName.get(id) ?? "—" }));
 
       // Molds follow the type (PL or PC) of the work orders: a run's own row, or the shift's runs for a wash.
       const typeOfOrder = new Map(all.map((o) => [o.id, o.product_type ?? productType.get(o.product_id ?? "") ?? ""]));
@@ -166,7 +173,7 @@ export function useShiftReferenceData(enabled: boolean) {
   );
 
   return {
-    workCenters: workCenters.data,
+    workCenters: productionLines,
     workCentersLoading: workCenters.isLoading,
     windows: settings.data?.shift_windows ?? [],
     activeEquipment,

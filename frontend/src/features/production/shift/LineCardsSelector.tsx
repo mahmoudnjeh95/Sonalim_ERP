@@ -4,17 +4,15 @@ import { Select } from "../../../components/ui/select";
 import { LineStatusBadge } from "./LineStatusBadge";
 import type { ShiftWindowRow } from "../board/api";
 
-interface Equipment {
+interface WorkCenterOption {
   id: string;
-  work_center_id: string;
   name: string;
-  archived_at: string | null;
 }
 
 interface LineCardsSelectorProps {
   value: string;
   onChange: (id: string) => void;
-  equipment: Equipment[];
+  lines: WorkCenterOption[];
   reportCountByLineDate: Map<string, number>;
   date: string;
   windows: ShiftWindowRow[];
@@ -23,7 +21,7 @@ interface LineCardsSelectorProps {
 export function LineCardsSelector({
   value,
   onChange,
-  equipment,
+  lines,
   reportCountByLineDate,
   date,
   windows,
@@ -51,9 +49,9 @@ export function LineCardsSelector({
         </label>
         <div className="flex gap-2">
           <Select id="shift-line" value={value} onChange={(e) => onChange(e.target.value)}>
-            {equipment.map((e) => (
-              <option key={e.id} value={e.id}>
-                {e.name}
+            {lines.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.name}
               </option>
             ))}
           </Select>
@@ -68,13 +66,13 @@ export function LineCardsSelector({
     <div className="space-y-1">
       <label className="text-xs text-muted-foreground">Line</label>
       <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
-        {equipment.map((e) => {
-          const count = reportCountByLineDate.get(`${date}|${e.id}`) ?? 0;
-          const isSelected = e.id === value;
+        {lines.map((l) => {
+          const count = reportCountByLineDate.get(`${date}|${l.id}`) ?? 0;
+          const isSelected = l.id === value;
           return (
             <button
-              key={e.id}
-              onClick={() => onChange(e.id)}
+              key={l.id}
+              onClick={() => onChange(l.id)}
               className={cn(
                 "rounded-lg border-2 p-3 text-left transition-all",
                 isSelected
@@ -83,7 +81,7 @@ export function LineCardsSelector({
               )}
             >
               <div className="flex items-start justify-between">
-                <div className="text-sm font-medium">{e.name}</div>
+                <div className="text-sm font-medium">{l.name}</div>
               </div>
               <div className="mt-2">
                 <LineStatusBadge reportCount={count} totalShifts={totalShifts} />

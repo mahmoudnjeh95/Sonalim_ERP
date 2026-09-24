@@ -12,13 +12,11 @@ import { Card, CardContent } from "../../components/ui/card";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Select } from "../../components/ui/select";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import {
   getDaySheet,
   getMonthRecap,
-  listWorkCenters,
   type DaySheetColumn,
   type DaySheetRow,
   type DaySheetSection,
@@ -26,8 +24,9 @@ import {
 import { addDays } from "./board/boardFormat";
 import { useWasteTypes } from "./wasteTypes";
 import { AppLoader } from "../../components/patterns/AppLoader";
+import { useShiftReferenceData } from "./shift/useShiftReferenceData";
+import { LineCardsSelector } from "./shift/LineCardsSelector";
 
-const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
 export const DAY_SHEET_QUERY_KEY = ["production", "day-sheet"] as const;
 export const MONTH_RECAP_QUERY_KEY = ["production", "month-recap"] as const;
 
@@ -254,7 +253,8 @@ export function DaySheetTab() {
   const [lineId, setLineId] = useState("");
   const [includePending, setIncludePending] = useState(false);
 
-  const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
+  const reference = useShiftReferenceData(true);
+  const workCenters = reference.workCenters;
   const selectedLine = lineId || workCenters[0]?.id || "";
 
   const daySheet = useQuery({
@@ -330,16 +330,6 @@ export function DaySheetTab() {
               </div>
             </div>
           )}
-          <div className="min-w-[12rem] space-y-1.5">
-            <Label htmlFor="day-sheet-line">{t("production.daySheet.line")}</Label>
-            <Select id="day-sheet-line" value={selectedLine} onChange={(event) => setLineId(event.target.value)}>
-              {workCenters.map((line) => (
-                <option key={line.id} value={line.id}>
-                  {line.name}
-                </option>
-              ))}
-            </Select>
-          </div>
           {mode === "day" && (
             <div className="flex items-center gap-2 pb-2">
               <Checkbox
@@ -353,6 +343,15 @@ export function DaySheetTab() {
             </div>
           )}
         </div>
+
+        <LineCardsSelector
+          value={selectedLine}
+          onChange={setLineId}
+          lines={workCenters}
+          reportCountByLineDate={reference.reportCountByLineDate}
+          date={date}
+          windows={reference.windows}
+        />
 
         {active.isError ? (
           <p role="alert" className="text-sm text-destructive">

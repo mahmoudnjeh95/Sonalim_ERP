@@ -644,6 +644,75 @@ def test_validator_edit_flag_stays_on_its_own_revision(db, env):
     assert next(h for h in history if h["edited_by_validator"])["reason"] == "corrected the semoule quantity"
 
 
+# ---- an admin's correction, after validation -------------------------------------
+
+
+def _unlocked_edit(db, env, shift_id, *, section_key="runs", payload=None, reason="fixing a typo after the fact"):
+    return ShiftValidationService(db).edit_section_after_validation(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=section_key,
+        payload=payload if payload is not None else _runs_with_semolina(db, shift_id, 1400), reason=reason,
+    )
+
+
+def test_admin_can_edit_a_validated_section_and_it_stays_validated(db, env):
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+
+    edited = _ok(_unlocked_edit(db, env, shift_id))
+
+    assert edited["status"] == "submitted"  # the section's own status is untouched
+    assert edited["shift_status"] == "validated"  # and so is the shift's
+    stored = _shift(db, shift_id)["sections"][0]["payload"]["runs"][0]
+    assert float(stored["semolina_lines"][0]["quantity"]) == 1400
+    history = _ok(ShiftReportService(db).list_revisions(tenant_id=TENANT, shift_report_id=shift_id, section_key="runs"))
+    assert history[0]["reason"] == "fixing a typo after the fact"
+    assert history[0]["edited_after_validation"] is True
+    assert history[0]["edited_by_validator"] is False
+    audit = db.execute(
+        "SELECT payload FROM core.audit_log WHERE entity_id = %s AND action = 'shift_report.section_edited_after_validation'",
+        (shift_id,),
+    ).fetchone()
+    assert audit is not None and audit[0]["reason"] == "fixing a typo after the fact"
+
+
+def test_admin_edit_after_validation_does_not_require_a_reason(db, env):
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+
+    edited = _ok(_unlocked_edit(db, env, shift_id, reason=""))
+
+    assert edited["shift_status"] == "validated"
+    history = _ok(ShiftReportService(db).list_revisions(tenant_id=TENANT, shift_report_id=shift_id, section_key="runs"))
+    assert history[0]["reason"] is None
+    assert history[0]["edited_after_validation"] is True
+
+
+def test_admin_edit_after_validation_refused_when_shift_is_not_validated(db, env):
+    shift_id = _submitted_shift(db, env)  # still 'submitted', not validated
+    result = _unlocked_edit(db, env, shift_id)
+    assert isinstance(result, Err) and result.code == "INVALID_TRANSITION"
+
+
+def test_admin_edit_after_validation_rejects_unknown_section(db, env):
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+    result = _unlocked_edit(db, env, shift_id, section_key="not_a_section", payload={})
+    assert isinstance(result, Err) and result.code == "INVALID_SECTION"
+
+
+def test_admin_edit_after_validation_flag_stays_on_its_own_revision(db, env):
+    """A normal team edit elsewhere in the section's history does not inherit the flag."""
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+    _ok(_unlocked_edit(db, env, shift_id))
+    _ok(_unlocked_edit(db, env, shift_id, payload=_runs_with_semolina(db, shift_id, 1500), reason="one more fix"))
+
+    history = _ok(ShiftReportService(db).list_revisions(tenant_id=TENANT, shift_report_id=shift_id, section_key="runs"))
+    flagged = [h["revision"] for h in history if h["edited_after_validation"]]
+    assert len(flagged) == 2
+    assert all(not h["edited_by_validator"] for h in history)
+
+
 # ---- where packed goods land ----------------------------------------------------
 
 

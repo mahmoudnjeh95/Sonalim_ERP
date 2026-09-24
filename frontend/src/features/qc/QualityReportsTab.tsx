@@ -232,6 +232,18 @@ export function QualityReportsTab() {
 
   // Quality outlives production, so a closed OF is still a legitimate target.
   const referenceOf = (ofId: string) => workOrders.find((o) => o.id === ofId)?.reference ?? ofId;
+  // The generated OF reference is opaque (a long code); the product it's making is what
+  // a user actually recognizes, so every OF label in this tab pairs the two. The report's
+  // own product_id (resolved server-side from the conditionnement run) is the accurate
+  // one -- an OF can pack more than one product -- with the OF's product_id as a fallback
+  // only for reports too old to have that link.
+  const productNameForId = (productId: string | null | undefined) =>
+    productId ? products.find((p) => p.id === productId)?.name ?? null : null;
+  const ofLabel = (r: QualityReport) => {
+    const productName =
+      productNameForId(r.product_id) ?? productNameForId(workOrders.find((o) => o.id === r.of_id)?.product_id);
+    return productName ? `${productName} — ${referenceOf(r.of_id)}` : referenceOf(r.of_id);
+  };
   // A link may name a report that no longer exists; a miss opens nothing rather
   // than an empty dialog.
   const focusedReport = openReport ?? reports.find((r) => r.id === linkedId) ?? null;
@@ -289,7 +301,7 @@ export function QualityReportsTab() {
   });
 
   const filterFields: FilterField<QualityReport>[] = [
-    { key: "of", kind: "text", getValue: (r) => referenceOf(r.of_id) },
+    { key: "of", kind: "text", getValue: (r) => ofLabel(r) },
     { key: "date", kind: "text", getValue: (r) => r.report_date },
     { key: "shift", kind: "text", getValue: (r) => r.shift },
   ];
@@ -302,15 +314,19 @@ export function QualityReportsTab() {
     {
       key: "of",
       header: t("production.reports.column.of"),
-      defaultWidth: 150,
-      cell: (r) => <span className="font-medium">{referenceOf(r.of_id)}</span>,
+      defaultWidth: 220,
+      cell: (r) => (
+        <span className="block min-w-0 truncate font-medium" title={ofLabel(r)}>
+          {ofLabel(r)}
+        </span>
+      ),
       filterCell: {
         type: "text",
         placeholder: t("common.filter"),
         value: columnFilters.text.of ?? "",
         onChange: (v) => columnFilters.setTextValue("of", v),
       },
-      sortValue: (r) => referenceOf(r.of_id),
+      sortValue: (r) => ofLabel(r),
     },
     {
       key: "date",
@@ -399,7 +415,7 @@ export function QualityReportsTab() {
     groupBy === "none"
       ? undefined
       : groupBy === "of"
-        ? { key: "of", label: t("production.reports.groupBy.of"), getGroupKey: (r) => r.of_id, getGroupLabel: (r) => referenceOf(r.of_id) }
+        ? { key: "of", label: t("production.reports.groupBy.of"), getGroupKey: (r) => r.of_id, getGroupLabel: (r) => ofLabel(r) }
         : { key: "shift", label: t("production.reports.groupBy.shift"), getGroupKey: (r) => r.shift ?? "", getGroupLabel: (r) => r.shift || t("common.none") };
   const rowGroups = groupRows(sortedVisible, groupSpec);
 

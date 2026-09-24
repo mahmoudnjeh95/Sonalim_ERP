@@ -143,7 +143,7 @@ class ShiftReportService:
             return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
         rows = self._connection.execute(
             """
-            SELECT revision, snapshot, reason, actor_id, created_at, edited_by_validator
+            SELECT revision, snapshot, reason, actor_id, created_at, edited_by_validator, edited_after_validation
             FROM production.shift_section_revisions
             WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s
             ORDER BY revision DESC
@@ -154,9 +154,9 @@ class ShiftReportService:
             [
                 {
                     "revision": rev, "snapshot": snap, "reason": reason, "actor_id": actor, "created_at": _iso(at),
-                    "edited_by_validator": by_validator,
+                    "edited_by_validator": by_validator, "edited_after_validation": after_validation,
                 }
-                for rev, snap, reason, actor, at, by_validator in rows
+                for rev, snap, reason, actor, at, by_validator, after_validation in rows
             ]
         )
 
@@ -271,7 +271,7 @@ class ShiftReportService:
 
     def _freeze_revision(
         self, tenant_id: str, actor_id: str, shift_report_id: str, section_key: str, reason: str | None,
-        edited_by_validator: bool = False
+        edited_by_validator: bool = False, edited_after_validation: bool = False,
     ) -> int:
         """Snapshot the section as it stands now under the next revision number."""
         revision = self._connection.execute(
@@ -285,10 +285,14 @@ class ShiftReportService:
         self._connection.execute(
             """
             INSERT INTO production.shift_section_revisions
-                (id, tenant_id, shift_report_id, section_key, revision, snapshot, reason, actor_id, edited_by_validator)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (id, tenant_id, shift_report_id, section_key, revision, snapshot, reason, actor_id,
+                 edited_by_validator, edited_after_validation)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (str(ULID()), tenant_id, shift_report_id, section_key, revision, Jsonb(snapshot), reason, actor_id, edited_by_validator),
+            (
+                str(ULID()), tenant_id, shift_report_id, section_key, revision, Jsonb(snapshot), reason, actor_id,
+                edited_by_validator, edited_after_validation,
+            ),
         )
         return revision
 

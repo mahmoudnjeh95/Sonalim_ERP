@@ -65,6 +65,7 @@ export interface SectionRevision {
   actor_id: string | null;
   created_at: string;
   edited_by_validator: boolean;
+  edited_after_validation: boolean;
 }
 
 export type HeaderFields = Partial<
@@ -109,6 +110,11 @@ export function validatorEditSection(token: string, id: string, key: SectionKey,
   return apiFetch<SectionState>(`${base}/${id}/sections/${key}/validator-edit`, { method: "PUT", body: { payload, reason }, token });
 }
 
+/** An admin's correction to a section after the shift is already validated; the reason is optional. */
+export function unlockedEditSection(token: string, id: string, key: SectionKey, payload: SectionPayload, reason?: string) {
+  return apiFetch<SectionState>(`${base}/${id}/sections/${key}/unlocked-edit`, { method: "PUT", body: { payload, reason }, token });
+}
+
 export function submitShiftSection(token: string, id: string, key: SectionKey) {
   return apiFetch<SectionState>(`${base}/${id}/sections/${key}/submit`, { method: "POST", token });
 }
@@ -135,4 +141,8 @@ export function rejectShiftSections(token: string, id: string, body: { sections:
 
 export function reverseShiftReport(token: string, id: string, body: { reason: string; force?: boolean }) {
   return apiFetch<ShiftReport>(`${base}/${id}/reverse`, { method: "POST", body, token });
+}
+
+export function bulkValidateShiftReports(token: string, ids: string[]) {
+  return apiFetch<ShiftReport[]>(`${base}/bulk/validate`, { method: "POST", body: { ids }, token });
 }

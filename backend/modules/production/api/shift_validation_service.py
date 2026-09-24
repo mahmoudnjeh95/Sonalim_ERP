@@ -308,6 +308,66 @@ class ShiftValidationService:
         )
         return Ok(self._shifts._section_result(tenant_id, shift_report_id, section_key))
 
+    # ---- an admin's correction after validation ------------------------------
+
+    def edit_section_after_validation(
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        shift_report_id: str,
+        section_key: str,
+        payload: dict,
+        reason: str | None,
+    ) -> Result[dict]:
+        """An admin's in-place fix to a section after the shift was already validated.
+
+        Gated by `production.shift.unlock_validated` at the router, not here. The shift
+        and section keep their status (this corrects data, it does not reopen a workflow);
+        the revision it freezes is tagged `edited_after_validation` at write time.
+        """
+        if section_key not in SECTION_KEYS:
+            return Err("INVALID_SECTION", f"unknown section {section_key!r}")
+        status = self._locked_status(tenant_id, shift_report_id)
+        if status is None:
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+        if status != "validated":
+            return Err("INVALID_TRANSITION", f"a shift that is {status} does not need an unlock to be edited")
+
+        saved = save_section_rows(
+            self._connection,
+            tenant_id=tenant_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=payload,
+            custom_waste_categories={
+                report_type: custom_waste_categories(self._connection, tenant_id=tenant_id, report_type=report_type)
+                for report_type in ("daily", "conditionnement")
+            },
+        )
+        if isinstance(saved, Err):
+            return saved
+
+        clean_reason = (reason or "").strip() or None
+        revision = self._shifts._freeze_revision(
+            tenant_id, actor_id, shift_report_id, section_key, clean_reason, edited_after_validation=True
+        )
+        self._connection.execute(
+            "UPDATE production.shift_report_sections SET revision = %s, updated_at = NOW() "
+            "WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s",
+            (revision, shift_report_id, tenant_id, section_key),
+        )
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="shift_report.section_edited_after_validation",
+            entity_type="shift_report",
+            entity_id=shift_report_id,
+            payload={"section": section_key, "revision": revision, "reason": clean_reason},
+        )
+        return Ok(self._shifts._section_result(tenant_id, shift_report_id, section_key))
+
     # ---- reject ------------------------------------------------------------
 
     def reject_sections(

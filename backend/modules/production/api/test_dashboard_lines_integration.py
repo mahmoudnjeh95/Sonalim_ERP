@@ -231,11 +231,11 @@ def test_team_status_colour_follows_the_shift_report_for_that_slot(db, env):
             {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 2},
         ],
     )
-    for shift, report_status in (("Shift 1", "validated"), ("Shift 2", "returned")):
+    for shift, team, report_status in (("Shift 1", "B", "validated"), ("Shift 2", "C", "returned")):
         db.execute(
-            "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 19), shift, report_status),
+            "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, team, status) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 19), shift, team, report_status),
         )
     # Viewed as a past day (today is the 20th): the colours reflect the reports, nothing blinks.
     team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))["L1"]["team_status"]
@@ -259,11 +259,11 @@ def test_team_status_shows_submitted_and_open_reports(db, env):
             {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 2},
         ],
     )
-    for shift, report_status in (("Shift 1", "submitted"), ("Shift 2", "open")):
+    for shift, team, report_status in (("Shift 1", "B", "submitted"), ("Shift 2", "C", "open")):
         db.execute(
-            "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
-            "VALUES (%s, %s, %s, %s, %s, %s)",
-            (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 19), shift, report_status),
+            "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, team, status) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 19), shift, team, report_status),
         )
     team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))["L1"]["team_status"]
     assert {(e["team"], e["status"]) for e in team_status} == {("B", "submitted"), ("C", "open"), ("A", None)}
@@ -284,20 +284,49 @@ def test_team_status_is_isolated_per_line_for_the_same_team_and_date(db, env):
         ],
     )
     db.execute(
-        "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
-        "VALUES (%s, %s, %s, %s, %s, %s)",
-        (str(ULID()), TENANT, line1, datetime.date(2026, 9, 19), "Shift 1", "validated"),
+        "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, team, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (str(ULID()), TENANT, line1, datetime.date(2026, 9, 19), "Shift 1", "B", "validated"),
     )
     db.execute(
-        "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, status) "
-        "VALUES (%s, %s, %s, %s, %s, %s)",
-        (str(ULID()), TENANT, line2, datetime.date(2026, 9, 19), "Shift 1", "submitted"),
+        "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, team, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (str(ULID()), TENANT, line2, datetime.date(2026, 9, 19), "Shift 1", "B", "submitted"),
     )
     payload = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))
     team_b_on_l1 = next(e for e in payload["L1"]["team_status"] if e["team"] == "B")
     team_b_on_l2 = next(e for e in payload["L2"]["team_status"] if e["team"] == "B")
     assert team_b_on_l1["status"] == "validated"
     assert team_b_on_l2["status"] == "submitted"
+
+
+def test_team_status_does_not_borrow_another_teams_report_for_the_same_slot(db, env):
+    """A stale/drifted rotation can assign a slot to a team that did not actually file
+    the report for it (a swap, or the rotation anchor being out of sync with reality).
+    The status must follow who filed the report, not just which shift it is under --
+    otherwise a team that never worked shows a "validated" badge it did not earn."""
+    line_id = _line(db, "L1")
+    settings = DashboardSettingsService(db)
+    settings.replace_shift_windows(
+        tenant_id=TENANT, actor_id=env["actor"], windows=[ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0))],
+    )
+    _team(db, env["actor"], "B", "A")
+    settings.replace_team_rotation(
+        tenant_id=TENANT, actor_id=env["actor"],
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 1},
+        ],
+    )
+    # The schedule says B is on Shift 1, but the report actually filed for Shift 1 was A's.
+    db.execute(
+        "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, team, status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+        (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 19), "Shift 1", "A", "validated"),
+    )
+    team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 19), today=datetime.date(2026, 9, 20)))["L1"]["team_status"]
+    team_b = next(e for e in team_status if e["team"] == "B")
+    assert team_b["status"] is None
 
 
 def test_team_status_is_empty_when_the_rotation_no_longer_matches_the_shift_count(db, env):

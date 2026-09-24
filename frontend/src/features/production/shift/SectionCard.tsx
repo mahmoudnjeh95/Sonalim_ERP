@@ -1,13 +1,14 @@
 import { useEffect, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { ChevronDown, Lock, RotateCcw, Save, Send } from "lucide-react";
+import { ChevronDown, Lock, LockOpen, RotateCcw, Save, Send } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
 import { cn } from "../../../lib/utils";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
+import { Input } from "../../../components/ui/input";
 import { Label as FieldLabel } from "../../../components/ui/label";
 import { Cell, ShiftGrid, type GridRow, type OptionMap } from "./ShiftGrid";
 import { RevisionHistory } from "./RevisionHistory";
@@ -18,6 +19,7 @@ import {
   declareSectionEmpty,
   saveShiftSection,
   submitShiftSection,
+  unlockedEditSection,
   type Row,
   type SectionState,
   type SectionStatus,
@@ -52,12 +54,16 @@ export function SectionCard({
   onToggle: () => void;
   onChanged: () => void;
 }) {
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const token = session!.token;
   const label = useLabel();
   const reduceMotion = useReducedMotion();
 
-  const locked = !canEdit || shift.status === "validated";
+  const validated = shift.status === "validated";
+  const canUnlock = canEdit && validated && hasPermission("production.shift.unlock_validated");
+  const [unlocked, setUnlocked] = useState(false);
+  const [unlockReason, setUnlockReason] = useState("");
+  const locked = !canEdit || (validated && !unlocked);
 
   // An editable section opens with one blank line in each table; a locked one shows what was handed in.
   const lotNumber = shift.default_lot_number ?? null;
@@ -65,13 +71,25 @@ export function SectionCard({
   const [dirty, setDirty] = useState(false);
 
   // What the server holds is the truth: when it changes (a save, a validator's return),
-  // the grids follow it and the section is clean again.
-  const serverKey = `${state.revision}|${state.status}|${locked}|${JSON.stringify(state.payload ?? {})}`;
+  // the grids follow it and the section is clean again. Keyed on canEdit, not on
+  // `locked` itself, so toggling the unlock doesn't loop back through this effect --
+  // otherwise flipping `unlocked` would change `locked`, which would reset `unlocked`.
+  const serverKey = `${state.revision}|${state.status}|${canEdit}|${JSON.stringify(state.payload ?? {})}`;
   useEffect(() => {
     setDraft(toDraft(def, state.payload, !locked, lotNumber));
     setDirty(false);
+    // A fresh server snapshot means any correction just landed (or someone else's did);
+    // either way the section goes back to being read-only.
+    setUnlocked(false);
+    setUnlockReason("");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverKey]);
+
+  const toggleUnlock = () => {
+    if (unlocked) setDraft(toDraft(def, state.payload, false, lotNumber)); // cancelling drops the unsaved correction
+    setUnlockReason("");
+    setUnlocked(!unlocked);
+  };
 
   // Naming the team gives the shift a lot: lines still untouched pick it up. Not an edit, so not unsaved.
   useEffect(() => {
@@ -92,9 +110,12 @@ export function SectionCard({
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
 
   const save = useMutation({
-    mutationFn: () => saveShiftSection(token, shift.id, def.key, toPayload(def, draft)),
+    mutationFn: () =>
+      unlocked
+        ? unlockedEditSection(token, shift.id, def.key, toPayload(def, draft), unlockReason.trim() || undefined)
+        : saveShiftSection(token, shift.id, def.key, toPayload(def, draft)),
     onSuccess: () => {
-      toast.success(label(T.saved));
+      toast.success(label(unlocked ? T.unlockedEditSaved : T.saved));
       onChanged();
     },
     onError: fail,
@@ -167,7 +188,27 @@ export function SectionCard({
             <StatusNode status={state.status} size={16} />
             {label(T.status[state.status])}
           </Badge>
-          {locked && <Lock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />}
+          {unlocked && (
+            <Badge variant="warning">{label(T.editedAfterValidation)}</Badge>
+          )}
+          {canUnlock ? (
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!open) onToggle();
+                toggleUnlock();
+              }}
+              className="h-6 gap-1 px-2 text-xs"
+              aria-pressed={unlocked}
+            >
+              <LockOpen className="h-3.5 w-3.5" />
+              {label(unlocked ? T.relock : T.unlock)}
+            </Button>
+          ) : (
+            locked && <Lock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden />
+          )}
           <ChevronDown className={cn("h-4 w-4 text-muted-foreground transition-transform", open && "rotate-180")} />
         </span>
       </button>
@@ -211,7 +252,23 @@ export function SectionCard({
                 />
               ))}
 
-              {!locked && (
+              {unlocked && (
+                <div className="flex flex-wrap items-center gap-2 rounded-md border border-primary/30 bg-primary/5 px-3 py-2.5">
+                  <Input
+                    value={unlockReason}
+                    onChange={(e) => setUnlockReason(e.target.value)}
+                    placeholder={label(T.unlockReason)}
+                    aria-label={label(T.unlockReason)}
+                    className="min-w-[16rem] flex-1"
+                  />
+                  <Button size="sm" onClick={() => save.mutate()} disabled={!dirty || busy}>
+                    <Save className="h-3.5 w-3.5" />
+                    {label(T.saveUnlockedEdit)}
+                  </Button>
+                </div>
+              )}
+
+              {!locked && !unlocked && (
                 <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
                   {submitted ? (
                     <Button size="sm" onClick={() => save.mutate()} disabled={!dirty || busy}>

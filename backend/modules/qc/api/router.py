@@ -628,6 +628,7 @@ def _serialize_report(report: QualityReport) -> dict:
     return {
         "id": report.id,
         "of_id": report.of_id,
+        "product_id": report.product_id,
         "conditionnement_report_id": report.conditionnement_report_id,
         "report_date": report.report_date.isoformat(),
         "status": report.status,

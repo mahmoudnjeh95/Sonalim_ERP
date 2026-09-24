@@ -62,12 +62,17 @@ class DashboardLinesService:
                 key=lambda e: e["team"].lower(),
             )
 
-        report_status_by_line: dict[str, dict[str, str]] = {}
-        for work_center_id, shift, report_status in self._connection.execute(
-            "SELECT work_center_id, shift, status FROM production.shift_reports WHERE tenant_id = %s AND report_date = %s",
+        # Keyed by (shift, team) rather than shift alone: the rotation schedule says
+        # who is *supposed* to be on a shift, but the report says who actually filed
+        # it. When those disagree (a swap, or the rotation anchor drifting out of
+        # sync with reality) a status must not be borrowed onto the wrong team --
+        # that reads as if the scheduled team worked when someone else did.
+        report_status_by_line: dict[str, dict[tuple[str, str], str]] = {}
+        for work_center_id, shift, team, report_status in self._connection.execute(
+            "SELECT work_center_id, shift, team, status FROM production.shift_reports WHERE tenant_id = %s AND report_date = %s",
             (tenant_id, date),
         ).fetchall():
-            report_status_by_line.setdefault(work_center_id, {})[shift.lower()] = report_status
+            report_status_by_line.setdefault(work_center_id, {})[(shift.lower(), team)] = report_status
 
         def team_status_for(line_id: str) -> list[dict]:
             statuses = report_status_by_line.get(line_id, {})
@@ -75,7 +80,7 @@ class DashboardLinesService:
                 {
                     "team": entry["team"],
                     "shift": entry["shift"],
-                    "status": statuses.get(entry["shift"].lower()) if entry["shift"] else None,
+                    "status": statuses.get((entry["shift"].lower(), entry["team"])) if entry["shift"] else None,
                     "is_current": bool(
                         is_today and running is not None and entry["shift"] is not None
                         and entry["shift"].lower() == running.shift.lower()

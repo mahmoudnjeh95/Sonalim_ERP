@@ -45,6 +45,10 @@ class QualityReport:
     validated_by: str | None = None
     validated_at: datetime.datetime | None = None
     rejection_reason: str | None = None
+    # The finished product this report inspects -- resolved from the conditionnement
+    # report it links to (see report_product.finished_product_of_report), not stored
+    # in qc.quality_reports itself. Populated by list_reports; None elsewhere.
+    product_id: str | None = None
 
 
 @dataclass(frozen=True)

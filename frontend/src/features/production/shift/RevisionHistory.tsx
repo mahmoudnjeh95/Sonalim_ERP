@@ -100,6 +100,7 @@ function HistoryDialog({
                   </span>
                   {index === 0 && <Badge variant="primary">{label(T.latest)}</Badge>}
                   {revision.edited_by_validator && <Badge variant="warning">{label(T.editedByValidator)}</Badge>}
+                  {revision.edited_after_validation && <Badge variant="destructive">{label(T.editedAfterValidation)}</Badge>}
                   <span className="text-muted-foreground">{when(revision.created_at)}</span>
                   <span className="text-muted-foreground">{who(revision.actor_id)}</span>
                   {revision.reason && <span className="min-w-0 flex-1 truncate text-muted-foreground">“{revision.reason}”</span>}

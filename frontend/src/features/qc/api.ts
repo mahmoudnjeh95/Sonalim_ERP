@@ -14,6 +14,11 @@ export type QualityReportStatus = "draft" | "submitted" | "validated" | "rejecte
 export interface QualityReport {
   id: string;
   of_id: string;
+  // The finished product this report inspects, resolved server-side from the
+  // conditionnement run it links to -- an OF can pack more than one product, so
+  // this is not always the same as work_orders.product_id. Null only for a
+  // report created before conditionnement_report_id existed (see below).
+  product_id: string | null;
   // The conditionnement (packaging) run this report inspects. `team`, `shift`
   // and `report_date` are all derived from it server-side -- never entered
   // independently -- so this is a real production team, never a QC-only label.

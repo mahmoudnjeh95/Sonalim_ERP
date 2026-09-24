@@ -24,6 +24,25 @@ def finished_product_of_report(connection: psycopg.Connection, *, tenant_id: str
     return row[0] if row else None
 
 
+def finished_products_of_reports(
+    connection: psycopg.Connection, *, tenant_id: str, report_ids: list[str]
+) -> dict[str, str | None]:
+    """Batch form of finished_product_of_report, for callers listing many reports at once."""
+    if not report_ids:
+        return {}
+    rows = connection.execute(
+        """
+        SELECT r.id, COALESCE(c.product_id, w.product_id)
+        FROM production.production_reports r
+        JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
+        LEFT JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+        WHERE r.tenant_id = %s AND r.id = ANY(%s)
+        """,
+        (tenant_id, report_ids),
+    ).fetchall()
+    return {row[0]: row[1] for row in rows}
+
+
 def stamp_order_products(connection: psycopg.Connection, *, tenant_id: str, shift_report_id: str) -> None:
     """An order with no product yet takes the product of its first packing row in this shift.
 

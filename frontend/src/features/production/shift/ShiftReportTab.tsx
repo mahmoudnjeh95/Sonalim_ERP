@@ -12,11 +12,11 @@ import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Label as FieldLabel } from "../../../components/ui/label";
-import { Select } from "../../../components/ui/select";
 import { SectionCard } from "./SectionCard";
 import { ShiftRail } from "./ShiftRail";
 import { DateNavigator } from "./DateNavigator";
 import { LineCardsSelector } from "./LineCardsSelector";
+import { ShiftCardsSelector } from "./ShiftCardsSelector";
 import type { OptionMap } from "./ShiftGrid";
 import { useShiftReferenceData } from "./useShiftReferenceData";
 import type { ShiftWindowRow } from "../board/api";
@@ -203,25 +203,14 @@ export function ShiftReportTab() {
             <LineCardsSelector
               value={workCenterId}
               onChange={setWorkCenterId}
-              equipment={reference.activeEquipment ?? []}
+              lines={workCenters.data ?? []}
               reportCountByLineDate={reference.reportCountByLineDate}
               date={date}
               windows={windows}
             />
 
-            {/* Shift selection dropdown (unchanged) */}
-            <div className="space-y-1">
-              <FieldLabel htmlFor="shift-name" className="text-xs text-muted-foreground">
-                {label(T.shift)}
-              </FieldLabel>
-              <Select id="shift-name" value={shiftName} onChange={(e) => setShiftName(e.target.value)}>
-                {windows.map((w) => (
-                  <option key={w.shift} value={w.shift}>
-                    {w.shift} ({w.start_time.slice(0, 5)}–{w.end_time.slice(0, 5)})
-                  </option>
-                ))}
-              </Select>
-            </div>
+            {/* Shift selection */}
+            <ShiftCardsSelector value={shiftName} onChange={setShiftName} windows={windows} />
 
             {/* Status badge */}
             {shift && <ShiftStatusBadge status={shift.status} />}

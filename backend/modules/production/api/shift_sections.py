@@ -22,6 +22,7 @@ from typing import Any
 import psycopg
 from ulid import ULID
 
+from core.api.service import CoreService
 from core.domain.result import Err, Ok, Result
 from modules.production.api.packing_derivation_service import derive_packing_rows
 from modules.production.domain.production_report import (
@@ -131,6 +132,20 @@ _RUNS = RowSet(
         _num("semolina_flow_rate"),
         Col("shortfall_comment"),
     ),
+)
+
+# Raw material poured into the line, recorded once per shift rather than per run.
+_VERSEMENTS = RowSet(
+    table="shift_versements",
+    payload_key="versements",
+    columns=(Col("product_id"), Col("location_id"), _num("quantity")),
+)
+
+# Regrind material (already reground) poured back into the line, recorded once per shift.
+_REBROYAT_VERSEMENTS = RowSet(
+    table="shift_rebroyat_versements",
+    payload_key="rebroyat_versements",
+    columns=(Col("product_id"), Col("location_id"), _num("quantity")),
 )
 
 
@@ -253,7 +268,7 @@ _ENERGY = Single(
 # Section key -> its parts. A part missing from a payload is left untouched; a part
 # present (even empty) replaces what was stored, so one part can be saved alone.
 SECTIONS: dict[str, tuple[Part, ...]] = {
-    "runs": (_RUNS,),
+    "runs": (_RUNS, _VERSEMENTS, _REBROYAT_VERSEMENTS),
     "waste_production": (_waste("waste_production"), _MOLD_WASHES),
     "stops": (_STOPS,),
     "silo": (_SILO,),
@@ -615,6 +630,16 @@ def _sync_single(connection: psycopg.Connection, tenant_id: str, shift_id: str, 
     )
 
 
+def _derive_versement_locations(connection: psycopg.Connection, *, tenant_id: str, rows: list[dict]) -> None:
+    """A versement names no store: it comes from its raw material's own default store."""
+    core = CoreService(connection)
+    for row in rows:
+        if not row["location_id"] and row["product_id"]:
+            product = core.get_product(tenant_id, row["product_id"])
+            if product is not None:
+                row["location_id"] = product.default_location_id
+
+
 def save_section_rows(
     connection: psycopg.Connection,
     *,
@@ -643,6 +668,8 @@ def save_section_rows(
                 derived = derive_packing_rows(connection, tenant_id=tenant_id, shift_id=shift_report_id, rows=rows.value)
                 if isinstance(derived, Err):
                     return derived
+            if part.table in ("shift_versements", "shift_rebroyat_versements"):
+                _derive_versement_locations(connection, tenant_id=tenant_id, rows=rows.value)
             checked = _validate_part(connection, tenant_id, shift_report_id, section_key, part, rows.value, custom)
             if isinstance(checked, Err):
                 return checked

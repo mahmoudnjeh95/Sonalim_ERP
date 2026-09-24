@@ -2693,6 +2693,32 @@ def list_shift_reports(
         )
 
 
+@router.post("/shift-reports/bulk/validate")
+def bulk_validate_shift_reports(
+    body: dict,
+    tenant: TenantContext = Depends(require_permission("production.shift.validate")),
+) -> list[dict]:
+    ids: list[str] = body.get("ids", [])
+    if not ids:
+        return []
+    with get_connection() as connection:
+        service = ShiftValidationService(connection)
+        results = []
+        for shift_id in ids:
+            result = service.validate_shift(
+                tenant_id=tenant.tenant_id,
+                actor_id=tenant.user_id,
+                shift_report_id=shift_id,
+                seen_revisions=None,
+                shortfall_comment=None,
+                regrind_work_center_id=None,
+            )
+            if isinstance(result, Err):
+                continue
+            results.append(_shift_result(connection, result))
+        return results
+
+
 @router.post("/shift-reports", status_code=status.HTTP_201_CREATED)
 def open_shift_report(body: OpenShiftRequest, tenant: TenantContext = Depends(_require_any_shift_edit)) -> dict:
     with get_connection() as connection:
@@ -2777,6 +2803,30 @@ def validator_edit_shift_report_section(
 ) -> dict:
     with get_connection() as connection:
         result = ShiftValidationService(connection).edit_section_as_validator(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=body.payload,
+            reason=body.reason,
+        )
+        return _shift_result(connection, result)
+
+
+class UnlockedEditSectionRequest(BaseModel):
+    payload: dict
+    reason: str | None = None
+
+
+@router.put("/shift-reports/{shift_report_id}/sections/{section_key}/unlocked-edit")
+def edit_shift_report_section_after_validation(
+    shift_report_id: str,
+    section_key: str,
+    body: UnlockedEditSectionRequest,
+    tenant: TenantContext = Depends(require_permission("production.shift.unlock_validated")),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftValidationService(connection).edit_section_after_validation(
             tenant_id=tenant.tenant_id,
             actor_id=tenant.user_id,
             shift_report_id=shift_report_id,
