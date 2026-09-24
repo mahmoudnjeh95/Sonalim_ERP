@@ -8,7 +8,7 @@ from pydantic import BaseModel
 from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.result import Err
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.api.quality_service import FollowUpPolicyService, FollowUpService, QualityReportService
 from modules.qc.domain.non_conformity import DispositionLine, NonConformity
@@ -31,6 +31,11 @@ def _err_status(code: str) -> int:
     ):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
+
+
+def _is_quality_admin(connection, tenant: TenantContext) -> bool:
+    """Admins correct a report in place at any status -- parameters included."""
+    return user_has_permission(connection, user_id=tenant.user_id, permission="qc.admin_quality_reports")
 
 
 class QualityDetailRequest(BaseModel):
@@ -376,6 +381,7 @@ def save_parameter_entry(
         result = QualityReportService(connection).save_parameter_entry(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id,
             group_key=body.group_key, entry_label=body.entry_label, fields=body.fields,
+            allow_non_draft=_is_quality_admin(connection, tenant),
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -393,6 +399,7 @@ def delete_parameter_entry(
     with get_connection() as connection:
         result = QualityReportService(connection).delete_parameter_entry(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id, entry_id=entry_id,
+            allow_non_draft=_is_quality_admin(connection, tenant),
         )
         if isinstance(result, Err):
             connection.rollback()

@@ -709,7 +709,7 @@ export function QualityReportDialog({
   autoResubmit?: boolean;
   onClose: () => void;
 }) {
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
@@ -844,6 +844,9 @@ export function QualityReportDialog({
   ];
 
   const needsReason = report.status !== "draft";
+  // Mirrors the backend: parameter entries are writable on a draft, otherwise
+  // only by an admin correcting the report in place.
+  const parametersEditable = report.status === "draft" || hasPermission("qc.admin_quality_reports");
 
   return (
     <>
@@ -905,7 +908,7 @@ export function QualityReportDialog({
       editForm={
         <form className="space-y-4" onSubmit={form.handleSubmit((input) => saveMutation.mutate(input))}>
           <QualityDetailFields form={form} lines={lines} lineLabel={lineLabel} lineUnit={lineUnit} />
-          <QualityParametersSection reportId={report.id} editable />
+          <QualityParametersSection reportId={report.id} editable={parametersEditable} />
           {needsReason && (
             <div className="space-y-1.5">
               <Label htmlFor="q_correction_reason">{t("production.reports.correctionReason")}</Label>

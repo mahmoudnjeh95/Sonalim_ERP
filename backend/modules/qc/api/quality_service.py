@@ -928,15 +928,25 @@ class QualityReportService:
         ).fetchall()
         return [{"id": r[0], "group_key": r[1], "entry_label": r[2], "fields": r[3]} for r in rows]
 
+    def _parameters_editable(self, *, tenant_id: str, report_id: str, allow_non_draft: bool) -> Result[None]:
+        """Parameter entries follow the report: editable on a draft, otherwise only by an admin
+        correcting in place (the router passes allow_non_draft for qc.admin_quality_reports)."""
+        report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
+        if report is None:
+            return Err("NOT_FOUND", f"quality report {report_id} not found")
+        if report.status != "draft" and not allow_non_draft:
+            return Err("NOT_EDITABLE", f"the parameters of a {report.status} quality report cannot be edited")
+        return Ok(None)
+
     def save_parameter_entry(
         self, *, tenant_id: str, actor_id: str, report_id: str, group_key: str,
-        entry_label: str | None, fields: dict,
+        entry_label: str | None, fields: dict, allow_non_draft: bool = False,
     ) -> Result[dict]:
         import json
 
-        report = self._load_report(tenant_id=tenant_id, report_id=report_id)
-        if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+        editable = self._parameters_editable(tenant_id=tenant_id, report_id=report_id, allow_non_draft=allow_non_draft)
+        if isinstance(editable, Err):
+            return editable
         validation = validate_parameter_entry(group_key, fields)
         if isinstance(validation, Err):
             return validation
@@ -953,7 +963,12 @@ class QualityReportService:
         )
         return Ok({"id": entry_id, "group_key": group_key, "entry_label": entry_label, "fields": fields})
 
-    def delete_parameter_entry(self, *, tenant_id: str, actor_id: str, report_id: str, entry_id: str) -> Result[None]:
+    def delete_parameter_entry(
+        self, *, tenant_id: str, actor_id: str, report_id: str, entry_id: str, allow_non_draft: bool = False,
+    ) -> Result[None]:
+        editable = self._parameters_editable(tenant_id=tenant_id, report_id=report_id, allow_non_draft=allow_non_draft)
+        if isinstance(editable, Err):
+            return editable
         deleted = self._connection.execute(
             "DELETE FROM qc.quality_parameters WHERE tenant_id = %s AND report_id = %s AND id = %s RETURNING id",
             (tenant_id, report_id, entry_id),
