@@ -243,7 +243,7 @@ export function listFollowUps(
 
 export function recordObservation(
   token: string,
-  input: { quality_report_id: string; observed_on: string; observation?: string; result?: string },
+  input: { quality_report_id: string; observed_on: string; observation?: string; result?: string; conformity_line_id?: string },
 ) {
   return apiFetch<FollowUp>("/qc/follow-ups", { method: "POST", token, body: input });
 }

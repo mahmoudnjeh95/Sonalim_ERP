@@ -929,6 +929,130 @@ def test_closing_requires_a_corrective_action(db, env, of):
     assert result.code == "MISSING_CORRECTIVE_ACTION"
 
 
+# --- multi-product / multi-OF shifts ---------------------------------------
+
+
+def _second_of(db, env, product_id):
+    return _ok(WorkOrderService(db).create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=product_id,
+        planned_quantity=1000, work_center_id=env["work_center"],
+    ))
+
+
+def _two_product_validated_report(db, env, of):
+    """A validated QC report on a shift packing OF-A/product A and OF-B/product B, where
+    product B has a 10-day follow-up policy and product A falls back to the 40-day default."""
+    product_b = _second_product(db, env)
+    of_b = _second_of(db, env, product_b)
+    _ok(FollowUpPolicyService(db).set_policy(tenant_id=TENANT, actor_id=env["actor"], window_days=10, product_id=product_b))
+    qc = QualityReportService(db)
+    shift_id = _validated_shift_with_rows(
+        db, env, [(of.id, env["product"]), (of_b.id, product_b)], report_date=datetime.date(2026, 9, 1),
+    )
+    report = _ok(qc.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))["report"]
+    _ok(qc.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id))
+    validated = _ok(qc.validate_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID()),
+    ))
+    lines = {line.product_id: line for line in validated["lines"]}
+    return report, validated, lines[env["product"]], lines[product_b], of_b
+
+
+def test_validating_a_two_product_report_opens_a_window_per_product(db, env, of):
+    report, validated, line_a, line_b, of_b = _two_product_validated_report(db, env, of)
+
+    follow_ups = {f.conformity_line_id: f for f in FollowUpService(db).list_follow_ups(tenant_id=TENANT, quality_report_id=report.id)}
+    assert len(follow_ups) == 2
+    assert follow_ups[line_a.id].of_id == of.id
+    assert follow_ups[line_a.id].window_ends_on == datetime.date(2026, 10, 11)
+    assert follow_ups[line_b.id].of_id == of_b.id
+    assert follow_ups[line_b.id].window_ends_on == datetime.date(2026, 9, 11)
+
+
+def test_an_observation_on_a_line_uses_that_lines_window_and_of(db, env, of):
+    report, _, line_a, line_b, of_b = _two_product_validated_report(db, env, of)
+    follow_ups = FollowUpService(db)
+
+    on_b = _ok(follow_ups.record_observation(
+        tenant_id=TENANT, actor_id=env["actor"], quality_report_id=report.id,
+        observed_on=datetime.date(2026, 9, 5), observation="B ok", conformity_line_id=line_b.id,
+    ))
+    assert on_b.of_id == of_b.id
+    assert on_b.window_ends_on == datetime.date(2026, 9, 11)
+    assert on_b.conformity_line_id == line_b.id
+
+    # Day 20 is inside A's 40-day window but past B's 10-day one.
+    late_b = follow_ups.record_observation(
+        tenant_id=TENANT, actor_id=env["actor"], quality_report_id=report.id,
+        observed_on=datetime.date(2026, 9, 20), conformity_line_id=line_b.id,
+    )
+    assert isinstance(late_b, Err)
+    assert late_b.code == "OUTSIDE_WINDOW"
+    on_a = _ok(follow_ups.record_observation(
+        tenant_id=TENANT, actor_id=env["actor"], quality_report_id=report.id,
+        observed_on=datetime.date(2026, 9, 20), conformity_line_id=line_a.id,
+    ))
+    assert on_a.of_id == of.id
+    assert on_a.window_ends_on == datetime.date(2026, 10, 11)
+
+    unknown = follow_ups.record_observation(
+        tenant_id=TENANT, actor_id=env["actor"], quality_report_id=report.id,
+        observed_on=datetime.date(2026, 9, 5), conformity_line_id=str(ULID()),
+    )
+    assert isinstance(unknown, Err)
+    assert unknown.code == "NOT_FOUND"
+
+
+def test_rejecting_restores_only_the_nc_raised_for_its_own_of(db, env, of):
+    """Two OFs on one shift; only OF-A's line got an NC from this report. Rejecting the
+    report cleans up that NC alone -- OF-B's own (manual) NC and stock are untouched."""
+    product_b = _second_product(db, env)
+    of_b = _second_of(db, env, product_b)
+    qc = QualityReportService(db)
+    shift_id = _validated_shift_with_rows(db, env, [(of.id, env["product"]), (of_b.id, product_b)])
+    report = _ok(qc.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))["report"]
+    lines = {line.product_id: line for line in qc._load_lines(tenant_id=TENANT, report_id=report.id)}
+    _ok(qc.update_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        lines=[
+            {"shift_packing_row_id": lines[env["product"]].shift_packing_row_id, "non_conforming_cartons": 3, "defect_details": "film"},
+            {"shift_packing_row_id": lines[product_b].shift_packing_row_id, "non_conforming_cartons": 5, "defect_details": "film"},
+        ],
+    ))
+    ncs = NonConformityService(db)
+    nc_a = _ok(ncs.raise_non_conformity(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, product_id=env["product"], quantity=0,
+        source_location_id=env["location"], quarantine_location_id=env["quarantine"],
+        defect_type="film", correlation_id=str(ULID()), quality_report_id=report.id,
+    ))
+    nc_b = _ok(ncs.raise_non_conformity(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of_b.id, product_id=product_b, quantity=5,
+        source_location_id=env["location"], quarantine_location_id=env["quarantine"],
+        defect_type="film", correlation_id=str(ULID()),
+    ))
+    shelf_a = _on_hand(db, env["product"], env["location"])
+    shelf_b = _on_hand(db, product_b, env["location"])
+
+    _ok(qc.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id))
+    _ok(qc.reject_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, reason="recount"))
+
+    remaining = {r[0] for r in db.execute("SELECT id FROM qc.non_conformities WHERE tenant_id = %s", (TENANT,)).fetchall()}
+    assert nc_a.id not in remaining
+    assert nc_b.id in remaining
+    assert _on_hand(db, env["product"], env["quarantine"]) == 0
+    assert _on_hand(db, env["product"], env["location"]) == shelf_a + 3
+    assert _on_hand(db, product_b, env["quarantine"]) == 5
+    assert _on_hand(db, product_b, env["location"]) == shelf_b
+    cleanup_ofs = [
+        r[0]
+        for r in db.execute(
+            "SELECT DISTINCT of_id FROM warehouse.stock_moves WHERE tenant_id = %s AND source_type = 'qc.non_conformity_rejection_cleanup'",
+            (TENANT,),
+        ).fetchall()
+    ]
+    assert cleanup_ofs == [of.id]
+
+
 # --- admin re-link to another shift ------------------------------------------
 
 

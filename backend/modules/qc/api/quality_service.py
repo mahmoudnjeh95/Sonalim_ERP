@@ -39,11 +39,11 @@ _FOLLOW_UP_COLUMNS = """
     id, quality_report_id, of_id, conformity_line_id, window_ends_on, observed_on, status, result, observation, actor_id
 """
 
-# For INSERTs that supply the id separately. A manually recorded observation is
-# not tied to one conformity line, so conformity_line_id is left NULL there --
-# only validate_report's own insert sets it.
+# For INSERTs that supply the id separately. A manually recorded observation
+# carries the conformity line it is about when the caller names one, NULL
+# otherwise (a report-wide observation).
 _FOLLOW_UP_INSERT_COLUMNS = """
-    quality_report_id, of_id, window_ends_on, observed_on, status, result, observation, actor_id
+    quality_report_id, of_id, conformity_line_id, window_ends_on, observed_on, status, result, observation, actor_id
 """
 
 
@@ -1043,17 +1043,39 @@ class FollowUpService:
         observed_on: datetime.date,
         observation: str | None = None,
         result: str | None = None,
+        conformity_line_id: str | None = None,
     ) -> Result[FollowUp]:
-        parent = self._connection.execute(
-            """
-            SELECT of_id, window_ends_on FROM qc.quality_follow_ups
-            WHERE tenant_id = %s AND quality_report_id = %s
-            ORDER BY created_at LIMIT 1
-            """,
-            (tenant_id, quality_report_id),
-        ).fetchone()
-        if parent is None:
-            return Err("NOT_FOUND", f"quality report {quality_report_id} has no open follow-up window")
+        """Record an observation inside a report's follow-up window.
+
+        Each conformity line has its own window (its own product's policy) and OF, so an
+        observation naming a line takes both from that line's follow-up. Without one it
+        falls back to the report's first window.
+        """
+        if conformity_line_id is not None:
+            parent = self._connection.execute(
+                """
+                SELECT of_id, window_ends_on FROM qc.quality_follow_ups
+                WHERE tenant_id = %s AND quality_report_id = %s AND conformity_line_id = %s
+                ORDER BY created_at LIMIT 1
+                """,
+                (tenant_id, quality_report_id, conformity_line_id),
+            ).fetchone()
+            if parent is None:
+                return Err(
+                    "NOT_FOUND",
+                    f"conformity line {conformity_line_id} has no follow-up window on report {quality_report_id}",
+                )
+        else:
+            parent = self._connection.execute(
+                """
+                SELECT of_id, window_ends_on FROM qc.quality_follow_ups
+                WHERE tenant_id = %s AND quality_report_id = %s
+                ORDER BY created_at LIMIT 1
+                """,
+                (tenant_id, quality_report_id),
+            ).fetchone()
+            if parent is None:
+                return Err("NOT_FOUND", f"quality report {quality_report_id} has no open follow-up window")
         of_id, window_ends_on = parent
 
         if observed_on > window_ends_on:
@@ -1064,13 +1086,14 @@ class FollowUpService:
             f"""
             INSERT INTO qc.quality_follow_ups
                 (id, tenant_id, {_FOLLOW_UP_INSERT_COLUMNS})
-            VALUES (%s, %s, %s, %s, %s, %s, 'open', %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, 'open', %s, %s, %s)
             """,
             (
                 follow_up_id,
                 tenant_id,
                 quality_report_id,
                 of_id,
+                conformity_line_id,
                 window_ends_on,
                 observed_on,
                 result,
@@ -1085,7 +1108,11 @@ class FollowUpService:
             action="quality_follow_up.recorded",
             entity_type="quality_follow_up",
             entity_id=follow_up_id,
-            payload={"quality_report_id": quality_report_id, "observed_on": observed_on.isoformat()},
+            payload={
+                "quality_report_id": quality_report_id,
+                "conformity_line_id": conformity_line_id,
+                "observed_on": observed_on.isoformat(),
+            },
         )
         return Ok(self._load(tenant_id=tenant_id, follow_up_id=follow_up_id))  # type: ignore[arg-type]
 

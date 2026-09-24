@@ -99,6 +99,8 @@ class RecordObservationRequest(BaseModel):
     observed_on: datetime.date
     observation: str | None = None
     result: str | None = None
+    # The line (product) the observation is about; its own window and OF apply.
+    conformity_line_id: str | None = None
 
 
 class TransitionFollowUpRequest(BaseModel):
@@ -466,6 +468,7 @@ def record_observation(
             observed_on=body.observed_on,
             observation=body.observation,
             result=body.result,
+            conformity_line_id=body.conformity_line_id,
         )
         if isinstance(result, Err):
             connection.rollback()
