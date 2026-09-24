@@ -56,6 +56,7 @@ import { StockHistoryChart } from "../../components/patterns/StockHistoryChart";
 import { ProductSelect } from "../../components/patterns/ProductSelect";
 import { CATEGORY_ORDER, useCatalogLabels, useProductCatalog, type CatalogProduct } from "../products/catalog";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
+import { CategoryIcon } from "../../components/patterns/CategoryIcon";
 import type { ProductCategory } from "../production/api";
 import { QuantityDiff } from "../../components/motion/QuantityDiff";
 import AdjustmentConfirmIcon from "../../assets/icons/warehouse/adjustment-confirm.svg?react";
@@ -762,7 +763,7 @@ export function StockTab() {
           onChange={setCategoryFilter}
           options={[
             { value: "all", label: t("common.all") },
-            ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category] })),
+            ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category], icon: <CategoryIcon category={category} /> })),
             { value: "unclassified", label: catalogLabels.unclassified },
           ]}
         />

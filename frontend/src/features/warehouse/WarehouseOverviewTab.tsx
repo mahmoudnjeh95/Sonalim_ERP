@@ -1,17 +1,16 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import {
-  ArrowDownToLine,
-  ArrowUpFromLine,
-  CalendarClock,
-  ClipboardList,
-  Coins,
-  Hourglass,
-  PackageX,
-  ShieldAlert,
-  Timer,
-  TriangleAlert,
-} from "lucide-react";
+import { useMemo, useState, type ReactNode } from "react";
+import { keepPreviousData, useQuery } from "@tanstack/react-query";
+import { AnimatePresence, motion } from "framer-motion";
+import { ClipboardList, Coins, Hourglass, PackageX, ShieldAlert, Timer } from "lucide-react";
+import LowStockIcon from "../../assets/icons/warehouse/low_stock.svg?react";
+import MovementInIcon from "../../assets/icons/warehouse/movement-in.svg?react";
+import MovementOutIcon from "../../assets/icons/warehouse/movement-out.svg?react";
+import LotIcon from "../../assets/icons/warehouse/lot.svg?react";
+import PalletIcon from "../../assets/icons/warehouse/pallet.svg?react";
+import ForkliftIcon from "../../assets/icons/warehouse/forklift.svg?react";
+import AdjustmentIcon from "../../assets/icons/warehouse/adjustment-confirm.svg?react";
+import EmptyStockIllustration from "../../assets/illustrations/empty-states/empty-no-stock.svg?react";
+import AllClearIllustration from "../../assets/illustrations/empty-states/empty-all-clear.svg?react";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
@@ -27,6 +26,11 @@ import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { CategoryBadge } from "../../components/patterns/StatusBadge";
 import { AppLoader } from "../../components/patterns/AppLoader";
+import { StatusAnimation } from "../../components/patterns/StatusAnimation";
+import { MotionSafeSvg } from "../../components/motion/MotionSafeSvg";
+import { rowEnterProps } from "../../components/motion/rowMotion";
+import { CategoryIcon, PackagingKindIcon } from "../../components/patterns/CategoryIcon";
+import { cn } from "../../lib/utils";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { useMoveTypeLabels } from "../../lib/stockMoveTypes";
 import { listUserDirectory, userDisplayName } from "../../lib/usersApi";
@@ -49,6 +53,53 @@ const CHART_COLORS = {
   inbound: "hsl(217 91% 45%)",
   outbound: "hsl(142 71% 40%)",
 };
+
+const EASE = [0.2, 0.8, 0.2, 1] as const;
+// Sections rise in one after another; tiles inside a section stagger a beat apart.
+const sectionMotion = (index: number) => ({
+  initial: { opacity: 0, y: 10 },
+  animate: { opacity: 1, y: 0 },
+  transition: { duration: 0.3, ease: EASE, delay: 0.06 * index },
+});
+const gridVariants = { hidden: {}, show: { transition: { staggerChildren: 0.05 } } };
+const tileVariants = { hidden: { opacity: 0, y: 8, scale: 0.98 }, show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.28, ease: EASE } } };
+const ROW_CLASS = "border-b border-border last:border-0 transition-colors hover:bg-muted/50";
+
+/** A stat card that lifts on hover and, when `alert` is on, carries a pulsing dot so a red figure is noticed before it is read. */
+function KpiTile({ alert = false, children }: { alert?: boolean; children: ReactNode }) {
+  return (
+    <motion.div variants={tileVariants} whileHover={{ y: -2 }} transition={{ duration: 0.18, ease: EASE }} className="relative">
+      {children}
+      {alert && (
+        <span className="absolute right-3 top-3 flex h-2.5 w-2.5" aria-hidden>
+          <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-destructive/60 motion-reduce:hidden" />
+          <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-destructive" />
+        </span>
+      )}
+    </motion.div>
+  );
+}
+
+/** Days of cover as a small meter: full at 30 days, empty when out. The status colour is the same one the badge beside it uses. */
+function CoverageMeter({ status, days }: { status: CoverageStatus; days: number | null }) {
+  const pct = status === "idle" ? 100 : days === null ? 0 : Math.max(0, Math.min(100, (days / 30) * 100));
+  return (
+    <div className="h-1.5 w-16 overflow-hidden rounded-full bg-muted" aria-hidden>
+      <motion.div
+        initial={{ width: 0 }}
+        animate={{ width: `${pct}%` }}
+        transition={{ duration: 0.5, ease: EASE }}
+        className={cn(
+          "h-full rounded-full",
+          status === "ok" && "bg-success",
+          status === "warning" && "bg-warning",
+          (status === "critical" || status === "out") && "bg-destructive",
+          status === "idle" && "bg-muted-foreground/30",
+        )}
+      />
+    </div>
+  );
+}
 
 const PERIOD_PRESETS = [7, 30, 90] as const;
 type PeriodPreset = (typeof PERIOD_PRESETS)[number];
@@ -116,9 +167,12 @@ export function WarehouseOverviewTab() {
   const [productView, setProductView] = useState<ProductView>("atRisk");
   const [chartUom, setChartUom] = useState<string | null>(null);
 
-  const { data: overview, isLoading, isError } = useQuery({
+  const { data: overview, isLoading, isError, isFetching, isPlaceholderData } = useQuery({
     queryKey: ["warehouse", "analytics", "overview", period.from, period.to],
     queryFn: () => getWarehouseOverview(token, { date_from: period.from, date_to: period.to }),
+    // Changing the period keeps the previous figures on screen (dimmed) while
+    // the new ones load, instead of flashing a loader over the whole tab.
+    placeholderData: keepPreviousData,
   });
   const { catalog } = useProductCatalog();
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
@@ -231,7 +285,12 @@ export function WarehouseOverviewTab() {
         row.category ? (
           <span className="inline-flex flex-wrap gap-1">
             <CategoryBadge category={row.category} />
-            {row.packaging_kind && <Badge variant="outline">{catalogLabels.packagingKind[row.packaging_kind]}</Badge>}
+            {row.packaging_kind && (
+              <Badge variant="outline">
+                <PackagingKindIcon kind={row.packaging_kind} className="h-3 w-3" />
+                {catalogLabels.packagingKind[row.packaging_kind]}
+              </Badge>
+            )}
           </span>
         ) : (
           <Badge variant="warning">{catalogLabels.unclassified}</Badge>
@@ -285,12 +344,17 @@ export function WarehouseOverviewTab() {
       ),
       defaultWidth: 170,
       cell: (row) => (
-        <span className="inline-flex items-center gap-2">
-          <Badge variant={COVERAGE_VARIANT[row.coverage_status]}>{coverageLabel[row.coverage_status]}</Badge>
-          {row.days_of_cover !== null && row.coverage_status !== "out" && (
-            <span className="tabular-nums text-muted-foreground">{fill(t("warehouse.overview.days"), { days: formatQty(row.days_of_cover) })}</span>
-          )}
-        </span>
+        <div className="space-y-1">
+          <span className="inline-flex items-center gap-2">
+            <Badge variant={COVERAGE_VARIANT[row.coverage_status]} dot={row.coverage_status === "critical" || row.coverage_status === "out"}>
+              {coverageLabel[row.coverage_status]}
+            </Badge>
+            {row.days_of_cover !== null && row.coverage_status !== "out" && (
+              <span className="tabular-nums text-muted-foreground">{fill(t("warehouse.overview.days"), { days: formatQty(row.days_of_cover) })}</span>
+            )}
+          </span>
+          <CoverageMeter status={row.coverage_status} days={row.days_of_cover} />
+        </div>
       ),
       sortValue: (row) => COVERAGE_RANK[row.coverage_status] * 1_000_000 + (row.days_of_cover ?? 0),
     },
@@ -400,7 +464,7 @@ export function WarehouseOverviewTab() {
       defaultWidth: 150,
       cell: (l) =>
         l.days_until_expiry < 0 ? (
-          <Badge variant="destructive">{fill(t("warehouse.overview.lots.expiredSince"), { days: String(-l.days_until_expiry) })}</Badge>
+          <Badge variant="destructive" dot>{fill(t("warehouse.overview.lots.expiredSince"), { days: String(-l.days_until_expiry) })}</Badge>
         ) : (
           <Badge variant={l.days_until_expiry <= 7 ? "warning" : "outline"}>{fill(t("warehouse.overview.days"), { days: String(l.days_until_expiry) })}</Badge>
         ),
@@ -450,66 +514,108 @@ export function WarehouseOverviewTab() {
           onChange={setCategoryFilter}
           options={[
             { value: "all", label: t("common.all") },
-            ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category] })),
+            ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category], icon: <CategoryIcon category={category} /> })),
             { value: "unclassified", label: catalogLabels.unclassified },
           ]}
         />
+        <AnimatePresence>
+          {isFetching && !isLoading && (
+            <motion.span
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"
+              aria-live="polite"
+            >
+              <MotionSafeSvg>
+                <StatusAnimation type="syncing" size={18} />
+              </MotionSafeSvg>
+              {t("warehouse.overview.updating")}
+            </motion.span>
+          )}
+        </AnimatePresence>
       </div>
 
-      <section className="space-y-2">
+      <div className={cn("space-y-6 transition-opacity duration-200", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
+      <motion.section {...sectionMotion(0)} className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">{t("warehouse.overview.section.today")}</h2>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <StatCard label={t("warehouse.overview.stat.stockValue")} value={summary.stock_value} icon={<Coins className="h-5 w-5" />} unit="F CFA" accent="primary" />
-          <StatCard
-            label={t("warehouse.overview.stat.belowThreshold")}
-            value={summary.below_threshold + summary.out_of_stock}
-            icon={<TriangleAlert className="h-5 w-5" />}
-            accent={summary.below_threshold + summary.out_of_stock > 0 ? "warning" : "success"}
-          />
-          <StatCard
-            label={t("warehouse.overview.stat.critical")}
-            value={summary.coverage_critical}
-            icon={<Timer className="h-5 w-5" />}
-            accent={summary.coverage_critical > 0 ? "destructive" : "success"}
-          />
-          <StatCard label={t("warehouse.overview.stat.dormant")} value={summary.dormant_count} icon={<Hourglass className="h-5 w-5" />} accent={summary.dormant_count > 0 ? "accent" : "success"} />
-          <StatCard label={t("warehouse.overview.stat.blocked")} value={summary.blocked_products} icon={<ShieldAlert className="h-5 w-5" />} accent={summary.blocked_products > 0 ? "warning" : "success"} />
-          <StatCard
-            label={t("warehouse.overview.stat.negative")}
-            value={summary.negative_stock}
-            icon={<PackageX className="h-5 w-5" />}
-            accent={summary.negative_stock > 0 ? "destructive" : "success"}
-          />
-          <StatCard
-            label={t("warehouse.overview.stat.lotsExpiring")}
-            value={summary.lots_expiring_soon + summary.lots_expired}
-            icon={<CalendarClock className="h-5 w-5" />}
-            accent={summary.lots_expired > 0 ? "destructive" : summary.lots_expiring_soon > 0 ? "warning" : "success"}
-          />
-          <StatCard label={t("warehouse.overview.stat.productsInStock")} value={summary.products_in_stock} icon={<ClipboardList className="h-5 w-5" />} accent="primary" />
-        </div>
+        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiTile>
+            <StatCard label={t("warehouse.overview.stat.stockValue")} value={summary.stock_value} icon={<Coins className="h-5 w-5" />} unit="F CFA" accent="primary" />
+          </KpiTile>
+          <KpiTile>
+            <StatCard
+              label={t("warehouse.overview.stat.belowThreshold")}
+              value={summary.below_threshold + summary.out_of_stock}
+              icon={<LowStockIcon className="h-5 w-5" />}
+              accent={summary.below_threshold + summary.out_of_stock > 0 ? "warning" : "success"}
+            />
+          </KpiTile>
+          <KpiTile alert={summary.coverage_critical > 0}>
+            <StatCard
+              label={t("warehouse.overview.stat.critical")}
+              value={summary.coverage_critical}
+              icon={<Timer className="h-5 w-5" />}
+              accent={summary.coverage_critical > 0 ? "destructive" : "success"}
+            />
+          </KpiTile>
+          <KpiTile>
+            <StatCard label={t("warehouse.overview.stat.dormant")} value={summary.dormant_count} icon={<Hourglass className="h-5 w-5" />} accent={summary.dormant_count > 0 ? "accent" : "success"} />
+          </KpiTile>
+          <KpiTile>
+            <StatCard label={t("warehouse.overview.stat.blocked")} value={summary.blocked_products} icon={<ShieldAlert className="h-5 w-5" />} accent={summary.blocked_products > 0 ? "warning" : "success"} />
+          </KpiTile>
+          <KpiTile alert={summary.negative_stock > 0}>
+            <StatCard
+              label={t("warehouse.overview.stat.negative")}
+              value={summary.negative_stock}
+              icon={<PackageX className="h-5 w-5" />}
+              accent={summary.negative_stock > 0 ? "destructive" : "success"}
+            />
+          </KpiTile>
+          <KpiTile alert={summary.lots_expired > 0}>
+            <StatCard
+              label={t("warehouse.overview.stat.lotsExpiring")}
+              value={summary.lots_expiring_soon + summary.lots_expired}
+              icon={<LotIcon className="h-5 w-5" />}
+              accent={summary.lots_expired > 0 ? "destructive" : summary.lots_expiring_soon > 0 ? "warning" : "success"}
+            />
+          </KpiTile>
+          <KpiTile>
+            <StatCard label={t("warehouse.overview.stat.productsInStock")} value={summary.products_in_stock} icon={<PalletIcon className="h-5 w-5" />} accent="primary" />
+          </KpiTile>
+        </motion.div>
         {summary.unvalued_products > 0 && (
           <p className="text-xs text-muted-foreground">{fill(t("warehouse.overview.unvaluedHint"), { count: String(summary.unvalued_products) })}</p>
         )}
-      </section>
+      </motion.section>
 
-      <section className="space-y-2">
+      <motion.section {...sectionMotion(1)} className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">
           {fill(t("warehouse.overview.section.period"), { from: formatDate(overview.period.from), to: formatDate(overview.period.to) })}
         </h2>
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <UnitBreakdownStat label={t("warehouse.overview.stat.inbound")} icon={<ArrowDownToLine className="h-5 w-5" />} accent="primary" breakdown={inboundBreakdown} />
-          <UnitBreakdownStat label={t("warehouse.overview.stat.outbound")} icon={<ArrowUpFromLine className="h-5 w-5" />} accent="success" breakdown={outboundBreakdown} />
-          <StatCard label={t("warehouse.overview.stat.movements")} value={summary.movements_count} icon={<ClipboardList className="h-5 w-5" />} accent="primary" />
-          <StatCard
-            label={t("warehouse.overview.stat.corrections")}
-            value={summary.corrections_count}
-            icon={<TriangleAlert className="h-5 w-5" />}
-            accent={summary.corrections_count > 0 ? "warning" : "success"}
-          />
-        </div>
-      </section>
+        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <KpiTile>
+            <UnitBreakdownStat label={t("warehouse.overview.stat.inbound")} icon={<MovementInIcon className="h-5 w-5" />} accent="primary" breakdown={inboundBreakdown} />
+          </KpiTile>
+          <KpiTile>
+            <UnitBreakdownStat label={t("warehouse.overview.stat.outbound")} icon={<MovementOutIcon className="h-5 w-5" />} accent="success" breakdown={outboundBreakdown} />
+          </KpiTile>
+          <KpiTile>
+            <StatCard label={t("warehouse.overview.stat.movements")} value={summary.movements_count} icon={<ForkliftIcon className="h-5 w-5" />} accent="primary" />
+          </KpiTile>
+          <KpiTile>
+            <StatCard
+              label={t("warehouse.overview.stat.corrections")}
+              value={summary.corrections_count}
+              icon={<AdjustmentIcon className="h-5 w-5" />}
+              accent={summary.corrections_count > 0 ? "warning" : "success"}
+            />
+          </KpiTile>
+        </motion.div>
+      </motion.section>
 
+      <motion.div {...sectionMotion(2)}>
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
           <div>
@@ -522,7 +628,7 @@ export function WarehouseOverviewTab() {
         </CardHeader>
         <CardContent>
           {chartData.length === 0 ? (
-            <EmptyState icon={<ClipboardList className="h-5 w-5" />} title={t("warehouse.overview.chart.empty.title")} description={t("warehouse.overview.chart.empty.description")} />
+            <EmptyState icon={<EmptyStockIllustration className="h-5 w-5" />} title={t("warehouse.overview.chart.empty.title")} description={t("warehouse.overview.chart.empty.description")} />
           ) : (
             <div className="h-64">
               <ResponsiveContainer width="100%" height="100%">
@@ -535,15 +641,17 @@ export function WarehouseOverviewTab() {
                     contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
                   />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
-                  <Bar dataKey="inbound" name={t("warehouse.overview.chart.inbound")} fill={CHART_COLORS.inbound} radius={[4, 4, 0, 0]} />
-                  <Bar dataKey="outbound" name={t("warehouse.overview.chart.outbound")} fill={CHART_COLORS.outbound} radius={[4, 4, 0, 0]} />
+                  <Bar dataKey="inbound" name={t("warehouse.overview.chart.inbound")} fill={CHART_COLORS.inbound} radius={[4, 4, 0, 0]} animationDuration={600} animationEasing="ease-out" />
+                  <Bar dataKey="outbound" name={t("warehouse.overview.chart.outbound")} fill={CHART_COLORS.outbound} radius={[4, 4, 0, 0]} animationDuration={600} animationEasing="ease-out" />
                 </BarChart>
               </ResponsiveContainer>
             </div>
           )}
         </CardContent>
       </Card>
+      </motion.div>
 
+      <motion.div {...sectionMotion(3)}>
       <Card>
         <CardHeader className="flex flex-row flex-wrap items-start justify-between gap-3">
           <div>
@@ -590,23 +698,31 @@ export function WarehouseOverviewTab() {
               {sortedProductRows.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={productTable.visibleColumns.length} className="p-0">
-                    <EmptyState icon={<ClipboardList className="h-5 w-5" />} title={t("warehouse.overview.products.empty.title")} description={t("warehouse.overview.products.empty.description")} />
+                    <EmptyState
+                      icon={<ClipboardList className="h-5 w-5" />}
+                      illustration={<AllClearIllustration className="h-auto w-52" />}
+                      title={t("warehouse.overview.products.empty.title")}
+                      description={t("warehouse.overview.products.empty.description")}
+                    />
                   </TableCell>
                 </TableRow>
               )}
-              {sortedProductRows.map((row) => (
-                <TableRow key={row.product_id}>
-                  {productTable.visibleColumns.map((column) => (
-                    <TableCell key={column.key}>{column.cell(row)}</TableCell>
-                  ))}
-                </TableRow>
-              ))}
+              <AnimatePresence initial={false}>
+                {sortedProductRows.map((row, index) => (
+                  <motion.tr key={row.product_id} {...rowEnterProps(index)} className={ROW_CLASS}>
+                    {productTable.visibleColumns.map((column) => (
+                      <TableCell key={column.key}>{column.cell(row)}</TableCell>
+                    ))}
+                  </motion.tr>
+                ))}
+              </AnimatePresence>
             </TableBody>
           </Table>
         </CardContent>
       </Card>
+      </motion.div>
 
-      <div className="grid gap-6">
+      <motion.div {...sectionMotion(4)} className="grid gap-6">
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-1.5">
@@ -636,17 +752,24 @@ export function WarehouseOverviewTab() {
                 {corrections.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={correctionTable.visibleColumns.length} className="p-0">
-                      <EmptyState icon={<ClipboardList className="h-5 w-5" />} title={t("warehouse.overview.corrections.empty.title")} description={t("warehouse.overview.corrections.empty.description")} />
+                      <EmptyState
+                        icon={<ClipboardList className="h-5 w-5" />}
+                        illustration={<AllClearIllustration className="h-auto w-52" />}
+                        title={t("warehouse.overview.corrections.empty.title")}
+                        description={t("warehouse.overview.corrections.empty.description")}
+                      />
                     </TableCell>
                   </TableRow>
                 )}
-                {correctionTable.sortRows(corrections).map((correction) => (
-                  <TableRow key={correction.id}>
-                    {correctionTable.visibleColumns.map((column) => (
-                      <TableCell key={column.key}>{column.cell(correction)}</TableCell>
-                    ))}
-                  </TableRow>
-                ))}
+                <AnimatePresence initial={false}>
+                  {correctionTable.sortRows(corrections).map((correction, index) => (
+                    <motion.tr key={correction.id} {...rowEnterProps(index)} className={ROW_CLASS}>
+                      {correctionTable.visibleColumns.map((column) => (
+                        <TableCell key={column.key}>{column.cell(correction)}</TableCell>
+                      ))}
+                    </motion.tr>
+                  ))}
+                </AnimatePresence>
               </TableBody>
             </Table>
           </CardContent>
@@ -678,21 +801,29 @@ export function WarehouseOverviewTab() {
                 {expiringLots.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={lotTable.visibleColumns.length} className="p-0">
-                      <EmptyState icon={<CalendarClock className="h-5 w-5" />} title={t("warehouse.overview.lots.empty.title")} description={t("warehouse.overview.lots.empty.description")} />
+                      <EmptyState
+                        icon={<LotIcon className="h-5 w-5" />}
+                        illustration={<AllClearIllustration className="h-auto w-52" />}
+                        title={t("warehouse.overview.lots.empty.title")}
+                        description={t("warehouse.overview.lots.empty.description")}
+                      />
                     </TableCell>
                   </TableRow>
                 )}
-                {lotTable.sortRows(expiringLots).map((lot) => (
-                  <TableRow key={lot.lot_id}>
-                    {lotTable.visibleColumns.map((column) => (
-                      <TableCell key={column.key}>{column.cell(lot)}</TableCell>
-                    ))}
-                  </TableRow>
-                ))}
+                <AnimatePresence initial={false}>
+                  {lotTable.sortRows(expiringLots).map((lot, index) => (
+                    <motion.tr key={lot.lot_id} {...rowEnterProps(index)} className={ROW_CLASS}>
+                      {lotTable.visibleColumns.map((column) => (
+                        <TableCell key={column.key}>{column.cell(lot)}</TableCell>
+                      ))}
+                    </motion.tr>
+                  ))}
+                </AnimatePresence>
               </TableBody>
             </Table>
           </CardContent>
         </Card>
+      </motion.div>
       </div>
     </div>
   );

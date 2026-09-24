@@ -2209,6 +2209,7 @@ const en = {
   "warehouse.tabs.overview": "Overview",
 
   "warehouse.overview.error": "Stock KPIs could not be loaded.",
+  "warehouse.overview.updating": "Updating…",
   "warehouse.overview.section.today": "As of today",
   "warehouse.overview.section.period": "Period {from} – {to}",
   "warehouse.overview.stat.stockValue": "Stock value at purchase cost",
@@ -5623,6 +5624,7 @@ const fr: Record<TranslationKey, string> = {
   "warehouse.tabs.overview": "Vue d'ensemble",
 
   "warehouse.overview.error": "Les indicateurs de stock n'ont pas pu être chargés.",
+  "warehouse.overview.updating": "Mise à jour…",
   "warehouse.overview.section.today": "À ce jour",
   "warehouse.overview.section.period": "Période du {from} au {to}",
   "warehouse.overview.stat.stockValue": "Valeur du stock au prix d'achat",

@@ -19,6 +19,7 @@ import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, Dialog
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
+import { CategoryIcon } from "../../components/patterns/CategoryIcon";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
@@ -634,7 +635,7 @@ export function ProductListTab() {
               onChange={setCategoryFilter}
               options={[
                 { value: "all", label: t("common.all") },
-                ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category] })),
+                ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category], icon: <CategoryIcon category={category} /> })),
                 { value: "unclassified", label: catalogLabels.unclassified },
               ]}
             />
