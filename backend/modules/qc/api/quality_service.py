@@ -239,9 +239,8 @@ class QualityReportService:
 
         Production is the authority on work_center/date/team/shift and on the
         packing rows a QC report inspects. qc never reads production's tables
-        for the header -- it asks production's own service. The packing rows
-        are read directly because get_shift returns section payloads, not
-        typed rows with stable ids.
+        -- it asks production's own service. get_shift's packing section
+        payload already carries each row's stable id, of_id and product_id.
         """
         from modules.production.api.shift_report_service import ShiftReportService
 
@@ -251,14 +250,13 @@ class QualityReportService:
             return found
         header = found.value
 
-        packing_rows = self._connection.execute(
-            """
-            SELECT id, of_id, product_id FROM production.shift_packing_rows
-            WHERE tenant_id = %s AND shift_report_id = %s AND product_id IS NOT NULL
-            ORDER BY id
-            """,
-            (tenant_id, shift_report_id),
-        ).fetchall()
+        packing_section = next((s for s in header["sections"] if s["key"] == "packing"), None)
+        payload_rows = ((packing_section or {}).get("payload") or {}).get("rows") or []
+        packing_rows = [
+            {"id": row["id"], "of_id": row["of_id"], "product_id": row["product_id"]}
+            for row in payload_rows
+            if row.get("product_id") is not None
+        ]
 
         return Ok(
             {
@@ -267,7 +265,7 @@ class QualityReportService:
                 "shift": header["shift"],
                 "team": header["team"],
                 "status": header["status"],
-                "packing_rows": [{"id": r[0], "of_id": r[1], "product_id": r[2]} for r in packing_rows],
+                "packing_rows": packing_rows,
             }
         )
 
