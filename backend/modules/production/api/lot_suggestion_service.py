@@ -26,12 +26,12 @@ class LotSuggestionService:
     def suggest(self, *, tenant_id: str, work_center_id: str, report_date: datetime.date) -> dict:
         rows = self._connection.execute(
             """
-            SELECT c.lot_number, r.report_date
-            FROM production.conditionnement_reports c
-            JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
-            WHERE c.tenant_id = %s AND r.work_center_id = %s AND r.report_date <= %s
-              AND r.status <> 'rejected' AND btrim(coalesce(c.lot_number, '')) <> ''
-            ORDER BY r.report_date DESC, r.created_at DESC
+            SELECT p.lot_number, s.report_date
+            FROM production.shift_packing_rows p
+            JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
+            WHERE p.tenant_id = %s AND s.work_center_id = %s AND s.report_date <= %s
+              AND s.status <> 'returned' AND btrim(coalesce(p.lot_number, '')) <> ''
+            ORDER BY s.report_date DESC, p.created_at DESC
             LIMIT %s
             """,
             (tenant_id, work_center_id, report_date, _LOOKBACK),
