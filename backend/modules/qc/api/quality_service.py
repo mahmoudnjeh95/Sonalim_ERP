@@ -10,6 +10,7 @@ from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.qc.domain.quality import (
     DEFAULT_FOLLOW_UP_WINDOW_DAYS,
+    ConformityLine,
     FollowUp,
     QualityReport,
     QualityReportDetail,
@@ -17,76 +18,54 @@ from modules.qc.domain.quality import (
     is_conforming,
     transition_follow_up,
     transition_quality_report,
-    validate_quality_detail,
+    validate_conformity_line,
     validate_window_days,
 )
 
 _REPORT_COLUMNS = """
-    id, of_id, report_date, status, revision, conditionnement_report_id, team, shift, created_by,
+    id, shift_report_id, report_date, status, revision, team, shift, created_by,
     submitted_at, validated_by, validated_at, rejection_reason
 """
 
-_DETAIL_COLUMNS = """
-    pre_dryer_index, humidity_percentage, cooling_index, pf_index, sumo_index,
-    conforming_cartons, non_conforming_cartons, defect_details, comments, corrective_action
+_DETAIL_COLUMNS = "comments, corrective_action"
+
+_LINE_COLUMNS = """
+    id, report_id, shift_packing_row_id, of_id, product_id,
+    conforming_cartons, non_conforming_cartons, defect_details
 """
 
 _FOLLOW_UP_COLUMNS = """
-    id, quality_report_id, of_id, window_ends_on, observed_on, status, result, observation, actor_id
+    id, quality_report_id, of_id, conformity_line_id, window_ends_on, observed_on, status, result, observation, actor_id
 """
 
-# Same list without the id, for INSERTs that supply it separately.
+# For INSERTs that supply the id separately. A manually recorded observation is
+# not tied to one conformity line, so conformity_line_id is left NULL there --
+# only validate_report's own insert sets it.
 _FOLLOW_UP_INSERT_COLUMNS = """
     quality_report_id, of_id, window_ends_on, observed_on, status, result, observation, actor_id
 """
 
 
-def _row_to_report(row: tuple, *, product_id: str | None = None) -> QualityReport:
+def _row_to_report(row: tuple) -> QualityReport:
     return QualityReport(
-        id=row[0],
-        of_id=row[1],
-        report_date=row[2],
-        status=row[3],
-        revision=row[4],
-        conditionnement_report_id=row[5],
-        team=row[6],
-        shift=row[7],
-        created_by=row[8],
-        submitted_at=row[9],
-        validated_by=row[10],
-        validated_at=row[11],
-        rejection_reason=row[12],
-        product_id=product_id,
+        id=row[0], shift_report_id=row[1], report_date=row[2], status=row[3], revision=row[4],
+        team=row[5], shift=row[6], created_by=row[7], submitted_at=row[8],
+        validated_by=row[9], validated_at=row[10], rejection_reason=row[11],
     )
 
 
 def _row_to_detail(row: tuple) -> QualityReportDetail:
-    return QualityReportDetail(
-        pre_dryer_index=float(row[0]) if row[0] is not None else None,
-        humidity_percentage=float(row[1]) if row[1] is not None else None,
-        cooling_index=float(row[2]) if row[2] is not None else None,
-        pf_index=float(row[3]) if row[3] is not None else None,
-        sumo_index=float(row[4]) if row[4] is not None else None,
-        conforming_cartons=float(row[5]),
-        non_conforming_cartons=float(row[6]),
-        defect_details=row[7],
-        comments=row[8],
-        corrective_action=row[9],
-    )
+    return QualityReportDetail(comments=row[0], corrective_action=row[1])
 
 
 def _detail_values(detail: QualityReportDetail) -> tuple:
-    return (
-        detail.pre_dryer_index,
-        detail.humidity_percentage,
-        detail.cooling_index,
-        detail.pf_index,
-        detail.sumo_index,
-        detail.conforming_cartons,
-        detail.non_conforming_cartons,
-        detail.defect_details,
-        detail.comments,
-        detail.corrective_action,
+    return (detail.comments, detail.corrective_action)
+
+
+def _row_to_line(row: tuple) -> ConformityLine:
+    return ConformityLine(
+        id=row[0], report_id=row[1], shift_packing_row_id=row[2], of_id=row[3], product_id=row[4],
+        conforming_cartons=float(row[5]), non_conforming_cartons=float(row[6]), defect_details=row[7],
     )
 
 
@@ -95,12 +74,13 @@ def _row_to_follow_up(row: tuple) -> FollowUp:
         id=row[0],
         quality_report_id=row[1],
         of_id=row[2],
-        window_ends_on=row[3],
-        observed_on=row[4],
-        status=row[5],
-        result=row[6],
-        observation=row[7],
-        actor_id=row[8],
+        conformity_line_id=row[3],
+        window_ends_on=row[4],
+        observed_on=row[5],
+        status=row[6],
+        result=row[7],
+        observation=row[8],
+        actor_id=row[9],
     )
 
 
@@ -167,11 +147,12 @@ class FollowUpPolicyService:
 
 
 class QualityReportService:
-    """The quality report and the follow-up window it opens.
+    """The quality report and the follow-up windows it opens.
 
-    Deliberately its own aggregate rather than a third detail table hanging off
-    production's header: a module may not read another's tables, and quality
-    outlives the OF it was raised against.
+    One report per shift report, carrying one conformity line per product
+    packed that shift. Deliberately its own aggregate rather than a detail
+    table hanging off production's header: a module may not read another's
+    tables, and quality outlives the OF it was raised against.
     """
 
     def __init__(self, connection: psycopg.Connection) -> None:
@@ -197,361 +178,156 @@ class QualityReportService:
         ).fetchone()
         return _row_to_detail(row) if row is not None else None
 
+    def _load_lines(self, *, tenant_id: str, report_id: str) -> list[ConformityLine]:
+        rows = self._connection.execute(
+            f"SELECT {_LINE_COLUMNS} FROM qc.quality_conformity_lines WHERE report_id = %s AND tenant_id = %s ORDER BY id",
+            (report_id, tenant_id),
+        ).fetchall()
+        return [_row_to_line(row) for row in rows]
+
     def get_report(self, *, tenant_id: str, report_id: str) -> dict | None:
         report = self._load_report(tenant_id=tenant_id, report_id=report_id)
         if report is None:
             return None
-        return {"report": report, "detail": self._load_detail(tenant_id=tenant_id, report_id=report_id)}
-
-    def get_conformity_summary(self, *, tenant_id: str, of_id: str) -> dict:
-        """How an OF's quality came out, summed over its validated reports.
-
-        This is qc's answer to production's consolidation question. Production
-        calls it rather than reading qc's tables — an immediate answer the caller
-        needs, which is exactly what a synchronous cross-module call is for.
-
-        Only validated reports count. A draft or rejected quality report is a
-        claim, not a verdict, and consolidating it would let unapproved figures
-        into the OF's official result.
-        """
-        row = self._connection.execute(
-            """
-            SELECT
-                count(*),
-                COALESCE(SUM(d.conforming_cartons), 0),
-                COALESCE(SUM(d.non_conforming_cartons), 0)
-            FROM qc.quality_reports r
-            JOIN qc.quality_report_details d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
-            WHERE r.tenant_id = %s AND r.of_id = %s AND r.status = 'validated'
-            """,
-            (tenant_id, of_id),
-        ).fetchone()
-        report_count, conforming, non_conforming = int(row[0]), float(row[1]), float(row[2])
-        total = conforming + non_conforming
         return {
-            "validated_report_count": report_count,
-            "conforming_cartons": conforming,
-            "non_conforming_cartons": non_conforming,
-            # None rather than 100% when nothing was inspected: "no data" and
-            # "everything passed" are different answers.
-            "conformity_rate": (conforming / total) if total > 0 else None,
-            "pending_nc_reports": self._reports_needing_nc(tenant_id=tenant_id, of_id=of_id),
+            "report": report,
+            "detail": self._load_detail(tenant_id=tenant_id, report_id=report_id),
+            "lines": self._load_lines(tenant_id=tenant_id, report_id=report_id),
         }
-
-    def _reports_needing_nc(self, *, tenant_id: str, of_id: str) -> list[dict]:
-        """Validated reports that logged a defect but never got a case raised for it.
-
-        A carton flagged `non_conforming_cartons` on the inspection form is only
-        an observation -- nothing pulls it off the market until someone raises a
-        non-conformity ticket against it (decision 21, see
-        `NonConformityService.get_rejected_quantity_for_of`). That second step is
-        manual, so a validated report can sit indefinitely with a defect nobody
-        acted on; this is what lets a screen say so instead of only showing a
-        conformity rate that already includes the drop.
-        """
-        rows = self._connection.execute(
-            """
-            SELECT r.id, r.report_date, d.non_conforming_cartons
-            FROM qc.quality_reports r
-            JOIN qc.quality_report_details d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
-            WHERE r.tenant_id = %s AND r.of_id = %s AND r.status = 'validated'
-              AND d.non_conforming_cartons > 0
-              AND NOT EXISTS (
-                  SELECT 1 FROM qc.non_conformities n
-                  WHERE n.tenant_id = r.tenant_id AND n.quality_report_id = r.id
-              )
-            ORDER BY r.report_date DESC
-            """,
-            (tenant_id, of_id),
-        ).fetchall()
-        return [
-            {
-                "report_id": report_id,
-                "report_date": report_date.isoformat(),
-                "non_conforming_cartons": float(non_conforming_cartons),
-            }
-            for report_id, report_date, non_conforming_cartons in rows
-        ]
 
     GRAINS = ("day", "week", "month", "year")
 
-    def team_conformity(
-        self,
-        *,
-        tenant_id: str,
-        grain: str,
-        date_from: str | None = None,
-        date_to: str | None = None,
-    ) -> list[dict]:
-        """Conformity from validated reports, bucketed by team and period.
+    # get_conformity_summary / team_conformity / index_trend read the old
+    # per-report conformity columns, which no longer exist. They are rewritten
+    # against conformity lines and parameter entries in the next task; until
+    # then they refuse loudly rather than query dropped columns.
 
-        Same shape and validated-only rule as `get_conformity_summary`, just
-        grouped by team and a calendar bucket instead of filtered to one OF —
-        production's team-performance panel and the QC dashboard's plant-wide
-        trend both read this, the second by summing across teams per period.
-        """
+    def get_conformity_summary(self, *, tenant_id: str, of_id: str) -> dict:
+        raise NotImplementedError("rewritten in the next task")
+
+    def team_conformity(
+        self, *, tenant_id: str, grain: str, date_from: str | None = None, date_to: str | None = None
+    ) -> list[dict]:
         if grain not in self.GRAINS:
             raise ValueError(f"grain must be one of {self.GRAINS}")
-
-        clauses = ["qr.tenant_id = %s", "qr.status = 'validated'"]
-        params: list[object] = [grain, tenant_id]
-        if date_from is not None:
-            clauses.append("qr.report_date >= %s")
-            params.append(date_from)
-        if date_to is not None:
-            clauses.append("qr.report_date <= %s")
-            params.append(date_to)
-
-        rows = self._connection.execute(
-            f"""
-            SELECT
-                qr.team,
-                date_trunc(%s, qr.report_date)::date AS period,
-                count(*) AS report_count,
-                COALESCE(SUM(d.conforming_cartons), 0),
-                COALESCE(SUM(d.non_conforming_cartons), 0)
-            FROM qc.quality_reports qr
-            JOIN qc.quality_report_details d ON d.report_id = qr.id AND d.tenant_id = qr.tenant_id
-            WHERE {' AND '.join(clauses)}
-            GROUP BY qr.team, period
-            """,
-            params,
-        ).fetchall()
-        return [
-            {
-                "team": team,
-                "period": period.isoformat(),
-                "report_count": int(report_count),
-                "conforming_cartons": float(conforming),
-                "non_conforming_cartons": float(non_conforming),
-            }
-            for team, period, report_count, conforming, non_conforming in rows
-        ]
+        raise NotImplementedError("rewritten in the next task")
 
     def index_trend(
-        self,
-        *,
-        tenant_id: str,
-        grain: str,
-        date_from: str | None = None,
-        date_to: str | None = None,
+        self, *, tenant_id: str, grain: str, date_from: str | None = None, date_to: str | None = None
     ) -> list[dict]:
-        """Average process indices from validated reports, bucketed by period.
-
-        Plant-wide rather than by team like team_conformity -- these are
-        leading process indicators (pre-dryer, humidity, cooling, PF, SUMO),
-        not a team ranking. AVG(...) ignores NULLs on its own, so a shift that
-        skipped one index doesn't drag the others toward zero.
-        """
         if grain not in self.GRAINS:
             raise ValueError(f"grain must be one of {self.GRAINS}")
+        raise NotImplementedError("rewritten in the next task")
 
-        clauses = ["qr.tenant_id = %s", "qr.status = 'validated'"]
-        params: list[object] = [grain, tenant_id]
-        if date_from is not None:
-            clauses.append("qr.report_date >= %s")
-            params.append(date_from)
-        if date_to is not None:
-            clauses.append("qr.report_date <= %s")
-            params.append(date_to)
-
-        rows = self._connection.execute(
-            f"""
-            SELECT
-                date_trunc(%s, qr.report_date)::date AS period,
-                count(*) AS report_count,
-                AVG(d.pre_dryer_index),
-                AVG(d.humidity_percentage),
-                AVG(d.cooling_index),
-                AVG(d.pf_index),
-                AVG(d.sumo_index)
-            FROM qc.quality_reports qr
-            JOIN qc.quality_report_details d ON d.report_id = qr.id AND d.tenant_id = qr.tenant_id
-            WHERE {' AND '.join(clauses)}
-            GROUP BY period
-            ORDER BY period
-            """,
-            params,
-        ).fetchall()
-        return [
-            {
-                "period": period.isoformat(),
-                "report_count": int(report_count),
-                "pre_dryer_index": float(pre_dryer_index) if pre_dryer_index is not None else None,
-                "humidity_percentage": float(humidity_percentage) if humidity_percentage is not None else None,
-                "cooling_index": float(cooling_index) if cooling_index is not None else None,
-                "pf_index": float(pf_index) if pf_index is not None else None,
-                "sumo_index": float(sumo_index) if sumo_index is not None else None,
-            }
-            for (
-                period, report_count, pre_dryer_index, humidity_percentage, cooling_index, pf_index, sumo_index,
-            ) in rows
-        ]
-
-    def list_reports(
-        self, *, tenant_id: str, of_id: str | None = None, status: str | None = None
-    ) -> list[QualityReport]:
+    def list_reports(self, *, tenant_id: str, status: str | None = None) -> list[QualityReport]:
         clauses = ["tenant_id = %s"]
         params: list[object] = [tenant_id]
-        if of_id is not None:
-            clauses.append("of_id = %s")
-            params.append(of_id)
         if status is not None:
             clauses.append("status = %s")
             params.append(status)
         rows = self._connection.execute(
-            f"""
-            SELECT {_REPORT_COLUMNS} FROM qc.quality_reports
-            WHERE {' AND '.join(clauses)}
-            ORDER BY report_date DESC, created_at DESC
-            """,
+            f"SELECT {_REPORT_COLUMNS} FROM qc.quality_reports WHERE {' AND '.join(clauses)} "
+            f"ORDER BY report_date DESC, created_at DESC",
             params,
         ).fetchall()
-
-        from modules.production.api.report_product import finished_products_of_reports
-
-        # row[5] is conditionnement_report_id -- the production report a quality report
-        # inspects. A report created before that link existed has none (see the
-        # QualityReport.conditionnement_report_id docstring) and gets no product.
-        report_ids = [row[5] for row in rows if row[5] is not None]
-        products_by_report = finished_products_of_reports(self._connection, tenant_id=tenant_id, report_ids=report_ids)
-        return [_row_to_report(row, product_id=products_by_report.get(row[5])) for row in rows]
+        return [_row_to_report(row) for row in rows]
 
     # ---- writes ----------------------------------------------------------
 
-    def _resolve_conditionnement(self, *, tenant_id: str, conditionnement_report_id: str) -> Result[dict]:
-        """Resolve a conditionnement report into what a quality report needs from it.
+    def _resolve_shift(self, *, tenant_id: str, shift_report_id: str) -> Result[dict]:
+        """Resolve a shift report into what a quality report needs from it.
 
-        Production is the authority on of_id/team/shift/date and on the
-        packaging figures QC shows as a hint before the inspector fills
-        anything in. qc never reads production's tables for this -- it asks
-        production's own service for an immediate answer, the same
-        synchronous cross-module call production already makes into qc for
-        get_conformity_summary, just in the other direction.
+        Production is the authority on work_center/date/team/shift and on the
+        packing rows a QC report inspects. qc never reads production's tables
+        for the header -- it asks production's own service. The packing rows
+        are read directly because get_shift returns section payloads, not
+        typed rows with stable ids.
         """
-        from modules.production.api.production_report_service import ProductionReportService
-        from modules.production.api.report_product import finished_product_of_report
+        from modules.production.api.shift_report_service import ShiftReportService
 
-        reports = ProductionReportService(self._connection)
-        found = reports.get_report(tenant_id=tenant_id, report_id=conditionnement_report_id)
-        if found is None:
-            return Err("NOT_FOUND", f"conditionnement report {conditionnement_report_id} not found")
-        header, detail = found["report"], found["detail"]
-        if header.report_type != "conditionnement":
-            return Err("WRONG_REPORT_TYPE", f"report {conditionnement_report_id} is not a conditionnement report")
+        shifts = ShiftReportService(self._connection)
+        found = shifts.get_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
+        if isinstance(found, Err):
+            return found
+        header = found.value
 
-        regrind_quantity = None
-        if detail.daily_report_id is not None:
-            daily = reports.get_report(tenant_id=tenant_id, report_id=detail.daily_report_id)
-            if daily is not None and daily["detail"] is not None:
-                regrind_quantity = daily["detail"].regrind_quantity
-
-        product_id = finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=conditionnement_report_id)
+        packing_rows = self._connection.execute(
+            """
+            SELECT id, of_id, product_id FROM production.shift_packing_rows
+            WHERE tenant_id = %s AND shift_report_id = %s AND product_id IS NOT NULL
+            ORDER BY id
+            """,
+            (tenant_id, shift_report_id),
+        ).fetchall()
 
         return Ok(
             {
-                "of_id": header.of_id,
-                "product_id": product_id,
-                "report_date": header.report_date,
-                "shift": header.shift,
-                "team": header.team,
-                "status": header.status,
-                "packets_counted": detail.packets_counted,
-                "carton_quantity": detail.carton_quantity,
-                "finished_product_quantity": detail.finished_product_quantity,
-                "regrind_quantity": regrind_quantity,
+                "work_center_id": header["work_center_id"],
+                "report_date": datetime.date.fromisoformat(header["report_date"]),
+                "shift": header["shift"],
+                "team": header["team"],
+                "status": header["status"],
+                "packing_rows": [{"id": r[0], "of_id": r[1], "product_id": r[2]} for r in packing_rows],
             }
         )
 
-    def list_inspectable_conditionnement_reports(
-        self, *, tenant_id: str, of_id: str | None = None
-    ) -> list[dict]:
-        """Conditionnement reports a QC report can still be opened against.
-
-        Backs both the picker in the create-report form and the hint panel
-        shown once one is selected -- one call gives the inspector the OF,
-        team, shift, date, and the packets/carton/regrind figures to check
-        their reading against, before they type anything.
-        """
-        from modules.production.api.production_report_service import ProductionReportService
-
+    def list_inspectable_shift_reports(self, *, tenant_id: str) -> list[dict]:
+        """Validated shift reports with no QC report yet."""
         already_linked = {
             row[0]
             for row in self._connection.execute(
-                "SELECT conditionnement_report_id FROM qc.quality_reports "
-                "WHERE tenant_id = %s AND conditionnement_report_id IS NOT NULL",
-                (tenant_id,),
+                "SELECT shift_report_id FROM qc.quality_reports WHERE tenant_id = %s", (tenant_id,)
             ).fetchall()
         }
+        from modules.production.api.shift_report_service import ShiftReportService
 
-        reports = ProductionReportService(self._connection)
-        candidates = reports.list_reports(tenant_id=tenant_id, of_id=of_id, report_type="conditionnement")
+        shifts = ShiftReportService(self._connection).list_shifts(tenant_id=tenant_id, status="validated")
+        return [
+            {
+                "shift_report_id": s["id"], "work_center_id": s["work_center_id"], "report_date": s["report_date"],
+                "shift": s["shift"], "team": s["team"],
+            }
+            for s in shifts
+            if s["id"] not in already_linked
+        ]
 
-        rows = []
-        for header in candidates:
-            if header.id in already_linked:
-                continue
-            resolved = self._resolve_conditionnement(tenant_id=tenant_id, conditionnement_report_id=header.id)
-            if isinstance(resolved, Err):
-                continue
-            rows.append({"conditionnement_report_id": header.id, **resolved.value})
-        return rows
+    def create_report(self, *, tenant_id: str, actor_id: str, shift_report_id: str) -> Result[dict]:
+        if not shift_report_id.strip():
+            return Err("MISSING_SHIFT_REPORT", "a quality report must inspect a shift report")
 
-    def create_report(
-        self,
-        *,
-        tenant_id: str,
-        actor_id: str,
-        conditionnement_report_id: str,
-        detail: QualityReportDetail | None = None,
-    ) -> Result[dict]:
-        if not conditionnement_report_id.strip():
-            return Err("MISSING_CONDITIONNEMENT_REPORT", "a quality report must inspect a conditionnement report")
-
-        detail = detail or QualityReportDetail()
-        validation = validate_quality_detail(detail)
-        if isinstance(validation, Err):
-            return validation
-
-        resolved = self._resolve_conditionnement(
-            tenant_id=tenant_id, conditionnement_report_id=conditionnement_report_id
-        )
+        resolved = self._resolve_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
         if isinstance(resolved, Err):
             return resolved
         link = resolved.value
 
         duplicate = self._connection.execute(
-            "SELECT 1 FROM qc.quality_reports WHERE tenant_id = %s AND conditionnement_report_id = %s",
-            (tenant_id, conditionnement_report_id),
+            "SELECT 1 FROM qc.quality_reports WHERE tenant_id = %s AND shift_report_id = %s",
+            (tenant_id, shift_report_id),
         ).fetchone()
         if duplicate is not None:
-            return Err("DUPLICATE_REPORT", "a quality report already exists for this conditionnement report")
+            return Err("DUPLICATE_REPORT", "a quality report already exists for this shift report")
 
         report_id = str(ULID())
         self._connection.execute(
             """
-            INSERT INTO qc.quality_reports
-                (id, tenant_id, of_id, report_date, status, revision, conditionnement_report_id, team, shift, created_by)
-            VALUES (%s, %s, %s, %s, 'draft', 1, %s, %s, %s, %s)
+            INSERT INTO qc.quality_reports (id, tenant_id, shift_report_id, report_date, status, revision, team, shift, created_by)
+            VALUES (%s, %s, %s, %s, 'draft', 1, %s, %s, %s)
             """,
-            (
-                report_id,
-                tenant_id,
-                link["of_id"],
-                link["report_date"],
-                conditionnement_report_id,
-                link["team"],
-                link["shift"],
-                actor_id,
-            ),
+            (report_id, tenant_id, shift_report_id, link["report_date"], link["team"], link["shift"], actor_id),
         )
         self._connection.execute(
-            f"""
-            INSERT INTO qc.quality_report_details (report_id, tenant_id, {_DETAIL_COLUMNS})
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            """,
-            (report_id, tenant_id, *_detail_values(detail)),
+            f"INSERT INTO qc.quality_report_details (report_id, tenant_id, {_DETAIL_COLUMNS}) VALUES (%s, %s, %s, %s)",
+            (report_id, tenant_id, None, None),
         )
+        for row in link["packing_rows"]:
+            self._connection.execute(
+                """
+                INSERT INTO qc.quality_conformity_lines
+                    (id, tenant_id, report_id, shift_packing_row_id, of_id, product_id)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                """,
+                (str(ULID()), tenant_id, report_id, row["id"], row["of_id"], row["product_id"]),
+            )
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -560,15 +336,21 @@ class QualityReportService:
             entity_type="quality_report",
             entity_id=report_id,
             payload={
-                "of_id": link["of_id"],
-                "conditionnement_report_id": conditionnement_report_id,
+                "shift_report_id": shift_report_id,
                 "report_date": link["report_date"].isoformat(),
+                "line_count": len(link["packing_rows"]),
             },
         )
         return Ok(self._read(tenant_id=tenant_id, report_id=report_id))
 
     def update_draft(
-        self, *, tenant_id: str, actor_id: str, report_id: str, detail: QualityReportDetail
+        self,
+        *,
+        tenant_id: str,
+        actor_id: str,
+        report_id: str,
+        lines: list[dict],
+        detail: QualityReportDetail | None = None,
     ) -> Result[dict]:
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
@@ -576,11 +358,12 @@ class QualityReportService:
         if report.status != "draft":
             return Err("NOT_EDITABLE", f"a {report.status} quality report cannot be edited as a draft")
 
-        validation = validate_quality_detail(detail)
-        if isinstance(validation, Err):
-            return validation
+        applied = self._apply_line_edits(tenant_id=tenant_id, report_id=report_id, edits=lines)
+        if isinstance(applied, Err):
+            return applied
 
-        self._write_detail(tenant_id=tenant_id, report_id=report_id, detail=detail)
+        if detail is not None:
+            self._write_detail(tenant_id=tenant_id, report_id=report_id, detail=detail)
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -588,9 +371,42 @@ class QualityReportService:
             action="quality_report.draft_updated",
             entity_type="quality_report",
             entity_id=report_id,
-            payload={"conforming_cartons": detail.conforming_cartons, "non_conforming_cartons": detail.non_conforming_cartons},
+            payload={"line_count": len(lines)},
         )
         return Ok(self._read(tenant_id=tenant_id, report_id=report_id))
+
+    def _apply_line_edits(self, *, tenant_id: str, report_id: str, edits: list[dict]) -> Result[None]:
+        for edit in edits:
+            row_id = edit["shift_packing_row_id"]
+            existing = self._connection.execute(
+                "SELECT id, of_id, product_id FROM qc.quality_conformity_lines "
+                "WHERE tenant_id = %s AND report_id = %s AND shift_packing_row_id = %s",
+                (tenant_id, report_id, row_id),
+            ).fetchone()
+            if existing is None:
+                return Err("LINE_NOT_FOUND", f"no conformity line for packing row {row_id} on this report")
+            line = ConformityLine(
+                id=existing[0],
+                report_id=report_id,
+                shift_packing_row_id=row_id,
+                of_id=existing[1],
+                product_id=existing[2],
+                conforming_cartons=float(edit.get("conforming_cartons", 0)),
+                non_conforming_cartons=float(edit.get("non_conforming_cartons", 0)),
+                defect_details=edit.get("defect_details"),
+            )
+            validation = validate_conformity_line(line)
+            if isinstance(validation, Err):
+                return validation
+            self._connection.execute(
+                """
+                UPDATE qc.quality_conformity_lines
+                SET conforming_cartons = %s, non_conforming_cartons = %s, defect_details = %s, updated_at = NOW()
+                WHERE id = %s
+                """,
+                (line.conforming_cartons, line.non_conforming_cartons, line.defect_details, line.id),
+            )
+        return Ok(None)
 
     def admin_update_report(
         self,
@@ -598,63 +414,68 @@ class QualityReportService:
         tenant_id: str,
         actor_id: str,
         report_id: str,
+        lines: list[dict] | None = None,
+        shift_report_id: str | None = None,
         detail: QualityReportDetail | None = None,
-        conditionnement_report_id: str | None = None,
         reason: str | None = None,
     ) -> Result[dict]:
         """Edit-in-place, gated by qc.admin_quality_reports.
 
         A separate, more trusted right than progressing a report through its normal
-        workflow — and allowed regardless of status, because the permission is what
+        workflow -- and allowed regardless of status, because the permission is what
         limits the blast radius, not a status check.
 
-        Re-linking to a different conditionnement_report_id re-derives of_id,
-        report_date, shift and team together from it. There is no path left to
-        set those independently, even in this elevated path -- a correction
-        can never leave the report pointing at one conditionnement run while
-        carrying another run's team or shift.
+        Re-linking to a different shift_report_id re-derives report_date, shift and
+        team together from it, and adds a conformity line for each of its packing
+        rows not already present. Existing lines are never removed here -- one may
+        carry a non-conformity, and silently orphaning it is worse than a stale line.
         """
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
             return Err("NOT_FOUND", f"quality report {report_id} not found")
 
-        current = self._load_detail(tenant_id=tenant_id, report_id=report_id) or QualityReportDetail()
-        updated = detail if detail is not None else current
-        validation = validate_quality_detail(updated)
-        if isinstance(validation, Err):
-            return validation
+        if lines is not None:
+            applied = self._apply_line_edits(tenant_id=tenant_id, report_id=report_id, edits=lines)
+            if isinstance(applied, Err):
+                return applied
 
-        link = None
-        if conditionnement_report_id is not None:
-            resolved = self._resolve_conditionnement(
-                tenant_id=tenant_id, conditionnement_report_id=conditionnement_report_id
-            )
+        if shift_report_id is not None:
+            resolved = self._resolve_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
             if isinstance(resolved, Err):
                 return resolved
             duplicate = self._connection.execute(
-                "SELECT 1 FROM qc.quality_reports WHERE tenant_id = %s AND conditionnement_report_id = %s AND id != %s",
-                (tenant_id, conditionnement_report_id, report_id),
+                "SELECT 1 FROM qc.quality_reports WHERE tenant_id = %s AND shift_report_id = %s AND id != %s",
+                (tenant_id, shift_report_id, report_id),
             ).fetchone()
             if duplicate is not None:
-                return Err("DUPLICATE_REPORT", "a quality report already exists for this conditionnement report")
+                return Err("DUPLICATE_REPORT", "a quality report already exists for this shift report")
             link = resolved.value
+            self._connection.execute(
+                "UPDATE qc.quality_reports SET shift_report_id = %s, team = %s, shift = %s, report_date = %s, "
+                "updated_at = NOW() WHERE id = %s",
+                (shift_report_id, link["team"], link["shift"], link["report_date"], report_id),
+            )
+            existing_row_ids = {
+                r[0]
+                for r in self._connection.execute(
+                    "SELECT shift_packing_row_id FROM qc.quality_conformity_lines WHERE tenant_id = %s AND report_id = %s",
+                    (tenant_id, report_id),
+                ).fetchall()
+            }
+            for row in link["packing_rows"]:
+                if row["id"] not in existing_row_ids:
+                    self._connection.execute(
+                        """
+                        INSERT INTO qc.quality_conformity_lines
+                            (id, tenant_id, report_id, shift_packing_row_id, of_id, product_id)
+                        VALUES (%s, %s, %s, %s, %s, %s)
+                        """,
+                        (str(ULID()), tenant_id, report_id, row["id"], row["of_id"], row["product_id"]),
+                    )
 
-        self._write_detail(tenant_id=tenant_id, report_id=report_id, detail=updated)
-        self._connection.execute(
-            """
-            UPDATE qc.quality_reports
-            SET conditionnement_report_id = %s, of_id = %s, team = %s, shift = %s, report_date = %s, updated_at = NOW()
-            WHERE id = %s
-            """,
-            (
-                conditionnement_report_id if link is not None else report.conditionnement_report_id,
-                link["of_id"] if link is not None else report.of_id,
-                link["team"] if link is not None else report.team,
-                link["shift"] if link is not None else report.shift,
-                link["report_date"] if link is not None else report.report_date,
-                report_id,
-            ),
-        )
+        if detail is not None:
+            self._write_detail(tenant_id=tenant_id, report_id=report_id, detail=detail)
+
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -662,11 +483,7 @@ class QualityReportService:
             action="quality_report.updated",
             entity_type="quality_report",
             entity_id=report_id,
-            payload={
-                "conditionnement_report_id": conditionnement_report_id,
-                "non_conforming_cartons": updated.non_conforming_cartons,
-                "reason": reason,
-            },
+            payload={"shift_report_id": shift_report_id, "reason": reason},
         )
         return Ok(self._read(tenant_id=tenant_id, report_id=report_id))
 
@@ -679,12 +496,10 @@ class QualityReportService:
         if isinstance(result, Err):
             return result
 
-        detail = self._load_detail(tenant_id=tenant_id, report_id=report_id)
-        if detail is None:
-            return Err("NOT_FOUND", f"quality report {report_id} has no detail to submit")
-        validation = validate_quality_detail(detail)
-        if isinstance(validation, Err):
-            return validation
+        for line in self._load_lines(tenant_id=tenant_id, report_id=report_id):
+            validation = validate_conformity_line(line)
+            if isinstance(validation, Err):
+                return validation
 
         self._connection.execute(
             "UPDATE qc.quality_reports SET status = 'submitted', submitted_at = NOW(), updated_at = NOW() WHERE id = %s",
@@ -701,15 +516,12 @@ class QualityReportService:
         )
         return Ok(self._load_report(tenant_id=tenant_id, report_id=report_id))  # type: ignore[arg-type]
 
-    def validate_report(
-        self, *, tenant_id: str, actor_id: str, report_id: str, correlation_id: str, product_id: str | None = None
-    ) -> Result[dict]:
-        """Make a quality report official and open its follow-up window.
+    def validate_report(self, *, tenant_id: str, actor_id: str, report_id: str, correlation_id: str) -> Result[dict]:
+        """Make a quality report official and open one follow-up window per product line.
 
-        Posts no stock — quality only moves inventory through a non-conformity.
-        `product_id` is supplied by the caller (resolved from the OF through
-        production's service) so the per-product follow-up window can be applied
-        without qc reading production's tables.
+        Posts no stock -- quality only moves inventory through a non-conformity.
+        Each line already carries its own product_id, so the per-product window
+        policy applies without qc reading production's tables.
         """
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
@@ -719,9 +531,7 @@ class QualityReportService:
         if isinstance(result, Err):
             return result
 
-        detail = self._load_detail(tenant_id=tenant_id, report_id=report_id)
-        if detail is None:
-            return Err("NOT_FOUND", f"quality report {report_id} has no detail")
+        lines = self._load_lines(tenant_id=tenant_id, report_id=report_id)
 
         self._connection.execute(
             """
@@ -732,40 +542,34 @@ class QualityReportService:
             (actor_id, report_id),
         )
 
-        window_days = FollowUpPolicyService(self._connection).resolve_window_days(
-            tenant_id=tenant_id, product_id=product_id
-        )
-        window_ends_on = follow_up_window_end(report.report_date, window_days)
-        follow_up_id = str(ULID())
-        self._connection.execute(
-            f"""
-            INSERT INTO qc.quality_follow_ups
-                (id, tenant_id, {_FOLLOW_UP_INSERT_COLUMNS})
-            VALUES (%s, %s, %s, %s, %s, %s, 'open', NULL, %s, %s)
-            """,
-            (
-                follow_up_id,
-                tenant_id,
-                report_id,
-                report.of_id,
-                window_ends_on,
-                report.report_date,
-                "opened on validation",
-                actor_id,
-            ),
-        )
+        policies = FollowUpPolicyService(self._connection)
+        opened_follow_ups = []
+        for line in lines:
+            window_days = policies.resolve_window_days(tenant_id=tenant_id, product_id=line.product_id)
+            window_ends_on = follow_up_window_end(report.report_date, window_days)
+            follow_up_id = str(ULID())
+            self._connection.execute(
+                """
+                INSERT INTO qc.quality_follow_ups
+                    (id, tenant_id, quality_report_id, of_id, conformity_line_id, window_ends_on, observed_on,
+                     status, observation, actor_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, 'open', %s, %s)
+                """,
+                (
+                    follow_up_id, tenant_id, report_id, line.of_id, line.id, window_ends_on, report.report_date,
+                    "opened on validation", actor_id,
+                ),
+            )
+            opened_follow_ups.append({"follow_up_id": follow_up_id, "of_id": line.of_id, "window_ends_on": window_ends_on})
 
+        conforming = is_conforming(lines)
         publish_event(
             self._connection,
             event_type="qc.quality_report.validated",
             producer="qc",
             tenant_id=tenant_id,
             correlation_id=correlation_id,
-            payload={
-                "quality_report_id": report_id,
-                "of_id": report.of_id,
-                "is_conforming": is_conforming(detail),
-            },
+            payload={"quality_report_id": report_id, "is_conforming": conforming},
         )
         record_audit(
             self._connection,
@@ -774,19 +578,13 @@ class QualityReportService:
             action="quality_report.validated",
             entity_type="quality_report",
             entity_id=report_id,
-            payload={
-                "of_id": report.of_id,
-                "is_conforming": is_conforming(detail),
-                "window_days": window_days,
-                "window_ends_on": window_ends_on.isoformat(),
-            },
+            payload={"is_conforming": conforming, "follow_ups": len(opened_follow_ups)},
         )
         return Ok(
             {
                 "report": self._load_report(tenant_id=tenant_id, report_id=report_id),
-                "detail": detail,
-                "follow_up_id": follow_up_id,
-                "window_ends_on": window_ends_on,
+                "lines": lines,
+                "follow_ups": opened_follow_ups,
             }
         )
 
@@ -807,16 +605,17 @@ class QualityReportService:
         # Clean up any non-conformities linked to this report.
         # They represent a rejected validation attempt and must not stay in quarantine.
         # Only clean up if they are still in quarantined/raised status (not yet dispositioned).
+        # The OF comes from the NC itself -- a shift-based report spans several OFs.
         non_conformities = self._connection.execute(
             """
-            SELECT id, product_id, quantity, quarantine_location_id, source_location_id
+            SELECT id, product_id, quantity, quarantine_location_id, source_location_id, of_id
             FROM qc.non_conformities
             WHERE tenant_id = %s AND quality_report_id = %s AND status IN ('raised', 'quarantined')
             """,
             (tenant_id, report_id),
         ).fetchall()
 
-        for nc_id, product_id, quantity, quarantine_location_id, source_location_id in non_conformities:
+        for nc_id, product_id, quantity, quarantine_location_id, source_location_id, nc_of_id in non_conformities:
             # The hold was never warranted -- the report describing it was rejected --
             # so the product goes back to where it was pulled from, not just off the books.
             from modules.warehouse.api.service import StockService
@@ -831,7 +630,7 @@ class QualityReportService:
                 actor_id=actor_id,
                 source_type="qc.non_conformity_rejection_cleanup",
                 source_id=nc_id,
-                of_id=report.of_id,
+                of_id=nc_of_id,
             )
             if isinstance(released, Err):
                 return released
@@ -902,8 +701,8 @@ class QualityReportService:
         """Remove a quality report, undoing what its validation opened.
 
         A quality report posts no stock, so there is nothing to reverse in the
-        warehouse. What validation *does* create is a follow-up window, and that
-        window goes with the report. A non-conformity raised from the report is
+        warehouse. What validation *does* create is a follow-up window per line,
+        and those go with the report. A non-conformity raised from the report is
         a different matter -- it may already have moved stock into quarantine --
         so the deletion is refused while one is still attached.
         """
@@ -929,6 +728,10 @@ class QualityReportService:
             (tenant_id, report_id),
         )
         self._connection.execute(
+            "DELETE FROM qc.quality_conformity_lines WHERE tenant_id = %s AND report_id = %s",
+            (tenant_id, report_id),
+        )
+        self._connection.execute(
             "DELETE FROM qc.quality_report_details WHERE tenant_id = %s AND report_id = %s",
             (tenant_id, report_id),
         )
@@ -942,7 +745,11 @@ class QualityReportService:
             action="quality_report.deleted",
             entity_type="quality_report",
             entity_id=report_id,
-            payload={"reason": reason, "status_when_deleted": report.status, "of_id": report.of_id},
+            payload={
+                "reason": reason,
+                "status_when_deleted": report.status,
+                "shift_report_id": report.shift_report_id,
+            },
         )
         return Ok(report_id)
 
@@ -958,6 +765,7 @@ class QualityReportService:
         return {
             "report": self._load_report(tenant_id=tenant_id, report_id=report_id),
             "detail": self._load_detail(tenant_id=tenant_id, report_id=report_id),
+            "lines": self._load_lines(tenant_id=tenant_id, report_id=report_id),
         }
 
 
