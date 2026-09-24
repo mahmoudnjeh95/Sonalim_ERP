@@ -861,6 +861,79 @@ def test_closing_requires_a_corrective_action(db, env, of):
     assert result.code == "MISSING_CORRECTIVE_ACTION"
 
 
+# --- admin re-link to another shift ------------------------------------------
+
+
+def _relink(db, env, report, shift_id):
+    return QualityReportService(db).admin_update_report(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, shift_report_id=shift_id, reason="wrong shift",
+    )
+
+
+def test_relinking_a_draft_replaces_its_lines_and_date(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1))
+    old_line = service._load_lines(tenant_id=TENANT, report_id=report.id)[0]
+    new_shift = _validated_shift(db, env, of, report_date=datetime.date(2026, 9, 2))
+
+    relinked = _ok(_relink(db, env, report, new_shift))
+
+    assert relinked["report"].shift_report_id == new_shift
+    assert relinked["report"].report_date == datetime.date(2026, 9, 2)
+    assert len(relinked["lines"]) == 1, "the old shift's line is replaced, not kept alongside"
+    assert relinked["lines"][0].shift_packing_row_id != old_line.shift_packing_row_id
+
+
+def test_relinking_a_validated_report_is_refused(db, env, of):
+    service = QualityReportService(db)
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1))
+    _ok(service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id))
+    _ok(service.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())))
+    new_shift = _validated_shift(db, env, of, report_date=datetime.date(2026, 9, 2))
+
+    result = _relink(db, env, report, new_shift)
+    assert isinstance(result, Err)
+    assert result.code == "NOT_EDITABLE"
+
+
+def test_relinking_a_report_with_a_non_conformity_is_refused(db, env, of):
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1))
+    _record_line(db, env, report, non_conforming_cartons=2, defect_details="bad film seal")
+    _ok(NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, product_id=env["product"], quantity=0,
+        source_location_id=env["location"], quarantine_location_id=env["quarantine"],
+        defect_type="bad film seal", correlation_id=str(ULID()), quality_report_id=report.id,
+    ))
+    new_shift = _validated_shift(db, env, of, report_date=datetime.date(2026, 9, 2))
+
+    result = _relink(db, env, report, new_shift)
+    assert isinstance(result, Err)
+    assert result.code == "NON_CONFORMITY_ATTACHED"
+
+
+def test_relinking_onto_an_unvalidated_shift_is_refused(db, env, of):
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1))
+    open_shift = _ok(ShiftReportService(db).open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
+        report_date=datetime.date(2026, 9, 2), shift="morning",
+    ))["id"]
+    result = _relink(db, env, report, open_shift)
+    assert isinstance(result, Err)
+    assert result.code == "SHIFT_NOT_VALIDATED"
+
+
+def test_after_a_relink_the_old_shift_can_get_a_new_report(db, env, of):
+    """The old lines went with the re-link, so the one-line-per-packing-row index no longer blocks the old shift."""
+    report = _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1))
+    old_shift = report.shift_report_id
+    new_shift = _validated_shift(db, env, of, report_date=datetime.date(2026, 9, 2))
+    _ok(_relink(db, env, report, new_shift))
+
+    fresh = _ok(QualityReportService(db).create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=old_shift))
+    assert fresh["report"].shift_report_id == old_shift
+    assert len(fresh["lines"]) == 1
+
+
 def test_edit_in_place_is_allowed_at_any_status(db, env, of):
     service = NonConformityService(db)
     non_conformity = _raise_nc(db, env, of)

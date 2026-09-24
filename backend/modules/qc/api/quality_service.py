@@ -554,22 +554,38 @@ class QualityReportService:
         workflow -- and allowed regardless of status, because the permission is what
         limits the blast radius, not a status check.
 
-        Re-linking to a different shift_report_id re-derives report_date, shift and
-        team together from it, and adds a conformity line for each of its packing
-        rows not already present. Existing lines are never removed here -- one may
-        carry a non-conformity, and silently orphaning it is worse than a stale line.
+        Re-linking to a different shift_report_id is only allowed on a draft with no
+        non-conformity raised against any of its lines, and only onto a validated
+        shift. It re-derives report_date, shift and team together from the new shift
+        and replaces the conformity lines wholesale with one per packing row of the
+        new shift -- the old lines described goods of the old shift, and keeping them
+        would block a fresh QC report on it (one line per packing row). A draft has
+        opened no follow-up windows yet, so nothing references the removed lines.
         """
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
             return Err("NOT_FOUND", f"quality report {report_id} not found")
 
-        if lines is not None:
-            applied = self._apply_line_edits(tenant_id=tenant_id, report_id=report_id, edits=lines)
-            if isinstance(applied, Err):
-                return applied
-
-        if shift_report_id is not None:
-            resolved = self._resolve_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
+        if shift_report_id is not None and shift_report_id != report.shift_report_id:
+            if report.status != "draft":
+                return Err("NOT_EDITABLE", f"a {report.status} quality report cannot be moved to another shift")
+            attached = self._connection.execute(
+                """
+                SELECT 1 FROM qc.quality_conformity_lines l
+                JOIN qc.non_conformities n
+                  ON n.tenant_id = l.tenant_id AND n.quality_report_id = l.report_id
+                 AND n.of_id = l.of_id AND n.product_id = l.product_id
+                WHERE l.tenant_id = %s AND l.report_id = %s
+                LIMIT 1
+                """,
+                (tenant_id, report_id),
+            ).fetchone()
+            if attached is not None:
+                return Err(
+                    "NON_CONFORMITY_ATTACHED",
+                    "a non-conformity was raised from this report; it cannot be moved to another shift",
+                )
+            resolved = self._resolve_validated_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
             if isinstance(resolved, Err):
                 return resolved
             duplicate = self._connection.execute(
@@ -584,23 +600,24 @@ class QualityReportService:
                 "updated_at = NOW() WHERE id = %s",
                 (shift_report_id, link["team"], link["shift"], link["report_date"], report_id),
             )
-            existing_row_ids = {
-                r[0]
-                for r in self._connection.execute(
-                    "SELECT shift_packing_row_id FROM qc.quality_conformity_lines WHERE tenant_id = %s AND report_id = %s",
-                    (tenant_id, report_id),
-                ).fetchall()
-            }
+            self._connection.execute(
+                "DELETE FROM qc.quality_conformity_lines WHERE tenant_id = %s AND report_id = %s",
+                (tenant_id, report_id),
+            )
             for row in link["packing_rows"]:
-                if row["id"] not in existing_row_ids:
-                    self._connection.execute(
-                        """
-                        INSERT INTO qc.quality_conformity_lines
-                            (id, tenant_id, report_id, shift_packing_row_id, of_id, product_id)
-                        VALUES (%s, %s, %s, %s, %s, %s)
-                        """,
-                        (str(ULID()), tenant_id, report_id, row["id"], row["of_id"], row["product_id"]),
-                    )
+                self._connection.execute(
+                    """
+                    INSERT INTO qc.quality_conformity_lines
+                        (id, tenant_id, report_id, shift_packing_row_id, of_id, product_id)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    """,
+                    (str(ULID()), tenant_id, report_id, row["id"], row["of_id"], row["product_id"]),
+                )
+
+        if lines is not None:
+            applied = self._apply_line_edits(tenant_id=tenant_id, report_id=report_id, edits=lines)
+            if isinstance(applied, Err):
+                return applied
 
         if detail is not None:
             self._write_detail(tenant_id=tenant_id, report_id=report_id, detail=detail)
