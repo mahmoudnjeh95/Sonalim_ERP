@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.result import Err
 from core.tenancy import TenantContext, require_permission
+from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.service import StockService
@@ -155,13 +156,49 @@ def list_stock_moves(
     location_id: str | None = None,
     product_id: str | None = None,
     move_type: str | None = None,
+    date_from: datetime.date | None = None,
+    date_to: datetime.date | None = None,
     limit: int = Query(default=200, le=5000),
     tenant: TenantContext = Depends(require_permission("warehouse.view_moves")),
 ) -> list[dict]:
     with get_connection() as connection:
         service = StockService(connection)
         return service.list_stock_moves(
-            tenant_id=tenant.tenant_id, location_id=location_id, product_id=product_id, move_type=move_type, limit=limit
+            tenant_id=tenant.tenant_id,
+            location_id=location_id,
+            product_id=product_id,
+            move_type=move_type,
+            date_from=date_from,
+            date_to=date_to,
+            limit=limit,
+        )
+
+
+@router.get("/analytics/overview")
+def analytics_overview(
+    date_from: datetime.date | None = None,
+    date_to: datetime.date | None = None,
+    consumption_window_days: int = Query(default=30, ge=1, le=365),
+    dormant_after_days: int = Query(default=60, ge=1, le=730),
+    tenant: TenantContext = Depends(require_permission("warehouse.view_moves")),
+) -> dict:
+    """Stock KPIs for the warehouse screen. The period bounds the movement figures
+    (flows, corrections, daily chart); stock levels, days of cover, dormant stock
+    and expiring lots are always "as of today". Defaults to the last 30 days."""
+    today = datetime.date.today()
+    if date_to is None:
+        date_to = today
+    if date_from is None:
+        date_from = date_to - datetime.timedelta(days=29)
+    with get_connection() as connection:
+        service = WarehouseAnalyticsService(connection)
+        return service.overview(
+            tenant_id=tenant.tenant_id,
+            date_from=date_from,
+            date_to=date_to,
+            consumption_window_days=consumption_window_days,
+            dormant_after_days=dormant_after_days,
+            today=today,
         )
 
 

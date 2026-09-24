@@ -67,7 +67,8 @@ export function SectionCard({
 
   // An editable section opens with one blank line in each table; a locked one shows what was handed in.
   const lotNumber = shift.default_lot_number ?? null;
-  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber));
+  const reportDate = shift.report_date;
+  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber, reportDate));
   const [dirty, setDirty] = useState(false);
 
   // What the server holds is the truth: when it changes (a save, a validator's return),
@@ -76,7 +77,7 @@ export function SectionCard({
   // otherwise flipping `unlocked` would change `locked`, which would reset `unlocked`.
   const serverKey = `${state.revision}|${state.status}|${canEdit}|${JSON.stringify(state.payload ?? {})}`;
   useEffect(() => {
-    setDraft(toDraft(def, state.payload, !locked, lotNumber));
+    setDraft(toDraft(def, state.payload, !locked, lotNumber, reportDate));
     setDirty(false);
     // A fresh server snapshot means any correction just landed (or someone else's did);
     // either way the section goes back to being read-only.
@@ -86,14 +87,14 @@ export function SectionCard({
   }, [serverKey]);
 
   const toggleUnlock = () => {
-    if (unlocked) setDraft(toDraft(def, state.payload, false, lotNumber)); // cancelling drops the unsaved correction
+    if (unlocked) setDraft(toDraft(def, state.payload, false, lotNumber, reportDate)); // cancelling drops the unsaved correction
     setUnlockReason("");
     setUnlocked(!unlocked);
   };
 
   // Naming the team gives the shift a lot: lines still untouched pick it up. Not an edit, so not unsaved.
   useEffect(() => {
-    if (!locked) setDraft((current) => followLot(def, current, lotNumber));
+    if (!locked) setDraft((current) => followLot(def, current, lotNumber, reportDate));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lotNumber]);
 
@@ -248,7 +249,7 @@ export function SectionCard({
                   onChange={(value) => edit(part.payloadKey, value)}
                   options={options}
                   disabled={locked || busy}
-                  defaults={partDefaults(part, lotNumber)}
+                  defaults={partDefaults(part, lotNumber, reportDate)}
                 />
               ))}
 
