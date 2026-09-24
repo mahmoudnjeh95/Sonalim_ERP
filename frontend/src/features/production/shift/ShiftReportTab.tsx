@@ -112,6 +112,16 @@ export function ShiftReportTab() {
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: SHIFT_REPORTS_QUERY_KEY });
 
+  // Prefetch the shift report when inputs change, so it's ready by the time the user needs it
+  useEffect(() => {
+    if (!workCenterId || !date || !shiftName) return;
+    queryClient.prefetchQuery({
+      queryKey: [...SHIFT_REPORTS_QUERY_KEY, "find", date, workCenterId],
+      queryFn: () => listShiftReports(token, { report_date: date, work_center_id: workCenterId }),
+      staleTime: 5000, // Fresh for 5 seconds after prefetch
+    });
+  }, [date, workCenterId, token, queryClient]);
+
   const fail = (error: unknown) =>
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
 
