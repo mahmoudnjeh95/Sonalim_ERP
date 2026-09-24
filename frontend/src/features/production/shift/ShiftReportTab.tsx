@@ -15,6 +15,8 @@ import { Label as FieldLabel } from "../../../components/ui/label";
 import { Select } from "../../../components/ui/select";
 import { SectionCard } from "./SectionCard";
 import { ShiftRail } from "./ShiftRail";
+import { DateNavigator } from "./DateNavigator";
+import { LineCardsSelector } from "./LineCardsSelector";
 import type { OptionMap } from "./ShiftGrid";
 import { useShiftReferenceData } from "./useShiftReferenceData";
 import type { ShiftWindowRow } from "../board/api";
@@ -172,25 +174,24 @@ export function ShiftReportTab() {
 
       <Card>
         <CardContent className="space-y-4 py-4">
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-            <div className="space-y-1">
-              <FieldLabel htmlFor="shift-date" className="text-xs text-muted-foreground">
-                {label(T.date)}
-              </FieldLabel>
-              <Input id="shift-date" type="date" value={date} onChange={(e) => setDate(e.target.value || todayIso())} />
+          <div className="space-y-3">
+            {/* Date with arrows + modal picker */}
+            <div>
+              <p className="mb-2 text-xs text-muted-foreground">{label(T.date)}</p>
+              <DateNavigator date={date} onDateChange={setDate} />
             </div>
-            <div className="space-y-1">
-              <FieldLabel htmlFor="shift-line" className="text-xs text-muted-foreground">
-                {label(T.line)}
-              </FieldLabel>
-              <Select id="shift-line" value={workCenterId} onChange={(e) => setWorkCenterId(e.target.value)}>
-                {(workCenters.data ?? []).map((w) => (
-                  <option key={w.id} value={w.id}>
-                    {w.name}
-                  </option>
-                ))}
-              </Select>
-            </div>
+
+            {/* Line cards or dropdown with status badges */}
+            <LineCardsSelector
+              value={workCenterId}
+              onChange={setWorkCenterId}
+              equipment={reference.activeEquipment ?? []}
+              reportCountByLineDate={reference.reportCountByLineDate}
+              date={date}
+              windows={windows}
+            />
+
+            {/* Shift selection dropdown (unchanged) */}
             <div className="space-y-1">
               <FieldLabel htmlFor="shift-name" className="text-xs text-muted-foreground">
                 {label(T.shift)}
@@ -203,9 +204,9 @@ export function ShiftReportTab() {
                 ))}
               </Select>
             </div>
-            <div className="flex items-end">
-              {shift && <ShiftStatusBadge status={shift.status} />}
-            </div>
+
+            {/* Status badge */}
+            {shift && <ShiftStatusBadge status={shift.status} />}
           </div>
 
           {shift && (
