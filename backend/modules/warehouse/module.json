@@ -1,6 +1,6 @@
 {
   "name": "warehouse",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "depends": ["core"],
   "optional_depends": [],
   "provides_api": ["StockService", "LocationService", "LotService"],
@@ -14,6 +14,7 @@
     "warehouse.admin_stock",
     "warehouse.admin_locations",
     "warehouse.view_lots",
-    "warehouse.manage_lots"
+    "warehouse.manage_lots",
+    "warehouse.set_lot_expiry"
   ]
 }

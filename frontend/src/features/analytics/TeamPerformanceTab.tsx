@@ -17,6 +17,7 @@ import { listTeamPerformance, type PerformanceGrain, type TeamPerformanceRow } f
 import { listProducts, listUoms } from "../warehouse/api";
 import { listQualityTeamPerformance, type TeamConformityRow } from "../qc/api";
 import { AnalyticsErrorState, AnalyticsInlineError } from "./AnalyticsStates";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const TEAM_PERFORMANCE_QUERY_KEY = ["production", "team-performance"] as const;
 const TEAM_CONFORMITY_QUERY_KEY = ["qc", "team-performance"] as const;
@@ -315,7 +316,7 @@ export function TeamPerformanceTab() {
       </div>
 
       {isLoading ? (
-        <div className="h-64 w-full animate-pulse rounded-lg bg-muted" />
+        <AppLoader className="py-8" />
       ) : productionFailed ? (
         <Card>
           <AnalyticsErrorState

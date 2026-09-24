@@ -5,9 +5,6 @@ from dataclasses import dataclass, replace
 
 from core.domain.result import Err, Ok, Result
 
-# The quality report mirrors a production report's vocabulary deliberately: the
-# Validation Center shows both kinds of pending work in one list, and a validator
-# should not have to learn two state machines.
 QUALITY_REPORT_TRANSITIONS = {
     "draft": {"submitted"},
     "submitted": {"validated", "rejected"},
@@ -21,23 +18,16 @@ FOLLOW_UP_TRANSITIONS = {
     "completed": set(),
 }
 
-# The window the specification describes. It is a default, not a constant — a
-# per-product policy may override it (see FollowUpPolicyService).
 DEFAULT_FOLLOW_UP_WINDOW_DAYS = 40
 
 
 @dataclass(frozen=True)
 class QualityReport:
     id: str
-    of_id: str
+    shift_report_id: str
     report_date: datetime.date
     status: str
     revision: int
-    # The conditionnement (packaging) run this report inspects. Nullable only
-    # for rows created before this link existed -- see
-    # scripts/backfill_qc_conditionnement_links.py. Every report created by
-    # QualityReportService.create_report from here on has one.
-    conditionnement_report_id: str | None = None
     team: str | None = None
     shift: str | None = None
     created_by: str | None = None
@@ -49,16 +39,22 @@ class QualityReport:
 
 @dataclass(frozen=True)
 class QualityReportDetail:
-    pre_dryer_index: float | None = None
-    humidity_percentage: float | None = None
-    cooling_index: float | None = None
-    pf_index: float | None = None
-    sumo_index: float | None = None
+    """Shift-wide notes. Conformity itself lives on ConformityLine, one per product."""
+
+    comments: str | None = None
+    corrective_action: str | None = None
+
+
+@dataclass(frozen=True)
+class ConformityLine:
+    id: str
+    report_id: str
+    shift_packing_row_id: str
+    of_id: str
+    product_id: str
     conforming_cartons: float = 0
     non_conforming_cartons: float = 0
     defect_details: str | None = None
-    comments: str | None = None
-    corrective_action: str | None = None
 
 
 @dataclass(frozen=True)
@@ -66,6 +62,7 @@ class FollowUp:
     id: str
     quality_report_id: str
     of_id: str
+    conformity_line_id: str | None
     window_ends_on: datetime.date
     observed_on: datetime.date
     status: str
@@ -86,32 +83,26 @@ def transition_follow_up(follow_up: FollowUp, new_status: str) -> Result[FollowU
     return Ok(replace(follow_up, status=new_status))
 
 
-def validate_quality_detail(detail: QualityReportDetail) -> Result[None]:
-    """Check a quality report's readings for internal sense.
+def validate_conformity_line(line: ConformityLine) -> Result[None]:
+    """Check one product's conformity counts for internal sense.
 
-    The indices are measurements, not targets — this refuses impossible values,
-    not disappointing ones. Judging whether a reading is acceptable is the
-    validator's job, and recording a bad shift honestly is the whole point.
+    Same stance as the old report-level check: refuses impossible values, not
+    disappointing ones. Judging whether a defect rate is acceptable is the
+    validator's job.
     """
     for field in ("conforming_cartons", "non_conforming_cartons"):
-        value = getattr(detail, field)
+        value = getattr(line, field)
         if value < 0:
             return Err("INVALID_QUANTITY", f"{field} cannot be negative")
         if abs(value - round(value)) > 1e-6:
             return Err("QUANTITY_MUST_BE_INTEGER", f"{field} must be a whole number of cartons")
-    if detail.humidity_percentage is not None and not 0 <= detail.humidity_percentage <= 100:
-        return Err("INVALID_PERCENTAGE", "humidity_percentage must be between 0 and 100")
-    for field in ("pre_dryer_index", "cooling_index", "pf_index", "sumo_index"):
-        value = getattr(detail, field)
-        if value is not None and value < 0:
-            return Err("INVALID_INDEX", f"{field} cannot be negative")
-    if detail.non_conforming_cartons > 0 and not (detail.defect_details or "").strip():
+    if line.non_conforming_cartons > 0 and not (line.defect_details or "").strip():
         return Err("MISSING_DEFECT_DETAILS", "non-conforming cartons need defect details")
     return Ok(None)
 
 
-def is_conforming(detail: QualityReportDetail) -> bool:
-    return detail.non_conforming_cartons == 0
+def is_conforming(lines: list[ConformityLine]) -> bool:
+    return all(line.non_conforming_cartons == 0 for line in lines)
 
 
 def follow_up_window_end(report_date: datetime.date, window_days: int) -> datetime.date:

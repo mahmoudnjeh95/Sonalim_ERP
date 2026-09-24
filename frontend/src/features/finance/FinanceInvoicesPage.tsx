@@ -15,7 +15,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -35,12 +34,13 @@ import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { createInvoice, issueInvoice, listInvoices, payInvoice, updateInvoice, type Invoice, type InvoiceStatus } from "./api";
 import { listCurrencies } from "../settings/exchangeRatesApi";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
 
 const newInvoiceSchema = z.object({
   partner_id: z.string().min(1, "Required"),
   amount: z.coerce.number().positive("Must be > 0"),
-  currency: z.string().min(1, "Required").default("USD"),
+  currency: z.string().min(1, "Required").default("XOF"),
 });
 type NewInvoiceForm = z.infer<typeof newInvoiceSchema>;
 type EditInvoiceForm = NewInvoiceForm;
@@ -78,14 +78,14 @@ export function FinanceInvoicesPage() {
     handleSubmit,
     reset,
     formState: { errors },
-  } = useForm<NewInvoiceForm>({ resolver: zodResolver(newInvoiceSchema), defaultValues: { currency: "USD" } });
+  } = useForm<NewInvoiceForm>({ resolver: zodResolver(newInvoiceSchema), defaultValues: { currency: "XOF" } });
 
   const createMutation = useMutation({
     mutationFn: (input: NewInvoiceForm) => createInvoice(token, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      reset({ currency: "USD" });
+      reset({ currency: "XOF" });
       toast.success(t("finance.created"));
     },
     onError: (error) => {
@@ -120,7 +120,7 @@ export function FinanceInvoicesPage() {
     handleSubmit: handleEditSubmit,
     reset: resetEdit,
     formState: { errors: editErrors },
-  } = useForm<EditInvoiceForm>({ resolver: zodResolver(newInvoiceSchema), defaultValues: { currency: "USD" } });
+  } = useForm<EditInvoiceForm>({ resolver: zodResolver(newInvoiceSchema), defaultValues: { currency: "XOF" } });
 
   const updateMutation = useMutation({
     mutationFn: (input: EditInvoiceForm) => updateInvoice(token, editingInvoice!.id, input),
@@ -247,7 +247,7 @@ export function FinanceInvoicesPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label={t("finance.stat.total")} value={invoices.length} icon={<Receipt className="h-5 w-5" />} />
         <StatCard label={t("finance.stat.outstanding")} value={outstandingCount} icon={<CircleDollarSign className="h-5 w-5" />} accent="warning" />
-        <StatCard label={t("finance.stat.paid")} value={Math.round(paidTotal)} icon={<BadgeDollarSign className="h-5 w-5" />} accent="success" prefix="$" />
+        <StatCard label={t("finance.stat.paid")} value={Math.round(paidTotal)} icon={<BadgeDollarSign className="h-5 w-5" />} accent="success" unit="F CFA" />
       </div>
 
       <Card>
@@ -308,7 +308,7 @@ export function FinanceInvoicesPage() {
                   <div className="space-y-1.5">
                     <Label htmlFor="currency">{t("finance.field.currency")}</Label>
                     <Select id="currency" {...register("currency")}>
-                      {currencies.length === 0 && <option value="USD">USD</option>}
+                      {currencies.length === 0 && <option value="XOF">XOF</option>}
                       {currencies.map((currency) => (
                         <option key={currency.code} value={currency.code}>
                           {currency.code}
@@ -362,7 +362,7 @@ export function FinanceInvoicesPage() {
                   <div className="space-y-1.5">
                     <Label htmlFor="edit_currency">{t("finance.field.currency")}</Label>
                     <Select id="edit_currency" {...registerEdit("currency")}>
-                      {currencies.length === 0 && <option value="USD">USD</option>}
+                      {currencies.length === 0 && <option value="XOF">XOF</option>}
                       {currencies.map((currency) => (
                         <option key={currency.code} value={currency.code}>
                           {currency.code}
@@ -403,14 +403,7 @@ export function FinanceInvoicesPage() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && filteredInvoices.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

@@ -15,6 +15,7 @@ import { UsersPage } from "../features/admin/users/UsersPage";
 import { RolesPage } from "../features/admin/roles/RolesPage";
 import { ActivityLogPage } from "../features/admin/activityLog/ActivityLogPage";
 import { ProductionPage } from "../features/production/ProductionPage";
+import { ProductionDashboardPage } from "../features/production/ProductionDashboardPage";
 import { IaAssistantTab } from "../features/production/IaAssistantTab";
 import { QualityPage } from "../features/qc/QualityPage";
 import { AnalyticsPage } from "../features/analytics/AnalyticsPage";
@@ -68,6 +69,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/crm/pipeline", element: <PipelinePage /> },
   { path: "/crm/activities", element: <ActivitiesPage /> },
   { path: "/production", element: <ProductionPage /> },
+  { path: "/production/dashboard", element: <ProductionDashboardPage /> },
   { path: "/production/ia-assistant", element: <IaAssistantTab /> },
   { path: "/production/work-orders/:workOrderId", element: <WorkOrderDetailsPage /> },
   { path: "/quality", element: <QualityPage /> },

@@ -1,7 +1,6 @@
 import pytest
 
 from modules.production.domain.packaging_estimate import (
-    DEFAULT_TOLERANCE_PERCENT,
     compute_variance,
     estimate_packaging,
     finished_quantity_from_count,
@@ -53,7 +52,12 @@ def test_a_zero_net_weight_is_treated_as_missing_not_as_a_division():
 
 def test_a_perfectly_packed_shift_has_no_variance():
     variance = compute_variance(
-        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=2000, counted_cartons=100
+        tonnage=1,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=2000,
+        counted_cartons=100,
+        tolerance_percent=2.0,
     )
     assert variance.packet_variance == 0
     assert variance.carton_variance == 0
@@ -63,7 +67,12 @@ def test_a_perfectly_packed_shift_has_no_variance():
 def test_counting_fewer_packets_than_the_weight_supports_is_negative():
     # The sign convention: actual - expected, so short reads negative.
     variance = compute_variance(
-        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=1900, counted_cartons=95
+        tonnage=1,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=1900,
+        counted_cartons=95,
+        tolerance_percent=2.0,
     )
     assert variance.packet_variance == -100
     assert variance.packet_variance_ratio == -0.05
@@ -72,7 +81,12 @@ def test_counting_fewer_packets_than_the_weight_supports_is_negative():
 
 def test_counting_more_packets_than_the_weight_supports_is_positive():
     variance = compute_variance(
-        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=2100, counted_cartons=105
+        tonnage=1,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=2100,
+        counted_cartons=105,
+        tolerance_percent=2.0,
     )
     assert variance.packet_variance == 100
     assert variance.within_tolerance is False
@@ -118,13 +132,30 @@ def test_cartons_are_never_quality_adjusted():
     assert variance.carton_variance == 0
 
 
-def test_a_variance_within_two_percent_passes_the_default_tolerance():
+def test_a_variance_within_the_configured_tolerance_passes():
     variance = compute_variance(
-        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=1970, counted_cartons=99
+        tonnage=1,
+        net_weight_grams=500,
+        packets_per_carton=20,
+        counted_packets=1970,
+        counted_cartons=99,
+        tolerance_percent=2.0,
     )
-    assert variance.tolerance_percent == DEFAULT_TOLERANCE_PERCENT
+    assert variance.tolerance_percent == 2.0
     assert variance.packet_variance_ratio == -0.015
     assert variance.within_tolerance is True
+
+
+def test_without_a_configured_tolerance_the_ecart_is_shown_but_not_judged():
+    # Nobody chose a tolerance, so there is no verdict to give: the figures stand
+    # on their own rather than being coloured against an invented default.
+    variance = compute_variance(
+        tonnage=1, net_weight_grams=500, packets_per_carton=20, counted_packets=1900, counted_cartons=95
+    )
+    assert variance.packet_variance == -100
+    assert variance.packet_variance_ratio == -0.05
+    assert variance.tolerance_percent is None
+    assert variance.within_tolerance is None
 
 
 def test_tolerance_is_judged_on_packets_not_on_the_rounded_carton_count():

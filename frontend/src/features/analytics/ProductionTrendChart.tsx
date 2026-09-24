@@ -18,18 +18,36 @@ function TrendTooltip({ active, payload }: Partial<TooltipContentProps<number, s
   const { t } = useI18n();
   const point = payload?.[0]?.payload as TrendPoint | undefined;
   if (!active || !point) return null;
+
+  const delta =
+    point.current !== null && point.previous !== null && point.previous > 0
+      ? ((point.current - point.previous) / point.previous) * 100
+      : null;
+
   return (
-    <div className="rounded-lg border border-border bg-background px-3 py-2 text-xs shadow-soft">
-      <p className="flex items-center gap-2">
-        <span className="h-0.5 w-4 rounded" style={{ backgroundColor: CURRENT }} aria-hidden />
-        <span className="text-muted-foreground">{shortDate(point.date)}</span>
-        <span className="ml-auto font-medium tabular-nums">{point.current === null ? t("analytics.chart.noReport") : `${formatNumber(point.current, 2)} t`}</span>
+    <div className="rounded-xl border border-border bg-background/95 p-3 text-xs shadow-lg backdrop-blur-sm space-y-1.5">
+      <p className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full" style={{ backgroundColor: CURRENT }} aria-hidden />
+          <span className="text-muted-foreground">{shortDate(point.date)}</span>
+        </span>
+        <span className="font-bold tabular-nums text-foreground">{point.current === null ? t("analytics.chart.noReport") : `${formatNumber(point.current, 2)} t`}</span>
       </p>
-      <p className="mt-1 flex items-center gap-2">
-        <span className="h-0.5 w-4 rounded border-t-2 border-dashed" style={{ borderColor: PREVIOUS }} aria-hidden />
-        <span className="text-muted-foreground">{shortDate(point.previousDate)}</span>
-        <span className="ml-auto font-medium tabular-nums">{point.previous === null ? t("analytics.chart.noReport") : `${formatNumber(point.previous, 2)} t`}</span>
+      <p className="flex items-center justify-between gap-3">
+        <span className="flex items-center gap-1.5">
+          <span className="h-2 w-2 rounded-full border border-dashed" style={{ borderColor: PREVIOUS, backgroundColor: `${PREVIOUS}40` }} aria-hidden />
+          <span className="text-muted-foreground">{shortDate(point.previousDate)}</span>
+        </span>
+        <span className="font-semibold tabular-nums text-muted-foreground">{point.previous === null ? t("analytics.chart.noReport") : `${formatNumber(point.previous, 2)} t`}</span>
       </p>
+      {delta !== null ? (
+        <div className="border-t border-border/60 pt-1 flex items-center justify-between text-[11px]">
+          <span className="text-muted-foreground">{t("production.board.trend.delta")}:</span>
+          <span className={delta >= 0 ? "font-semibold tabular-nums text-success" : "font-semibold tabular-nums text-destructive"}>
+            {delta >= 0 ? "+" : ""}{formatNumber(delta, 1)}%
+          </span>
+        </div>
+      ) : null}
     </div>
   );
 }

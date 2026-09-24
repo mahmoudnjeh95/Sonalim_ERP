@@ -6,7 +6,6 @@ import { useI18n } from "../../../lib/i18n";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../../components/ui/table";
-import { Skeleton } from "../../../components/ui/skeleton";
 import { EmptyState } from "../../../components/patterns/EmptyState";
 import { ColumnFilterRow } from "../../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
@@ -14,6 +13,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { useColumnFilters, type FilterField } from "../../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import { humanizeAuditAction, humanizeSnakeCase } from "../../../lib/humanize";
+import { TableLoadingRow } from "../../../components/patterns/AppLoader";
 import { listAuditLog, type AuditLogEntry } from "./api";
 
 const PAGE_SIZE = 300;
@@ -257,14 +257,7 @@ export function ActivityLogPage() {
                 <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
               </TableHeader>
               <TableBody>
-                {isLoading &&
-                  Array.from({ length: 6 }).map((_, i) => (
-                    <TableRow key={i}>
-                      <TableCell colSpan={visibleColumns.length}>
-                        <Skeleton className="h-5 w-full" />
-                      </TableCell>
-                    </TableRow>
-                  ))}
+                {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
                 {!isLoading && filteredEntries.length === 0 && (
                   <TableRow>
                     <TableCell colSpan={visibleColumns.length} className="p-0">

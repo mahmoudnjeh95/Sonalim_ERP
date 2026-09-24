@@ -8,10 +8,11 @@ from pydantic import BaseModel
 from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.result import Err
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, require_session, user_has_permission
 from modules.production.api.packaging_bom_service import PackagingBomService
 from modules.production.api.resource_type_service import ResourceTypeService
 from modules.production.api.product_classification_service import ProductClassificationService
+from modules.production.api.work_order_overview_service import WorkOrderOverviewService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
 from modules.production.api.recipe_correlation_insight_service import (
     RecipeCorrelationInsightUnavailable,
@@ -20,6 +21,10 @@ from modules.production.api.recipe_correlation_insight_service import (
 from modules.production.api import ia_assistant_service
 from modules.production.api.team_performance_service import GRAINS, TeamPerformanceService
 from modules.production.api.machine_performance_service import MachinePerformanceService
+from modules.production.api.stops_analytics_service import StopsAnalyticsService
+from modules.production.api.energy_analytics_service import EnergyAnalyticsService
+from modules.production.api.shift_health_service import ShiftHealthService
+from modules.production.api.humidity_analytics_service import list_humidity
 from modules.production.api.consumption_report_service import CATEGORIES, ConsumptionReportService
 from modules.production.api.consumption_report_export import build_consumption_workbook
 from modules.production.api.daily_recap_export import build_daily_recap_workbook, fetch_period_rows, resolve_period
@@ -32,6 +37,18 @@ from modules.production.domain.product_classification import ProductClassificati
 from modules.production.api.recipe_service import RecipeService
 from modules.production.api.regrind_service import RegrindDefaultsService, RegrindService, ScrapService
 from modules.production.api.of_consolidation_service import OfConsolidationService
+from modules.production.api.dashboard_day_service import GRANULARITIES, DashboardDayService
+from modules.production.api.day_sheet_service import DaySheetService
+from modules.production.api.lot_suggestion_service import LotSuggestionService
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.shift_report import SECTION_KEYS, permission_for_section
+from modules.production.api.dashboard_lines_service import DashboardLinesService
+from modules.production.api.dashboard_live_service import DashboardLiveService
+from modules.production.api.stock_release_service import StockReleaseService
+from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.waste_type_service import WasteTypeService
+from modules.production.domain.dashboard import ShiftWindow
 from modules.production.api.packaging_variance_service import (
     PackagingTolerancePolicyService,
     PackagingVarianceService,
@@ -43,7 +60,6 @@ from modules.production.api.work_center_service import WorkCenterService
 from modules.production.api.mold_service import MoldService
 from modules.production.domain.entities import WorkOrder
 from modules.production.domain.mold import Mold
-from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     DailyReportDetail,
@@ -143,12 +159,23 @@ class CompleteRegrindBatchRequest(BaseModel):
     actual_output_quantity: float | None = None
 
 
+class ReleaseStockItem(BaseModel):
+    product_id: str
+    quantity: float
+
+
+class ReleaseStockRequest(BaseModel):
+    day: datetime.date  # the day the goods were packed
+    items: list[ReleaseStockItem]
+
+
 class SetProductClassificationRequest(BaseModel):
     product_id: str
     category: str
     is_regrind: bool = False
     packaging_format: str | None = None
     is_water: bool = False
+    packaging_kind: str | None = None
 
 
 class PackagingBomLineRequest(BaseModel):
@@ -581,6 +608,20 @@ def list_work_order_yields(
         return WorkOrderYieldService(connection).list_work_order_yields(tenant.tenant_id)
 
 
+@router.get("/work-orders/overview")
+def get_work_orders_overview(
+    date: datetime.date | None = Query(default=None, description="Plant-local date. Defaults to the server's."),
+    at: datetime.time | None = Query(default=None, description="Plant-local clock time, HH:MM. Defaults to the server's."),
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> list[dict]:
+    """One light row per OF for the list: products, produced tonnes, shift counts, pending tonnes, live."""
+    now = datetime.datetime.now()
+    with get_connection() as connection:
+        return WorkOrderOverviewService(connection).overview(
+            tenant_id=tenant.tenant_id, date=date or now.date(), at=at or now.time().replace(second=0, microsecond=0)
+        )
+
+
 @router.get("/work-orders/recipe-correlation")
 def list_recipe_correlation(
     tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
@@ -1011,6 +1052,7 @@ def set_product_classification(
             is_regrind=body.is_regrind,
             packaging_format=body.packaging_format,
             is_water=body.is_water,
+            packaging_kind=body.packaging_kind,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -1176,6 +1218,7 @@ def _serialize_classification(classification: ProductClassification) -> dict:
         "is_regrind": classification.is_regrind,
         "packaging_format": classification.packaging_format,
         "is_water": classification.is_water,
+        "packaging_kind": classification.packaging_kind,
     }
 
 
@@ -1814,33 +1857,15 @@ def _report_err_status(code: str) -> int:
         "REGRIND_STOCK_MOVE_NOT_FOUND",
         "REGRIND_DELTA_REQUIRES_NEW_ORDER",
         "REGRIND_MULTIPLE_CLOSED_BATCHES",
+        "EMPTY_SECTION",
+        "DUPLICATE_ROW",
+        "CHANGED_SINCE_OPENED",
+        "OPEN_STOP",
+        "NOTHING_TO_VALIDATE",
+        "ALREADY_POSTED",
     ):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
-
-
-@router.post("/reports/daily", status_code=status.HTTP_201_CREATED)
-def create_daily_report(
-    body: CreateDailyReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.manage_reports")),
-) -> dict:
-    with get_connection() as connection:
-        result = ProductionReportService(connection).create_daily_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            of_id=body.of_id,
-            report_date=body.report_date,
-            detail=body.detail.to_detail(),
-            team=body.team,
-            work_center_id=body.work_center_id,
-            equipment_id=body.equipment_id,
-            shift=body.shift,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
 
 
 @router.get("/reports")
@@ -1929,6 +1954,53 @@ def list_downtime_breakdown(
         return TeamPerformanceService(connection).list_downtime_breakdown(
             tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to
         )
+
+
+@router.get("/analytics/stops")
+def list_stops_analytics(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """Every stop of a validated shift, at full detail, for the Downtime analytics tab."""
+    with get_connection() as connection:
+        return StopsAnalyticsService(connection).list_stops(tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to)
+
+
+@router.get("/analytics/energy")
+def list_energy_analytics(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    work_center_id: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """One row per validated shift's energy figures, for the Energy analytics tab."""
+    with get_connection() as connection:
+        return EnergyAnalyticsService(connection).list_energy(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to, work_center_id=work_center_id
+        )
+
+
+@router.get("/analytics/shift-health")
+def get_shift_health_analytics(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """Submission funnel, time-to-validate, return rate and completeness, for the Shift Health tab."""
+    with get_connection() as connection:
+        return ShiftHealthService(connection).get_shift_health(tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to)
+
+
+@router.get("/analytics/humidity")
+def list_humidity_analytics(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    """Per-run dough humidity of validated shifts, for the Yield & Waste humidity trend."""
+    with get_connection() as connection:
+        return list_humidity(connection, tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to)
 
 
 def _validate_consumption_category(category: str | None) -> None:
@@ -2084,256 +2156,6 @@ def list_report_revisions(
         return ProductionReportService(connection).list_revisions(tenant_id=tenant.tenant_id, report_id=report_id)
 
 
-@router.patch("/reports/daily/{report_id}")
-def update_daily_report(
-    report_id: str,
-    body: UpdateDailyReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.manage_reports")),
-) -> dict:
-    with get_connection() as connection:
-        result = ProductionReportService(connection).update_daily_draft(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            detail=body.detail.to_detail(),
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
-
-
-@router.post("/reports/conditionnement", status_code=status.HTTP_201_CREATED)
-def create_conditionnement_report(
-    body: CreateConditionnementReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.manage_reports")),
-) -> dict:
-    with get_connection() as connection:
-        result = ConditionnementReportService(connection).create_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            of_id=body.of_id,
-            report_date=body.report_date,
-            detail=body.detail.to_detail(),
-            team=body.team,
-            work_center_id=body.work_center_id,
-            equipment_id=body.equipment_id,
-            shift=body.shift,
-            product_id=body.product_id,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
-
-
-@router.patch("/reports/conditionnement/{report_id}")
-def update_conditionnement_report(
-    report_id: str,
-    body: UpdateConditionnementReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.manage_reports")),
-) -> dict:
-    with get_connection() as connection:
-        result = ConditionnementReportService(connection).update_draft(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            detail=body.detail.to_detail(),
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
-
-
-@router.patch("/reports/conditionnement/{report_id}/correct")
-def correct_conditionnement_report(
-    report_id: str,
-    body: CorrectConditionnementReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.admin_reports")),
-) -> dict:
-    with get_connection() as connection:
-        result = ConditionnementReportService(connection).correct_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            detail=body.detail.to_detail(),
-            reason=body.reason,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
-
-
-@router.post("/reports/{report_id}/submit")
-def submit_report(
-    report_id: str, tenant: TenantContext = Depends(require_permission("production.manage_reports"))
-) -> dict:
-    with get_connection() as connection:
-        result = ProductionReportService(connection).submit_report(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report(result.value)
-
-
-@router.patch("/reports/daily/{report_id}/correct")
-def correct_daily_report(
-    report_id: str,
-    body: CorrectDailyReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.admin_reports")),
-) -> dict:
-    with get_connection() as connection:
-        result = ProductionReportService(connection).correct_daily_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            detail=body.detail.to_detail(),
-            reason=body.reason,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
-
-
-@router.post("/reports/{report_id}/validate")
-def validate_report(
-    report_id: str,
-    body: ValidateReportRequest = ValidateReportRequest(),
-    tenant: TenantContext = Depends(require_permission("production.validate_reports")),
-) -> dict:
-    """Validation is what posts stock. A shortfall posts anyway but needs a comment."""
-    with get_connection() as connection:
-        result = ProductionReportService(connection).validate_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            correlation_id=body.correlation_id,
-            shortfall_comment=body.shortfall_comment,
-            regrind_work_center_id=body.regrind_work_center_id,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report(result.value)
-
-
-@router.post("/reports/{report_id}/reject")
-def reject_report(
-    report_id: str,
-    body: RejectReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.validate_reports")),
-) -> dict:
-    with get_connection() as connection:
-        result = ProductionReportService(connection).reject_report(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id, reason=body.reason
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report(result.value)
-
-
-@router.delete("/reports/{report_id}")
-def delete_report(
-    report_id: str,
-    body: DeleteReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.admin_reports")),
-) -> dict:
-    """Delete a report, undoing whatever it posted.
-
-    A validated report has moved stock, so deleting it reverses those movements
-    first. Gated by admin_reports — the same elevated right that lets a validator
-    change entered figures.
-    """
-    with get_connection() as connection:
-        result = ProductionReportService(connection).delete_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            reason=body.reason,
-            force=body.force,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return result.value
-
-
-@router.patch("/reports/daily/{report_id}/correct-validated")
-def correct_validated_daily_report(
-    report_id: str,
-    body: CorrectDailyReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.admin_reports")),
-) -> dict:
-    """Change a validated daily report, reversing and re-posting its stock."""
-    with get_connection() as connection:
-        result = ProductionReportService(connection).correct_validated_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            detail=body.detail.to_detail(),
-            reason=body.reason,
-            force=body.force,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
-
-
-@router.patch("/reports/conditionnement/{report_id}/correct-validated")
-def correct_validated_conditionnement_report(
-    report_id: str,
-    body: CorrectConditionnementReportRequest,
-    tenant: TenantContext = Depends(require_permission("production.admin_reports")),
-) -> dict:
-    """Change a validated conditionnement report, reversing and re-posting its stock."""
-    with get_connection() as connection:
-        result = ProductionReportService(connection).correct_validated_report(
-            tenant_id=tenant.tenant_id,
-            actor_id=tenant.user_id,
-            report_id=report_id,
-            detail=body.detail.to_detail(),
-            reason=body.reason,
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report_with_detail(result.value)
-
-
-@router.post("/reports/{report_id}/revise")
-def revise_report(
-    report_id: str, tenant: TenantContext = Depends(require_permission("production.manage_reports"))
-) -> dict:
-    """Reopen a rejected report so the team can correct and resubmit it."""
-    with get_connection() as connection:
-        result = ProductionReportService(connection).revise_report(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_id=report_id
-        )
-        if isinstance(result, Err):
-            connection.rollback()
-            raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
-        connection.commit()
-    return _serialize_report(result.value)
-
-
 def _serialize_report(report: ProductionReport) -> dict:
     return {
         "id": report.id,
@@ -2463,3 +2285,657 @@ def set_regrind_default(
             raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
         connection.commit()
     return result.value
+
+
+# --- waste types ------------------------------------------------------------
+#
+# The déchet kinds a plant adds to the built-in ones: a name, and the report the
+# entry belongs to. See waste_type_service.py.
+
+
+class CreateWasteTypeRequest(BaseModel):
+    name: str
+    report_type: str
+    sort_order: int = 0
+
+
+class UpdateWasteTypeRequest(BaseModel):
+    name: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+def _waste_type_result(connection, result) -> dict:
+    if isinstance(result, Err):
+        connection.rollback()
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if result.code == "NOT_FOUND"
+            else status.HTTP_409_CONFLICT
+            if result.code == "DUPLICATE_WASTE_TYPE"
+            else status.HTTP_400_BAD_REQUEST
+        )
+        raise HTTPException(code, {"code": result.code, "message": result.message})
+    connection.commit()
+    return result.value
+
+
+@router.get("/waste-types")
+def list_waste_types(
+    report_type: str | None = None,
+    include_inactive: bool = True,
+    # Anyone who can read a report needs the names to read its déchets.
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    with get_connection() as connection:
+        return WasteTypeService(connection).list_types(
+            tenant_id=tenant.tenant_id, report_type=report_type, include_inactive=include_inactive
+        )
+
+
+@router.post("/waste-types", status_code=status.HTTP_201_CREATED)
+def create_waste_type(
+    body: CreateWasteTypeRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).create_type(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            name=body.name,
+            report_type=body.report_type,
+            sort_order=body.sort_order,
+        )
+        return _waste_type_result(connection, result)
+
+
+@router.patch("/waste-types/{waste_type_id}")
+def update_waste_type(
+    waste_type_id: str,
+    body: UpdateWasteTypeRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).update_type(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            waste_type_id=waste_type_id,
+            name=body.name,
+            sort_order=body.sort_order,
+            is_active=body.is_active,
+        )
+        return _waste_type_result(connection, result)
+
+
+# --- dashboard settings -----------------------------------------------------
+#
+# What the production dashboard is configured with: the clock times of each
+# shift, which team works which shift on which line, which stage each machine
+# belongs to, and which stores hold finished product before and after its
+# release. Each list is replaced as a whole. See dashboard_settings_service.py.
+
+
+class ShiftWindowRequest(BaseModel):
+    shift: str
+    start_time: datetime.time
+    end_time: datetime.time
+
+
+class ReplaceShiftWindowsRequest(BaseModel):
+    items: list[ShiftWindowRequest]
+
+
+class TeamRotationEntryRequest(BaseModel):
+    team: str
+    anchor_date: datetime.date
+    anchor_stop: int
+
+
+class ReplaceTeamRotationRequest(BaseModel):
+    items: list[TeamRotationEntryRequest]
+
+
+class StoreRoleRequest(BaseModel):
+    location_id: str
+    role: str
+
+
+class ReplaceStoreRolesRequest(BaseModel):
+    items: list[StoreRoleRequest]
+
+
+def _settings_result(connection, result) -> list[dict]:
+    if isinstance(result, Err):
+        connection.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+    connection.commit()
+    return result.value
+
+
+@router.get("/dashboard/settings")
+def get_dashboard_settings(
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    with get_connection() as connection:
+        return DashboardSettingsService(connection).get_settings(tenant_id=tenant.tenant_id)
+
+
+@router.put("/dashboard/settings/shift-windows")
+def replace_shift_windows(
+    body: ReplaceShiftWindowsRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> list[dict]:
+    with get_connection() as connection:
+        result = DashboardSettingsService(connection).replace_shift_windows(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            windows=[ShiftWindow(shift=i.shift, start=i.start_time, end=i.end_time) for i in body.items],
+        )
+        return _settings_result(connection, result)
+
+
+@router.put("/dashboard/settings/team-rotation")
+def replace_team_rotation(
+    body: ReplaceTeamRotationRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> list[dict]:
+    with get_connection() as connection:
+        result = DashboardSettingsService(connection).replace_team_rotation(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            entries=[{"team": i.team, "anchor_date": i.anchor_date.isoformat(), "anchor_stop": i.anchor_stop} for i in body.items],
+        )
+        return _settings_result(connection, result)
+
+
+@router.put("/dashboard/settings/store-roles")
+def replace_store_roles(
+    body: ReplaceStoreRolesRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> list[dict]:
+    with get_connection() as connection:
+        result = DashboardSettingsService(connection).replace_store_roles(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, entries=[i.model_dump() for i in body.items]
+        )
+        return _settings_result(connection, result)
+
+
+@router.get("/dashboard/lines")
+def get_dashboard_lines(
+    at: datetime.time | None = Query(default=None, description="Plant-local clock time, HH:MM. Defaults to the server's."),
+    date: datetime.date | None = Query(default=None, description="Which day's board to show. Defaults to the server's today."),
+    tenant: TenantContext = Depends(require_permission("production.view_work_orders")),
+) -> dict:
+    """The live board: each line with the OFs open on it, every machine declared
+    on it (with its stage once the plant has set one), and the 4-team rotation
+    for `date`, each team's slot coloured by that line's shift report."""
+    with get_connection() as connection:
+        today = datetime.date.today()
+        return DashboardLinesService(connection).get_lines(
+            tenant_id=tenant.tenant_id,
+            at=at or datetime.datetime.now().time().replace(second=0, microsecond=0),
+            date=date or today,
+            today=today,
+        )
+
+
+@router.get("/dashboard/day")
+def get_dashboard_day(
+    date: datetime.date = Query(...),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """One day's production from validated reports: totals against the previous
+    day, each OF cut by shift and team, and where déchets and stops came from."""
+    with get_connection() as connection:
+        return DashboardDayService(connection).get_day(tenant_id=tenant.tenant_id, date=date)
+
+
+@router.get("/dashboard/live")
+def get_dashboard_live(
+    date: datetime.date | None = Query(default=None, description="Plant-local date. Defaults to the server's."),
+    at: datetime.time | None = Query(default=None, description="Plant-local clock time, HH:MM. Defaults to the server's."),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """The shift running on each line right now, from what its team has entered or handed in and
+    nobody has validated yet. Shown apart on the board and never added to the day's validated
+    totals."""
+    now = datetime.datetime.now()
+    with get_connection() as connection:
+        return DashboardLiveService(connection).get_live(
+            tenant_id=tenant.tenant_id, date=date or now.date(), at=at or now.time().replace(second=0, microsecond=0)
+        )
+
+
+@router.get("/stock-release")
+def get_stock_release(
+    day: datetime.date | None = Query(default=None, description="The day the goods were packed. Defaults to yesterday, or today when nothing from yesterday can be released."),
+    tenant: TenantContext = Depends(require_permission("production.release_stock")),
+) -> dict:
+    """The products packed on a day, what has already been released and what the line store still holds."""
+    with get_connection() as connection:
+        return StockReleaseService(connection).get_release_list(tenant_id=tenant.tenant_id, day=day)
+
+
+@router.post("/stock-release")
+def release_stock(
+    body: ReleaseStockRequest, tenant: TenantContext = Depends(require_permission("production.release_stock"))
+) -> dict:
+    """Move packed goods from the line store to each product's own store, all or nothing."""
+    with get_connection() as connection:
+        result = StockReleaseService(connection).release(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, day=body.day, items=[item.model_dump() for item in body.items]
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+        connection.commit()
+    return result.value
+
+
+@router.get("/day-sheet")
+def get_day_sheet(
+    date: datetime.date = Query(...),
+    work_center_id: str = Query(...),
+    include_pending: bool = Query(default=False),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """One line's Daily and Conditionnement reports for a day on one grid, the way the
+    plant's Excel day sheet lays them out: a column per shift and a total. Validated
+    reports only unless `include_pending`, which adds the ones still being filled in."""
+    with get_connection() as connection:
+        result = DaySheetService(connection).get_day_sheet(
+            tenant_id=tenant.tenant_id, date=date, work_center_id=work_center_id, include_pending=include_pending
+        )
+    if isinstance(result, Err):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+    return result.value
+
+
+@router.get("/month-recap")
+def get_month_recap(
+    month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM"),
+    work_center_id: str = Query(...),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """A line's month on the same rows as the day sheet, every validated Daily and
+    Conditionnement report added up, with a column per product produced."""
+    with get_connection() as connection:
+        result = DaySheetService(connection).get_month_recap(
+            tenant_id=tenant.tenant_id, month=datetime.date.fromisoformat(f"{month}-01"), work_center_id=work_center_id
+        )
+    if isinstance(result, Err):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+    return result.value
+
+
+@router.get("/lot-suggestion")
+def get_lot_suggestion(
+    work_center_id: str = Query(...),
+    report_date: datetime.date = Query(...),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """The lot number a packing report on this line and day most likely carries: the line's
+    last lot counted on by the days since. Only ever a suggestion -- the form fills it in and
+    the team can type another."""
+    with get_connection() as connection:
+        return LotSuggestionService(connection).suggest(
+            tenant_id=tenant.tenant_id, work_center_id=work_center_id, report_date=report_date
+        )
+
+
+@router.get("/dashboard/trend")
+def get_dashboard_trend(
+    date_from: datetime.date = Query(...),
+    date_to: datetime.date = Query(...),
+    granularity: str = Query(default="day"),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> dict:
+    """Semoule poured (rebroyat included) and finished product, for the period
+    and for the equal-length period just before it, bucketed by shift, day,
+    week or month. A bucket nobody reported on is null, not zero."""
+    if granularity not in GRANULARITIES:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"code": "INVALID_GRANULARITY", "message": f"granularity must be one of {GRANULARITIES}"},
+        )
+    if date_from > date_to:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {"code": "INVALID_PERIOD", "message": "date_from cannot be after date_to"},
+        )
+    with get_connection() as connection:
+        return DashboardDayService(connection).get_trend(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to, granularity=granularity
+        )
+
+
+# --- shift reports ----------------------------------------------------------
+#
+# One report per line, date and shift, filled section by section. Reading needs
+# production.shift.view. Changing a section needs that section's own edit right
+# (production.shift.edit.<section>), so the team that owns the packing table is not
+# the team that can edit the production runs; roles bundle these same permissions.
+
+
+class OpenShiftRequest(BaseModel):
+    work_center_id: str
+    report_date: datetime.date
+    shift: str
+    team: str | None = None
+
+
+class UpdateShiftHeaderRequest(BaseModel):
+    team: str | None = None
+    conducteur: str | None = None
+    agent_fabrication: str | None = None
+    machiniste: str | None = None
+    aide_machiniste: str | None = None
+
+
+class SaveShiftSectionRequest(BaseModel):
+    payload: dict
+    reason: str | None = None
+
+
+def _forbidden(permission: str) -> HTTPException:
+    return HTTPException(
+        status.HTTP_403_FORBIDDEN, {"code": "FORBIDDEN", "message": f"missing permission: {permission}"}
+    )
+
+
+def _require_section_edit(section_key: str, tenant: TenantContext = Depends(require_session)) -> TenantContext:
+    """The caller must be allowed to edit this section, which is named in the URL."""
+    if section_key not in SECTION_KEYS:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, {"code": "INVALID_SECTION", "message": f"unknown section {section_key!r}"}
+        )
+    permission = permission_for_section(section_key)
+    with get_connection() as connection:
+        if not user_has_permission(connection, user_id=tenant.user_id, permission=permission):
+            raise _forbidden(permission)
+    return tenant
+
+
+def _require_any_shift_edit(tenant: TenantContext = Depends(require_session)) -> TenantContext:
+    """Opening a shift or filling its header is open to anyone who can edit some section."""
+    with get_connection() as connection:
+        if not any(
+            user_has_permission(connection, user_id=tenant.user_id, permission=permission_for_section(key))
+            for key in SECTION_KEYS
+        ):
+            raise _forbidden("production.shift.edit.<section>")
+    return tenant
+
+
+def _shift_result(connection, result):
+    if isinstance(result, Err):
+        connection.rollback()
+        raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
+    connection.commit()
+    return result.value
+
+
+@router.get("/shift-reports")
+def list_shift_reports(
+    report_date: datetime.date | None = None,
+    work_center_id: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    of_id: str | None = Query(default=None, description="Only the shifts that worked on this work order."),
+    tenant: TenantContext = Depends(require_permission("production.shift.view")),
+) -> list[dict]:
+    with get_connection() as connection:
+        return ShiftReportService(connection).list_shifts(
+            tenant_id=tenant.tenant_id,
+            report_date=report_date,
+            work_center_id=work_center_id,
+            status=status_filter,
+            of_id=of_id,
+        )
+
+
+@router.post("/shift-reports/bulk/validate")
+def bulk_validate_shift_reports(
+    body: dict,
+    tenant: TenantContext = Depends(require_permission("production.shift.validate")),
+) -> list[dict]:
+    ids: list[str] = body.get("ids", [])
+    if not ids:
+        return []
+    with get_connection() as connection:
+        service = ShiftValidationService(connection)
+        results = []
+        for shift_id in ids:
+            result = service.validate_shift(
+                tenant_id=tenant.tenant_id,
+                actor_id=tenant.user_id,
+                shift_report_id=shift_id,
+                seen_revisions=None,
+                shortfall_comment=None,
+                regrind_work_center_id=None,
+            )
+            if isinstance(result, Err):
+                continue
+            results.append(_shift_result(connection, result))
+        return results
+
+
+@router.post("/shift-reports", status_code=status.HTTP_201_CREATED)
+def open_shift_report(body: OpenShiftRequest, tenant: TenantContext = Depends(_require_any_shift_edit)) -> dict:
+    with get_connection() as connection:
+        result = ShiftReportService(connection).open_shift(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            work_center_id=body.work_center_id,
+            report_date=body.report_date,
+            shift=body.shift,
+            team=body.team,
+        )
+        return _shift_result(connection, result)
+
+
+@router.get("/shift-reports/{shift_report_id}")
+def get_shift_report(
+    shift_report_id: str, tenant: TenantContext = Depends(require_permission("production.shift.view"))
+) -> dict:
+    with get_connection() as connection:
+        return _shift_result(
+            connection, ShiftReportService(connection).get_shift(tenant_id=tenant.tenant_id, shift_report_id=shift_report_id)
+        )
+
+
+@router.patch("/shift-reports/{shift_report_id}/header")
+def update_shift_report_header(
+    shift_report_id: str,
+    body: UpdateShiftHeaderRequest,
+    tenant: TenantContext = Depends(_require_any_shift_edit),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftReportService(connection).update_header(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            fields=body.model_dump(exclude_unset=True),
+        )
+        return _shift_result(connection, result)
+
+
+@router.put("/shift-reports/{shift_report_id}/sections/{section_key}")
+def save_shift_report_section(
+    shift_report_id: str,
+    section_key: str,
+    body: SaveShiftSectionRequest,
+    tenant: TenantContext = Depends(_require_section_edit),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftReportService(connection).save_section(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=body.payload,
+            reason=body.reason,
+        )
+        return _shift_result(connection, result)
+
+
+@router.post("/shift-reports/{shift_report_id}/sections/{section_key}/submit")
+def submit_shift_report_section(
+    shift_report_id: str, section_key: str, tenant: TenantContext = Depends(_require_section_edit)
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftReportService(connection).submit_section(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, shift_report_id=shift_report_id, section_key=section_key
+        )
+        return _shift_result(connection, result)
+
+
+class ValidatorEditSectionRequest(BaseModel):
+    payload: dict
+    reason: str
+
+
+@router.put("/shift-reports/{shift_report_id}/sections/{section_key}/validator-edit")
+def validator_edit_shift_report_section(
+    shift_report_id: str,
+    section_key: str,
+    body: ValidatorEditSectionRequest,
+    tenant: TenantContext = Depends(require_permission("production.shift.validate")),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftValidationService(connection).edit_section_as_validator(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=body.payload,
+            reason=body.reason,
+        )
+        return _shift_result(connection, result)
+
+
+class UnlockedEditSectionRequest(BaseModel):
+    payload: dict
+    reason: str | None = None
+
+
+@router.put("/shift-reports/{shift_report_id}/sections/{section_key}/unlocked-edit")
+def edit_shift_report_section_after_validation(
+    shift_report_id: str,
+    section_key: str,
+    body: UnlockedEditSectionRequest,
+    tenant: TenantContext = Depends(require_permission("production.shift.unlock_validated")),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftValidationService(connection).edit_section_after_validation(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            section_key=section_key,
+            payload=body.payload,
+            reason=body.reason,
+        )
+        return _shift_result(connection, result)
+
+
+@router.post("/shift-reports/{shift_report_id}/sections/{section_key}/nothing-to-report")
+def declare_shift_report_section_empty(
+    shift_report_id: str, section_key: str, tenant: TenantContext = Depends(_require_section_edit)
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftReportService(connection).declare_nothing(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, shift_report_id=shift_report_id, section_key=section_key
+        )
+        return _shift_result(connection, result)
+
+
+@router.get("/shift-reports/{shift_report_id}/sections/{section_key}/revisions")
+def list_shift_report_section_revisions(
+    shift_report_id: str,
+    section_key: str,
+    tenant: TenantContext = Depends(require_permission("production.shift.view")),
+) -> list[dict]:
+    with get_connection() as connection:
+        return _shift_result(
+            connection,
+            ShiftReportService(connection).list_revisions(
+                tenant_id=tenant.tenant_id, shift_report_id=shift_report_id, section_key=section_key
+            ),
+        )
+
+
+# --- validating a shift -------------------------------------------------------
+#
+# One approval for the whole shift. Approving and rejecting need
+# production.shift.validate; undoing a validated shift is rarer and heavier, so it
+# needs production.admin_reports, the same right that lets a supervisor correct or
+# delete a report.
+
+
+class ValidateShiftRequest(BaseModel):
+    # What the validator's screen showed (section key -> revision). If any moved on,
+    # validation is refused so nothing is approved unseen.
+    seen_revisions: dict[str, int] | None = None
+    shortfall_comment: str | None = None
+    regrind_work_center_id: str | None = None
+
+
+class RejectShiftSectionsRequest(BaseModel):
+    sections: list[str]
+    reason: str
+
+
+class ReverseShiftRequest(BaseModel):
+    reason: str
+    force: bool = False
+
+
+@router.post("/shift-reports/{shift_report_id}/validate")
+def validate_shift_report(
+    shift_report_id: str,
+    body: ValidateShiftRequest,
+    tenant: TenantContext = Depends(require_permission("production.shift.validate")),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftValidationService(connection).validate_shift(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            seen_revisions=body.seen_revisions,
+            shortfall_comment=body.shortfall_comment,
+            regrind_work_center_id=body.regrind_work_center_id,
+        )
+        return _shift_result(connection, result)
+
+
+@router.post("/shift-reports/{shift_report_id}/reject")
+def reject_shift_report_sections(
+    shift_report_id: str,
+    body: RejectShiftSectionsRequest,
+    tenant: TenantContext = Depends(require_permission("production.shift.validate")),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftValidationService(connection).reject_sections(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            section_keys=body.sections,
+            reason=body.reason,
+        )
+        return _shift_result(connection, result)
+
+
+@router.post("/shift-reports/{shift_report_id}/reverse")
+def reverse_shift_report(
+    shift_report_id: str,
+    body: ReverseShiftRequest,
+    tenant: TenantContext = Depends(require_permission("production.admin_reports")),
+) -> dict:
+    with get_connection() as connection:
+        result = ShiftValidationService(connection).reverse_shift(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shift_report_id=shift_report_id,
+            reason=body.reason,
+            force=body.force,
+        )
+        return _shift_result(connection, result)

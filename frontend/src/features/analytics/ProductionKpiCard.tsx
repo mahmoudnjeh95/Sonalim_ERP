@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { ArrowDownRight, ArrowUpRight, Info, Minus } from "lucide-react";
 import { motion } from "framer-motion";
 import { Card } from "../../components/ui/card";
@@ -21,6 +22,7 @@ export function ProductionKpiCard({
   driver,
   unavailable,
   index,
+  extra,
 }: {
   icon: SvgComponent;
   label: string;
@@ -36,6 +38,9 @@ export function ProductionKpiCard({
   /** Why the figure cannot be shown. */
   unavailable: string | null;
   index: number;
+  /** A second, unrelated line of context (e.g. a cross-module count with its own link) — rides
+   * below `driver` instead of replacing it. */
+  extra?: ReactNode;
 }) {
   const { t } = useI18n();
   const tone = comparison?.tone ?? "neutral";
@@ -78,6 +83,7 @@ export function ProductionKpiCard({
             </div>
             {previousText ? <p className="text-muted-foreground">{previousText}</p> : <p className="text-muted-foreground">{t("analytics.kpi.noPrevious")}</p>}
             {driver && <p className="text-muted-foreground">{driver}</p>}
+            {extra}
           </div>
         )}
       </Card>

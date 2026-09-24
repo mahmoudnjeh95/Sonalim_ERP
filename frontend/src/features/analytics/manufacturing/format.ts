@@ -1,7 +1,9 @@
 import { useMemo } from "react";
-import { currentLocale, useI18n, type TranslationKey } from "../../../lib/i18n";
+import { currentLocale, useI18n } from "../../../lib/i18n";
 import { formatDuration } from "../../../lib/units";
+import { downtimeLabel } from "../../production/downtimeOptions";
 import type { WasteCategory } from "../../production/api";
+import { useWasteTypes } from "../../production/wasteTypes";
 import type { Formatters, InsightText } from "./insights";
 
 /** Same `{placeholder}` convention the rest of the app uses with t(). */
@@ -25,6 +27,7 @@ export function useInsightText() {
 
 export function useFormatters(machineLabel: (equipmentId: string) => string): Formatters {
   const { t, language } = useI18n();
+  const { label: wasteLabel } = useWasteTypes();
   return useMemo(
     () => ({
       number: formatNumber,
@@ -33,10 +36,13 @@ export function useFormatters(machineLabel: (equipmentId: string) => string): Fo
       duration: formatDuration,
       money: (value) => `${formatNumber(value, 0)} CFA`,
       machine: machineLabel,
-      stage: (stage: WasteCategory) => t(`production.waste.category.${stage}` as TranslationKey),
+      stage: (stage: WasteCategory) => wasteLabel(stage),
+      motif: (motif: string) => downtimeLabel(t, "motif", motif),
+      classification: (value: string) => downtimeLabel(t, "classification", value),
+      downtimeType: (value: string) => downtimeLabel(t, "type", value),
     }),
     // language is not read directly but changes what formatNumber/t return.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [machineLabel, t, language],
+    [machineLabel, t, language, wasteLabel],
   );
 }

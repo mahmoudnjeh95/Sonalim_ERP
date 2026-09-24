@@ -13,6 +13,7 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listMachinePerformance, listMachines, type MachinePerformanceRow, type PerformanceGrain } from "../production/api";
 import { AnalyticsErrorState } from "./AnalyticsStates";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const MACHINE_PERFORMANCE_QUERY_KEY = ["production", "machine-performance"] as const;
 const MACHINES_QUERY_KEY = ["production", "machines", "all"] as const;
@@ -211,7 +212,7 @@ export function MachinePerformanceTab() {
       </div>
 
       {isLoading ? (
-        <div className="h-64 w-full animate-pulse rounded-lg bg-muted" />
+        <AppLoader className="py-8" />
       ) : performanceFailed ? (
         <Card>
           <AnalyticsErrorState

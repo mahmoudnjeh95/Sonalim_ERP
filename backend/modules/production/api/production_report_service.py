@@ -15,6 +15,7 @@ from modules.production.api.downtime_line_store import (
     load_downtime_lines,
     replace_downtime_lines,
 )
+from modules.production.api.report_product import finished_product_of_report
 from modules.production.api.report_stock_service import ReportStockService
 from modules.production.api.semolina_line_store import (
     delete_semolina_lines,
@@ -26,6 +27,7 @@ from modules.production.api.waste_line_store import (
     load_waste_lines,
     replace_waste_lines,
 )
+from modules.production.api.waste_type_service import custom_waste_categories
 from modules.production.domain.production_report import (
     DailyReportDetail,
     DowntimeLine,
@@ -210,13 +212,13 @@ class ProductionReportService:
             return validate_conditionnement_stock_targets(detail)
         return validate_daily_stock_targets(detail)
 
-    @staticmethod
-    def _validate_detail(report_type: str, detail) -> Result[None]:
+    def _validate_detail(self, report_type: str, detail, *, tenant_id: str) -> Result[None]:
+        waste_categories = custom_waste_categories(self._connection, tenant_id=tenant_id, report_type=report_type)
         if report_type == "conditionnement":
             from modules.production.domain.production_report import validate_conditionnement_detail
 
-            return validate_conditionnement_detail(detail)
-        return validate_daily_detail(detail)
+            return validate_conditionnement_detail(detail, waste_categories=waste_categories)
+        return validate_daily_detail(detail, waste_categories=waste_categories)
 
     def get_report(self, *, tenant_id: str, report_id: str) -> dict | None:
         header = self._load_header(tenant_id=tenant_id, report_id=report_id)
@@ -296,7 +298,9 @@ class ProductionReportService:
             return header_validation
 
         detail = detail or DailyReportDetail()
-        detail_validation = validate_daily_detail(detail)
+        detail_validation = validate_daily_detail(
+            detail, waste_categories=custom_waste_categories(self._connection, tenant_id=tenant_id, report_type="daily")
+        )
         if isinstance(detail_validation, Err):
             return detail_validation
 
@@ -366,7 +370,9 @@ class ProductionReportService:
         if header.status != "draft":
             return Err("NOT_EDITABLE", f"a {header.status} report cannot be edited as a draft")
 
-        validation = validate_daily_detail(detail)
+        validation = validate_daily_detail(
+            detail, waste_categories=custom_waste_categories(self._connection, tenant_id=tenant_id, report_type="daily")
+        )
         if isinstance(validation, Err):
             return validation
 
@@ -414,7 +420,7 @@ class ProductionReportService:
         detail = self._load_detail(tenant_id=tenant_id, report_id=report_id, report_type=header.report_type)
         if detail is None:
             return Err("NOT_FOUND", f"report {report_id} has no detail to submit")
-        validation = self._validate_detail(header.report_type, detail)
+        validation = self._validate_detail(header.report_type, detail, tenant_id=tenant_id)
         if isinstance(validation, Err):
             return validation
 
@@ -472,7 +478,9 @@ class ProductionReportService:
             # posted against its figures; that path ships with Phase 5, not here.
             return Err("NOT_CORRECTABLE", f"only a submitted report can be corrected, not a {header.status} one")
 
-        validation = validate_daily_detail(detail)
+        validation = validate_daily_detail(
+            detail, waste_categories=custom_waste_categories(self._connection, tenant_id=tenant_id, report_type="daily")
+        )
         if isinstance(validation, Err):
             return validation
 
@@ -619,10 +627,13 @@ class ProductionReportService:
 
             from modules.production.api.conditionnement_service import freeze_packaging_parameters
 
+            # The report's own product: one work order can pack several.
+            finished_product_id = finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=report_id)
+
             # Before anything is posted: the ecart this report will be judged on
             # has to be pinned to the packaging it was actually validated against.
             effects["packaging_parameters"] = freeze_packaging_parameters(
-                self._connection, tenant_id=tenant_id, report_id=report_id, product_id=work_order[0], detail=detail
+                self._connection, tenant_id=tenant_id, report_id=report_id, product_id=finished_product_id, detail=detail
             )
 
             posted = stock.post_conditionnement_report(
@@ -630,7 +641,7 @@ class ProductionReportService:
                 actor_id=actor_id,
                 header=header,
                 detail=detail,
-                finished_product_id=work_order[0],
+                finished_product_id=finished_product_id,
                 correlation_id=correlation_id,
                 packets_per_carton=effects["packaging_parameters"]["packets_per_carton"],  # type: ignore[index]
             )
@@ -725,7 +736,8 @@ class ProductionReportService:
             )
             undone = stock.post_conditionnement_report(
                 tenant_id=tenant_id, actor_id=actor_id, header=header, detail=detail,
-                finished_product_id=work_order[0], correlation_id=correlation_id, reverse=True,
+                finished_product_id=finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=header.id),
+                correlation_id=correlation_id, reverse=True,
                 packets_per_carton=snapshot_packets_per_carton,
             )
         if isinstance(undone, Err):
@@ -1097,7 +1109,7 @@ class ProductionReportService:
         targets = self._validate_stock_targets(header.report_type, detail)
         if isinstance(targets, Err):
             return targets
-        validation = self._validate_detail(header.report_type, detail)
+        validation = self._validate_detail(header.report_type, detail, tenant_id=tenant_id)
         if isinstance(validation, Err):
             return validation
 
@@ -1134,7 +1146,8 @@ class ProductionReportService:
             )
             posted = stock.post_conditionnement_report(
                 tenant_id=tenant_id, actor_id=actor_id, header=header, detail=detail,
-                finished_product_id=work_order[0], correlation_id=correlation_id,
+                finished_product_id=finished_product_of_report(self._connection, tenant_id=tenant_id, report_id=report_id),
+                correlation_id=correlation_id,
                 packets_per_carton=snapshot_packets_per_carton,
             )
         if isinstance(posted, Err):

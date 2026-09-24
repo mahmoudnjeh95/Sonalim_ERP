@@ -28,7 +28,7 @@ export function YieldWasteTab() {
   const { t } = useI18n();
   const reduceMotion = useReducedMotion();
   const [days, setDays] = useState<PeriodDays>(30);
-  const { windows, teamCurrent, ops, previousOps } = useOperationsData(days);
+  const { windows, teamCurrent, ops, previousOps, humidity } = useOperationsData(days);
   const showLoader = useMinimumLoading(teamCurrent.isLoading);
   // Machine names are not needed on this tab, so ids pass through untouched.
   const fmt = useFormatters(useMemo(() => (id: string) => id, []));
@@ -211,6 +211,43 @@ export function YieldWasteTab() {
                   })}
                 </TableBody>
               </Table>
+            </CardContent>
+          </Card>
+        )}
+
+        {humidity.length > 0 && (
+          <Card>
+            <CardHeader>
+              <div>
+                <CardTitle>{t("analytics.yieldWasteTab.humidity.title")}</CardTitle>
+                <CardDescription>{t("analytics.yieldWasteTab.humidity.subtitle")}</CardDescription>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="h-64 w-full">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart
+                    data={humidity.map((point) => ({ date: point.date, humidity: point.averageHumidityPct }))}
+                    margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
+                  >
+                    <CartesianGrid stroke={GRID} vertical={false} />
+                    <XAxis dataKey="date" tick={TICK} tickLine={false} axisLine={false} minTickGap={32} tickFormatter={shortDate} />
+                    <YAxis
+                      tick={TICK}
+                      tickLine={false}
+                      axisLine={false}
+                      width={44}
+                      domain={["auto", "auto"]}
+                      tickFormatter={(value: number) => `${formatNumber(value, 1)}%`}
+                    />
+                    <Tooltip
+                      formatter={(value) => [`${formatNumber(Number(value), 1)}%`, t("analytics.yieldWasteTab.humidity.title")]}
+                      labelFormatter={(label) => shortDate(String(label))}
+                    />
+                    <Line type="linear" dataKey="humidity" stroke={LINE} strokeWidth={2} dot={{ r: 2.5 }} connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
             </CardContent>
           </Card>
         )}

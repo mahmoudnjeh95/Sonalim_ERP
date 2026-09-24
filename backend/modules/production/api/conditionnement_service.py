@@ -9,7 +9,9 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.production.api.production_report_service import ProductionReportService, _detail_to_json
+from modules.production.api.report_product import finished_product_of_report
 from modules.production.api.waste_line_store import load_waste_lines, replace_waste_lines
+from modules.production.api.waste_type_service import custom_waste_categories
 from modules.production.domain.packaging_estimate import tonnage_from_count
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
@@ -156,16 +158,13 @@ def register_dlc_lot(
     if detail is None or not (detail.lot_number or "").strip():
         return Ok(None)
 
-    product_row = connection.execute(
-        "SELECT product_id FROM production.work_orders WHERE id = %s AND tenant_id = %s",
-        (header.of_id, tenant_id),
-    ).fetchone()
-    if product_row is None:
-        return Err("NOT_FOUND", f"work order {header.of_id} not found")
+    product_id = finished_product_of_report(connection, tenant_id=tenant_id, report_id=header.id)
+    if product_id is None:
+        return Err("NOT_FOUND", f"work order {header.of_id} not found or has no product")
 
     lot = LotService(connection).register_lot(
         tenant_id=tenant_id,
-        product_id=product_row[0],
+        product_id=product_id,
         lot_number=detail.lot_number,  # type: ignore[arg-type]
         actor_id=actor_id,
         expiry_date=detail.dlc_date,
@@ -297,7 +296,12 @@ class ConditionnementReportService:
             return header_validation
 
         detail = detail or ConditionnementReportDetail()
-        detail_validation = validate_conditionnement_detail(detail)
+        detail_validation = validate_conditionnement_detail(
+            detail,
+            waste_categories=custom_waste_categories(
+                self._connection, tenant_id=tenant_id, report_type="conditionnement"
+            ),
+        )
         if isinstance(detail_validation, Err):
             return detail_validation
 
@@ -398,7 +402,12 @@ class ConditionnementReportService:
         if header.status != "draft":
             return Err("NOT_EDITABLE", f"a {header.status} report cannot be edited as a draft")
 
-        validation = validate_conditionnement_detail(detail)
+        validation = validate_conditionnement_detail(
+            detail,
+            waste_categories=custom_waste_categories(
+                self._connection, tenant_id=tenant_id, report_type="conditionnement"
+            ),
+        )
         if isinstance(validation, Err):
             return validation
 
@@ -437,7 +446,12 @@ class ConditionnementReportService:
         if header.status != "submitted":
             return Err("NOT_CORRECTABLE", f"only a submitted report can be corrected, not a {header.status} one")
 
-        validation = validate_conditionnement_detail(detail)
+        validation = validate_conditionnement_detail(
+            detail,
+            waste_categories=custom_waste_categories(
+                self._connection, tenant_id=tenant_id, report_type="conditionnement"
+            ),
+        )
         if isinstance(validation, Err):
             return validation
 

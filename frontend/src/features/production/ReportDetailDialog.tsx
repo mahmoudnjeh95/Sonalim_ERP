@@ -20,13 +20,13 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
-import { Skeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { formatDuration, formatQuantity } from "../../lib/units";
 import { listAuditLog, type AuditLogEntry } from "../admin/activityLog/api";
 import { listPartners } from "../partners/api";
 import { listLocations } from "../warehouse/api";
 import { listMachines, listMolds, listProducts, listWorkCenters, listWorkOrders } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 export interface FigureRow {
   label: string;
@@ -577,11 +577,7 @@ function ReportHistoryPanel({ reportId, entityType }: { reportId: string; entity
 
   if (isLoading) {
     return (
-      <div className="space-y-2">
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-        <Skeleton className="h-10 w-full" />
-      </div>
+      <AppLoader size={120} className="py-6" />
     );
   }
 

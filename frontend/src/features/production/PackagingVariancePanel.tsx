@@ -71,6 +71,10 @@ export function PackagingVariancePanel({
   // it falls back to the machine/carton figure, the one that's actually there.
   const short = hasWeightEcart ? (variance.packet_variance ?? 0) < 0 : machineShort;
   const ok = hasWeightEcart ? variance.within_tolerance === true : machineOk;
+  // The weight ecart is only judged against a tolerance the plant configured; with
+  // none set the figures are shown as they are, not coloured against a guess.
+  const judged = !hasWeightEcart || variance.within_tolerance !== null;
+  const tone = !judged ? "neutral" : ok ? "success" : short ? "destructive" : "warning";
 
   const ratioLabel =
     variance.packet_variance_ratio === null
@@ -81,21 +85,25 @@ export function PackagingVariancePanel({
     <div
       className={cn(
         "overflow-hidden rounded-lg border",
-        ok ? "border-success/20" : short ? "border-destructive/30" : "border-warning/30",
+        tone === "neutral" && "border-border",
+        tone === "success" && "border-success/20",
+        tone === "destructive" && "border-destructive/30",
+        tone === "warning" && "border-warning/30",
         className,
       )}
     >
       <div
         className={cn(
           "flex items-center gap-2 border-b px-3 py-2",
-          ok
-            ? "border-success/20 bg-success-soft"
-            : short
-              ? "border-destructive/30 bg-destructive-soft"
-              : "border-warning/30 bg-warning-soft",
+          tone === "neutral" && "border-border bg-muted/40",
+          tone === "success" && "border-success/20 bg-success-soft",
+          tone === "destructive" && "border-destructive/30 bg-destructive-soft",
+          tone === "warning" && "border-warning/30 bg-warning-soft",
         )}
       >
-        {ok ? (
+        {tone === "neutral" ? (
+          <HelpCircle className="h-4 w-4 text-muted-foreground" />
+        ) : ok ? (
           <CheckCircle2 className="h-4 w-4 text-success" />
         ) : (
           <AlertTriangle className={cn("h-4 w-4", short ? "text-destructive" : "text-warning")} />
@@ -138,12 +146,15 @@ export function PackagingVariancePanel({
             <Figure
               label={t("production.packagingVariance.field.packetVariance")}
               value={`${formatQuantity(variance.packet_variance)}${ratioLabel ? ` (${ratioLabel})` : ""}`}
-              emphasis={ok ? "success" : short ? "destructive" : "warning"}
+              emphasis={tone === "neutral" ? undefined : tone}
               gauge={
-                variance.packet_variance_ratio !== null && variance.tolerance_percent > 0
+                tone !== "neutral" &&
+                variance.packet_variance_ratio !== null &&
+                variance.tolerance_percent !== null &&
+                variance.tolerance_percent > 0
                   ? {
                       percent: (Math.abs(variance.packet_variance_ratio) * 100 * 100) / variance.tolerance_percent,
-                      tone: ok ? "success" : short ? "destructive" : "warning",
+                      tone,
                     }
                   : undefined
               }
@@ -264,7 +275,9 @@ export function PackagingVariancePanel({
                     : formatQuantity(variance.packets_per_carton)
                 }`,
               ]),
-          `${t("production.packagingVariance.basis.tolerance")} ${variance.tolerance_percent} %`,
+          variance.tolerance_percent !== null
+            ? `${t("production.packagingVariance.basis.tolerance")} ${variance.tolerance_percent} %`
+            : t("production.packagingVariance.basis.noTolerance"),
         ].join(" · ")}
       </p>
     </div>

@@ -3,7 +3,6 @@ from __future__ import annotations
 import psycopg
 
 from core.domain.result import Err, Ok, Result
-from modules.production.domain.production_report import WASTE_CATEGORIES_BY_REPORT_TYPE
 
 # Only validated reports count. A draft is a team's working notes and a rejected
 # report has been refused — consolidating either would let figures nobody approved
@@ -87,6 +86,27 @@ class OfConsolidationService:
             return Err("NOT_FOUND", f"work order {of_id} not found")
         reference, product_id, planned_quantity, status, work_center_id, start_date, closed_at = work_order
 
+        # Every product the order's validated packing reports cover, earliest first: one order can
+        # pack several. Before its first validated report it has only its own product, if any.
+        packed_products = [
+            row[0]
+            for row in self._connection.execute(
+                """
+                SELECT COALESCE(c.product_id, w.product_id)
+                FROM production.production_reports r
+                JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+                JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
+                LEFT JOIN production.shift_packing_rows p ON p.id = r.id AND p.tenant_id = r.tenant_id
+                WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'conditionnement' AND r.status = 'validated'
+                GROUP BY 1
+                ORDER BY MIN(r.report_date), MIN(p.line_order) NULLS LAST, MIN(r.created_at), 1
+                """,
+                (tenant_id, of_id),
+            ).fetchall()
+            if row[0] is not None
+        ]
+        product_ids = packed_products or ([product_id] if product_id else [])
+
         daily = self._daily_totals(tenant_id=tenant_id, of_id=of_id)
         packing = self._conditionnement_totals(tenant_id=tenant_id, of_id=of_id)
         quality = self._quality_summary(tenant_id=tenant_id, of_id=of_id)
@@ -107,6 +127,7 @@ class OfConsolidationService:
                 "of_id": of_id,
                 "reference": reference,
                 "product_id": product_id,
+                "product_ids": product_ids,
                 "status": status,
                 "work_center_id": work_center_id,
                 "start_date": start_date.isoformat() if start_date is not None else None,
@@ -402,16 +423,19 @@ class OfConsolidationService:
         `net_semoule_waste` below needs the original kilo figure regardless --
         `daily_raw_kg_total` carries it unconverted.
         """
-        daily_categories = list(WASTE_CATEGORIES_BY_REPORT_TYPE["daily"])
+        # Which report a line sits on decides its basis, not which category it
+        # names: the plant's own waste types are daily or packing lines too, and
+        # a fixed list of category names would leave them out of the conversion.
         rows = self._connection.execute(
             f"""
             SELECT
                 w.category,
+                r.report_type,
                 w.product_id,
                 COALESCE(SUM(w.quantity), 0),
                 COALESCE(SUM(
                     CASE
-                        WHEN w.category = ANY(%s) AND u.category = 'weight' AND u.ratio_to_base > 0
+                        WHEN r.report_type = 'daily' AND u.category = 'weight' AND u.ratio_to_base > 0
                             THEN w.quantity / u.ratio_to_base
                         ELSE w.quantity
                     END
@@ -421,17 +445,17 @@ class OfConsolidationService:
             LEFT JOIN core.products p ON p.id = w.product_id AND p.tenant_id = r.tenant_id
             LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
             WHERE r.tenant_id = %s AND r.of_id = %s AND r.{_VALIDATED}
-            GROUP BY w.category, w.product_id
+            GROUP BY w.category, r.report_type, w.product_id
             """,
-            (daily_categories, tenant_id, of_id),
+            (tenant_id, of_id),
         ).fetchall()
 
         by_category: dict[str, float] = {}
         by_product: dict[str, float] = {}
         unattributed = 0.0
         daily_raw_kg_total = 0.0
-        for category, product_id, raw_quantity, converted_quantity in rows:
-            if category in WASTE_CATEGORIES_BY_REPORT_TYPE["daily"]:
+        for category, report_type, product_id, raw_quantity, converted_quantity in rows:
+            if report_type == "daily":
                 daily_raw_kg_total += float(raw_quantity)
             amount = float(converted_quantity)
             by_category[category] = by_category.get(category, 0.0) + amount

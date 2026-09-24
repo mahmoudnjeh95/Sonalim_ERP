@@ -1,13 +1,10 @@
-import { ArrowRight } from "lucide-react";
-import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { MotionSafeSvg } from "../../components/motion/MotionSafeSvg";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
-import { cn } from "../../lib/utils";
 import type { DowntimeBreakdownRow, Machine } from "../production/api";
 import { AnalyticsEmptyState } from "./AnalyticsStates";
-import { formatPercent, useInsightText } from "./manufacturing/format";
-import type { Formatters, Insight } from "./manufacturing/insights";
+import { formatPercent } from "./manufacturing/format";
+import type { Formatters } from "./manufacturing/insights";
 import { rankDowntimeReasons, type MachinesSummary } from "./manufacturing/metrics";
 import AlertPulse from "../../assets/animations/alert-pulse.svg?react";
 import MachineHealthPulse from "../../assets/animations/machine-health-pulse.svg?react";
@@ -43,23 +40,17 @@ export function MachineDowntimePanel({
   breakdown,
   machineRecords,
   fmt,
-  insight,
-  onDrilldown,
 }: {
   machines: MachinesSummary;
   breakdown: DowntimeBreakdownRow[];
   machineRecords: Machine[];
   fmt: Formatters;
-  insight: Insight | null;
-  onDrilldown: (insight: Insight) => void;
 }) {
   const { t } = useI18n();
-  const text = useInsightText();
   const rows = machines.machines.slice(0, MAX_ROWS);
   const worst = machines.machines[0];
   const reasons = worst ? rankDowntimeReasons(breakdown, worst.equipmentId).slice(0, 3) : [];
   const statusById = new Map(machineRecords.map((machine) => [machine.id, machine.status]));
-  const alert = insight && (insight.tone === "danger" || insight.tone === "warning") ? insight : null;
 
   return (
     <Card>
@@ -78,25 +69,6 @@ export function MachineDowntimePanel({
           />
         ) : (
           <>
-            {alert && (
-              <div
-                role="alert"
-                className={cn(
-                  "flex items-start gap-3 rounded-lg border p-3",
-                  alert.tone === "danger" ? "border-destructive/30 bg-destructive-soft" : "border-warning/30 bg-warning-soft",
-                )}
-              >
-                <MotionSafeSvg className="mt-0.5 shrink-0">
-                  <AlertPulse aria-hidden viewBox="340 190 120 120" className="h-6 w-6" />
-                </MotionSafeSvg>
-                <p className="min-w-0 flex-1 text-sm font-medium">{text(alert.explanation)}</p>
-                <Button type="button" variant="ghost" size="sm" className="h-7 shrink-0 gap-1 px-2 text-xs" onClick={() => onDrilldown(alert)}>
-                  {t("analytics.insight.drilldown")}
-                  <ArrowRight className="h-3.5 w-3.5" aria-hidden />
-                </Button>
-              </div>
-            )}
-
             <ul className="space-y-3">
               {rows.map((machine) => (
                 <li key={machine.equipmentId} className="space-y-1.5">
@@ -129,7 +101,7 @@ export function MachineDowntimePanel({
                 <ul className="flex flex-wrap gap-2">
                   {reasons.map((reason) => (
                     <li key={reason.reason} className="rounded-full border border-border bg-muted/40 px-2.5 py-1 text-xs">
-                      {reason.reason} <span className="tabular-nums text-muted-foreground">· {fmt.duration(reason.minutes)}</span>
+                      {fmt.motif(reason.reason)} <span className="tabular-nums text-muted-foreground">· {fmt.duration(reason.minutes)}</span>
                     </li>
                   ))}
                 </ul>

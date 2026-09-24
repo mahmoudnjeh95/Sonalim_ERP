@@ -8,7 +8,6 @@ import { ApiError } from "../../lib/api";
 import { Card, CardContent } from "../../components/ui/card";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
-import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { cn } from "../../lib/utils";
 import {
@@ -19,6 +18,7 @@ import {
   sendIaAssistantMessage,
   type IaAssistantConversation,
 } from "./api";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 const CONVERSATIONS_QUERY_KEY = ["production", "ia-assistant", "conversations"] as const;
 
@@ -209,10 +209,7 @@ export function IaAssistantTab() {
           </Button>
 
           {loadingConversations ? (
-            <div className="space-y-2 pt-1">
-              <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-8 w-full" />
-            </div>
+            <AppLoader size={72} className="py-2" />
           ) : conversations.length === 0 ? (
             <p className="px-1 py-2 text-xs text-muted-foreground">{t("production.iaAssistant.noConversations")}</p>
           ) : (
@@ -255,10 +252,7 @@ export function IaAssistantTab() {
                 description={t("production.iaAssistant.empty.description")}
               />
             ) : loadingMessages ? (
-              <div className="space-y-3">
-                <Skeleton className="h-10 w-2/3" />
-                <Skeleton className="ml-auto h-10 w-1/2" />
-              </div>
+              <AppLoader size={120} className="py-6" />
             ) : messages.length === 0 ? (
               <EmptyState
                 icon={<Sparkles className="h-5 w-5" />}

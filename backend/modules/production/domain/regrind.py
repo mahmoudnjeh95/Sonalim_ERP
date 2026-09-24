@@ -9,7 +9,7 @@ from core.domain.result import Err, Ok, Result
 # daily report validates with rebroyat above zero, which is how scrap_records
 # turns from a typed-in record into a derived ledger. The non-conformity sources
 # join this set with the qc module.
-VALID_SCRAP_TYPES = {"filling_dosing", "cutting", "daily_report", "non_conformity"}
+VALID_SCRAP_TYPES = {"filling_dosing", "cutting", "daily_report", "shift_run", "non_conformity"}
 
 
 @dataclass(frozen=True)

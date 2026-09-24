@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, CheckCircle2, Pencil, Plus, Settings2, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, CheckCircle2, Pencil, Plus, Settings2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -16,7 +16,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -33,25 +32,38 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import {
+  PRODUCTION_STAGES,
+  archiveEquipment,
   createEquipment,
   listEquipment,
   listWorkCenters,
   setEquipmentStatus,
+  unarchiveEquipment,
   updateEquipment,
   type Equipment,
   type EquipmentStatus,
+  type ProductionStage,
 } from "./api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const newEquipmentSchema = z.object({
   work_center_id: z.string().min(1, "Required"),
   code: z.string().min(1, "Required"),
   name: z.string().min(1, "Required"),
+  // "" is a machine that works at none of the stages.
+  production_stage: z.string(),
 });
 type NewEquipmentForm = z.infer<typeof newEquipmentSchema>;
+
+/** The form's "" becomes null, which is what clears a stage on the server. */
+function toInput(form: NewEquipmentForm) {
+  return { ...form, production_stage: (form.production_stage || null) as ProductionStage | null };
+}
 
 const EQUIPMENT_QUERY_KEY = ["maintenance", "equipment"] as const;
 const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
 type StatusFilter = "all" | EquipmentStatus;
+type StageFilter = "all" | ProductionStage | "none";
 
 const STATUS_VARIANT: Record<EquipmentStatus, BadgeProps["variant"]> = {
   operational: "success",
@@ -73,11 +85,17 @@ export function EquipmentTab() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [stageFilter, setStageFilter] = useState<StageFilter>("all");
 
   const STATUS_LABEL: Record<EquipmentStatus, string> = {
     operational: t("maintenance.equipment.status.operational"),
     down: t("maintenance.equipment.status.down"),
     maintenance: t("maintenance.equipment.status.maintenance"),
+  };
+  const STAGE_LABEL: Record<ProductionStage, string> = {
+    versement: t("maintenance.equipment.stage.versement"),
+    extrusion: t("maintenance.equipment.stage.extrusion"),
+    conditionnement: t("maintenance.equipment.stage.conditionnement"),
   };
 
   const { data: equipment = [], isLoading } = useQuery({ queryKey: EQUIPMENT_QUERY_KEY, queryFn: () => listEquipment(token) });
@@ -91,7 +109,7 @@ export function EquipmentTab() {
   } = useForm<NewEquipmentForm>({ resolver: zodResolver(newEquipmentSchema) });
 
   const createMutation = useMutation({
-    mutationFn: (input: NewEquipmentForm) => createEquipment(token, input),
+    mutationFn: (input: NewEquipmentForm) => createEquipment(token, toInput(input)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: EQUIPMENT_QUERY_KEY });
       setDialogOpen(false);
@@ -104,7 +122,7 @@ export function EquipmentTab() {
   });
 
   const updateMutation = useMutation({
-    mutationFn: (input: NewEquipmentForm) => updateEquipment(token, editingEquipment!.id, input),
+    mutationFn: (input: NewEquipmentForm) => updateEquipment(token, editingEquipment!.id, toInput(input)),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: EQUIPMENT_QUERY_KEY });
       setDialogOpen(false);
@@ -119,13 +137,13 @@ export function EquipmentTab() {
 
   function openCreateDialog() {
     setEditingEquipment(null);
-    reset({ work_center_id: "", code: "", name: "" });
+    reset({ work_center_id: "", code: "", name: "", production_stage: "" });
     setDialogOpen(true);
   }
 
   function openEditDialog(item: Equipment) {
     setEditingEquipment(item);
-    reset({ work_center_id: item.work_center_id, code: item.code, name: item.name });
+    reset({ work_center_id: item.work_center_id, code: item.code, name: item.name, production_stage: item.production_stage ?? "" });
     setDialogOpen(true);
   }
 
@@ -140,9 +158,36 @@ export function EquipmentTab() {
     },
   });
 
-  const operationalCount = equipment.filter((m) => m.status === "operational").length;
-  const attentionCount = equipment.filter((m) => m.status !== "operational").length;
+  const archiveMutation = useMutation({
+    mutationFn: (id: string) => archiveEquipment(token, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: EQUIPMENT_QUERY_KEY });
+      toast.success(t("maintenance.equipment.archived"));
+    },
+    onError: (error) => {
+      toast.error(t("maintenance.equipment.archiveError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const unarchiveMutation = useMutation({
+    mutationFn: (id: string) => unarchiveEquipment(token, id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: EQUIPMENT_QUERY_KEY });
+      toast.success(t("maintenance.equipment.unarchived"));
+    },
+    onError: (error) => {
+      toast.error(t("maintenance.equipment.unarchiveError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const activeEquipment = equipment.filter((m) => !m.archived_at);
+  const operationalCount = activeEquipment.filter((m) => m.status === "operational").length;
+  const attentionCount = activeEquipment.filter((m) => m.status !== "operational").length;
   const statusFilteredEquipment = statusFilter === "all" ? equipment : equipment.filter((m) => m.status === statusFilter);
+  const stageFilteredEquipment =
+    stageFilter === "all"
+      ? statusFilteredEquipment
+      : statusFilteredEquipment.filter((m) => (stageFilter === "none" ? m.production_stage === null : m.production_stage === stageFilter));
 
   const columnFilterFields: FilterField<Equipment>[] = [
     { key: "code", kind: "text", getValue: (m) => m.code },
@@ -150,7 +195,7 @@ export function EquipmentTab() {
     { key: "work_center", kind: "text", getValue: (m) => workCenters.find((wc) => wc.id === m.work_center_id)?.code ?? m.work_center_id },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
-  const filteredEquipment = columnFilters.apply(statusFilteredEquipment);
+  const filteredEquipment = columnFilters.apply(stageFilteredEquipment);
 
   const columns: ColumnDef<Equipment>[] = [
     {
@@ -197,15 +242,28 @@ export function EquipmentTab() {
       sortValue: (item) => workCenters.find((wc) => wc.id === item.work_center_id)?.code ?? item.work_center_id,
     },
     {
+      key: "stage",
+      header: t("maintenance.equipment.column.stage"),
+      defaultWidth: 160,
+      cell: (item) =>
+        item.production_stage ? <span>{STAGE_LABEL[item.production_stage]}</span> : <span className="text-muted-foreground">—</span>,
+      sortValue: (item) => item.production_stage ?? "",
+    },
+    {
       key: "status",
       header: t("maintenance.equipment.column.status"),
       defaultWidth: 160,
-      cell: (item) => (
-        <Badge variant={STATUS_VARIANT[item.status]} dot>
-          {STATUS_LABEL[item.status]}
-        </Badge>
-      ),
-      sortValue: (item) => item.status,
+      cell: (item) =>
+        item.archived_at ? (
+          <Badge variant="outline" dot>
+            {t("maintenance.equipment.archived.badge")}
+          </Badge>
+        ) : (
+          <Badge variant={STATUS_VARIANT[item.status]} dot>
+            {STATUS_LABEL[item.status]}
+          </Badge>
+        ),
+      sortValue: (item) => (item.archived_at ? "archived" : item.status),
     },
     {
       key: "action",
@@ -214,25 +272,45 @@ export function EquipmentTab() {
       alwaysVisible: true,
       headerClassName: "text-right",
       cellClassName: "space-x-2 text-right",
-      cell: (item) => (
-        <>
-          <Button size="sm" variant="outline" onClick={() => openEditDialog(item)}>
-            <Pencil className="h-3.5 w-3.5" />
-            {t("maintenance.equipment.edit")}
+      cell: (item) =>
+        item.archived_at ? (
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => unarchiveMutation.mutate(item.id)}
+            disabled={unarchiveMutation.isPending && unarchiveMutation.variables === item.id}
+          >
+            <ArchiveRestore className="h-3.5 w-3.5" />
+            {t("maintenance.equipment.unarchive")}
           </Button>
-          {NEXT_STATUS[item.status].map((status) => (
+        ) : (
+          <>
+            <Button size="sm" variant="outline" onClick={() => openEditDialog(item)}>
+              <Pencil className="h-3.5 w-3.5" />
+              {t("maintenance.equipment.edit")}
+            </Button>
+            {NEXT_STATUS[item.status].map((status) => (
+              <Button
+                key={status}
+                size="sm"
+                variant="outline"
+                onClick={() => transitionMutation.mutate({ id: item.id, status })}
+                disabled={transitionMutation.isPending && transitionMutation.variables?.id === item.id}
+              >
+                {STATUS_LABEL[status]}
+              </Button>
+            ))}
             <Button
-              key={status}
               size="sm"
               variant="outline"
-              onClick={() => transitionMutation.mutate({ id: item.id, status })}
-              disabled={transitionMutation.isPending && transitionMutation.variables?.id === item.id}
+              onClick={() => archiveMutation.mutate(item.id)}
+              disabled={archiveMutation.isPending && archiveMutation.variables === item.id}
             >
-              {STATUS_LABEL[status]}
+              <Archive className="h-3.5 w-3.5" />
+              {t("maintenance.equipment.archive")}
             </Button>
-          ))}
-        </>
-      ),
+          </>
+        ),
     },
   ];
   const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
@@ -242,7 +320,7 @@ export function EquipmentTab() {
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatCard label={t("maintenance.equipment.stat.total")} value={equipment.length} icon={<Settings2 className="h-5 w-5" />} />
+        <StatCard label={t("maintenance.equipment.stat.total")} value={activeEquipment.length} icon={<Settings2 className="h-5 w-5" />} />
         <StatCard label={t("maintenance.equipment.stat.operational")} value={operationalCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
         <StatCard label={t("maintenance.equipment.stat.attention")} value={attentionCount} icon={<AlertTriangle className="h-5 w-5" />} accent="warning" />
       </div>
@@ -262,6 +340,15 @@ export function EquipmentTab() {
                 { value: "operational", label: t("maintenance.equipment.status.operational") },
                 { value: "down", label: t("maintenance.equipment.status.down") },
                 { value: "maintenance", label: t("maintenance.equipment.status.maintenance") },
+              ]}
+            />
+            <FilterTabs
+              value={stageFilter}
+              onChange={setStageFilter}
+              options={[
+                { value: "all", label: t("maintenance.equipment.stage.all") },
+                ...PRODUCTION_STAGES.map((stage) => ({ value: stage, label: STAGE_LABEL[stage] })),
+                { value: "none", label: t("maintenance.equipment.stage.none") },
               ]}
             />
             {columnFilters.isActive && (
@@ -327,6 +414,18 @@ export function EquipmentTab() {
                     {errors.name && <p className="text-sm text-destructive">{errors.name.message}</p>}
                   </div>
                 </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="production_stage">{t("maintenance.equipment.field.stage")}</Label>
+                  <Select id="production_stage" {...register("production_stage")}>
+                    <option value="">{t("maintenance.equipment.stage.none")}</option>
+                    {PRODUCTION_STAGES.map((stage) => (
+                      <option key={stage} value={stage}>
+                        {STAGE_LABEL[stage]}
+                      </option>
+                    ))}
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t("maintenance.equipment.field.stage.hint")}</p>
+                </div>
                 {(editingEquipment ? updateMutation.isError : createMutation.isError) && (
                   <p className="text-sm text-destructive">
                     {(editingEquipment ? updateMutation.error : createMutation.error) instanceof ApiError
@@ -371,14 +470,7 @@ export function EquipmentTab() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && filteredEquipment.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

@@ -292,3 +292,38 @@ export function getCostSummary(token: string) {
   return apiFetch<CostSummaryRow[]>("/procurement/cost-summary", { token });
 }
 
+
+// --- Lots -------------------------------------------------------------------
+
+export interface Lot {
+  id: string;
+  product_id: string;
+  lot_number: string;
+  status: string;
+  /** Null until someone enters it: production files a finished-goods lot with its number only. */
+  expiry_date: string | null;
+  produced_at: string | null;
+  source_type: string | null;
+  source_id: string | null;
+}
+
+/** The lots a validated packing report registers, which is where quality's DLC queue comes from. */
+export const FINISHED_GOODS_LOT_SOURCE = "production.conditionnement_report";
+export const SET_LOT_EXPIRY_PERMISSION = "warehouse.set_lot_expiry";
+export const LOTS_QUERY_KEY = ["warehouse", "lots"] as const;
+
+export function listLots(token: string, params: { sourceType?: string; withoutExpiry?: boolean } = {}) {
+  const query = new URLSearchParams();
+  if (params.sourceType) query.set("source_type", params.sourceType);
+  if (params.withoutExpiry) query.set("without_expiry", "true");
+  const suffix = query.size > 0 ? `?${query}` : "";
+  return apiFetch<Lot[]>(`/warehouse/lots${suffix}`, { token });
+}
+
+export function setLotExpiry(token: string, lotId: string, expiryDate: string) {
+  return apiFetch<Lot>(`/warehouse/lots/${lotId}/expiry`, {
+    method: "PATCH",
+    token,
+    body: { expiry_date: expiryDate },
+  });
+}

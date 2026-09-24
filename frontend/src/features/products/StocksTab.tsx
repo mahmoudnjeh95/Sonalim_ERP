@@ -8,7 +8,6 @@ import { useI18n } from "../../lib/i18n";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Badge } from "../../components/ui/badge";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
@@ -18,6 +17,7 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listProducts, listStock, listUoms, type Product } from "../warehouse/api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const STOCK_QUERY_KEY = ["warehouse", "stock"] as const;
@@ -217,14 +217,7 @@ export function StocksTab() {
             <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
           </TableHeader>
           <TableBody>
-            {isLoading &&
-              Array.from({ length: 3 }).map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={visibleColumns.length}>
-                    <Skeleton className="h-5 w-full" />
-                  </TableCell>
-                </TableRow>
-              ))}
+            {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
             {!isLoading && rows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={visibleColumns.length} className="p-0">

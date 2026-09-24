@@ -6,7 +6,6 @@ import { useAuth } from "../../lib/auth";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Skeleton } from "../../components/ui/skeleton";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
@@ -23,6 +22,7 @@ import {
   type ConsumptionRow,
 } from "../production/api";
 import { listProducts } from "../warehouse/api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
 
 const CONSUMPTION_QUERY_KEY = ["production", "consumption-by-supplier"] as const;
@@ -257,14 +257,7 @@ export function ConsumptionReportTab() {
             <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
           </TableHeader>
           <TableBody>
-            {isLoading &&
-              Array.from({ length: 3 }).map((_, i) => (
-                <TableRow key={i}>
-                  <TableCell colSpan={visibleColumns.length}>
-                    <Skeleton className="h-5 w-full" />
-                  </TableCell>
-                </TableRow>
-              ))}
+            {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
             {!isLoading && sortedRows.length === 0 && (
               <TableRow>
                 <TableCell colSpan={visibleColumns.length} className="p-0">

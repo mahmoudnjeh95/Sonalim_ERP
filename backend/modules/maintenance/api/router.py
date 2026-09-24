@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.result import Err
 from core.tenancy import TenantContext, require_permission
-from modules.maintenance.api.equipment_service import EquipmentService
+from modules.maintenance.api.equipment_service import UNSET, EquipmentService
 from modules.maintenance.domain.equipment import Equipment
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -16,12 +16,15 @@ class CreateEquipmentRequest(BaseModel):
     work_center_id: str
     code: str
     name: str
+    production_stage: str | None = None
 
 
 class UpdateEquipmentRequest(BaseModel):
     work_center_id: str | None = None
     code: str | None = None
     name: str | None = None
+    # Sent as null it clears the stage; left out it is left as it is.
+    production_stage: str | None = None
 
 
 class TransitionEquipmentRequest(BaseModel):
@@ -35,6 +38,8 @@ def _serialize_equipment(equipment: Equipment) -> dict:
         "code": equipment.code,
         "name": equipment.name,
         "status": equipment.status,
+        "production_stage": equipment.production_stage,
+        "archived_at": equipment.archived_at.isoformat() if equipment.archived_at is not None else None,
     }
 
 
@@ -51,6 +56,7 @@ def create_equipment(
             work_center_id=body.work_center_id,
             code=body.code,
             name=body.name,
+            production_stage=body.production_stage,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -66,7 +72,9 @@ def list_equipment(
 ) -> list[dict]:
     with get_connection() as connection:
         service = EquipmentService(connection)
-        equipment = service.list_equipment(tenant_id=tenant.tenant_id, work_center_id=work_center_id)
+        equipment = service.list_equipment(
+            tenant_id=tenant.tenant_id, work_center_id=work_center_id, include_archived=True
+        )
     return [_serialize_equipment(e) for e in equipment]
 
 
@@ -85,6 +93,7 @@ def update_equipment(
             work_center_id=body.work_center_id,
             code=body.code,
             name=body.name,
+            production_stage=body.production_stage if "production_stage" in body.model_fields_set else UNSET,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -105,6 +114,38 @@ def transition_equipment_status(
         result = service.transition_status(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, equipment_id=equipment_id, new_status=body.status
         )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return _serialize_equipment(result.value)
+
+
+@router.post("/equipment/{equipment_id}/archive")
+def archive_equipment(
+    equipment_id: str,
+    tenant: TenantContext = Depends(require_permission("maintenance.manage_equipment")),
+) -> dict:
+    with get_connection() as connection:
+        service = EquipmentService(connection)
+        result = service.archive_equipment(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, equipment_id=equipment_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, {"code": result.code, "message": result.message})
+        connection.commit()
+    return _serialize_equipment(result.value)
+
+
+@router.post("/equipment/{equipment_id}/unarchive")
+def unarchive_equipment(
+    equipment_id: str,
+    tenant: TenantContext = Depends(require_permission("maintenance.manage_equipment")),
+) -> dict:
+    with get_connection() as connection:
+        service = EquipmentService(connection)
+        result = service.unarchive_equipment(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, equipment_id=equipment_id)
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT

@@ -19,6 +19,7 @@ from modules.production.api.conditionnement_service import ConditionnementReport
 from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.regrind_service import RegrindDefaultsService
 from modules.production.api.service import WorkOrderService
+from modules.production.api.waste_type_service import WasteTypeService
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     DailyReportDetail,
@@ -241,8 +242,9 @@ def test_the_renamed_and_added_daily_categories_are_accepted(db, env, of):
 
 
 def test_cutting_is_no_longer_a_valid_category(db, env, of):
-    """The old name is refused end-to-end, not just in the domain layer --
-    the database's own check constraint was renamed alongside it."""
+    """The old name is refused end-to-end, not just in the domain layer. The
+    database no longer carries a fixed list (a plant can add kinds of its own),
+    so the service is what refuses it."""
     result = ProductionReportService(db).create_daily_report(
         tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
         report_date=datetime.date(2026, 9, 2), shift="night",
@@ -454,3 +456,91 @@ def test_rebroyat_with_no_item_named_still_uses_the_tenant_regrind_product(db, e
         (TENANT, of.id),
     ).fetchone()
     assert scrap[0] == env["product"]
+
+
+# --- the plant's own waste types --------------------------------------------
+
+
+def _waste_type(db, env, *, name, report_type):
+    created = WasteTypeService(db).create_type(
+        tenant_id=TENANT, actor_id=env["actor"], name=name, report_type=report_type
+    )
+    assert isinstance(created, Ok), getattr(created, "message", "")
+    return created.value
+
+
+def test_a_plants_own_waste_type_is_stored_and_read_back_like_a_built_in(db, env, of):
+    pf_fab = _waste_type(db, env, name="Déchet PF fab", report_type="daily")
+    report = _draft(
+        db, env, of,
+        waste_lines=(
+            WasteLine(category=pf_fab["id"], product_id=env["rebut"], quantity=6, note="cut too short"),
+            WasteLine(category="press", product_id=env["rebut"], quantity=1),
+        ),
+    )
+    detail = _read(db, report.id)["detail"]
+    assert [(line.category, line.quantity) for line in detail.waste_lines] == [(pf_fab["id"], 6), ("press", 1)]
+
+
+def test_a_type_entered_on_the_packing_report_is_refused_on_a_daily_one(db, env, of):
+    film = _waste_type(db, env, name="Déchet cello", report_type="conditionnement")
+    result = ProductionReportService(db).create_daily_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
+        report_date=datetime.date(2026, 9, 3), shift="morning",
+        detail=DailyReportDetail(
+            raw_material_location_id=env["location"],
+            waste_lines=(WasteLine(category=film["id"], product_id=env["rebut"], quantity=1),),
+        ),
+    )
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_WASTE_CATEGORY"
+
+
+def test_an_id_that_is_not_a_waste_type_of_this_tenant_is_refused(db, env, of):
+    result = ProductionReportService(db).create_daily_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
+        report_date=datetime.date(2026, 9, 3), shift="morning",
+        detail=DailyReportDetail(
+            raw_material_location_id=env["location"],
+            waste_lines=(WasteLine(category=str(ULID()), product_id=env["rebut"], quantity=1),),
+        ),
+    )
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_WASTE_CATEGORY"
+
+
+def test_a_report_that_used_a_type_stays_editable_after_the_type_is_retired(db, env, of):
+    """Retiring takes a type off the next form; it must not strand the drafts
+    that already used it."""
+    pf_fab = _waste_type(db, env, name="Déchet PF fab", report_type="daily")
+    report = _draft(
+        db, env, of,
+        waste_lines=(WasteLine(category=pf_fab["id"], product_id=env["rebut"], quantity=6),),
+    )
+    retired = WasteTypeService(db).update_type(
+        tenant_id=TENANT, actor_id=env["actor"], waste_type_id=pf_fab["id"], is_active=False
+    )
+    assert isinstance(retired, Ok)
+
+    updated = ProductionReportService(db).update_daily_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        detail=DailyReportDetail(
+            semolina_lines=(SemolinaLine(product_id=env["product"], quantity=500, location_id=env["location"]),),
+            raw_material_location_id=env["location"],
+            waste_lines=(WasteLine(category=pf_fab["id"], product_id=env["rebut"], quantity=8),),
+        ),
+    )
+    assert isinstance(updated, Ok), getattr(updated, "message", "")
+
+
+def test_a_plants_own_packing_type_is_accepted_on_a_packing_report(db, env, of):
+    film = _waste_type(db, env, name="Déchet cello", report_type="conditionnement")
+    result = ConditionnementReportService(db).create_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id,
+        report_date=datetime.date(2026, 9, 3), shift="morning",
+        equipment_id=env["equipment"],
+        detail=ConditionnementReportDetail(
+            waste_lines=(WasteLine(category=film["id"], product_id=env["scotch"], quantity=2),),
+        ),
+    )
+    assert isinstance(result, Ok), getattr(result, "message", "")

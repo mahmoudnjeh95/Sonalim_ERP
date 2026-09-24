@@ -11,7 +11,6 @@ import { listUserDirectory, userDisplayName } from "../../../lib/usersApi";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../../components/ui/table";
-import { Skeleton } from "../../../components/ui/skeleton";
 import { StatCard } from "../../../components/patterns/StatCard";
 import { EmptyState } from "../../../components/patterns/EmptyState";
 import { StatusBadge, PriorityBadge } from "../../../components/patterns/StatusBadge";
@@ -26,6 +25,7 @@ import { listOpportunities, NEXT_STAGES, transitionOpportunity, type Opportunity
 import { OpportunityFormDialog } from "./OpportunityFormDialog";
 import { MarkLostDialog } from "./MarkLostDialog";
 import { MarkWonDialog } from "./MarkWonDialog";
+import { TableLoadingRow } from "../../../components/patterns/AppLoader";
 
 const OPPORTUNITIES_QUERY_KEY = ["crm", "opportunities"] as const;
 const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
@@ -317,14 +317,7 @@ export function OpportunitiesPage() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {isListError && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="py-8 text-center text-destructive">

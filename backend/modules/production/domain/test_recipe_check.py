@@ -95,16 +95,24 @@ def test_a_hard_limit_is_marked_hard_and_a_soft_one_soft():
     assert by_product[REBROYAT].severity == "soft"
 
 
-# --- tolerance --------------------------------------------------------------
+# --- the recipe's own limits, and nothing added to them ---------------------
 
 
-def test_a_hair_outside_the_limit_is_not_worth_saying():
-    """Scales round. A warning that fires on every report is one nobody reads."""
+def test_exactly_on_the_limit_is_within_it():
+    findings = check_recipe_limits(
+        [PouredComponent(SEMOULE, 90), PouredComponent(REBROYAT, 10)],
+        _limits((SEMOULE, 90, 95, True), (REBROYAT, 0, 100, False)),
+    )
+    assert findings == []
+
+
+def test_any_share_outside_the_recipe_limit_reports_even_a_hair_outside():
+    # No allowance is invented on top of the recipe's own min/max.
     findings = check_recipe_limits(
         [PouredComponent(SEMOULE, 89.98), PouredComponent(REBROYAT, 10.02)],
         _limits((SEMOULE, 90, 95, True), (REBROYAT, 0, 100, False)),
     )
-    assert findings == []
+    assert [f.code for f in findings if f.component_product_id == SEMOULE] == ["BELOW_MINIMUM"]
 
 
 def test_a_real_drift_still_reports():

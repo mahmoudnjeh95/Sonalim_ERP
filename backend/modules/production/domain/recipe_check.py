@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-# A component's share may drift this far from its limit before it is worth
-# saying anything. Scales round, shifts pour by eye, and a warning that fires on
-# every single report is a warning nobody reads.
-TOLERANCE_PERCENTAGE_POINTS = 0.05
+# The recipe's own min/max are the only limits: no extra allowance is invented on
+# top of them. This is floating-point slack only, so a share of exactly 90% is not
+# reported as below a 90% minimum because of how the division rounds.
+FLOAT_EPSILON = 1e-9
 
 
 @dataclass(frozen=True)
@@ -122,7 +122,7 @@ def check_recipe_limits(
             )
             continue
 
-        if share < limit.min_percentage - TOLERANCE_PERCENTAGE_POINTS:
+        if share < limit.min_percentage - FLOAT_EPSILON:
             findings.append(
                 RecipeFinding(
                     code="BELOW_MINIMUM",
@@ -133,7 +133,7 @@ def check_recipe_limits(
                     max_percentage=limit.max_percentage,
                 )
             )
-        elif share > limit.max_percentage + TOLERANCE_PERCENTAGE_POINTS:
+        elif share > limit.max_percentage + FLOAT_EPSILON:
             findings.append(
                 RecipeFinding(
                     code="ABOVE_MAXIMUM",

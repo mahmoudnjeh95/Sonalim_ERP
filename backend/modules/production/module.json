@@ -1,6 +1,6 @@
 {
   "name": "production",
-  "version": "0.12.0",
+  "version": "0.15.0",
   "depends": ["core"],
   "optional_depends": ["warehouse", "qc", "maintenance", "procurement"],
   "provides_api": [
@@ -20,7 +20,12 @@
     "PackagingTolerancePolicyService",
     "TeamPerformanceService",
     "MachinePerformanceService",
-    "ConsumptionReportService"
+    "ConsumptionReportService",
+    "DashboardSettingsService",
+    "WasteTypeService",
+    "DaySheetService",
+    "LotSuggestionService",
+    "ShiftReportService"
   ],
   "publishes_events": [
     "production.work_order.closed",
@@ -55,8 +60,21 @@
     "production.manage_resource_consumption",
     "production.admin_resource_types",
     "production.view_reports",
-    "production.manage_reports",
-    "production.validate_reports",
+    "production.manage_dashboard_settings",
+    "production.release_stock",
+    "production.manage_waste_types",
+    "production.shift.view",
+    "production.shift.validate",
+    "production.shift.edit.runs",
+    "production.shift.edit.waste_production",
+    "production.shift.edit.stops",
+    "production.shift.edit.silo",
+    "production.shift.edit.staffing",
+    "production.shift.edit.packing",
+    "production.shift.edit.packet_checks",
+    "production.shift.edit.waste_packing",
+    "production.shift.edit.energy",
+    "production.shift.unlock_validated",
     "production.admin_reports",
     "production.use_ia_assistant"
   ]

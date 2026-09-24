@@ -61,6 +61,7 @@ export function listUoms(token: string) {
 
 export type ProductCategory = "raw_material" | "semi_finished" | "packaging_component" | "finished_good";
 export type PackagingFormat = "packet" | "carton" | "sac";
+export type PackagingKind = "film" | "carton" | "bobine" | "scotch" | "ruban";
 
 export interface ProductClassification {
   product_id: string;
@@ -68,6 +69,7 @@ export interface ProductClassification {
   is_regrind: boolean;
   packaging_format: PackagingFormat | null;
   is_water: boolean;
+  packaging_kind: PackagingKind | null;
 }
 
 export interface SetClassificationInput {
@@ -76,6 +78,7 @@ export interface SetClassificationInput {
   is_regrind: boolean;
   packaging_format?: PackagingFormat;
   is_water?: boolean;
+  packaging_kind?: PackagingKind;
 }
 
 export function listClassifications(token: string) {
@@ -616,43 +619,6 @@ export function getRegrindBatch(token: string, workOrderId: string) {
   return apiFetch<RegrindBatch>(`/production/regrind-batches/${workOrderId}`, { token });
 }
 
-// --- Metered resource types ------------------------------------------------
-//
-// The per-date and per-OF consumption ledgers these used to key are gone:
-// water, fuel and electricity are recorded on the daily production report now.
-// The lookup itself is kept pending the Phase 8 dashboard.
-
-export interface ResourceType {
-  id: string;
-  code: string;
-  name: string;
-  unit: string;
-}
-
-export interface CreateResourceTypeInput {
-  code: string;
-  name: string;
-  unit: string;
-}
-
-export interface UpdateResourceTypeInput {
-  code?: string;
-  name?: string;
-  unit?: string;
-}
-
-export function listResourceTypes(token: string) {
-  return apiFetch<ResourceType[]>("/production/resource-types", { token });
-}
-
-export function createResourceType(token: string, input: CreateResourceTypeInput) {
-  return apiFetch<ResourceType>("/production/resource-types", { method: "POST", token, body: input });
-}
-
-export function updateResourceType(token: string, resourceTypeId: string, input: UpdateResourceTypeInput) {
-  return apiFetch<ResourceType>(`/production/resource-types/${resourceTypeId}`, { method: "PATCH", token, body: input });
-}
-
 // --- Rendement (yield) ------------------------------------------------------
 
 export interface WorkOrderYield {
@@ -674,6 +640,30 @@ export interface RecipeYieldSummary {
 
 export function listWorkOrderYields(token: string) {
   return apiFetch<WorkOrderYield[]>("/production/work-orders/yields", { token });
+}
+
+/** What the OF list needs per order, from one light read: official figures from validated shifts, pending ones apart. */
+export interface WorkOrderOverview {
+  of_id: string;
+  /** Products of the validated packing reports (earliest first), else the order's own; empty until either exists. */
+  products: string[];
+  /** Tonnes packed in validated shifts. */
+  produced_quantity: number;
+  /** produced / planned; null when the order has no planned quantity. */
+  completion_ratio: number | null;
+  /** Null until a shift is validated. */
+  yield_ratio: number | null;
+  shifts: { validated: number; submitted: number; in_progress: number; returned: number };
+  last_shift_date: string | null;
+  /** Tonnes on shifts handed in or still being typed; never part of the official figure. */
+  pending_quantity: number;
+  live: boolean;
+}
+
+export const WORK_ORDER_OVERVIEW_QUERY_KEY = ["production", "work-orders", "overview"] as const;
+
+export function getWorkOrdersOverview(token: string, params: { date: string; at: string }) {
+  return apiFetch<WorkOrderOverview[]>(`/production/work-orders/overview?date=${params.date}&at=${params.at}`, { token });
 }
 
 // --- Team performance --------------------------------------------------------
@@ -916,6 +906,77 @@ export function listDowntimeBreakdown(token: string, params: { date_from?: strin
   return apiFetch<DowntimeBreakdownRow[]>(`/production/reports/downtime-breakdown${suffix}`, { token });
 }
 
+// --- Shift-era analytics ------------------------------------------------------
+//
+// Read straight from the validated shifts' own tables: one row per stop, one row per
+// shift's energy, and the reporting process's own lifecycle facts.
+
+function windowQuery(params: Record<string, string | undefined>) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) if (value) query.set(key, value);
+  return query.toString() ? `?${query.toString()}` : "";
+}
+
+export interface StopAnalyticsRow {
+  equipment_id: string | null;
+  work_center_id: string;
+  team: string | null;
+  report_date: string;
+  started_at: string;
+  ended_at: string;
+  minutes: number;
+  downtime_type: string | null;
+  classification: string | null;
+  motif: string | null;
+  source: "live" | "added_after" | "manual" | "migrated";
+}
+
+export function listStopsAnalytics(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  return apiFetch<StopAnalyticsRow[]>(`/production/analytics/stops${windowQuery(params)}`, { token });
+}
+
+/** A blank energy field is null ("not recorded"), distinct from a recorded 0. */
+export interface EnergyAnalyticsRow {
+  report_date: string;
+  work_center_id: string;
+  team: string | null;
+  fuel_quantity: number | null;
+  gasoil_quantity: number | null;
+  gasoil_flow_rate: number | null;
+  generator_hours: number | null;
+  electricity_quantity: number | null;
+  produced_quantity: number;
+}
+
+export function listEnergyAnalytics(
+  token: string,
+  params: { date_from?: string; date_to?: string; work_center_id?: string } = {},
+) {
+  return apiFetch<EnergyAnalyticsRow[]>(`/production/analytics/energy${windowQuery(params)}`, { token });
+}
+
+export interface ShiftHealth {
+  funnel: { status: string; count: number }[];
+  time_to_validate_minutes: { median: number | null; average: number | null; sample_size: number };
+  return_rate_by_section: { section_key: string; returned_count: number; total_count: number; return_rate_pct: number | null }[];
+  validator_edit_rate_by_section: { section_key: string; edited_count: number; total_count: number; edit_rate_pct: number | null }[];
+  completeness: { average_sections_filled: number | null; total_sections: number; shift_count: number };
+}
+
+export function getShiftHealth(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  return apiFetch<ShiftHealth>(`/production/analytics/shift-health${windowQuery(params)}`, { token });
+}
+
+export interface HumidityRow {
+  report_date: string;
+  work_center_id: string;
+  humidity_percentage: number;
+}
+
+export function listHumidity(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  return apiFetch<HumidityRow[]>(`/production/analytics/humidity${windowQuery(params)}`, { token });
+}
+
 // --- Recipe correlation ------------------------------------------------------
 //
 // Each shift's water dosage and flow rate against its own OF's yield —
@@ -1018,6 +1079,8 @@ export interface OfConsolidation {
   of_id: string;
   reference: string;
   product_id: string;
+  /** Every product the order's validated packing reports cover, earliest first; the order's own before its first one. */
+  product_ids: string[];
   status: string;
   work_center_id: string | null;
   start_date: string | null;
@@ -1084,12 +1147,18 @@ export interface OfConsolidation {
     non_conforming_cartons: number;
     conformity_rate: number | null;
     /**
-     * Validated reports that logged a defect but never got a case raised
-     * against it -- nothing pulls that carton off the market until someone
-     * does, so the screen needs to flag it rather than let it hide inside a
-     * conformity percentage that already counts it as lost.
+     * Validated conformity lines (this OF's only) that logged a defect but
+     * never got a case raised against it -- nothing pulls that carton off the
+     * market until someone does, so the screen needs to flag it rather than
+     * let it hide inside a conformity percentage that already counts it as
+     * lost. Keyed by line: one report can carry several defective lines.
      */
-    pending_nc_reports: { report_id: string; report_date: string; non_conforming_cartons: number }[];
+    pending_nc_reports: {
+      conformity_line_id: string;
+      report_id: string;
+      report_date: string;
+      non_conforming_cartons: number;
+    }[];
   };
   report_counts: { daily: number; conditionnement: number; quality: number };
 }
@@ -1199,20 +1268,120 @@ export interface ProductionReport {
 }
 
 /**
- * Where in the process material was lost. `raw_material`, `press`, `pouring`,
- * `cross`, `kneading` and `finished_product_conditioning` belong to the daily
- * report, `product` and `packaging` to the packing report — the backend
- * refuses a line filed under the other one's stage.
+ * Where in the process material was lost: either one of the built-ins below or
+ * the id of a kind the plant added itself (see `WasteType`). The backend refuses
+ * a line filed under a kind the report does not have, so a daily report never
+ * carries a packing stage.
+ *
+ * A string, not a union, because the plant's own ids are not known at compile
+ * time. Use `useWasteTypes().label(category)` to show one — never the raw value.
  */
-export type WasteCategory =
-  | "raw_material"
-  | "press"
-  | "pouring"
-  | "cross"
-  | "kneading"
-  | "finished_product_conditioning"
-  | "product"
-  | "packaging";
+export type WasteCategory = string;
+
+/**
+ * The built-in kinds, by the report they are entered on. `raw_material`, `press`,
+ * `pouring`, `cross`, `kneading` and `finished_product_conditioning` belong to
+ * the daily report, `product` and `packaging` to the packing report. Their names
+ * are translated; a plant's own kinds carry the name its administrator typed.
+ */
+export const BUILT_IN_WASTE_CATEGORIES = {
+  daily: ["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"],
+  conditionnement: ["product", "packaging"],
+} as const satisfies Record<ReportType, readonly string[]>;
+
+/** A déchet kind a plant defined for itself, entered on one report. */
+export interface WasteType {
+  /** What a line stores as its category. */
+  id: string;
+  name: string;
+  report_type: ReportType;
+  sort_order: number;
+  /** A retired kind is no longer offered on a new line but still explains old ones. */
+  is_active: boolean;
+}
+
+export function listWasteTypes(token: string) {
+  return apiFetch<WasteType[]>("/production/waste-types", { token });
+}
+
+export function createWasteType(token: string, input: { name: string; report_type: ReportType; sort_order?: number }) {
+  return apiFetch<WasteType>("/production/waste-types", { method: "POST", token, body: input });
+}
+
+export function updateWasteType(
+  token: string,
+  wasteTypeId: string,
+  input: { name?: string; sort_order?: number; is_active?: boolean },
+) {
+  return apiFetch<WasteType>(`/production/waste-types/${wasteTypeId}`, { method: "PATCH", token, body: input });
+}
+
+export type DaySheetSection = "material" | "production" | "waste" | "packing" | "energy";
+
+/** One row of the day sheet. The fixed rows are named by `key`; the ones that exist once per product or déchet kind carry `ref`/`name`. */
+export interface DaySheetRow {
+  section: DaySheetSection;
+  key: string;
+  /** A product id, or a déchet category, for the rows that exist once per item. */
+  ref: string | null;
+  name: string | null;
+  unit: string | null;
+  /** A shift with no report is absent, which is not the same as 0. */
+  by_column: Record<string, number>;
+  total: number | null;
+}
+
+export interface DaySheetColumn {
+  /** The shift as filed (empty for reports filed with none) on a day sheet; the product's id on the month recap. */
+  key: string;
+  /** The recap's column title, the product's name. */
+  name?: string | null;
+  teams: string[];
+  lots: string[];
+  reports: Record<ReportType, { validated: number; pending: number }>;
+}
+
+export interface DaySheet {
+  date: string;
+  work_center: { id: string; code: string; name: string };
+  include_pending: boolean;
+  columns: DaySheetColumn[];
+  rows: DaySheetRow[];
+  ofs: { id: string; reference: string | null; product_name: string | null }[];
+}
+
+/** The same rows as a day sheet, added up over a month, with a column per product. */
+export interface MonthRecap {
+  month: string;
+  work_center: { id: string; code: string; name: string };
+  columns: DaySheetColumn[];
+  rows: DaySheetRow[];
+}
+
+export function getDaySheet(token: string, params: { date: string; workCenterId: string; includePending: boolean }) {
+  const query = new URLSearchParams({
+    date: params.date,
+    work_center_id: params.workCenterId,
+    include_pending: String(params.includePending),
+  });
+  return apiFetch<DaySheet>(`/production/day-sheet?${query}`, { token });
+}
+
+/** The lot a packing report is most likely to carry, and the earlier lot it is counted on from. */
+export interface LotSuggestion {
+  lot_number: string | null;
+  based_on: { lot_number: string; report_date: string } | null;
+}
+
+export function getLotSuggestion(token: string, params: { workCenterId: string; reportDate: string }) {
+  const query = new URLSearchParams({ work_center_id: params.workCenterId, report_date: params.reportDate });
+  return apiFetch<LotSuggestion>(`/production/lot-suggestion?${query}`, { token });
+}
+
+export function getMonthRecap(token: string, params: { month: string; workCenterId: string }) {
+  const query = new URLSearchParams({ month: params.month, work_center_id: params.workCenterId });
+  return apiFetch<MonthRecap>(`/production/month-recap?${query}`, { token });
+}
 
 export interface WasteLine {
   category: WasteCategory;
@@ -1355,14 +1524,6 @@ export interface ProductionReportWithDetail extends ProductionReport {
   detail: DailyReportDetail | ConditionnementReportDetail | null;
 }
 
-export interface ReportRevision {
-  revision: number;
-  detail: Record<string, unknown>;
-  reason: string | null;
-  actor_id: string | null;
-  created_at: string;
-}
-
 export interface CreateDailyReportInput {
   of_id: string;
   report_date: string;
@@ -1387,10 +1548,6 @@ export function listReports(
 
 export function getReport(token: string, reportId: string) {
   return apiFetch<ProductionReportWithDetail>(`/production/reports/${reportId}`, { token });
-}
-
-export function listReportRevisions(token: string, reportId: string) {
-  return apiFetch<ReportRevision[]>(`/production/reports/${reportId}/revisions`, { token });
 }
 
 export function createDailyReport(token: string, input: CreateDailyReportInput) {
@@ -1623,7 +1780,7 @@ export interface PackagingVariance {
    */
   machine_carton_variance: number | null;
   machine_carton_variance_ratio: number | null;
-  tolerance_percent: number;
+  tolerance_percent: number | null;
   within_tolerance: boolean | null;
   missing: string[];
 }
@@ -1651,6 +1808,15 @@ export interface WorkOrderPackagingVariance extends PackagingVariance {
   quality_available: boolean;
 }
 
+/** An order whose validated packing reports cover several products: one breakdown per product, no order-wide figure. */
+export interface MultiProductOrderVariance {
+  scope: "work_order";
+  multi_product: true;
+  of_id: string;
+  of_reference: string;
+  products: ProductPackagingVariance[];
+}
+
 export interface ProductPackagingVariance extends PackagingVariance {
   scope: "product";
   product_id: string;
@@ -1673,7 +1839,7 @@ export function getReportPackagingVariance(token: string, reportId: string) {
 
 /** Écart net — the same, less what quality pulled. */
 export function getWorkOrderPackagingVariance(token: string, workOrderId: string) {
-  return apiFetch<WorkOrderPackagingVariance>(
+  return apiFetch<WorkOrderPackagingVariance | MultiProductOrderVariance>(
     `/production/work-orders/${workOrderId}/packaging-variance`,
     { token },
   );

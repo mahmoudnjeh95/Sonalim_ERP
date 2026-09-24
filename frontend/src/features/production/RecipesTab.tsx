@@ -16,7 +16,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -45,6 +44,7 @@ import {
   type Recipe,
   type RecipeStatus,
 } from "./api";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const lineSchema = z.object({
   component_product_id: z.string().min(1, "Required"),
@@ -114,7 +114,7 @@ export function RecipesTab() {
     resolver: zodResolver(newRecipeSchema),
     defaultValues: {
       target_product_id: "",
-      lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 95, max_percentage: 100, is_hard_limit: false }],
+      lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 0, max_percentage: 100, is_hard_limit: false }],
     },
   });
   const { fields, append, remove } = useFieldArray({ control, name: "lines" });
@@ -126,7 +126,7 @@ export function RecipesTab() {
       setDialogOpen(false);
       reset({
         target_product_id: "",
-        lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 95, max_percentage: 100, is_hard_limit: false }],
+        lines: [{ component_product_id: "", default_percentage: 100, min_percentage: 0, max_percentage: 100, is_hard_limit: false }],
       });
       toast.success(t("production.recipes.created"), { description: `${recipe.target_product_id} · v${recipe.version}` });
     },
@@ -520,14 +520,7 @@ export function RecipesTab() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && filteredRecipes.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

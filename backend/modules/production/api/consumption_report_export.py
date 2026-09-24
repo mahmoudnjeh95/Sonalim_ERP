@@ -4,7 +4,6 @@ import datetime
 import io
 
 from openpyxl import Workbook
-from openpyxl.worksheet.worksheet import Worksheet
 
 from modules.production.api.xlsx_report_style import (
     autofit as _autofit,
@@ -14,7 +13,6 @@ from modules.production.api.xlsx_report_style import (
     HEADER_FILL as _HEADER_FILL,
     BOLD as _BOLD,
     CENTER as _CENTER,
-    BORDER as _BORDER,
 )
 from modules.production.api.xlsx_report_style import title_row as _title_row
 

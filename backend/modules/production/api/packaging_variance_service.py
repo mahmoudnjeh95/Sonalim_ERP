@@ -39,7 +39,6 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.domain.packaging_estimate import (
-    DEFAULT_TOLERANCE_PERCENT,
     compute_variance,
     variance_to_json,
 )
@@ -58,8 +57,9 @@ class PackagingTolerancePolicyService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
-    def resolve_tolerance_percent(self, *, tenant_id: str, product_id: str | None) -> float:
-        """Per-product override, else the tenant default, else 2%."""
+    def resolve_tolerance_percent(self, *, tenant_id: str, product_id: str | None) -> float | None:
+        """Per-product override, else the tenant default, else None: with no
+        tolerance configured an ecart is shown but not judged."""
         if product_id is not None:
             row = self._connection.execute(
                 "SELECT tolerance_percent FROM production.packaging_tolerances "
@@ -74,7 +74,7 @@ class PackagingTolerancePolicyService:
             "WHERE tenant_id = %s AND product_id IS NULL",
             (tenant_id,),
         ).fetchone()
-        return float(row[0]) if row is not None else DEFAULT_TOLERANCE_PERCENT
+        return float(row[0]) if row is not None else None
 
     def set_policy(
         self, *, tenant_id: str, actor_id: str, tolerance_percent: float, product_id: str | None = None
@@ -205,7 +205,7 @@ class PackagingVarianceService:
         """
         row = self._connection.execute(
             """
-            SELECT r.of_id, w.product_id, w.reference, r.report_date, r.status,
+            SELECT r.of_id, COALESCE(c.product_id, w.product_id), w.reference, r.report_date, r.status,
                    c.packets_counted, c.carton_quantity, c.waste_carton_quantity,
                    c.snapshot_net_weight_grams, c.snapshot_packets_per_carton
             FROM production.production_reports r
@@ -288,6 +288,35 @@ class PackagingVarianceService:
         if work_order is None:
             return Err("NOT_FOUND", f"work order {of_id} not found")
         product_id, reference = work_order
+
+        # An order that packed several products has no single net weight and one declared tonnage
+        # that cannot be split between them, so it answers per product instead.
+        packed_products = [
+            row[0]
+            for row in self._connection.execute(
+                f"""
+                SELECT DISTINCT COALESCE(c.product_id, w.product_id)
+                FROM production.production_reports r
+                JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+                JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
+                WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'conditionnement' AND r.{_VALIDATED}
+                """,
+                (tenant_id, of_id),
+            ).fetchall()
+            if row[0] is not None
+        ]
+        if len(packed_products) > 1:
+            return Ok(
+                {
+                    "scope": "work_order",
+                    "of_id": of_id,
+                    "of_reference": reference,
+                    "multi_product": True,
+                    "products": self.by_product(tenant_id=tenant_id, only_of_id=of_id),
+                }
+            )
+        if packed_products:
+            product_id = packed_products[0]
 
         totals = self._connection.execute(
             f"""
@@ -377,7 +406,12 @@ class PackagingVarianceService:
     # ---- the finished-goods warehouse view -------------------------------
 
     def by_product(
-        self, *, tenant_id: str, date_from: str | None = None, date_to: str | None = None
+        self,
+        *,
+        tenant_id: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        only_of_id: str | None = None,
     ) -> list[dict]:
         """Ecart net per finished product over a period, with its reports listed.
 
@@ -395,22 +429,26 @@ class PackagingVarianceService:
         if date_to:
             clauses.append("r.report_date <= %s")
             params.append(date_to)
+        if only_of_id:
+            clauses.append("r.of_id = %s")
+            params.append(only_of_id)
 
         rows = self._connection.execute(
             f"""
-            SELECT w.product_id, r.of_id, w.reference, r.id, r.report_date,
+            SELECT COALESCE(c.product_id, w.product_id) AS product_id, r.of_id, w.reference, r.id, r.report_date,
                    c.packets_counted, c.carton_quantity, c.waste_carton_quantity,
                    c.snapshot_net_weight_grams, c.snapshot_packets_per_carton
             FROM production.production_reports r
             JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
             JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
             WHERE {" AND ".join(clauses)}
-            ORDER BY w.product_id, r.report_date
+            ORDER BY 1, r.report_date
             """,
             tuple(params),
         ).fetchall()
 
         grouped: dict[str, dict] = {}
+        products_of_order: dict[str, set[str]] = {}
         for (
             product_id,
             of_id,
@@ -439,6 +477,7 @@ class PackagingVarianceService:
             bucket["cartons"] += float(cartons)
             bucket["waste_cartons"] += float(waste_cartons)
             bucket["of_ids"].add(of_id)
+            products_of_order.setdefault(of_id, set()).add(product_id)
             bucket["weights"].add(float(snapshot_weight) if snapshot_weight is not None else None)
 
             weight = float(snapshot_weight) if snapshot_weight is not None else None
@@ -485,14 +524,18 @@ class PackagingVarianceService:
             # rather than forcing the whole product's tonnage to be treated as unknown.
             tonnage_known = False
             tonnage_total = 0.0
-            for of_id in bucket["of_ids"]:
-                rejected = self._rejected(tenant_id=tenant_id, of_id=of_id, product_id=product_id)
+            for order_id in bucket["of_ids"]:
+                rejected = self._rejected(tenant_id=tenant_id, of_id=order_id, product_id=product_id)
                 subtractable += rejected["subtractable"]
                 undecided += rejected["undecided"]
                 quality_available = quality_available and rejected["available"]
 
+                # An order that packed several products declares one tonnage for all of them; it
+                # cannot be split, so it is attributed to none of them rather than to each.
+                if len(products_of_order[order_id]) > 1:
+                    continue
                 of_tonnage = self._daily_tonnage(
-                    tenant_id=tenant_id, of_id=of_id, date_from=date_from, date_to=date_to
+                    tenant_id=tenant_id, of_id=order_id, date_from=date_from, date_to=date_to
                 )
                 if of_tonnage is not None:
                     tonnage_known = True

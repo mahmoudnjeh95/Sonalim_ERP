@@ -55,6 +55,10 @@ export interface Formatters {
   money: (value: number) => string;
   machine: (equipmentId: string) => string;
   stage: (stage: WasteCategory) => string;
+  /** A stored downtime motif as the person reads it: translated if built in, as typed if the plant added it. */
+  motif: (motif: string) => string;
+  classification: (value: string) => string;
+  downtimeType: (value: string) => string;
 }
 
 export interface InsightInput {
@@ -66,7 +70,7 @@ export interface InsightInput {
   fmt: Formatters;
 }
 
-const TONE_ORDER: Record<Tone, number> = { danger: 0, warning: 1, good: 2, neutral: 3 };
+const TONE_ORDER: Record<Tone, number> = { warning: 0, good: 1, neutral: 2 };
 const KIND_ORDER: InsightKind[] = [
   "highestDowntimeMachine",
   "yieldDrift",
@@ -87,7 +91,7 @@ function reportsBasis(count: number, fmt: Formatters): InsightText {
 
 function productionGap({ current, previous, fmt }: InsightInput): Insight | null {
   const cmp = compareQuantity(current.ops.totals.produced, previous.ops.totals.produced, true);
-  if (cmp.delta === null || (cmp.tone !== "warning" && cmp.tone !== "danger")) return null;
+  if (cmp.delta === null || cmp.tone !== "warning") return null;
 
   // Union of both windows: a team that produced last period and nothing this one is the biggest drop of all.
   const currentByTeam = new Map(current.ops.byTeam.map((team) => [team.team, team.produced]));
@@ -120,7 +124,7 @@ function productionGap({ current, previous, fmt }: InsightInput): Insight | null
 function yieldDrift({ current, previous, fmt }: InsightInput): Insight | null {
   const cmp = compareRatio(current.ops.yieldPct, previous.ops.yieldPct, true);
   if (cmp.delta === null || cmp.current === null || cmp.previous === null) return null;
-  if (cmp.tone !== "warning" && cmp.tone !== "danger") return null;
+  if (cmp.tone !== "warning") return null;
 
   const previousByTeam = new Map(previous.ops.byTeam.map((team) => [team.team, team.yieldPct]));
   const worstTeam = current.ops.byTeam
@@ -190,14 +194,15 @@ function highestDowntimeMachine({ machines, breakdown, fmt }: InsightInput): Ins
   // With a single machine its share is trivially 100%; that says nothing about where to look.
   const comparable = machines.machines.length > 1 && worst.shareOfDowntimePct !== null;
   const share = worst.shareOfDowntimePct ?? 0;
-  const tone: Tone = !comparable ? "neutral" : share >= 50 ? "danger" : share >= 30 ? "warning" : "neutral";
+  // A ranking, not a verdict: nothing says how much downtime one machine may have.
+  const tone: Tone = "neutral";
   const reason = rankDowntimeReasons(breakdown, worst.equipmentId)[0];
 
   const vars = {
     machine: fmt.machine(worst.equipmentId),
     duration: fmt.duration(worst.downtimeMinutes),
     share: fmt.number(share, 0),
-    reason: reason?.reason ?? "",
+    reason: reason ? fmt.motif(reason.reason) : "",
     reasonDuration: reason ? fmt.duration(reason.minutes) : "",
   };
   const key: TranslationKey = comparable
@@ -228,7 +233,7 @@ function qualityDrift({ current, previous, fmt }: InsightInput): Insight | null 
   if (!current.quality || !previous.quality) return null;
   const cmp = compareRatio(current.quality.conformityPct, previous.quality.conformityPct, true);
   if (cmp.delta === null || cmp.current === null || cmp.previous === null) return null;
-  if (cmp.tone !== "warning" && cmp.tone !== "danger") return null;
+  if (cmp.tone !== "warning") return null;
 
   const lowest = current.quality.byTeam
     .filter((team) => team.conformityPct !== null)
@@ -324,7 +329,7 @@ const RULES = [
   costVariance,
 ];
 
-/** Findings, most urgent first: danger, warning, then good, then neutral. */
+/** Findings, worsening ones first, then improving, then plain rankings. */
 export function buildInsights(input: InsightInput): Insight[] {
   return RULES.map((rule) => rule(input))
     .filter((insight): insight is Insight => insight !== null)

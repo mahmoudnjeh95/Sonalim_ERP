@@ -19,7 +19,7 @@ class InvoiceService:
         tenant_id: str,
         partner_id: str,
         amount: float,
-        currency: str = "USD",
+        currency: str = "XOF",
         source_order_id: str | None = None,
         actor_id: str | None = None,
     ) -> Invoice:

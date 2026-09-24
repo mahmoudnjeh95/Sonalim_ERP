@@ -58,9 +58,6 @@ from dataclasses import dataclass
 
 GRAMS_PER_TONNE = 1_000_000
 
-# Decision 22. Colours a number; no validation path consults it.
-DEFAULT_TOLERANCE_PERCENT = 2.0
-
 
 @dataclass(frozen=True)
 class PackagingEstimate:
@@ -148,7 +145,9 @@ class PackagingVariance:
     machine_carton_variance: float | None
     machine_carton_variance_ratio: float | None
 
-    tolerance_percent: float
+    # None when the plant has not configured a tolerance: the ecart is then
+    # reported without a verdict rather than judged against a number nobody chose.
+    tolerance_percent: float | None
     within_tolerance: bool | None
     missing: tuple[str, ...]
 
@@ -169,7 +168,7 @@ def compute_variance(
     rejected_packets: float = 0.0,
     undecided_packets: float = 0.0,
     waste_cartons: float = 0.0,
-    tolerance_percent: float = DEFAULT_TOLERANCE_PERCENT,
+    tolerance_percent: float | None = None,
 ) -> PackagingVariance:
     """Compare a tonnage's expected packaging against what was counted.
 
@@ -209,7 +208,11 @@ def compute_variance(
     # Tolerance is judged on the packet side alone: cartons are a rounded-down
     # consequence of packets, so a part-full carton would trip a tolerance that
     # the packets themselves pass.
-    within = None if packet_ratio is None else abs(packet_ratio) <= tolerance_percent / 100
+    within = (
+        None
+        if packet_ratio is None or tolerance_percent is None
+        else abs(packet_ratio) <= tolerance_percent / 100
+    )
 
     return PackagingVariance(
         tonnage=tonnage,

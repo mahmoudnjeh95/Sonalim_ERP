@@ -37,6 +37,26 @@ def require_session(authorization: str | None = Header(default=None)) -> TenantC
     return TenantContext(tenant_id=tenant_id, user_id=user_id, session_token=token)
 
 
+def user_has_permission(connection, *, user_id: str, permission: str) -> bool:
+    """Whether the user holds `permission`, directly or through any role they are assigned.
+
+    The one check behind require_permission, exposed for the places that only know
+    which permission they need at run time (a per-section edit right in the URL).
+    """
+    row = connection.execute(
+        """
+        SELECT 1 FROM core.user_permissions WHERE user_id = %s AND permission = %s
+        UNION
+        SELECT 1 FROM core.user_roles ur
+        JOIN core.role_permissions rp ON rp.role_id = ur.role_id
+        WHERE ur.user_id = %s AND rp.permission = %s
+        LIMIT 1
+        """,
+        (user_id, permission, user_id, permission),
+    ).fetchone()
+    return row is not None
+
+
 def require_permission(permission: str):
     """Dependency factory: proves the session's user holds `permission`, directly or via a role.
 
@@ -47,18 +67,8 @@ def require_permission(permission: str):
 
     def dependency(tenant: TenantContext = Depends(require_session)) -> TenantContext:
         with get_connection() as connection:
-            row = connection.execute(
-                """
-                SELECT 1 FROM core.user_permissions WHERE user_id = %s AND permission = %s
-                UNION
-                SELECT 1 FROM core.user_roles ur
-                JOIN core.role_permissions rp ON rp.role_id = ur.role_id
-                WHERE ur.user_id = %s AND rp.permission = %s
-                LIMIT 1
-                """,
-                (tenant.user_id, permission, tenant.user_id, permission),
-            ).fetchone()
-        if row is None:
+            allowed = user_has_permission(connection, user_id=tenant.user_id, permission=permission)
+        if not allowed:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
                 {"code": "FORBIDDEN", "message": f"missing permission: {permission}"},

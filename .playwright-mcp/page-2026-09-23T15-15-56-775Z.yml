@@ -1,0 +1,41 @@
+- generic [ref=e2]:
+  - generic [ref=e3]:
+    - img "Sonalim ERP startup" [ref=e4]:
+      - generic [ref=e15]:
+        - generic [ref=e16]: Sonalim ERP
+        - generic [ref=e17]: PRODUCTION • QUALITÉ • PERFORMANCE
+      - generic [ref=e25]: Démarrage de l'application...
+      - generic [ref=e27]: Initialisation des modules Sonalim ERP
+    - generic [ref=e28]: Starting up…
+  - generic [ref=e35]:
+    - generic [ref=e36]:
+      - generic [ref=e38]:
+        - img "Sonalim ERP" [ref=e40]
+        - generic [ref=e48]:
+          - paragraph [ref=e49]: Sonalim
+          - paragraph [ref=e50]: ERP
+      - generic [ref=e51]:
+        - paragraph [ref=e52]: Production • Qualité • Performance
+        - heading "Manage your factory with confidence." [level=1] [ref=e53]
+        - paragraph [ref=e54]: Centralize production, quality, workforce, and stock visibility in one secure operational workspace.
+      - generic [ref=e55]:
+        - generic [ref=e56]: Production planning
+        - generic [ref=e58]: Quality and traceability
+        - generic [ref=e60]: Warehouse and performance tracking
+    - generic [ref=e62]:
+      - generic [ref=e64]:
+        - generic [ref=e65]: SE
+        - generic [ref=e66]:
+          - paragraph [ref=e67]: Sonalim ERP
+          - paragraph [ref=e68]: Secure access
+      - generic [ref=e69]:
+        - heading "Sign in to Sonalim ERP" [level=2] [ref=e71]
+        - generic [ref=e77]:
+          - generic [ref=e78]:
+            - text: Email
+            - textbox "Email" [ref=e80]
+          - generic [ref=e81]:
+            - text: Password
+            - textbox "Password" [ref=e83]
+          - button "Sign in" [ref=e85] [cursor=pointer]
+  - region "Notifications alt+T"

@@ -31,12 +31,12 @@ import { useAuth } from "../../../lib/auth";
 import { currentLocale, useI18n, type Language } from "../../../lib/i18n";
 import { cn } from "../../../lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
-import { Skeleton } from "../../../components/ui/skeleton";
 import { StatCard } from "../../../components/patterns/StatCard";
 import { HelpTooltip } from "../../../components/patterns/HelpTooltip";
 import { EmptyState } from "../../../components/patterns/EmptyState";
 import { StatusBadge } from "../../../components/patterns/StatusBadge";
 import { getCrmDashboard, type RecentActivity } from "./api";
+import { AppLoader } from "../../../components/patterns/AppLoader";
 
 const CHART_COLORS = {
   primary: "hsl(217 91% 45%)",
@@ -174,13 +174,7 @@ export function CrmDashboardPage() {
         </Card>
       )}
 
-      {isLoading && (
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-20 rounded-xl" />
-          ))}
-        </div>
-      )}
+      {isLoading && <AppLoader className="py-8" />}
 
       {data && (
         <>

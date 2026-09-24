@@ -15,7 +15,6 @@ import { Select } from "../../components/ui/select";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -29,6 +28,7 @@ import {
   listProducts,
   setClassification,
   type PackagingFormat,
+  type PackagingKind,
   type ProductCategory,
   type ProductClassification,
 } from "./api";
@@ -42,11 +42,13 @@ import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { Badge } from "../../components/ui/badge";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const CATEGORY_VALUES: ProductCategory[] = ["raw_material", "semi_finished", "packaging_component", "finished_good"];
 type CategoryFilter = "all" | ProductCategory;
 
 const PACKAGING_FORMAT_VALUES: PackagingFormat[] = ["packet", "carton", "sac"];
+const PACKAGING_KIND_VALUES: PackagingKind[] = ["film", "carton", "bobine", "scotch", "ruban"];
 
 const formSchema = z
   .object({
@@ -55,6 +57,7 @@ const formSchema = z
     is_regrind: z.boolean(),
     is_water: z.boolean(),
     packaging_format: z.enum(["packet", "carton", "sac"]).optional(),
+    packaging_kind: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["film", "carton", "bobine", "scotch", "ruban"]).optional()),
   })
   .refine((data) => !(data.is_regrind && data.is_water), {
     message: "A product cannot be both regrind and water/humidity",
@@ -86,6 +89,14 @@ export function ProductClassificationsTab() {
     sac: t("production.classifications.packagingFormat.sac"),
   };
 
+  const PACKAGING_KIND_LABEL: Record<PackagingKind, string> = {
+    film: t("production.classifications.packagingKind.film"),
+    carton: t("production.classifications.packagingKind.carton"),
+    bobine: t("production.classifications.packagingKind.bobine"),
+    scotch: t("production.classifications.packagingKind.scotch"),
+    ruban: t("production.classifications.packagingKind.ruban"),
+  };
+
   const { data: classifications = [], isLoading } = useQuery({
     queryKey: QUERY_KEY,
     queryFn: () => listClassifications(token),
@@ -111,6 +122,7 @@ export function ProductClassificationsTab() {
       setClassification(token, {
         ...input,
         packaging_format: input.category === "finished_good" ? input.packaging_format : undefined,
+        packaging_kind: input.category === "packaging_component" ? input.packaging_kind : undefined,
       }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
@@ -163,6 +175,13 @@ export function ProductClassificationsTab() {
       defaultWidth: 160,
       cell: (c) => <span className="text-muted-foreground">{c.packaging_format ? PACKAGING_FORMAT_LABEL[c.packaging_format] : "—"}</span>,
       sortValue: (c) => (c.packaging_format ? PACKAGING_FORMAT_LABEL[c.packaging_format] : null),
+    },
+    {
+      key: "packagingKind",
+      header: t("production.classifications.column.packagingKind"),
+      defaultWidth: 160,
+      cell: (c) => <span className="text-muted-foreground">{c.packaging_kind ? PACKAGING_KIND_LABEL[c.packaging_kind] : "—"}</span>,
+      sortValue: (c) => (c.packaging_kind ? PACKAGING_KIND_LABEL[c.packaging_kind] : null),
     },
     {
       key: "regrind",
@@ -326,6 +345,25 @@ export function ProductClassificationsTab() {
                       </Select>
                     </motion.div>
                   )}
+                  {category === "packaging_component" && (
+                    <motion.div
+                      initial={{ opacity: 0, height: 0 }}
+                      animate={{ opacity: 1, height: "auto" }}
+                      exit={{ opacity: 0, height: 0 }}
+                      transition={{ duration: 0.18 }}
+                      className="space-y-1.5"
+                    >
+                      <Label htmlFor="packaging_kind">{t("production.classifications.field.packagingKind")}</Label>
+                      <Select id="packaging_kind" {...register("packaging_kind")}>
+                        <option value="">—</option>
+                        {PACKAGING_KIND_VALUES.map((value) => (
+                          <option key={value} value={value}>
+                            {PACKAGING_KIND_LABEL[value]}
+                          </option>
+                        ))}
+                      </Select>
+                    </motion.div>
+                  )}
                 </AnimatePresence>
 
                 {mutation.isError && (
@@ -360,14 +398,7 @@ export function ProductClassificationsTab() {
               <ColumnFilterRow cells={visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && filteredClassifications.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">

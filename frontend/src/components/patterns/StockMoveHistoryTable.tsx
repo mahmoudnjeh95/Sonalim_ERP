@@ -2,7 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { History } from "lucide-react";
 import { Badge } from "../ui/badge";
-import { Skeleton } from "../ui/skeleton";
+import { TableLoadingRow } from "./AppLoader";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../ui/table";
 import { EmptyState } from "./EmptyState";
 import { ColumnVisibilityMenu } from "./ColumnVisibilityMenu";
@@ -162,14 +162,7 @@ export function StockMoveHistoryTable({
           </TableRow>
         </TableHeader>
         <TableBody>
-          {isLoading &&
-            Array.from({ length: 4 }).map((_, i) => (
-              <TableRow key={i}>
-                <TableCell colSpan={visibleColumns.length}>
-                  <Skeleton className="h-5 w-full" />
-                </TableCell>
-              </TableRow>
-            ))}
+          {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
           {!isLoading && moves.length === 0 && (
             <TableRow>
               <TableCell colSpan={visibleColumns.length} className="p-0">

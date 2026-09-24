@@ -18,7 +18,6 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
-import { Skeleton } from "../../components/ui/skeleton";
 import {
   Dialog,
   DialogTrigger,
@@ -60,6 +59,8 @@ import { groupRows, type GroupSpec } from "../../lib/groupRows";
 import { ReportDetailDialog, type FigureRow } from "./ReportDetailDialog";
 import { OfConsolidationHint } from "./OfConsolidationHint";
 import { downtimeLabel } from "./downtimeOptions";
+import { useWasteTypes } from "./wasteTypes";
+import { useShiftWindow } from "./shiftLength";
 import {
   correctDailyReport,
   correctValidatedDailyReport,
@@ -82,11 +83,13 @@ import {
 } from "./api";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners, type Partner } from "../partners/api";
-import { UTILITY_UNITS, productUnit, totalsByUomCategory, formatQuantity } from "../../lib/units";
+import { UTILITY_UNITS, productUnit, totalsByUomCategory, formatDuration, formatQuantity } from "../../lib/units";
+import { AppLoader } from "../../components/patterns/AppLoader";
 
 type SemolinaLine = { product_id: string; quantity: number; location_id: string };
 type WasteLine = {
-  category: "raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning";
+  // A built-in stage or the id of a kind the plant added.
+  category: string;
   product_id: string;
   quantity: number;
   note: string;
@@ -146,7 +149,7 @@ const EMPTY_DETAIL = {
   regrind_quantity: 0,
   regrind_product_id: "",
   mold_id: "",
-  waste_lines: [] as WasteLineForm<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">[],
+  waste_lines: [] as WasteLineForm[],
   water_quantity: 0,
   water_percentage: 0,
   fuel_quantity: 0,
@@ -190,7 +193,9 @@ export function DailyReportsTab() {
     mold_id: z.string().optional(),
     waste_lines: z.array(
       z.object({
-        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        // A built-in stage or the id of a kind the plant added; the backend refuses
+        // one the daily report does not have.
+        category: z.string().min(1),
         product_id: z.string(),
         quantity: z.coerce.number().min(0),
         note: z.string(),
@@ -638,6 +643,7 @@ export function DailyReportsTab() {
                       molds={molds}
                       regrindOutputProductId={regrindOutputProductId}
                       suppliers={suppliers}
+                      shift={form.watch("shift")}
                     />
 
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
@@ -652,10 +658,7 @@ export function DailyReportsTab() {
         </CardHeader>
         <CardContent className="p-0">
           {isLoading ? (
-            <div className="space-y-2 p-6">
-              <Skeleton className="h-9 w-full" />
-              <Skeleton className="h-9 w-full" />
-            </div>
+            <AppLoader className="py-8" />
           ) : visible.length === 0 ? (
             <EmptyState
               icon={<ClipboardList className="h-5 w-5" />}
@@ -824,7 +827,7 @@ export function DailyReportDialog({
     mold_id: z.string().optional(),
     waste_lines: z.array(
       z.object({
-        category: z.enum(["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]),
+        category: z.string().min(1),
         product_id: z.string(),
         quantity: z.coerce.number().min(0),
         note: z.string(),
@@ -881,7 +884,7 @@ export function DailyReportDialog({
       regrind_input_product_id: detail?.regrind_input_product_id ?? "",
       regrind_product_id: detail?.regrind_product_id ?? "",
       mold_id: detail?.mold_id ?? "",
-      waste_lines: toWasteLineForms<"raw_material" | "press" | "pouring" | "cross" | "kneading" | "finished_product_conditioning">(detail?.waste_lines),
+      waste_lines: toWasteLineForms(detail?.waste_lines),
       start_time: detail?.start_time ?? "",
       downtime_lines: toDowntimeLineForms(detail?.downtime_lines),
     } as CreateForm,
@@ -932,6 +935,7 @@ export function DailyReportDialog({
   const regrindDeltaConfirmRequired =
     saveMutation.error instanceof ApiError && saveMutation.error.code === "REGRIND_DELTA_REQUIRES_NEW_ORDER";
 
+  const { label: wasteLabel } = useWasteTypes();
   const semolinaUnit = productUnit(detail?.semolina_lines?.[0]?.product_id, products, uoms);
   const rebroyatUnit = productUnit(detail?.regrind_input_product_id, products, uoms);
   const regrindUnit = productUnit(detail?.regrind_product_id, products, uoms);
@@ -1017,7 +1021,7 @@ export function DailyReportDialog({
     // déchets are always weighed in kg (see WasteLinesField's fixedUnit), so
     // the unit here is fixed too rather than resolved per product.
     ...(detail?.waste_lines ?? []).map((line) => ({
-      label: `${t(`production.waste.category.${line.category}` as Parameters<typeof t>[0])} — ${productName(line.product_id)}`,
+      label: `${wasteLabel(line.category)} — ${productName(line.product_id)}`,
       value: line.quantity,
       unit: "kg",
       group: "out" as const,
@@ -1101,6 +1105,7 @@ export function DailyReportDialog({
             molds={molds}
             regrindOutputProductId={regrindOutputProductId}
             suppliers={suppliers}
+            shift={report.shift}
           />
           {needsReason && (
             <div className="space-y-1.5">
@@ -1199,6 +1204,7 @@ function DailyDetailFields({
   molds,
   regrindOutputProductId,
   suppliers,
+  shift,
 }: {
   form: ReturnType<typeof useForm<CreateForm>>;
   products: { id: string; name: string; uom_id: string }[];
@@ -1209,8 +1215,11 @@ function DailyDetailFields({
   /** The tenant's one rebroyat product (production.regrind_defaults, input_product_id IS NULL). */
   regrindOutputProductId: string | null;
   suppliers: Partner[];
+  /** The shift the report is filed under -- what the production time is offered against. */
+  shift: string | null | undefined;
 }) {
   const { t } = useI18n();
+  const { categoriesFor } = useWasteTypes();
   // Every figure is entered in its product's own stock unit — the same unit the
   // warehouse deducts in — so the label states it rather than offering a choice.
   // The first line stands in for "the semoule unit" where finished product
@@ -1397,7 +1406,10 @@ function DailyDetailFields({
         <WasteLinesField
           form={form}
           name="waste_lines"
-          categories={["raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning"]}
+          categories={categoriesFor(
+            "daily",
+            (form.watch("waste_lines") ?? []).map((line) => line.category),
+          )}
           products={products}
           uoms={uoms}
           // The daily report's déchets are always weighed in kg -- every stage
@@ -1534,7 +1546,7 @@ function DailyDetailFields({
             <Label htmlFor="start_time">{t("production.dailyReports.field.startTime")}</Label>
             <Input id="start_time" type="time" {...form.register("start_time")} />
           </div>
-          <ProductionDurationField form={form} />
+          <ProductionDurationField form={form} shift={shift} />
         </div>
         <div className="space-y-1.5">
           <Label className="flex items-center gap-1">
@@ -1553,12 +1565,43 @@ function DailyDetailFields({
  * composed into the single `production_minutes` the backend stores. Local
  * state rather than two more zod fields: only the composed total is ever
  * submitted, so the split only needs to exist here.
+ *
+ * The time produced is the shift's configured hours minus the stoppages -- what
+ * the plant's Excel computes (`=7-C20`), from hours now kept in Production settings
+ * instead of typed into a formula. It is offered, never forced: it fills the box
+ * while nobody has typed a time of their own, follows the stoppages as they are
+ * added, and steps aside once the team enters a different figure, leaving a button
+ * to take it back.
  */
-function ProductionDurationField({ form }: { form: ReturnType<typeof useForm<CreateForm>> }) {
+function ProductionDurationField({
+  form,
+  shift,
+}: {
+  form: ReturnType<typeof useForm<CreateForm>>;
+  shift: string | null | undefined;
+}) {
   const { t } = useI18n();
+  const windowOf = useShiftWindow();
   const totalMinutes = form.watch("production_minutes") ?? 0;
   const [hours, setHours] = useState(Math.floor(totalMinutes / 60));
   const [minutes, setMinutes] = useState(totalMinutes % 60);
+
+  const shiftWindow = windowOf(shift);
+  const stopped = (form.watch("downtime_lines") ?? []).reduce((sum, line) => sum + (Number(line.minutes) || 0), 0);
+  const suggested =
+    shiftWindow?.length_minutes !== undefined ? Math.max(0, shiftWindow.length_minutes - stopped) : null;
+  const lastSuggested = useRef<number | null>(null);
+  useEffect(() => {
+    if (suggested === null) {
+      lastSuggested.current = null;
+      return;
+    }
+    const current = form.getValues("production_minutes") ?? 0;
+    if (current === 0 || current === lastSuggested.current) form.setValue("production_minutes", suggested);
+    lastSuggested.current = suggested;
+    // form.getValues / setValue are stable across renders.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [suggested]);
 
   // The form's own value can change out from under this component -- a report
   // switching under the same dialog, or a draft loading in -- so it stays the
@@ -1578,28 +1621,48 @@ function ProductionDurationField({ form }: { form: ReturnType<typeof useForm<Cre
   }, [hours, minutes]);
 
   return (
-    <div className="grid grid-cols-2 gap-2">
-      <div className="space-y-1.5">
-        <Label htmlFor="production_hours">{t("production.dailyReports.field.productionHours")}</Label>
-        <Input
-          id="production_hours"
-          type="number"
-          min={0}
-          value={hours}
-          onChange={(event) => setHours(Number(event.target.value) || 0)}
-        />
+    <div className="space-y-1.5 sm:col-span-2">
+      <div className="grid grid-cols-2 gap-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="production_hours">{t("production.dailyReports.field.productionHours")}</Label>
+          <Input
+            id="production_hours"
+            type="number"
+            min={0}
+            value={hours}
+            onChange={(event) => setHours(Number(event.target.value) || 0)}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="production_minutes_only">{t("production.dailyReports.field.productionMinutesOnly")}</Label>
+          <Input
+            id="production_minutes_only"
+            type="number"
+            min={0}
+            max={59}
+            value={minutes}
+            onChange={(event) => setMinutes(Number(event.target.value) || 0)}
+          />
+        </div>
       </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="production_minutes_only">{t("production.dailyReports.field.productionMinutesOnly")}</Label>
-        <Input
-          id="production_minutes_only"
-          type="number"
-          min={0}
-          max={59}
-          value={minutes}
-          onChange={(event) => setMinutes(Number(event.target.value) || 0)}
-        />
-      </div>
+      {shiftWindow && suggested !== null && (
+        <p className="flex flex-wrap items-center gap-x-2 text-xs text-muted-foreground">
+          <span>
+            {t("production.dailyReports.shiftLength.label")} {shiftWindow.shift} {shiftWindow.start_time}–
+            {shiftWindow.end_time} ({formatDuration(shiftWindow.length_minutes)}) −{" "}
+            {t("production.dailyReports.shiftLength.stoppages")} {formatDuration(stopped)} = {formatDuration(suggested)}
+          </span>
+          {totalMinutes !== suggested && (
+            <button
+              type="button"
+              className="font-medium text-primary underline-offset-2 hover:underline"
+              onClick={() => form.setValue("production_minutes", suggested)}
+            >
+              {t("production.dailyReports.shiftLength.apply")} {formatDuration(suggested)}
+            </button>
+          )}
+        </p>
+      )}
     </div>
   );
 }

@@ -1,44 +1,30 @@
-import { useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useForm, type UseFormReturn } from "react-hook-form";
+import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence } from "framer-motion";
 import {
-  Activity,
-  ArrowRight,
   Boxes,
   CheckCircle2,
+  ChevronDown,
   ClipboardList,
-  Clock3,
   Eye,
   Factory,
-  Gauge,
-  PackageCheck,
   PauseCircle,
   Pencil,
   PlayCircle,
   Plus,
-  ShieldCheck,
-  Sparkles,
+  Search,
   Timer,
   XCircle,
-  Zap,
 } from "lucide-react";
 import { toast } from "sonner";
-import ProductionEmptyStateIllustration from "../../assets/illustrations/production/production-empty-state.svg?react";
-import ProductPackagingThumbIllustration from "../../assets/illustrations/production/product-packaging-thumb.svg?react";
-import ProductionFlowIllustration from "../../assets/illustrations/production/production-flow.svg?react";
-import PlannedStatusIcon from "../../assets/icons/status/status-planned.svg?react";
-import OngoingStatusIcon from "../../assets/icons/status/status-ongoing.svg?react";
-import SuspendedStatusIcon from "../../assets/icons/status/status-suspended.svg?react";
-import ClosedStatusIcon from "../../assets/icons/status/status-closed.svg?react";
-import CancelledStatusIcon from "../../assets/icons/status/status-cancelled.svg?react";
 import { z } from "zod";
+import ProductionEmptyStateIllustration from "../../assets/illustrations/production/production-empty-state.svg?react";
 import { useAuth } from "../../lib/auth";
-import { currentLocale, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
-import { rowEnterProps, highlightRowEnterProps } from "../../components/motion/rowMotion";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -46,521 +32,185 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Skeleton } from "../../components/ui/skeleton";
+import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../components/ui/dialog";
+import { StatCard } from "../../components/patterns/StatCard";
+import { EmptyState } from "../../components/patterns/EmptyState";
+import { FilterTabs } from "../../components/patterns/FilterTabs";
+import type { RowAction } from "../../components/patterns/RowActionsMenu";
 import {
-  Dialog,
-  DialogTrigger,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogDescription,
-} from "../../components/ui/dialog";
-import {
-  cancelWorkOrder,
-  closeWorkOrder,
+  WORK_ORDER_OVERVIEW_QUERY_KEY,
   createWorkOrder,
-  getWorkOrderConsolidation,
-  getWorkOrderYield,
+  getWorkOrdersOverview,
   listPackagingBoms,
   listProducts,
   listRecipes,
-  listWorkCenters,
   listSupervisorOptions,
-  listWorkOrderInputs,
-  supervisorLabel,
-  listWorkOrderYields,
+  listWorkCenters,
   listWorkOrders,
-  listRegrindBatches,
-  listReports,
-  resumeWorkOrder,
-  startWorkOrder,
-  suspendWorkOrder,
-  updateWorkOrder,
-  type PackagingBom,
-  type Product,
-  type Recipe,
+  supervisorLabel,
   type SupervisorOption,
-  type UpdateWorkOrderInput,
   type WorkCenter,
   type WorkOrder,
   type WorkOrderStatus,
 } from "./api";
-import { StatusBadge } from "../../components/patterns/StatusBadge";
-import { RowActionsMenu, type RowAction } from "../../components/patterns/RowActionsMenu";
-import { StatCard } from "../../components/patterns/StatCard";
-import { EmptyState } from "../../components/patterns/EmptyState";
-import { listQualityReports } from "../qc/api";
-import { FilterTabs } from "../../components/patterns/FilterTabs";
-import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
-import { HelpTooltip } from "../../components/patterns/HelpTooltip";
-import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
-import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { cn } from "../../lib/utils";
+import { WorkOrderCard } from "./WorkOrderCard";
+import { CloseWorkOrderDialog, EditWorkOrderDialog } from "./WorkOrderDialogs";
+import { WORK_ORDERS_QUERY_KEY, useWorkOrderActions } from "./useWorkOrderActions";
 
-function todayDateInputValue(): string {
+const pad = (n: number) => String(n).padStart(2, "0");
+const todayDateInputValue = () => {
   const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
   return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}`;
-}
-
-function nowDatetimeLocalValue(): string {
+};
+const clockNow = () => {
   const now = new Date();
-  const pad = (n: number) => String(n).padStart(2, "0");
-  return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}T${pad(now.getHours())}:${pad(now.getMinutes())}`;
-}
-
-// Lightweight by design: work center, PC/PL and a start date. The product is
-// named later by Conditionnement's first packaging report; the quantity is
-// assigned later too, once known, via edit.
-type NewOrderForm = {
-  work_center_id: string;
-  product_type: "PC" | "PL";
-  start_date: string;
-  supervisor_id?: string;
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}`;
 };
 
-type EditOrderForm = {
-  planned_quantity?: number;
-  work_center_id?: string;
-  supervisor_id?: string;
-  recipe_id?: string;
-  packaging_bom_id?: string;
-  product_type?: string;
-};
+// Lightweight by design: work center, PC/PL and a start date. The product is not asked for: it appears
+// once the order's first shift is validated, and lists every product the order packs.
+type NewOrderForm = { work_center_id: string; product_type: "PC" | "PL"; start_date: string; supervisor_id?: string };
 
-type CloseOrderForm = {
-  closed_at: string;
-};
+type StatusFilter = "all" | WorkOrderStatus;
+type TypeFilter = "all" | "PC" | "PL";
 
-const PROGRESS: Record<WorkOrderStatus, number> = {
-  planned: 8,
-  ongoing: 55,
-  suspended: 55,
-  closed: 100,
-  cancelled: 100,
-};
-const QUERY_KEY = ["production", "work-orders"] as const;
 const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
 const RECIPES_QUERY_KEY = ["production", "recipes"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const PACKAGING_BOMS_QUERY_KEY = ["production", "packaging-boms"] as const;
-const YIELDS_QUERY_KEY = ["production", "work-order-yields"] as const;
-const REGRIND_BATCHES_QUERY_KEY = ["production", "regrind-batches"] as const;
 const SUPERVISORS_QUERY_KEY = ["production", "work-order-supervisors"] as const;
-type StatusFilter = "all" | WorkOrderStatus;
+
+// Running orders first: they are what a manager opens this screen for.
+const STATUS_RANK: Record<WorkOrderStatus, number> = { ongoing: 0, suspended: 1, planned: 2, closed: 3, cancelled: 4 };
+const isFinished = (status: WorkOrderStatus) => status === "closed" || status === "cancelled";
 
 export function WorkOrdersTab() {
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
-  const queryClient = useQueryClient();
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editingId, setEditingId] = useState<string | null>(null);
-  const [detailsId, setDetailsId] = useState<string | null>(null);
-  const [closingId, setClosingId] = useState<string | null>(null);
+  const navigate = useNavigate();
+  const [editing, setEditing] = useState<WorkOrder | null>(null);
+  const [closing, setClosing] = useState<WorkOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  const [typeFilter, setTypeFilter] = useState<"all" | "PC" | "PL">("all");
-  // Draws the eye to the row that was just created, rather than leaving the
-  // new order to blend into the rest of the list.
+  const [typeFilter, setTypeFilter] = useState<TypeFilter>("all");
+  const [search, setSearch] = useState("");
+  const [showFinished, setShowFinished] = useState(false);
+  // Draws the eye to the card that was just created, rather than leaving it to blend into the list.
   const [justCreatedId, setJustCreatedId] = useState<string | null>(null);
-  const todayIso = todayDateInputValue();
 
-  const { data: orders = [], isLoading } = useQuery({
-    queryKey: QUERY_KEY,
-    queryFn: () => listWorkOrders(token),
+  const ordersQuery = useQuery({ queryKey: WORK_ORDERS_QUERY_KEY, queryFn: () => listWorkOrders(token) });
+  const overviewQuery = useQuery({
+    queryKey: WORK_ORDER_OVERVIEW_QUERY_KEY,
+    queryFn: () => getWorkOrdersOverview(token, { date: todayDateInputValue(), at: clockNow() }),
+    // "Live now" follows the clock, so the list refreshes itself while it stays open.
+    refetchInterval: 60_000,
   });
   const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
   const { data: recipes = [] } = useQuery({ queryKey: RECIPES_QUERY_KEY, queryFn: () => listRecipes(token) });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { data: products = [], isSuccess: productsReady } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: packagingBoms = [] } = useQuery({ queryKey: PACKAGING_BOMS_QUERY_KEY, queryFn: () => listPackagingBoms(token) });
-  const { data: workOrderYields = [] } = useQuery({ queryKey: YIELDS_QUERY_KEY, queryFn: () => listWorkOrderYields(token) });
-  const { data: regrindBatches = [] } = useQuery({ queryKey: REGRIND_BATCHES_QUERY_KEY, queryFn: () => listRegrindBatches(token) });
   const { data: supervisorOptions = [] } = useQuery({ queryKey: SUPERVISORS_QUERY_KEY, queryFn: () => listSupervisorOptions(token) });
-  const regrindWorkOrderIds = new Set(regrindBatches.map((b) => b.work_order_id));
-  const yieldByWorkOrderId = new Map(workOrderYields.map((y) => [y.work_order_id, y.yield_ratio]));
 
-  // Create schemas with i18n messages
-  const newOrderSchema = z.object({
-    work_center_id: z.string().min(1, t("common.required")),
-    product_type: z.enum(["PC", "PL"]),
-    start_date: z.string().min(1, t("common.required")),
-    supervisor_id: z.string().optional(),
-  });
-  const editOrderSchema = z.object({
-    planned_quantity: z.coerce.number().positive(t("common.mustBeGreaterThanZero")).optional(),
-    work_center_id: z.string().optional(),
-    supervisor_id: z.string().optional(),
-    recipe_id: z.string().optional(),
-    packaging_bom_id: z.string().optional(),
-    product_type: z.string().optional(),
-  });
+  const actions = useWorkOrderActions(token, { onUpdated: () => setEditing(null), onClosed: () => setClosing(null) });
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<NewOrderForm>({
-    resolver: zodResolver(newOrderSchema),
-    defaultValues: { work_center_id: "", product_type: "PC", start_date: todayIso, supervisor_id: "" },
-  });
-
-  const createMutation = useMutation({
-    mutationFn: (input: NewOrderForm) =>
-      createWorkOrder(token, {
-        work_center_id: input.work_center_id,
-        product_type: input.product_type,
-        start_date: input.start_date,
-        supervisor_id: input.supervisor_id || undefined,
-      }),
-    onSuccess: (created) => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      setDialogOpen(false);
-      reset({ work_center_id: "", product_type: "PC", start_date: todayDateInputValue(), supervisor_id: "" });
-      toast.success(t("production.workOrders.created"));
-      setJustCreatedId(created.id);
-      setTimeout(() => setJustCreatedId(null), 2000);
-    },
-    onError: (error) => {
-      toast.error(t("production.workOrders.createError"), {
-        description: error instanceof ApiError ? error.message : undefined,
-      });
-    },
-  });
-
-  const startMutation = useMutation({
-    mutationFn: (id: string) => startWorkOrder(token, id),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      toast.success(t("production.workOrders.started"));
-    },
-    onError: (error) => {
-      toast.error(t("production.workOrders.startError"), { description: error instanceof ApiError ? error.message : undefined });
-    },
-  });
-
-  const editForm = useForm<EditOrderForm>({ resolver: zodResolver(editOrderSchema) });
-
-  const updateMutation = useMutation({
-    mutationFn: ({ id, input }: { id: string; input: UpdateWorkOrderInput }) => updateWorkOrder(token, id, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      setEditingId(null);
-      editForm.reset();
-      toast.success(t("production.workOrders.updated"));
-    },
-    onError: (error) => {
-      toast.error(t("production.workOrders.updateError"), { description: error instanceof ApiError ? error.message : undefined });
-    },
-  });
-
-  function openEditDialog(order: WorkOrder | null) {
-    if (!order) {
-      setEditingId(null);
-      return;
-    }
-    setEditingId(order.id);
-    editForm.reset({
-      planned_quantity: order.planned_quantity ?? undefined,
-      work_center_id: order.work_center_id ?? "",
-      supervisor_id: order.supervisor_id ?? "",
-      recipe_id: order.recipe_id ?? "",
-      packaging_bom_id: order.packaging_bom_id ?? "",
-      product_type: order.product_type ?? "",
-    });
-  }
-
-  function submitEdit(order: WorkOrder, input: EditOrderForm) {
-    updateMutation.mutate({
-      id: order.id,
-      input: {
-        planned_quantity: input.planned_quantity,
-        work_center_id: input.work_center_id || undefined,
-        supervisor_id: input.supervisor_id || undefined,
-        recipe_id: input.recipe_id || undefined,
-        packaging_bom_id: input.packaging_bom_id || undefined,
-        product_type: input.product_type || undefined,
-      },
-    });
-  }
-
-  // The OF lifecycle posts no stock, so every one of these is a plain status
-  // change. What was produced and consumed is recorded on the OF's reports and
-  // posted when a supervisor validates them.
-  function lifecycleMutation(
-    action: (id: string) => Promise<unknown>,
-    successKey: string,
-    errorKey: string,
-  ) {
-    return {
-      mutationFn: (id: string) => action(id),
-      onSuccess: () => {
-        queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-        toast.success(t(successKey as Parameters<typeof t>[0]));
-      },
-      onError: (error: unknown) => {
-        toast.error(t(errorKey as Parameters<typeof t>[0]), {
-          description: error instanceof ApiError ? error.message : undefined,
-        });
-      },
-    };
-  }
-
-  const suspendMutation = useMutation(
-    lifecycleMutation(
-      (id) => suspendWorkOrder(token, id),
-      "production.workOrders.suspendedToast",
-      "production.workOrders.suspendError",
-    ),
-  );
-
-  const resumeMutation = useMutation(
-    lifecycleMutation(
-      (id) => resumeWorkOrder(token, id),
-      "production.workOrders.resumedToast",
-      "production.workOrders.resumeError",
-    ),
-  );
-
-  const cancelMutation = useMutation(
-    lifecycleMutation(
-      (id) => cancelWorkOrder(token, id),
-      "production.workOrders.cancelledToast",
-      "production.workOrders.cancelError",
-    ),
-  );
-
-  // Closing asks when the order actually finished (defaults to now, adjustable),
-  // so a shift wrapped up and closed the next morning can record the real time.
-  const closeMutation = useMutation({
-    mutationFn: ({ id, closedAt }: { id: string; closedAt: string }) =>
-      closeWorkOrder(token, id, crypto.randomUUID(), { closedAt }),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      setClosingId(null);
-      toast.success(t("production.workOrders.closedToast"));
-    },
-    onError: (error) => {
-      toast.error(t("production.workOrders.closeError"), { description: error instanceof ApiError ? error.message : undefined });
-    },
-  });
-
-  const supervisorNameFor = (supervisorId: string | null) => {
-    const supervisor = supervisorOptions.find((s) => s.id === supervisorId);
+  const overviewById = useMemo(() => new Map((overviewQuery.data ?? []).map((row) => [row.of_id, row])), [overviewQuery.data]);
+  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? "—";
+  const workCenterOf = (order: WorkOrder) => workCenters.find((wc) => wc.id === order.work_center_id);
+  const supervisorNameOf = (order: WorkOrder) => {
+    const supervisor = supervisorOptions.find((s) => s.id === order.supervisor_id);
     return supervisor ? supervisorLabel(supervisor) : "";
   };
-
-  const nonRegrindOrders = orders.filter((o) => !regrindWorkOrderIds.has(o.id));
-  const ongoingCount = nonRegrindOrders.filter((o) => o.status === "ongoing").length;
-  const closedCount = nonRegrindOrders.filter((o) => o.status === "closed").length;
-  const statusFilteredOrders = statusFilter === "all" ? nonRegrindOrders : nonRegrindOrders.filter((o) => o.status === statusFilter);
-  const typeFilteredOrders = typeFilter === "all" ? statusFilteredOrders : statusFilteredOrders.filter((o) => o.product_type === typeFilter);
-
-  const columnFilterFields: FilterField<WorkOrder>[] = [
-    { key: "reference", kind: "text", getValue: (o) => o.reference },
-    { key: "work_center", kind: "text", getValue: (o) => workCenters.find((wc) => wc.id === o.work_center_id)?.code ?? o.work_center_id },
-    { key: "supervisor", kind: "text", getValue: (o) => supervisorNameFor(o.supervisor_id) },
-  ];
-  const columnFilters = useColumnFilters(columnFilterFields);
-  const filteredOrders = columnFilters.apply(statusFilteredOrders);
-
-  const columns: ColumnDef<WorkOrder>[] = [
-    {
-      key: "reference",
-      header: t("production.workOrders.column.reference"),
-      defaultWidth: 140,
-      // The reference is the way into the OF's own page — where the consolidated
-      // result, its reports and its quality history live.
-      cell: (order) => (
-        <Link to={`/production/work-orders/${order.id}`} className="font-medium text-primary hover:underline">
-          {order.reference}
-        </Link>
-      ),
-      filterCell: {
-        type: "text",
-        value: columnFilters.text.reference ?? "",
-        onChange: (v) => columnFilters.setTextValue("reference", v),
-        placeholder: t("production.workOrders.column.reference"),
-      },
-      sortValue: (order) => order.reference,
-    },
-    {
-      key: "productType",
-      header: t("production.workOrders.column.type"),
-      defaultWidth: 90,
-      cell: (order) =>
-        order.product_type ? <Badge variant={order.product_type === "PC" ? "primary" : "outline"}>{order.product_type}</Badge> : "—",
-      sortValue: (order) => order.product_type,
-    },
-    {
-      key: "startDate",
-      header: t("production.workOrders.column.startDate"),
-      defaultWidth: 160,
-      cell: (order) => (
-        <div className="flex items-center gap-1.5">
-          <span className="tabular-nums text-muted-foreground">{order.start_date ?? "—"}</span>
-          {order.status === "planned" && order.start_date === todayIso && (
-            <Badge variant="warning">{t("production.workOrders.dueToday")}</Badge>
-          )}
-        </div>
-      ),
-      sortValue: (order) => order.start_date,
-    },
-    {
-      key: "work_center",
-      header: t("production.workOrders.column.workCenter"),
-      defaultWidth: 160,
-      cell: (order) => (
-        <span className="text-muted-foreground">{workCenters.find((wc) => wc.id === order.work_center_id)?.code ?? "—"}</span>
-      ),
-      filterCell: {
-        type: "text",
-        value: columnFilters.text.work_center ?? "",
-        onChange: (v) => columnFilters.setTextValue("work_center", v),
-        placeholder: t("production.workOrders.column.workCenter"),
-      },
-      sortValue: (order) => workCenters.find((wc) => wc.id === order.work_center_id)?.code ?? "",
-    },
-    {
-      key: "supervisor",
-      header: t("production.workOrders.column.supervisor"),
-      defaultWidth: 180,
-      cell: (order) => (
-        <span className="text-muted-foreground">{supervisorNameFor(order.supervisor_id) || "—"}</span>
-      ),
-      filterCell: {
-        type: "text",
-        value: columnFilters.text.supervisor ?? "",
-        onChange: (v) => columnFilters.setTextValue("supervisor", v),
-        placeholder: t("production.workOrders.column.supervisor"),
-      },
-      sortValue: (order) => supervisorNameFor(order.supervisor_id),
-    },
-    {
-      key: "progress",
-      header: t("production.workOrders.column.progress"),
-      defaultWidth: 160,
-      cell: (order) => (
-        <div className="h-1.5 w-28 overflow-hidden rounded-full bg-muted">
-          <motion.div
-            className={cn(
-              "h-full rounded-full",
-              order.status === "closed" ? "bg-success" : order.status === "ongoing" ? "bg-warning" : "bg-border",
-            )}
-            initial={{ width: 0 }}
-            animate={{ width: `${PROGRESS[order.status]}%` }}
-            transition={{ duration: 0.5, ease: "easeOut" }}
-          />
-        </div>
-      ),
-      sortValue: (order) => PROGRESS[order.status],
-    },
-    {
-      key: "status",
-      header: (
-        <span className="inline-flex items-center gap-1">
-          {t("production.workOrders.column.status")}
-          <HelpTooltip text={t("production.workOrders.help.status")} />
-        </span>
-      ),
-      defaultWidth: 140,
-      cell: (order) => <StatusBadge status={order.status} />,
-      sortValue: (order) => order.status,
-    },
-    {
-      key: "yield",
-      header: t("production.workOrders.column.yield"),
-      defaultWidth: 140,
-      cell: (order) => {
-        // No validated report yet means nothing has been divided by anything —
-        // that reads as 0%, not as a missing value.
-        const ratio = yieldByWorkOrderId.get(order.id) ?? 0;
-        return <span className="tabular-nums text-muted-foreground">{`${(ratio * 100).toFixed(1)}%`}</span>;
-      },
-      sortValue: (order) => yieldByWorkOrderId.get(order.id) ?? 0,
-    },
-    {
-      key: "action",
-      header: t("production.workOrders.column.action"),
-      defaultWidth: 90,
-      alwaysVisible: true,
-      headerClassName: "text-right",
-      cellClassName: "text-right",
-      cell: (order) => (
-        <OrderActions
-          order={order}
-          products={products}
-          workCenters={workCenters}
-          supervisorOptions={supervisorOptions}
-          recipes={recipes}
-          packagingBoms={packagingBoms}
-          detailsId={detailsId}
-          onOpenDetails={(open) => setDetailsId(open ? order.id : null)}
-          onStart={() => startMutation.mutate(order.id)}
-          onSuspend={() => suspendMutation.mutate(order.id)}
-          onResume={() => resumeMutation.mutate(order.id)}
-          onCancel={() => cancelMutation.mutate(order.id)}
-          closingId={closingId}
-          onOpenClose={(open) => setClosingId(open ? order.id : null)}
-          onClose={(closedAt) => closeMutation.mutate({ id: order.id, closedAt })}
-          isStarting={startMutation.isPending && startMutation.variables === order.id}
-          isSuspending={suspendMutation.isPending && suspendMutation.variables === order.id}
-          isResuming={resumeMutation.isPending && resumeMutation.variables === order.id}
-          isCancelling={cancelMutation.isPending && cancelMutation.variables === order.id}
-          isClosing={closeMutation.isPending && closeMutation.variables?.id === order.id}
-          editingId={editingId}
-          onOpenEdit={(open) => openEditDialog(open ? order : null)}
-          editForm={editForm}
-          onSubmitEdit={(input) => submitEdit(order, input)}
-          isUpdating={updateMutation.isPending && updateMutation.variables?.id === order.id}
-        />
-      ),
-    },
-  ];
-  const { isVisible, toggleVisible, resetAll, sortRows } = useTableColumns("production.workOrders", columns);
-  const sortedOrders = sortRows(filteredOrders);
-  const groupedOrders = (["PC", "PL"] as const).map((groupType) => ({
-    type: groupType,
-    orders: sortedOrders.filter((order) => order.product_type === groupType),
-  }));
-
-  const visibleGroups = typeFilter === "all" ? groupedOrders : [{ type: typeFilter, orders: sortedOrders.filter((order) => order.product_type === typeFilter) }];
-
-  const productNameFor = (productId: string | null) => {
-    if (!productId) return "—";
-    return products.find((product) => product.id === productId)?.name ?? "—";
+  // The overview lists the products of validated shifts; an order with none yet falls back to its own.
+  // Null while the product list loads, so a name that is still coming is not shown as a missing one.
+  const productNamesOf = (order: WorkOrder): string[] | null => {
+    const ids = overviewById.get(order.id)?.products ?? (order.product_id ? [order.product_id] : []);
+    if (ids.length > 0 && !productsReady) return null;
+    return ids.map(productName);
   };
 
-  const workCenterNameFor = (order: WorkOrder) => workCenters.find((wc) => wc.id === order.work_center_id)?.name ?? "—";
+  const orders = (ordersQuery.data ?? []).filter((o) => !o.is_regrind);
+  const ongoingCount = orders.filter((o) => o.status === "ongoing").length;
+  const closedCount = orders.filter((o) => o.status === "closed").length;
 
-  const cardAccent = (status: WorkOrderStatus) => {
-    if (status === "closed") return "from-success/25 via-success/10 to-transparent text-success";
-    if (status === "ongoing") return "from-warning/30 via-warning/10 to-transparent text-warning";
-    if (status === "suspended") return "from-accent/30 via-accent/10 to-transparent text-accent";
-    if (status === "cancelled") return "from-destructive/25 via-destructive/10 to-transparent text-destructive";
-    return "from-primary/25 via-primary/10 to-transparent text-primary";
+  const needle = search.trim().toLowerCase();
+  const matches = (order: WorkOrder) => {
+    if (statusFilter !== "all" && order.status !== statusFilter) return false;
+    if (typeFilter !== "all" && order.product_type !== typeFilter) return false;
+    if (!needle) return true;
+    const center = workCenterOf(order);
+    return [order.reference, center?.code, center?.name, supervisorNameOf(order), ...(productNamesOf(order) ?? [])]
+      .filter(Boolean)
+      .some((field) => String(field).toLowerCase().includes(needle));
   };
+  const visible = orders.filter(matches);
+  // With the status filter on "all", finished orders stay folded away unless asked for.
+  const folding = statusFilter === "all" && !showFinished;
+  const foldedAway = folding ? visible.filter((o) => isFinished(o.status)).length : 0;
+  const shown = folding ? visible.filter((o) => !isFinished(o.status)) : visible;
 
-  const StatusIconFor = (status: WorkOrderStatus) => {
-    switch (status) {
-      case "planned":
-        return <PlannedStatusIcon className="h-4 w-4" />;
-      case "ongoing":
-        return <OngoingStatusIcon className="h-4 w-4" />;
-      case "suspended":
-        return <SuspendedStatusIcon className="h-4 w-4" />;
-      case "closed":
-        return <ClosedStatusIcon className="h-4 w-4" />;
-      case "cancelled":
-        return <CancelledStatusIcon className="h-4 w-4" />;
-      default:
-        return <PlannedStatusIcon className="h-4 w-4" />;
+  const sortOrders = (list: WorkOrder[]) =>
+    [...list].sort((a, b) => STATUS_RANK[a.status] - STATUS_RANK[b.status] || b.reference.localeCompare(a.reference));
+  const groups = (["PC", "PL", null] as const)
+    .map((type) => ({
+      type,
+      orders: sortOrders(shown.filter((o) => (o.product_type ?? null) === type)),
+      // The header counts every order of the type the filters match, folded ones included.
+      matching: visible.filter((o) => (o.product_type ?? null) === type),
+    }))
+    .filter((group) => (typeFilter === "all" ? group.type !== null || group.orders.length > 0 : group.type === typeFilter));
+
+  const rowActionsFor = (order: WorkOrder): RowAction[] => {
+    const busy = (mutation: { isPending: boolean; variables?: unknown }) => mutation.isPending && mutation.variables === order.id;
+    const list: RowAction[] = [
+      { key: "details", label: t("production.workOrders.details"), icon: <Eye className="h-4 w-4" />, onSelect: () => navigate(`/production/work-orders/${order.id}`) },
+      { key: "edit", label: t("production.workOrders.edit"), icon: <Pencil className="h-4 w-4" />, onSelect: () => setEditing(order) },
+    ];
+    // Only the transitions this status allows are listed: an action the backend would refuse is worse than a missing one.
+    if (order.status === "planned") {
+      list.push({
+        key: "start",
+        label: busy(actions.start) ? t("production.workOrders.starting") : t("production.workOrders.start"),
+        icon: <PlayCircle className="h-4 w-4" />,
+        onSelect: () => actions.start.mutate(order.id),
+        disabled: busy(actions.start),
+      });
     }
+    if (order.status === "ongoing") {
+      list.push({
+        key: "suspend",
+        label: t("production.workOrders.suspend"),
+        icon: <PauseCircle className="h-4 w-4" />,
+        onSelect: () => actions.suspend.mutate(order.id),
+        disabled: busy(actions.suspend),
+      });
+      list.push({ key: "close", label: t("production.workOrders.close"), icon: <CheckCircle2 className="h-4 w-4" />, onSelect: () => setClosing(order) });
+    }
+    if (order.status === "suspended") {
+      list.push({
+        key: "resume",
+        label: t("production.workOrders.resume"),
+        icon: <PlayCircle className="h-4 w-4" />,
+        onSelect: () => actions.resume.mutate(order.id),
+        disabled: busy(actions.resume),
+      });
+    }
+    if (order.status === "planned" || order.status === "suspended") {
+      list.push({
+        key: "cancel",
+        label: t("production.workOrders.cancel"),
+        icon: <XCircle className="h-4 w-4" />,
+        onSelect: () => actions.cancel.mutate(order.id),
+        disabled: busy(actions.cancel),
+        tone: "destructive",
+      });
+    }
+    return list;
   };
 
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatCard label={t("production.workOrders.stat.total")} value={nonRegrindOrders.length} icon={<ClipboardList className="h-5 w-5" />} />
+        <StatCard label={t("production.workOrders.stat.total")} value={orders.length} icon={<ClipboardList className="h-5 w-5" />} />
         <StatCard label={t("production.workOrders.stat.ongoing")} value={ongoingCount} icon={<Timer className="h-5 w-5" />} accent="warning" />
         <StatCard label={t("production.workOrders.stat.closed")} value={closedCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
       </div>
@@ -593,706 +243,254 @@ export function WorkOrdersTab() {
                 { value: "PL", label: "PL" },
               ]}
             />
-            {columnFilters.isActive && (
-              <Button variant="ghost" size="sm" onClick={columnFilters.reset}>
-                {t("common.clearFilters")}
-              </Button>
-            )}
-            <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
+            <div className="relative min-w-[14rem] flex-1 sm:max-w-xs">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                placeholder={t("production.workOrders.search")}
+                aria-label={t("production.workOrders.search")}
+                className="pl-8"
+              />
+            </div>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4" />
-                {t("production.workOrders.new")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-2xl">
-              <DialogHeader>
-                <DialogTitle>{t("production.workOrders.dialog.title")}</DialogTitle>
-                <DialogDescription>{t("production.workOrders.dialog.description")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={handleSubmit((input) => createMutation.mutate(input))}>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="product_type">{t("production.workOrders.field.productType")}</Label>
-                    <Select id="product_type" {...register("product_type")}>
-                      <option value="PC">PC</option>
-                      <option value="PL">PL</option>
-                    </Select>
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="start_date">{t("production.workOrders.field.startDate")}</Label>
-                    <Input id="start_date" type="date" {...register("start_date")} />
-                    {errors.start_date && <p className="text-sm text-destructive">{errors.start_date.message}</p>}
-                  </div>
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="work_center_id">{t("production.workOrders.field.workCenter")}</Label>
-                  <Select id="work_center_id" {...register("work_center_id")}>
-                    <option value="">—</option>
-                    {workCenters.map((wc) => (
-                      <option key={wc.id} value={wc.id}>
-                        {wc.code} — {wc.name}
-                      </option>
-                    ))}
-                  </Select>
-                  {errors.work_center_id && <p className="text-sm text-destructive">{errors.work_center_id.message}</p>}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="supervisor_id">{t("production.workOrders.field.supervisor")}</Label>
-                  <Select id="supervisor_id" {...register("supervisor_id")}>
-                    <option value="">—</option>
-                    {supervisorOptions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {supervisorLabel(s)}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-
-                <p className="text-xs text-muted-foreground">{t("production.workOrders.productHint")}</p>
-
-                {createMutation.isError && (
-                  <p className="text-sm text-destructive">
-                    {createMutation.error instanceof ApiError ? createMutation.error.message : t("production.workOrders.createError")}
-                  </p>
-                )}
-                <Button type="submit" className="w-full" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? t("production.workOrders.creating") : t("production.workOrders.create")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <CreateWorkOrderDialog
+            token={token}
+            workCenters={workCenters}
+            supervisorOptions={supervisorOptions}
+            onCreated={(id) => {
+              setJustCreatedId(id);
+              setTimeout(() => setJustCreatedId(null), 2000);
+            }}
+          />
         </CardHeader>
         <CardContent className="p-4">
-          {isLoading ? (
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {Array.from({ length: 6 }).map((_, i) => (
+          {ordersQuery.isLoading ? (
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+              {Array.from({ length: 4 }).map((_, i) => (
                 <div key={i} className="rounded-xl border border-border bg-card p-4">
-                  <Skeleton className="h-6 w-24" />
-                  <Skeleton className="mt-4 h-16 w-full" />
-                  <Skeleton className="mt-4 h-4 w-full" />
-                  <Skeleton className="mt-2 h-4 w-2/3" />
+                  <Skeleton className="h-5 w-32" />
+                  <Skeleton className="mt-3 h-4 w-2/3" />
+                  <Skeleton className="mt-4 h-2 w-full" />
                 </div>
               ))}
             </div>
-          ) : typeFilteredOrders.length === 0 ? (
+          ) : orders.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-border bg-muted/15 p-8">
               <EmptyState
                 icon={<ProductionEmptyStateIllustration className="h-52 w-full max-w-md" />}
-                title={typeFilter === "all" ? t("production.workOrders.empty.title") : `${typeFilter} — aucune OF trouvée`}
-                description={
-                  typeFilter === "all"
-                    ? t("production.workOrders.empty.description")
-                    : `Aucune OF ${typeFilter} ne correspond au statut et aux filtres actuels.`
-                }
+                title={t("production.workOrders.empty.title")}
+                description={t("production.workOrders.empty.description")}
               />
             </div>
           ) : (
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {visibleGroups.map((group) => (
-                <div key={group.type} className="space-y-3 rounded-2xl border border-border/80 bg-gradient-to-br from-muted/10 via-card to-background p-3 shadow-[0_8px_24px_rgba(15,23,42,0.04)]">
-                  <div className="space-y-3 border-b border-border pb-3">
-                    <div className="flex items-center justify-between gap-3">
-                      <motion.div
-                        initial={{ opacity: 0, x: -8 }}
-                        animate={{ opacity: 1, x: 0 }}
-                        className="flex items-center gap-2"
-                      >
-                        <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-border bg-background text-primary shadow-sm">
-                          {group.type === "PC" ? <Factory className="h-4 w-4" /> : <Boxes className="h-4 w-4" />}
-                        </div>
-                        <div className="space-y-0.5">
-                          <Badge variant={group.type === "PC" ? "primary" : "outline"}>{group.type}</Badge>
-                          <div className="text-xs text-muted-foreground">{group.orders.length} OF</div>
-                        </div>
-                      </motion.div>
-                      <motion.div
-                        animate={{ rotate: [0, 4, -4, 0] }}
-                        transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-                        className="flex h-7 w-7 items-center justify-center rounded-full bg-primary/10 text-primary"
-                      >
-                        <Sparkles className="h-3.5 w-3.5" />
-                      </motion.div>
-                    </div>
-
-                    <div className="grid grid-cols-3 gap-2 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                      <motion.div
-                        whileHover={{ y: -1 }}
-                        className="rounded-xl border border-border bg-background/90 px-2 py-1.5 shadow-sm"
-                      >
-                        <div className="flex items-center gap-1.5"><Zap className="h-3 w-3 text-primary" /> Active</div>
-                        <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
-                          {group.orders.filter((o) => o.status === "ongoing" || o.status === "suspended").length}
-                        </div>
-                      </motion.div>
-                      <motion.div
-                        whileHover={{ y: -1 }}
-                        className="rounded-xl border border-border bg-background/90 px-2 py-1.5 shadow-sm"
-                      >
-                        <div className="flex items-center gap-1.5"><CheckCircle2 className="h-3 w-3 text-success" /> Closed</div>
-                        <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
-                          {group.orders.filter((o) => o.status === "closed").length}
-                        </div>
-                      </motion.div>
-                      <motion.div
-                        whileHover={{ y: -1 }}
-                        className="rounded-xl border border-border bg-background/90 px-2 py-1.5 shadow-sm"
-                      >
-                        <div className="flex items-center gap-1.5"><Clock3 className="h-3 w-3 text-warning" /> Planned</div>
-                        <div className="mt-1 text-sm font-semibold text-foreground tabular-nums">
-                          {group.orders.filter((o) => o.status === "planned").length}
-                        </div>
-                      </motion.div>
-                    </div>
-                  </div>
-
-                  {group.orders.length === 0 ? (
-                    <div className="rounded-xl border border-dashed border-border bg-muted/10 px-4 py-6 text-sm text-muted-foreground">
-                      No {group.type} orders for this filter set.
-                    </div>
-                  ) : (
-                    <div className="grid grid-cols-1 gap-4">
-                      <AnimatePresence initial={false}>
-                        {group.orders.map((order, index) => {
-                          const productName = productNameFor(order.product_id);
-                          const visibleProgress = PROGRESS[order.status];
-                          const badgeTone = cardAccent(order.status);
-
-                          return (
-                            <motion.article
+            <div className="space-y-4">
+              {visible.length === 0 && (
+                <p className="rounded-xl border border-dashed border-border bg-muted/10 px-4 py-6 text-sm text-muted-foreground">
+                  {t("production.workOrders.empty.filtered")}
+                </p>
+              )}
+              <div className="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
+                {groups.map((group) => (
+                  <section key={group.type ?? "none"} className="space-y-3 rounded-2xl border border-border/80 bg-muted/10 p-3">
+                    <GroupHeader type={group.type} orders={group.matching} />
+                    {group.orders.length === 0 ? (
+                      <p className="rounded-xl border border-dashed border-border px-4 py-5 text-sm text-muted-foreground">
+                        {group.matching.length > 0
+                          ? `${group.matching.length} ${t("production.workOrders.group.hidden")}`
+                          : t("production.workOrders.group.empty")}
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-1 gap-3">
+                        <AnimatePresence initial={false}>
+                          {group.orders.map((order, index) => (
+                            <WorkOrderCard
                               key={order.id}
-                              {...(order.id === justCreatedId ? highlightRowEnterProps(index) : rowEnterProps(index))}
-                              layout
-                              whileHover={{ y: -3, scale: 1.01 }}
-                              transition={{ duration: 0.18, ease: "easeOut" }}
-                              className="group overflow-hidden rounded-2xl border border-border/80 bg-gradient-to-br from-card via-card to-muted/20 shadow-[0_10px_24px_rgba(15,23,42,0.05)]"
-                            >
-                              <div className="flex items-start justify-between gap-3 border-b border-border bg-gradient-to-r from-primary/5 via-transparent to-transparent p-4">
-                                <div className="flex min-w-0 flex-1 items-center gap-2 text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
-                                  <motion.span
-                                    animate={{ scale: [1, 1.12, 1] }}
-                                    transition={{ duration: 2.2, repeat: Infinity, ease: "easeInOut" }}
-                                    className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10 text-primary"
-                                  >
-                                    <Factory className="h-3.5 w-3.5" />
-                                  </motion.span>
-                                  <span>OF</span>
-                                  <span className="text-primary">{order.reference}</span>
-                                  <ArrowRight className="h-3 w-3 text-muted-foreground" />
-                                </div>
-
-                                <div className="flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
-                                  <StatusBadge status={order.status} />
-                                  <OrderActions
-                                    order={order}
-                                    products={products}
-                                    workCenters={workCenters}
-                                    supervisorOptions={supervisorOptions}
-                                    recipes={recipes}
-                                    packagingBoms={packagingBoms}
-                                    detailsId={detailsId}
-                                    onOpenDetails={(open) => setDetailsId(open ? order.id : null)}
-                                    onStart={() => startMutation.mutate(order.id)}
-                                    onSuspend={() => suspendMutation.mutate(order.id)}
-                                    onResume={() => resumeMutation.mutate(order.id)}
-                                    onCancel={() => cancelMutation.mutate(order.id)}
-                                    closingId={closingId}
-                                    onOpenClose={(open) => setClosingId(open ? order.id : null)}
-                                    onClose={(closedAt) => closeMutation.mutate({ id: order.id, closedAt })}
-                                    isStarting={startMutation.isPending && startMutation.variables === order.id}
-                                    isSuspending={suspendMutation.isPending && suspendMutation.variables === order.id}
-                                    isResuming={resumeMutation.isPending && resumeMutation.variables === order.id}
-                                    isCancelling={cancelMutation.isPending && cancelMutation.variables === order.id}
-                                    isClosing={closeMutation.isPending && closeMutation.variables?.id === order.id}
-                                    editingId={editingId}
-                                    onOpenEdit={(open) => openEditDialog(open ? order : null)}
-                                    editForm={editForm}
-                                    onSubmitEdit={(input) => submitEdit(order, input)}
-                                    isUpdating={updateMutation.isPending && updateMutation.variables?.id === order.id}
-                                  />
-                                </div>
-                              </div>
-
-                              <Link to={`/production/work-orders/${order.id}`} className="block p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/60">
-                                <div className="space-y-4">
-                                  <div className="flex items-center gap-3">
-                                    <motion.div
-                                      animate={{ y: [0, -3, 0], rotate: [0, 1, -1, 0] }}
-                                      transition={{ duration: 3.4, repeat: Infinity, ease: "easeInOut" }}
-                                      className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-xl border border-border bg-gradient-to-br from-background to-muted/25 shadow-inner"
-                                    >
-                                      <ProductPackagingThumbIllustration className={cn("h-full w-full object-cover", badgeTone)} />
-                                    </motion.div>
-                                    <div className="flex-1 space-y-2">
-                                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                        <span className="inline-flex items-center gap-1.5"><Factory className="h-3.5 w-3.5" /> {t("production.workOrders.column.workCenter")}</span>
-                                        <span className="font-semibold text-foreground">{workCenterNameFor(order)}</span>
-                                      </div>
-                                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                        <span className="inline-flex items-center gap-1.5"><Clock3 className="h-3.5 w-3.5" /> {t("production.workOrders.column.startDate")}</span>
-                                        <span className="font-semibold text-foreground">{order.start_date ?? "—"}</span>
-                                      </div>
-                                      <div className="flex items-center justify-between text-xs text-muted-foreground">
-                                        <span className="inline-flex items-center gap-1.5"><Boxes className="h-3.5 w-3.5" /> {t("production.workOrders.column.type")}</span>
-                                        <span className="font-semibold text-foreground">{order.product_type ?? "—"}</span>
-                                      </div>
-                                    </div>
-                                  </div>
-
-                                  <div className="space-y-2">
-                                    <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-[0.12em] text-muted-foreground">
-                                      <span className="inline-flex items-center gap-1.5"><Gauge className="h-3.5 w-3.5" /> {t("production.workOrders.column.progress")}</span>
-                                      <span className="text-foreground">{visibleProgress}%</span>
-                                    </div>
-                                    <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
-                                      <motion.div
-                                        className={cn(
-                                          "h-full rounded-full",
-                                          order.status === "closed" ? "bg-success" : order.status === "ongoing" ? "bg-warning" : order.status === "cancelled" ? "bg-destructive" : "bg-primary",
-                                        )}
-                                        initial={{ width: 0 }}
-                                        animate={{ width: `${visibleProgress}%` }}
-                                        transition={{ duration: 0.5, ease: "easeOut" }}
-                                      />
-                                    </div>
-                                  </div>
-
-                                  <div className="grid grid-cols-3 gap-2 text-xs">
-                                    <motion.div whileHover={{ y: -2 }} className="rounded-xl border border-border bg-muted/20 p-2.5 shadow-sm">
-                                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                                        <Activity className="h-3 w-3 text-primary" />
-                                        <span>{t("production.workOrders.column.status")}</span>
-                                      </div>
-                                      <div className="mt-1 font-semibold text-foreground">
-                                        {t(`status.${order.status}` as Parameters<typeof t>[0])}
-                                      </div>
-                                    </motion.div>
-                                    <motion.div whileHover={{ y: -2 }} className="rounded-xl border border-border bg-muted/20 p-2.5 shadow-sm">
-                                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                                        <PackageCheck className="h-3 w-3 text-success" />
-                                        <span>{t("production.workOrders.column.yield")}</span>
-                                      </div>
-                                      <div className="mt-1 font-semibold text-foreground">
-                                        {`${((yieldByWorkOrderId.get(order.id) ?? 0) * 100).toFixed(1)}%`}
-                                      </div>
-                                    </motion.div>
-                                    <motion.div whileHover={{ y: -2 }} className="rounded-xl border border-border bg-muted/20 p-2.5 shadow-sm">
-                                      <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-[0.12em] text-muted-foreground">
-                                        {StatusIconFor(order.status)}
-                                        <span>{t("production.workOrders.column.supervisor")}</span>
-                                      </div>
-                                      <div className="mt-1 font-semibold text-foreground">{supervisorNameFor(order.supervisor_id) || "—"}</div>
-                                    </motion.div>
-                                  </div>
-
-                                  <div className="flex items-center justify-between gap-2 rounded-xl border border-border bg-muted/15 p-3">
-                                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                                      <ShieldCheck className="h-3.5 w-3.5 text-success" />
-                                      <span>{productName}</span>
-                                    </div>
-                                    <div className="flex items-center gap-1.5 text-xs font-medium text-primary">
-                                      <Zap className="h-3.5 w-3.5" />
-                                      <span>{t("production.workOrders.card.open")}</span>
-                                      <ArrowRight className="h-3.5 w-3.5" />
-                                    </div>
-                                  </div>
-
-                                  <div className="rounded-xl border border-border bg-muted/15 p-3">
-                                    <ProductionFlowIllustration className="h-16 w-full" />
-                                  </div>
-                                </div>
-                              </Link>
-                            </motion.article>
-                          );
-                        })}
-                      </AnimatePresence>
-                    </div>
-                  )}
-                </div>
-              ))}
+                              order={order}
+                              overview={overviewById.get(order.id)}
+                              productNames={productNamesOf(order)}
+                              workCenterName={workCenterOf(order)?.name ?? "—"}
+                              supervisorName={supervisorNameOf(order)}
+                              index={index}
+                              highlighted={order.id === justCreatedId}
+                              actions={rowActionsFor(order)}
+                            />
+                          ))}
+                        </AnimatePresence>
+                      </div>
+                    )}
+                  </section>
+                ))}
+              </div>
+              {statusFilter === "all" && (showFinished || foldedAway > 0) && (
+                <Button variant="ghost" size="sm" onClick={() => setShowFinished((open) => !open)}>
+                  <ChevronDown className={`h-4 w-4 transition-transform ${showFinished ? "rotate-180" : ""}`} />
+                  {showFinished ? t("production.workOrders.group.hideClosed") : `${t("production.workOrders.group.showClosed")} (${foldedAway})`}
+                </Button>
+              )}
             </div>
           )}
         </CardContent>
       </Card>
+
+      <EditWorkOrderDialog
+        order={editing}
+        onClose={() => setEditing(null)}
+        onSubmit={(id, input) => actions.update.mutate({ id, input })}
+        isPending={actions.update.isPending}
+        workCenters={workCenters}
+        supervisorOptions={supervisorOptions}
+        recipes={recipes}
+        packagingBoms={packagingBoms}
+        products={products}
+      />
+      <CloseWorkOrderDialog
+        order={closing}
+        onClose={() => setClosing(null)}
+        onSubmit={(id, closedAt) => actions.close.mutate({ id, closedAt })}
+        isPending={actions.close.isPending}
+      />
     </div>
   );
 }
 
-function OrderActions({
-  order,
-  products,
+/** A group's type and its counts, read from the orders it holds: nothing here is decoration. */
+function GroupHeader({ type, orders }: { type: "PC" | "PL" | null; orders: WorkOrder[] }) {
+  const { t } = useI18n();
+  const count = (...statuses: WorkOrderStatus[]) => orders.filter((o) => statuses.includes(o.status)).length;
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border pb-2.5">
+      <div className="flex items-center gap-2">
+        <div className="flex h-8 w-8 items-center justify-center rounded-lg border border-border bg-background text-primary">
+          {type === "PL" ? <Boxes className="h-4 w-4" /> : <Factory className="h-4 w-4" />}
+        </div>
+        <Badge variant={type === "PC" ? "primary" : "outline"}>{type ?? t("production.workOrders.group.noType")}</Badge>
+        <span className="text-xs text-muted-foreground">{orders.length} OF</span>
+      </div>
+      <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground">
+        <span>
+          <span className="font-semibold tabular-nums text-foreground">{count("ongoing", "suspended")}</span> {t("status.ongoing")}
+        </span>
+        <span>
+          <span className="font-semibold tabular-nums text-foreground">{count("planned")}</span> {t("status.planned")}
+        </span>
+        <span>
+          <span className="font-semibold tabular-nums text-foreground">{count("closed")}</span> {t("status.closed")}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+function CreateWorkOrderDialog({
+  token,
   workCenters,
   supervisorOptions,
-  recipes,
-  packagingBoms,
-  detailsId,
-  onOpenDetails,
-  onStart,
-  onSuspend,
-  onResume,
-  onCancel,
-  closingId,
-  onOpenClose,
-  onClose,
-  isStarting,
-  isSuspending,
-  isResuming,
-  isCancelling,
-  isClosing,
-  editingId,
-  onOpenEdit,
-  editForm,
-  onSubmitEdit,
-  isUpdating,
+  onCreated,
 }: {
-  order: WorkOrder;
-  products: Product[];
+  token: string;
   workCenters: WorkCenter[];
   supervisorOptions: SupervisorOption[];
-  recipes: Recipe[];
-  packagingBoms: PackagingBom[];
-  detailsId: string | null;
-  onOpenDetails: (open: boolean) => void;
-  onStart: () => void;
-  onSuspend: () => void;
-  onResume: () => void;
-  onCancel: () => void;
-  closingId: string | null;
-  onOpenClose: (open: boolean) => void;
-  onClose: (closedAt: string) => void;
-  isStarting: boolean;
-  isSuspending: boolean;
-  isResuming: boolean;
-  isCancelling: boolean;
-  isClosing: boolean;
-  editingId: string | null;
-  onOpenEdit: (open: boolean) => void;
-  editForm: UseFormReturn<EditOrderForm>;
-  onSubmitEdit: (input: EditOrderForm) => void;
-  isUpdating: boolean;
+  onCreated: (id: string) => void;
 }) {
-  const { session } = useAuth();
-  const token = session!.token;
   const { t } = useI18n();
-  const navigate = useNavigate();
-
-  const closeOrderSchema = z.object({
-    closed_at: z.string().min(1, t("common.required")),
+  const queryClient = useQueryClient();
+  const [open, setOpen] = useState(false);
+  const blank = (): NewOrderForm => ({ work_center_id: "", product_type: "PC", start_date: todayDateInputValue(), supervisor_id: "" });
+  const {
+    register,
+    handleSubmit,
+    reset,
+    formState: { errors },
+  } = useForm<NewOrderForm>({
+    resolver: zodResolver(
+      z.object({
+        work_center_id: z.string().min(1, t("common.required")),
+        product_type: z.enum(["PC", "PL"]),
+        start_date: z.string().min(1, t("common.required")),
+        supervisor_id: z.string().optional(),
+      }),
+    ),
+    defaultValues: blank(),
   });
 
-  const productName = (productId: string | null) => {
-    if (!productId) return "—";
-    return products.find((p) => p.id === productId)?.name ?? "—";
-  };
-  const supervisorName = (supervisorId: string | null) => {
-    const supervisor = supervisorOptions.find((s) => s.id === supervisorId);
-    return supervisor ? supervisorLabel(supervisor) : "—";
-  };
-  const isDetailsDialogOpen = detailsId === order.id;
-  const isCloseDialogOpen = closingId === order.id;
-  const closeForm = useForm<CloseOrderForm>({ resolver: zodResolver(closeOrderSchema) });
-
-  const { data: pouredInputs = [] } = useQuery({
-    queryKey: ["production", "work-order-inputs", order.id],
-    queryFn: () => listWorkOrderInputs(token, order.id),
-    enabled: isDetailsDialogOpen,
-  });
-  const { data: reports = [] } = useQuery({
-    queryKey: ["production", "reports", "of", order.id],
-    queryFn: () => listReports(token, { of_id: order.id }),
-    enabled: isDetailsDialogOpen,
-  });
-  const { data: qualityReports = [] } = useQuery({
-    queryKey: ["qc", "quality-reports", "of", order.id],
-    queryFn: () => listQualityReports(token, { of_id: order.id }),
-    enabled: isDetailsDialogOpen,
-  });
-  // Consolidation and yield are both computed from validated reports, so they are
-  // meaningful while the order is still running — no need to wait for closure.
-  const { data: consolidation } = useQuery({
-    queryKey: ["production", "of-consolidation", order.id],
-    queryFn: () => getWorkOrderConsolidation(token, order.id),
-    enabled: isDetailsDialogOpen,
-  });
-  const { data: yieldDetail } = useQuery({
-    queryKey: ["production", "work-order-yield", order.id],
-    queryFn: () => getWorkOrderYield(token, order.id),
-    enabled: isDetailsDialogOpen,
-  });
-
-  // Only the transitions this status actually allows are listed. An action the
-  // backend would refuse is worse than a missing one: it invites the click and
-  // then explains why it failed.
-  const rowActions: RowAction[] = [
-    {
-      key: "details",
-      label: t("production.workOrders.details"),
-      icon: <Eye className="h-4 w-4" />,
-      onSelect: () => navigate(`/production/work-orders/${order.id}`),
+  const create = useMutation({
+    mutationFn: (input: NewOrderForm) =>
+      createWorkOrder(token, {
+        work_center_id: input.work_center_id,
+        product_type: input.product_type,
+        start_date: input.start_date,
+        supervisor_id: input.supervisor_id || undefined,
+      }),
+    onSuccess: (created) => {
+      queryClient.invalidateQueries({ queryKey: WORK_ORDERS_QUERY_KEY });
+      setOpen(false);
+      reset(blank());
+      toast.success(t("production.workOrders.created"));
+      onCreated(created.id);
     },
-    {
-      key: "edit",
-      label: t("production.workOrders.edit"),
-      icon: <Pencil className="h-4 w-4" />,
-      onSelect: () => onOpenEdit(true),
+    onError: (error) => {
+      toast.error(t("production.workOrders.createError"), { description: error instanceof ApiError ? error.message : undefined });
     },
-  ];
-  if (order.status === "planned") {
-    rowActions.push({
-      key: "start",
-      label: isStarting ? t("production.workOrders.starting") : t("production.workOrders.start"),
-      icon: <PlayCircle className="h-4 w-4" />,
-      onSelect: onStart,
-      disabled: isStarting,
-    });
-  }
-  if (order.status === "ongoing") {
-    rowActions.push({
-      key: "suspend",
-      label: isSuspending ? t("production.workOrders.suspending") : t("production.workOrders.suspend"),
-      icon: <PauseCircle className="h-4 w-4" />,
-      onSelect: onSuspend,
-      disabled: isSuspending,
-    });
-  }
-  if (order.status === "suspended") {
-    rowActions.push({
-      key: "resume",
-      label: isResuming ? t("production.workOrders.resuming") : t("production.workOrders.resume"),
-      icon: <PlayCircle className="h-4 w-4" />,
-      onSelect: onResume,
-      disabled: isResuming,
-    });
-  }
-  if (order.status === "ongoing") {
-    rowActions.push({
-      key: "close",
-      label: isClosing ? t("production.workOrders.closing") : t("production.workOrders.close"),
-      icon: <CheckCircle2 className="h-4 w-4" />,
-      onSelect: () => {
-        closeForm.reset({ closed_at: nowDatetimeLocalValue() });
-        onOpenClose(true);
-      },
-      disabled: isClosing,
-    });
-  }
-  if (order.status === "planned" || order.status === "suspended") {
-    rowActions.push({
-      key: "cancel",
-      label: isCancelling ? t("production.workOrders.cancelling") : t("production.workOrders.cancel"),
-      icon: <XCircle className="h-4 w-4" />,
-      onSelect: onCancel,
-      disabled: isCancelling,
-      tone: "destructive",
-    });
-  }
+  });
 
   return (
-        <div className="flex justify-end gap-2">
-          <RowActionsMenu actions={rowActions} label={t("production.workOrders.column.action")} />
-          <Dialog open={isDetailsDialogOpen} onOpenChange={onOpenDetails}>
-            <DialogContent className="max-w-xl">
-              <DialogHeader>
-                <DialogTitle>{order.reference || order.id}</DialogTitle>
-                <DialogDescription>{productName(order.product_id)}</DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-3 rounded-xl border border-border bg-muted/20 p-3 text-sm">
-                  <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.details.productionReports")}</p>
-                    <p className="mt-1 text-lg font-semibold">{reports.length}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.details.qualityReports")}</p>
-                    <p className="mt-1 text-lg font-semibold">{qualityReports.length}</p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.details.produced")}</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums">
-                      {consolidation ? consolidation.produced_quantity : "—"}
-                    </p>
-                  </div>
-                  <div className="rounded-lg border border-border bg-background p-2.5">
-                    <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground">{t("production.workOrders.column.yield")}</p>
-                    <p className="mt-1 text-lg font-semibold tabular-nums">
-                      {yieldDetail ? `${(yieldDetail.yield_ratio * 100).toFixed(1)}%` : "—"}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-2 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.column.status")}: </span>
-                    <StatusBadge status={order.status} />
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.column.type")}: </span>
-                    <span className="font-medium">{order.product_type ?? "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.column.startDate")}: </span>
-                    <span className="font-medium">{order.start_date ?? "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.column.workCenter")}: </span>
-                    <span className="font-medium">{workCenters.find((wc) => wc.id === order.work_center_id)?.name ?? "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.column.supervisor")}: </span>
-                    <span className="font-medium">
-                      {supervisorName(order.supervisor_id)}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.details.produced")}: </span>
-                    <span className="font-medium">{consolidation ? consolidation.produced_quantity : "—"}</span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.details.recipe")}: </span>
-                    <span className="font-medium">
-                      {order.recipe_id
-                        ? `v${recipes.find((r) => r.id === order.recipe_id)?.version ?? "?"}`
-                        : "—"}
-                    </span>
-                  </div>
-                  <div>
-                    <span className="text-muted-foreground">{t("production.workOrders.details.packagingBom")}: </span>
-                    <span className="font-medium">
-                      {order.packaging_bom_id
-                        ? `v${packagingBoms.find((b) => b.id === order.packaging_bom_id)?.version ?? "?"}`
-                        : "—"}
-                    </span>
-                  </div>
-                  {order.closed_at && (
-                    <div>
-                      <span className="text-muted-foreground">{t("production.workOrders.field.closedAt")}: </span>
-                      <span className="font-medium">{new Date(order.closed_at).toLocaleString(currentLocale())}</span>
-                    </div>
-                  )}
-                </div>
-
-                {yieldDetail && (
-                  <div className="space-y-1.5 rounded-lg border border-border p-3">
-                    <p className="text-xs font-medium text-muted-foreground">{t("production.workOrders.details.yield")}</p>
-                    <div className="grid grid-cols-2 gap-1 text-sm">
-                      <span>{t("production.workOrders.column.yield")}: {(yieldDetail.yield_ratio * 100).toFixed(1)}%</span>
-                      <span>{t("production.workOrders.details.rebroyat")}: {yieldDetail.rebroyat_quantity}</span>
-                      <span>{t("production.workOrders.details.semoule")}: {yieldDetail.semoule_quantity_total}</span>
-                    </div>
-                  </div>
-                )}
-
-                <div className="space-y-1.5">
-                  <p className="text-xs font-medium text-muted-foreground">{t("production.workOrders.details.pouredInputs")}</p>
-                  {pouredInputs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">{t("production.workOrders.details.pouredInputsEmpty")}</p>
-                  ) : (
-                    <ul className="space-y-1 text-sm">
-                      {pouredInputs.map((line) => (
-                        <li key={line.id} className="flex justify-between text-muted-foreground">
-                          <span>{productName(line.product_id)}</span>
-                          <span className="tabular-nums">{line.quantity}</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-
-              </div>
-            </DialogContent>
-          </Dialog>
-          <Dialog open={editingId === order.id} onOpenChange={onOpenEdit}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{t("production.workOrders.dialog.editTitle")}</DialogTitle>
-                <DialogDescription>{t("production.workOrders.dialog.editDescription")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={editForm.handleSubmit(onSubmitEdit)}>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`edit_work_center_${order.id}`}>{t("production.workOrders.field.workCenter")}</Label>
-                  <Select id={`edit_work_center_${order.id}`} {...editForm.register("work_center_id")}>
-                    <option value="">—</option>
-                    {workCenters.map((wc) => (
-                      <option key={wc.id} value={wc.id}>
-                        {wc.code} — {wc.name}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`edit_supervisor_${order.id}`}>{t("production.workOrders.field.supervisor")}</Label>
-                  <Select id={`edit_supervisor_${order.id}`} {...editForm.register("supervisor_id")}>
-                    <option value="">—</option>
-                    {supervisorOptions.map((s) => (
-                      <option key={s.id} value={s.id}>
-                        {supervisorLabel(s)}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`edit_product_type_${order.id}`}>{t("production.workOrders.field.productType")}</Label>
-                  <Select id={`edit_product_type_${order.id}`} {...editForm.register("product_type")}>
-                    <option value="">—</option>
-                    <option value="PC">PC</option>
-                    <option value="PL">PL</option>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`edit_recipe_${order.id}`}>{t("production.workOrders.field.recipe")}</Label>
-                  <Select id={`edit_recipe_${order.id}`} {...editForm.register("recipe_id")}>
-                    <option value="">—</option>
-                    {recipes.map((recipe) => (
-                      <option key={recipe.id} value={recipe.id}>
-                        {productName(recipe.target_product_id)} · v{recipe.version}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor={`edit_packaging_bom_${order.id}`}>{t("production.workOrders.field.packagingBom")}</Label>
-                  <Select id={`edit_packaging_bom_${order.id}`} {...editForm.register("packaging_bom_id")}>
-                    <option value="">—</option>
-                    {packagingBoms.map((bom) => (
-                      <option key={bom.id} value={bom.id}>
-                        {productName(bom.target_product_id)} · v{bom.version}
-                      </option>
-                    ))}
-                  </Select>
-                </div>
-                <Button type="submit" className="w-full" disabled={isUpdating}>
-                  {isUpdating ? t("production.workOrders.updating") : t("production.workOrders.update")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-          <Dialog open={isCloseDialogOpen} onOpenChange={onOpenClose}>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{t("production.workOrders.dialog.closeTitle")}</DialogTitle>
-                <DialogDescription>{t("production.workOrders.dialog.closeDescription")}</DialogDescription>
-              </DialogHeader>
-              <form
-                className="space-y-4"
-                onSubmit={closeForm.handleSubmit((input) => onClose(new Date(input.closed_at).toISOString()))}
-              >
-                <div className="space-y-1.5">
-                  <Label htmlFor={`close_at_${order.id}`}>{t("production.workOrders.field.closedAt")}</Label>
-                  <Input id={`close_at_${order.id}`} type="datetime-local" {...closeForm.register("closed_at")} />
-                  {closeForm.formState.errors.closed_at && (
-                    <p className="text-sm text-destructive">{closeForm.formState.errors.closed_at.message}</p>
-                  )}
-                </div>
-                <Button type="submit" className="w-full" disabled={isClosing}>
-                  {isClosing ? t("production.workOrders.closing") : t("production.workOrders.close")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
-        </div>
+    <Dialog open={open} onOpenChange={setOpen}>
+      <DialogTrigger asChild>
+        <Button>
+          <Plus className="h-4 w-4" />
+          {t("production.workOrders.new")}
+        </Button>
+      </DialogTrigger>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>{t("production.workOrders.dialog.title")}</DialogTitle>
+          <DialogDescription>{t("production.workOrders.dialog.description")}</DialogDescription>
+        </DialogHeader>
+        <form className="space-y-4" onSubmit={handleSubmit((input) => create.mutate(input))}>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="product_type">{t("production.workOrders.field.productType")}</Label>
+              <Select id="product_type" {...register("product_type")}>
+                <option value="PC">PC</option>
+                <option value="PL">PL</option>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="start_date">{t("production.workOrders.field.startDate")}</Label>
+              <Input id="start_date" type="date" {...register("start_date")} />
+              {errors.start_date && <p className="text-sm text-destructive">{errors.start_date.message}</p>}
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="work_center_id">{t("production.workOrders.field.workCenter")}</Label>
+            <Select id="work_center_id" {...register("work_center_id")}>
+              <option value="">—</option>
+              {workCenters.map((wc) => (
+                <option key={wc.id} value={wc.id}>
+                  {wc.code} — {wc.name}
+                </option>
+              ))}
+            </Select>
+            {errors.work_center_id && <p className="text-sm text-destructive">{errors.work_center_id.message}</p>}
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="supervisor_id">{t("production.workOrders.field.supervisor")}</Label>
+            <Select id="supervisor_id" {...register("supervisor_id")}>
+              <option value="">—</option>
+              {supervisorOptions.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {supervisorLabel(s)}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <p className="text-xs text-muted-foreground">{t("production.workOrders.productHint")}</p>
+          <Button type="submit" className="w-full" disabled={create.isPending}>
+            {create.isPending ? t("production.workOrders.creating") : t("production.workOrders.create")}
+          </Button>
+        </form>
+      </DialogContent>
+    </Dialog>
   );
 }

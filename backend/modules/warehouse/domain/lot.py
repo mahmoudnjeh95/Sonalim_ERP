@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass
 
 from core.domain.result import Err, Ok, Result
@@ -33,6 +34,15 @@ def validate_lot_number(*, lot_number: str) -> Result[None]:
     """
     if not lot_number.strip():
         return Err("INVALID_LOT_NUMBER", "lot_number is required")
+    return Ok(None)
+
+
+def validate_expiry_date(*, expiry_date: datetime.date, produced_at: str | None) -> Result[None]:
+    """A DLC is the last day the product is good, so it cannot fall before the day the lot
+    was made. Checked only when the lot says when it was made -- a lot received from a
+    supplier has no production day to compare against."""
+    if produced_at is not None and expiry_date < datetime.datetime.fromisoformat(produced_at).date():
+        return Err("INVALID_EXPIRY", "the expiry date cannot be before the day the lot was produced")
     return Ok(None)
 
 

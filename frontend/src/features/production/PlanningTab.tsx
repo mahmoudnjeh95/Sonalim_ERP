@@ -9,7 +9,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Skeleton } from "../../components/ui/skeleton";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
@@ -21,6 +20,7 @@ import { listPartners } from "../partners/api";
 import { listProducts, listWorkOrders } from "./api";
 import { computeProductionSuggestions, type ProductionSuggestion } from "./planning";
 import { CreateOfFromSuggestionDialog } from "./CreateOfFromSuggestionDialog";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const ORDERS_QUERY_KEY = ["sales", "orders"] as const;
 const OPPORTUNITIES_QUERY_KEY = ["crm", "opportunities"] as const;
@@ -30,8 +30,6 @@ const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
-
-const DUE_SOON_DAYS = 7;
 
 function daysUntil(dateIso: string): number {
   const today = new Date();
@@ -124,15 +122,16 @@ export function PlanningTab() {
       defaultWidth: 180,
       cell: (suggestion) => {
         const daysAway = suggestion.earliestShipDate ? daysUntil(suggestion.earliestShipDate) : null;
+        // Overdue is a fact about the ship date and today; "due soon" would need a
+        // window nobody has configured, so it is not judged.
         const isOverdue = daysAway !== null && daysAway < 0;
-        const isDueSoon = daysAway !== null && daysAway >= 0 && daysAway <= DUE_SOON_DAYS;
         return suggestion.earliestShipDate ? (
           <span className="flex items-center gap-1.5">
             {new Date(suggestion.earliestShipDate).toLocaleDateString(currentLocale())}
-            {(isOverdue || isDueSoon) && (
-              <Badge variant={isOverdue ? "destructive" : "warning"}>
+            {isOverdue && (
+              <Badge variant="destructive">
                 <AlertTriangle className="h-3 w-3" />
-                {isOverdue ? t("production.planning.urgency.overdue") : t("production.planning.urgency.dueSoon")}
+                {t("production.planning.urgency.overdue")}
               </Badge>
             )}
           </span>
@@ -212,14 +211,7 @@ export function PlanningTab() {
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <TableRow key={i}>
-                    <TableCell colSpan={visibleColumns.length}>
-                      <Skeleton className="h-5 w-full" />
-                    </TableCell>
-                  </TableRow>
-                ))}
+              {isLoading && <TableLoadingRow colSpan={visibleColumns.length} />}
               {!isLoading && suggestions.length === 0 && (
                 <TableRow>
                   <TableCell colSpan={visibleColumns.length} className="p-0">
