@@ -57,7 +57,10 @@ def env(db):
         "VALUES (%s, %s, %s, 'TC-EQ', 'Test machine')",
         (equipment, TENANT, work_center),
     )
-    return {"actor": actor, "product": product, "work_center": work_center, "equipment": equipment}
+    return {
+        "actor": actor, "product": product, "location": location,
+        "work_center": work_center, "equipment": equipment,
+    }
 
 
 @pytest.fixture
@@ -170,6 +173,50 @@ def test_conformity_summary_sums_several_validated_reports_and_skips_drafts(db, 
     assert summary["conformity_rate"] == 130 / 140
     assert [p["report_date"] for p in summary["pending_nc_reports"]] == ["2026-09-01"]
     assert summary["pending_nc_reports"][0]["non_conforming_cartons"] == 10.0
+
+
+def test_an_nc_for_one_of_does_not_clear_the_same_products_defect_on_another_of(db, env, of):
+    """One shift packs the same product for two OFs, both with defects. A case
+    raised for OF A's defect must leave OF B's still flagged as unaddressed."""
+    other_of = _ok(WorkOrderService(db).create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"], planned_quantity=500,
+        work_center_id=env["work_center"],
+    ))
+    shift_id = _validated_shift(
+        db, env, [_packing_row(env, of.id), _packing_row(env, other_of.id, finished=300, packets=60)],
+        report_date=datetime.date(2026, 9, 5),
+    )
+    qc = QualityReportService(db)
+    created = _ok(qc.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    report_id = created["report"].id
+    _ok(qc.update_draft(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, lines=[
+        {
+            "shift_packing_row_id": line.shift_packing_row_id, "conforming_cartons": 10,
+            "non_conforming_cartons": 3, "defect_details": "bad seal",
+        }
+        for line in created["lines"]
+    ]))
+    _ok(qc.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id))
+    _ok(qc.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())))
+
+    # Inserted directly: this test is about the pending-NC match, not the raise path.
+    db.execute(
+        """
+        INSERT INTO qc.non_conformities
+            (id, tenant_id, reference, of_id, quality_report_id, product_id, quantity, source_location_id, defect_type)
+        VALUES (%s, %s, %s, %s, %s, %s, 3, %s, 'bad seal')
+        """,
+        (str(ULID()), TENANT, f"NC-{ULID()}", of.id, report_id, env["product"], env["location"]),
+    )
+
+    assert qc.get_conformity_summary(tenant_id=TENANT, of_id=of.id)["pending_nc_reports"] == []
+    other_line = next(l for l in created["lines"] if l.of_id == other_of.id)
+    assert qc.get_conformity_summary(tenant_id=TENANT, of_id=other_of.id)["pending_nc_reports"] == [
+        {
+            "conformity_line_id": other_line.id, "report_id": report_id,
+            "report_date": "2026-09-05", "non_conforming_cartons": 3.0,
+        }
+    ]
 
 
 def test_conformity_summary_of_an_uninspected_of_is_empty(db, env, of):

@@ -657,7 +657,7 @@ def test_a_validated_defect_with_no_case_raised_is_flagged(db, env, of):
     line_id = quality._load_lines(tenant_id=TENANT, report_id=report_id)[0].id
     result = _consolidate(db, of)["quality"]
     assert result["pending_nc_reports"] == [
-        {"conformity_line_id": line_id, "report_date": "2026-09-01", "non_conforming_cartons": 10.0}
+        {"conformity_line_id": line_id, "report_id": report_id, "report_date": "2026-09-01", "non_conforming_cartons": 10.0}
     ]
 
     from modules.qc.api.non_conformity_service import NonConformityService

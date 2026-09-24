@@ -224,27 +224,36 @@ class QualityReportService:
     def _reports_needing_nc(self, *, tenant_id: str, of_id: str) -> list[dict]:
         """Validated conformity lines that logged a defect but never got an NC raised for it.
 
-        Keyed by conformity line, not report: a report spans several products,
-        so "the report" does not say which product's defect is unaddressed.
+        Keyed by conformity line: a report spans several products and OFs, so
+        the report alone does not say which defect is unaddressed. report_id
+        is carried alongside so a screen can still open the report. An NC only
+        clears the line of its own OF -- one shift can pack the same product
+        for two OFs, and a case raised for one says nothing about the other.
         """
         rows = self._connection.execute(
             """
-            SELECT l.id, r.report_date, l.non_conforming_cartons
+            SELECT l.id, r.id, r.report_date, l.non_conforming_cartons
             FROM qc.quality_conformity_lines l
             JOIN qc.quality_reports r ON r.id = l.report_id AND r.tenant_id = l.tenant_id
             WHERE l.tenant_id = %s AND l.of_id = %s AND r.status = 'validated'
               AND l.non_conforming_cartons > 0
               AND NOT EXISTS (
                   SELECT 1 FROM qc.non_conformities n
-                  WHERE n.tenant_id = l.tenant_id AND n.quality_report_id = l.report_id AND n.product_id = l.product_id
+                  WHERE n.tenant_id = l.tenant_id AND n.quality_report_id = l.report_id
+                    AND n.product_id = l.product_id AND n.of_id = l.of_id
               )
             ORDER BY r.report_date DESC
             """,
             (tenant_id, of_id),
         ).fetchall()
         return [
-            {"conformity_line_id": line_id, "report_date": report_date.isoformat(), "non_conforming_cartons": float(qty)}
-            for line_id, report_date, qty in rows
+            {
+                "conformity_line_id": line_id,
+                "report_id": report_id,
+                "report_date": report_date.isoformat(),
+                "non_conforming_cartons": float(qty),
+            }
+            for line_id, report_id, report_date, qty in rows
         ]
 
     GRAINS = ("day", "week", "month", "year")
