@@ -257,6 +257,40 @@ class QualityReportService:
             for line_id, report_id, report_date, qty in rows
         ]
 
+    def get_validated_conforming(self, *, tenant_id: str, day: datetime.date) -> dict[str, float]:
+        """Conforming pieces per product that validated QC reports of `day` cleared.
+
+        Only a validated report counts -- a draft, submitted or rejected one is a claim, not a
+        verdict. `report_date` is the QC report's own, copied from its shift at creation, so it
+        is the shift's day without reading production's tables. A line's conforming cartons are
+        turned into pieces with the packets-per-carton frozen on its packing row (asked of
+        production, never read here) and the same `finished_quantity_from_count` the packed
+        figure uses, so the two stay comparable. No carton tier (a sac) passes the count through.
+        """
+        from modules.production.api.report_product import packing_row_packets_per_carton
+        from modules.production.domain.packaging_estimate import finished_quantity_from_count
+
+        rows = self._connection.execute(
+            """
+            SELECT l.product_id, l.shift_packing_row_id, l.conforming_cartons
+            FROM qc.quality_conformity_lines l
+            JOIN qc.quality_reports r ON r.id = l.report_id AND r.tenant_id = l.tenant_id
+            WHERE l.tenant_id = %s AND r.status = 'validated' AND r.report_date = %s
+            """,
+            (tenant_id, day),
+        ).fetchall()
+        per_carton_by_row = packing_row_packets_per_carton(
+            self._connection, tenant_id=tenant_id, shift_packing_row_ids=[row[1] for row in rows]
+        )
+        totals: dict[str, float] = {}
+        for product_id, row_id, conforming_cartons in rows:
+            cartons = float(conforming_cartons)
+            pieces = finished_quantity_from_count(
+                packets_per_carton=per_carton_by_row.get(row_id), carton_quantity=cartons, packets_counted=cartons,
+            )
+            totals[product_id] = totals.get(product_id, 0.0) + pieces
+        return totals
+
     GRAINS = ("day", "week", "month", "year")
 
     def team_conformity(

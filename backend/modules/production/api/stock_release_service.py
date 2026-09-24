@@ -9,7 +9,9 @@ Lots are registered records here, with no per-store lot stock, so only product s
 
 What is offered comes from the packing reports of one day, not from the store's stock level:
 each finished product packed that day, how much of it, how much has already been released
-(remembered in `stock_release_lines`) and how much the line store still holds. The list opens
+(remembered in `stock_release_lines`) and how much the line store still holds. Only what quality
+control has validated as conforming may go: packed goods still waiting on their shift's QC report,
+or rejected by it, are shown as pending and refused by the release itself. The list opens
 on yesterday, or on today once nothing from yesterday is left unreleased. Quantities are in each
 product's own unit; cartons are only the screen's way of reading them.
 """
@@ -84,6 +86,12 @@ class StockReleaseService:
         ).fetchall()
         return {product_id: float(total) for product_id, total in rows}
 
+    def _qc_validated_on(self, tenant_id: str, day: datetime.date) -> dict[str, float]:
+        """Conforming pieces per product that validated QC reports of `day` cleared -- asked of qc."""
+        from modules.qc.api.quality_service import QualityReportService
+
+        return QualityReportService(self._connection).get_validated_conforming(tenant_id=tenant_id, day=day)
+
     def get_release_list(self, *, tenant_id: str, day: datetime.date | None = None, today: datetime.date | None = None) -> dict:
         """The products packed on `day`, what has left the line store and what still can.
 
@@ -107,6 +115,7 @@ class StockReleaseService:
         names = {location.id: location.name for location in LocationService(self._connection).list_locations(tenant_id=tenant_id)}
         on_hand = {level.product_id: level.quantity_on_hand for level in self._stock.list_stock_items(tenant_id, location_id=line_id)}
         released = self._released_on(tenant_id, day)
+        qc_validated = self._qc_validated_on(tenant_id, day)
         items = []
         for product_id, packed in self._packed_on(tenant_id, day).items():
             product = self._core.get_product(tenant_id, product_id)
@@ -116,6 +125,9 @@ class StockReleaseService:
             destination = product.default_location_id
             per_carton = product.packets_per_carton
             classification = self._classifications.get_classification(tenant_id, product_id)
+            qc_conforming = qc_validated.get(product_id, 0.0)
+            # What QC has cleared and is not released yet: only that may leave the line store.
+            qc_remaining = max(qc_conforming - released.get(product_id, 0.0), 0.0)
             items.append(
                 {
                     "product_id": product.id,
@@ -129,7 +141,10 @@ class StockReleaseService:
                     "remaining": remaining,
                     # What the line store actually holds caps it: goods validated before a line store
                     # was set went straight to the product's own store and cannot be moved from here.
-                    "releasable": min(remaining, max(on_hand.get(product_id, 0.0), 0.0)),
+                    # QC caps it too: packed goods QC has not validated as conforming stay put.
+                    "releasable": min(remaining, max(on_hand.get(product_id, 0.0), 0.0), qc_remaining),
+                    # Packed but not cleared: its shift's QC report is not validated yet, or QC rejected it.
+                    "pending_qc": max(packed - qc_conforming, 0.0),
                     "destination": {"id": destination, "name": names.get(destination)} if destination else None,
                 }
             )
@@ -146,6 +161,7 @@ class StockReleaseService:
         on_hand = {level.product_id: level.quantity_on_hand for level in self._stock.list_stock_items(tenant_id, location_id=line_id)}
         packed = self._packed_on(tenant_id, day)
         released = self._released_on(tenant_id, day)
+        qc_validated = self._qc_validated_on(tenant_id, day)
         plan: list[tuple[str, str, float, str]] = []  # (product id, name, quantity, destination)
         seen: set[str] = set()
         for item in items:
@@ -169,6 +185,14 @@ class StockReleaseService:
                 return Err(
                     "EXCEEDS_PACKED",
                     f"{product.name}: only {max(left, 0.0):g} of what was packed on {day.isoformat()} is left to release, {quantity:g} asked",
+                )
+            # Checked here too, not only in the list: a stale or forged request must not move
+            # goods QC has not validated as conforming, whatever the line store holds.
+            qc_left = qc_validated.get(product_id, 0.0) - released.get(product_id, 0.0)
+            if quantity > qc_left + _EPSILON:
+                return Err(
+                    "EXCEEDS_QC_VALIDATED",
+                    f"{product.name}: only {max(qc_left, 0.0):g} has been validated as conforming by quality control, {quantity:g} asked",
                 )
             if not product.default_location_id:
                 return Err("NO_DEFAULT_LOCATION", f"{product.name} has no default storage location to be released into")
