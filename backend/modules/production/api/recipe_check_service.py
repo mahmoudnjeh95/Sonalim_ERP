@@ -7,14 +7,14 @@ consults it. A line that has already run cannot be un-run by rejecting its repor
 **Where the mix comes from.** Two places record material entering an OF, and they
 overlap, so the rule has to be stated rather than guessed:
 
-* the **validated daily reports** are authoritative for the products they name —
+* the **validated shift runs** are authoritative for the products they name —
   semoule and rebroyat poured back in. They are what actually moved stock, and
   what decision 6 measures production against;
 * the OF's **poured input lines** supply every other component. They are recorded
   when the OF is opened and are the only record of additives and anything else
-  the daily report has no field for.
+  the shift run has no field for.
 
-A product named by a daily report is therefore never also counted from the input
+A product named by a shift run is therefore never also counted from the input
 lines. Counting it twice would inflate its share and fire a warning about a mix
 that was correct.
 """
@@ -143,14 +143,15 @@ class RecipeCheckService:
         totals: dict[str, float] = {}
         from_reports: set[str] = set()
 
-        # Semoule: one row per line, one or more lines per report, however many
+        # Semoule: one row per line, one or more lines per run, however many
         # qualities the shift poured.
         semolina_rows = self._connection.execute(
             """
             SELECT sl.product_id, COALESCE(SUM(sl.quantity), 0)
-            FROM production.production_reports r
-            JOIN production.report_semolina_lines sl ON sl.report_id = r.id AND sl.tenant_id = r.tenant_id
-            WHERE r.tenant_id = %s AND r.of_id = %s AND r.status = 'validated' AND sl.product_id IS NOT NULL
+            FROM production.shift_runs r
+            JOIN production.shift_reports s ON s.id = r.shift_report_id AND s.tenant_id = r.tenant_id
+            JOIN production.shift_run_semolina_lines sl ON sl.run_id = r.id AND sl.tenant_id = r.tenant_id
+            WHERE r.tenant_id = %s AND r.of_id = %s AND s.status = 'validated' AND sl.product_id IS NOT NULL
             GROUP BY sl.product_id
             """,
             (tenant_id, of_id),
@@ -159,15 +160,15 @@ class RecipeCheckService:
             from_reports.add(product_id)
             totals[product_id] = totals.get(product_id, 0.0) + float(quantity)
 
-        # Rebroyat poured back in: still one product per report, authoritative
+        # Rebroyat poured back in: still one product per run, authoritative
         # the same way semoule is.
         rebroyat_rows = self._connection.execute(
             """
-            SELECT d.regrind_input_product_id, COALESCE(SUM(d.regrind_input_quantity), 0)
-            FROM production.production_reports r
-            JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
-            WHERE r.tenant_id = %s AND r.of_id = %s AND r.status = 'validated' AND d.regrind_input_product_id IS NOT NULL
-            GROUP BY d.regrind_input_product_id
+            SELECT r.regrind_input_product_id, COALESCE(SUM(r.regrind_input_quantity), 0)
+            FROM production.shift_runs r
+            JOIN production.shift_reports s ON s.id = r.shift_report_id AND s.tenant_id = r.tenant_id
+            WHERE r.tenant_id = %s AND r.of_id = %s AND s.status = 'validated' AND r.regrind_input_product_id IS NOT NULL
+            GROUP BY r.regrind_input_product_id
             """,
             (tenant_id, of_id),
         ).fetchall()
