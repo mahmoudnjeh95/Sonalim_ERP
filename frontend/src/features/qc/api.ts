@@ -91,12 +91,13 @@ export function listQualityTeamPerformance(
   return apiFetch<TeamConformityRow[]>(`/qc/quality-reports/team-performance?${query.toString()}`, { token });
 }
 
+// No OF filter: a report follows a shift, and each of its conformity lines
+// names its own OF. Scope to an OF client-side (see WorkOrderDetailsPage).
 export function listQualityReports(
   token: string,
-  params: { of_id?: string; status?: QualityReportStatus } = {},
+  params: { status?: QualityReportStatus } = {},
 ) {
   const query = new URLSearchParams();
-  if (params.of_id) query.set("of_id", params.of_id);
   if (params.status) query.set("status", params.status);
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return apiFetch<QualityReport[]>(`/qc/quality-reports${suffix}`, { token });
