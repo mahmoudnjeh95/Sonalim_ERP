@@ -6,16 +6,15 @@ import psycopg
 class WorkOrderYieldService:
     """Rendement (yield) = finished product / material poured in.
 
-    Every term now comes from the OF's **validated** reports rather than from
-    columns cached on the order:
+    Every term now comes from the OF's **validated** shift runs rather than
+    from columns cached on the order:
 
-    * finished product — the sum of the daily reports' own Produit fini figure,
-      the tonnage off the scale at the press (see the daily_reports migration
-      comment: "feeds yield and consolidation only"). Not the conditionnement
-      reports' tonnage — packaging can lag the press by days, and a yield that
-      waits on it tells the plant nothing while the shift can still act;
-    * material poured in — the daily reports' semoule figures (one term per
-      report — semoule_x + semoule_y + ... across every validated shift) plus
+    * finished product — the sum of the shift runs' own Produit fini figure,
+      the tonnage off the scale at the press. Not the packing rows' tonnage
+      — packaging can lag the press by days, and a yield that waits on it
+      tells the plant nothing while the shift can still act;
+    * material poured in — the shift runs' semoule figures (one term per
+      run — semoule_x + semoule_y + ... across every validated shift) plus
       the rebroyat poured back into the mix. That is everything that went into
       the line, fresh or recycled.
 
@@ -43,7 +42,7 @@ class WorkOrderYieldService:
         self, tenant_id: str, work_order_ids: list[str] | None = None
     ) -> dict[str, dict[str, float]]:
         """Semoule in, rebroyat and finished product out, per OF, validated only."""
-        clauses = ["r.tenant_id = %s", "r.status = 'validated'"]
+        clauses = ["r.tenant_id = %s", "s.status = 'validated'"]
         params: list[object] = [tenant_id]
         if work_order_ids is not None:
             if not work_order_ids:
@@ -61,45 +60,45 @@ class WorkOrderYieldService:
                 -- fixture and a tonne-buying real tenant both correct.
                 SELECT r2.of_id,
                        CASE WHEN COUNT(DISTINCT u2.ratio_to_base) = 1 THEN MIN(u2.ratio_to_base) END AS ratio_to_base
-                FROM production.report_semolina_lines sl2
-                JOIN production.production_reports r2 ON r2.id = sl2.report_id AND r2.tenant_id = sl2.tenant_id
+                FROM production.shift_run_semolina_lines sl2
+                JOIN production.shift_runs r2 ON r2.id = sl2.run_id AND r2.tenant_id = sl2.tenant_id
+                JOIN production.shift_reports s2 ON s2.id = r2.shift_report_id AND s2.tenant_id = r2.tenant_id
                 LEFT JOIN core.products p2 ON p2.id = sl2.product_id AND p2.tenant_id = r2.tenant_id
                 LEFT JOIN core.uoms u2 ON u2.id = p2.uom_id AND u2.tenant_id = p2.tenant_id
-                WHERE r2.tenant_id = %s AND r2.status = 'validated'
+                WHERE r2.tenant_id = %s AND s2.status = 'validated'
                 GROUP BY r2.of_id
             )
             SELECT r.of_id,
                    COALESCE(SUM(sl.total_quantity), 0)
                        + COALESCE(SUM(
-                           d.regrind_input_quantity
+                           r.regrind_input_quantity
                            * COALESCE(riu.ratio_to_base, COALESCE(sr.ratio_to_base, 1))
                            / COALESCE(sr.ratio_to_base, 1)
                        ), 0),
-                   COALESCE(SUM(d.regrind_quantity), 0),
-                   COALESCE(SUM(d.finished_product_quantity), 0)
-            FROM production.production_reports r
-            LEFT JOIN production.daily_reports d
-                   ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+                   COALESCE(SUM(r.regrind_quantity), 0),
+                   COALESCE(SUM(r.finished_product_quantity), 0)
+            FROM production.shift_runs r
+            JOIN production.shift_reports s ON s.id = r.shift_report_id AND s.tenant_id = r.tenant_id
             -- Rebroyat poured back in is weighed against whatever product the
-            -- report names for it -- the dedicated rebroyat product most of
-            -- the time, but an old report can name a raw material bought in a
-            -- different unit instead. Restated against this OF's own semoule
-            -- unit (sem_ratio, joined below) so material_input adds like with
-            -- like. Same fix as regrind_service.create_regrind_batch's scrap
-            -- intake, which anchors to the output product instead.
+            -- run names for it -- the dedicated rebroyat product most of the
+            -- time, but a run can name a raw material bought in a different
+            -- unit instead. Restated against this OF's own semoule unit
+            -- (sem_ratio, joined below) so material_input adds like with like.
+            -- Same fix as regrind_service.create_regrind_batch's scrap intake,
+            -- which anchors to the output product instead.
             LEFT JOIN core.products rip
-                   ON rip.id = d.regrind_input_product_id AND rip.tenant_id = r.tenant_id
+                   ON rip.id = r.regrind_input_product_id AND rip.tenant_id = r.tenant_id
             LEFT JOIN core.uoms riu
                    ON riu.id = rip.uom_id AND riu.tenant_id = rip.tenant_id
             LEFT JOIN sem_ratio sr ON sr.of_id = r.of_id
-            -- Pre-aggregated per report before joining: a report can carry
-            -- several semoule lines, and joining that many-rows table straight
-            -- in would multiply every other summed column by the line count.
+            -- Pre-aggregated per run before joining: a run can carry several
+            -- semoule lines, and joining that many-rows table straight in
+            -- would multiply every other summed column by the line count.
             LEFT JOIN (
-                SELECT report_id, tenant_id, SUM(quantity) AS total_quantity
-                FROM production.report_semolina_lines
-                GROUP BY report_id, tenant_id
-            ) sl ON sl.report_id = r.id AND sl.tenant_id = r.tenant_id
+                SELECT run_id, tenant_id, SUM(quantity) AS total_quantity
+                FROM production.shift_run_semolina_lines
+                GROUP BY run_id, tenant_id
+            ) sl ON sl.run_id = r.id AND sl.tenant_id = r.tenant_id
             WHERE {' AND '.join(clauses)}
             GROUP BY r.of_id, sr.ratio_to_base
             """,
@@ -178,15 +177,15 @@ class WorkOrderYieldService:
                 WHERE rl.tenant_id = %s
                 GROUP BY rl.recipe_id
             )
-            SELECT r.id, r.of_id, w.product_id, r.report_date, r.team,
-                   d.water_percentage, d.semolina_flow_rate,
+            SELECT r.id, r.of_id, w.product_id, s.report_date, s.team,
+                   r.water_percentage, r.semolina_flow_rate,
                    wl.min_percentage, wl.max_percentage, wl.default_percentage
-            FROM production.production_reports r
-            JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            FROM production.shift_runs r
+            JOIN production.shift_reports s ON s.id = r.shift_report_id AND s.tenant_id = r.tenant_id
             JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
             LEFT JOIN water_line wl ON wl.recipe_id = w.recipe_id
-            WHERE r.tenant_id = %s AND r.status = 'validated'
-              AND (d.water_percentage > 0 OR d.semolina_flow_rate > 0)
+            WHERE r.tenant_id = %s AND s.status = 'validated'
+              AND (r.water_percentage > 0 OR r.semolina_flow_rate > 0)
             """,
             (tenant_id, tenant_id),
         ).fetchall()
