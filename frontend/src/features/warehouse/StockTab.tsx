@@ -53,6 +53,10 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { StockMoveHistoryTable } from "../../components/patterns/StockMoveHistoryTable";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { StockHistoryChart } from "../../components/patterns/StockHistoryChart";
+import { ProductSelect } from "../../components/patterns/ProductSelect";
+import { CATEGORY_ORDER, useCatalogLabels, useProductCatalog, type CatalogProduct } from "../products/catalog";
+import { FilterTabs } from "../../components/patterns/FilterTabs";
+import type { ProductCategory } from "../production/api";
 import { QuantityDiff } from "../../components/motion/QuantityDiff";
 import AdjustmentConfirmIcon from "../../assets/icons/warehouse/adjustment-confirm.svg?react";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
@@ -65,7 +69,6 @@ import {
   deleteStockItem,
   listConfirmedReceiptLineDetails,
   listLocations,
-  listProducts,
   listStock,
   listStockMoves,
   listUoms,
@@ -127,7 +130,6 @@ type RowAction = { item: StockItem; action: "adjust" | "edit" | "move" | "delete
 const STOCK_QUERY_KEY = ["warehouse", "stock"] as const;
 const STOCK_MOVES_QUERY_KEY = ["warehouse", "stock", "moves"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
-const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 // Same key AnalysisTab.tsx uses for the same endpoint -- shares its cache entry.
 const RECEIPT_LINES_QUERY_KEY = ["procurement", "receipt-lines"] as const;
@@ -209,10 +211,12 @@ export function StockTab() {
   const [historyProductId, setHistoryProductId] = useState<string | null>(null);
   const [rowAction, setRowAction] = useState<RowAction | null>(null);
   const [cartonItem, setCartonItem] = useState<StockItem | null>(null);
+  const [categoryFilter, setCategoryFilter] = useState<"all" | "unclassified" | ProductCategory>("all");
 
   const { data: items = [], isLoading } = useQuery({ queryKey: STOCK_QUERY_KEY, queryFn: () => listStock(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { catalog, products } = useProductCatalog();
+  const catalogLabels = useCatalogLabels();
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
   // Best-effort: a role without production.view_work_orders just doesn't get the
   // "work order" row in the move-detail dialog, rather than an error anywhere.
@@ -418,6 +422,15 @@ export function StockTab() {
   });
 
   const locationFilteredItems = activeLocationId === "all" ? items : items.filter((i) => i.location_id === activeLocationId);
+  // Category comes from Production > Product classifications (joined by
+  // useProductCatalog). "unclassified" is a real bucket, not a leftover: it is
+  // the list of products someone still has to classify before the pickers
+  // elsewhere can find them under the right heading.
+  const categoryOf = new Map<string, CatalogProduct["category"]>(catalog.map((p) => [p.id, p.category]));
+  const categoryFilteredItems =
+    categoryFilter === "all"
+      ? locationFilteredItems
+      : locationFilteredItems.filter((i) => (categoryFilter === "unclassified" ? categoryOf.get(i.product_id) == null : categoryOf.get(i.product_id) === categoryFilter));
 
   const columnFilterFields: FilterField<StockItem>[] = [
     { key: "product", kind: "text", getValue: (i) => productName(i.product_id) },
@@ -427,7 +440,7 @@ export function StockTab() {
     { key: "quantity_available", kind: "range", getValue: (i) => i.quantity_available },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
-  const visibleItems = columnFilters.apply(locationFilteredItems);
+  const visibleItems = columnFilters.apply(categoryFilteredItems);
   const onHandBreakdown = breakdownByUnit(visibleItems, (item) => productUomCode(item.product_id), (item) => item.quantity_on_hand);
   const reservedBreakdown = breakdownByUnit(visibleItems, (item) => productUomCode(item.product_id), (item) => item.quantity_reserved);
 
@@ -705,7 +718,7 @@ export function StockTab() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <div className="inline-flex flex-wrap gap-1 rounded-lg border border-border bg-muted/40 p-1">
           <button
             onClick={() => setActiveLocationId("all")}
@@ -744,6 +757,15 @@ export function StockTab() {
             </span>
           ))}
         </div>
+        <FilterTabs
+          value={categoryFilter}
+          onChange={setCategoryFilter}
+          options={[
+            { value: "all", label: t("common.all") },
+            ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category] })),
+            { value: "unclassified", label: catalogLabels.unclassified },
+          ]}
+        />
         {columnFilters.isActive && (
           <Button variant="ghost" size="sm" onClick={columnFilters.reset}>
             {t("common.clearFilters")}
@@ -868,14 +890,7 @@ export function StockTab() {
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="product_id">{t("warehouse.stock.field.productId")}</Label>
-                  <Select id="product_id" {...register("product_id")}>
-                    <option value="">—</option>
-                    {products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name}
-                      </option>
-                    ))}
-                  </Select>
+                  <ProductSelect id="product_id" products={catalog} {...register("product_id")} />
                   {errors.product_id && <p className="text-sm text-destructive">{errors.product_id.message}</p>}
                 </div>
                 <div className="space-y-1.5">

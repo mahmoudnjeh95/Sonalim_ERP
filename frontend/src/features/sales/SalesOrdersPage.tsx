@@ -35,7 +35,8 @@ import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners } from "../partners/api";
-import { listProducts } from "../production/api";
+import { ProductSelect } from "../../components/patterns/ProductSelect";
+import { useProductCatalog } from "../products/catalog";
 import { listProductTags } from "../products/api";
 import { confirmOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
@@ -56,7 +57,6 @@ type EditOrderForm = NewOrderForm;
 const QUERY_KEY = ["sales", "orders"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
-const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const PRODUCT_TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
@@ -77,10 +77,15 @@ export function SalesOrdersPage() {
   const { data: orders = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listOrders(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
-  const { data: allProducts = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { catalog } = useProductCatalog();
+  const allProducts = catalog;
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const { data: productTags = [] } = useQuery({ queryKey: PRODUCT_TAGS_QUERY_KEY, queryFn: () => listProductTags(token) });
   const products = allProducts.filter((product) => product.is_sellable);
+  // What a customer can buy: sellable products, finished goods listed first
+  // and grouped by category so a packet of spaghetti is never hunted for
+  // between the semolina and the film reels.
+  const catalogProducts = products;
 
   // "Sold by sac" is marked with the "sac" product tag (Products > Étiquettes),
   // the same tag pickers use for CARTON/FILM/SCOTCH — not a separate field.
@@ -370,14 +375,11 @@ export function SalesOrdersPage() {
                           <span aria-hidden className="block select-none text-xs font-medium text-transparent">
                             {t("sales.field.productId")}
                           </span>
-                          <Select {...register(`lines.${index}.product_id` as const)}>
-                            <option value="">{t("sales.field.productId")}</option>
-                            {products.map((product) => (
-                              <option key={product.id} value={product.id}>
-                                {product.name}
-                              </option>
-                            ))}
-                          </Select>
+                          <ProductSelect
+                            products={catalogProducts}
+                            placeholder={t("sales.field.productId")}
+                            {...register(`lines.${index}.product_id` as const)}
+                          />
                         </div>
                         <div className="w-24 space-y-1">
                           <span className="block text-xs font-medium text-foreground">
@@ -498,14 +500,11 @@ export function SalesOrdersPage() {
                           <span aria-hidden className="block select-none text-xs font-medium text-transparent">
                             {t("sales.field.productId")}
                           </span>
-                          <Select {...registerEdit(`lines.${index}.product_id` as const)}>
-                            <option value="">{t("sales.field.productId")}</option>
-                            {products.map((product) => (
-                              <option key={product.id} value={product.id}>
-                                {product.name}
-                              </option>
-                            ))}
-                          </Select>
+                          <ProductSelect
+                            products={catalogProducts}
+                            placeholder={t("sales.field.productId")}
+                            {...registerEdit(`lines.${index}.product_id` as const)}
+                          />
                         </div>
                         <div className="w-24 space-y-1">
                           <span className="block text-xs font-medium text-foreground">

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 import psycopg
 from ulid import ULID
 
@@ -789,6 +791,8 @@ class StockService:
         product_id: str | None = None,
         move_type: str | None = None,
         reference: str | None = None,
+        date_from: datetime.date | None = None,
+        date_to: datetime.date | None = None,
         limit: int = 200,
     ) -> list[dict]:
         clauses = ["tenant_id = %s"]
@@ -805,6 +809,14 @@ class StockService:
         if reference is not None:
             clauses.append("reference = %s")
             params.append(reference)
+        # Calendar-day bounds, inclusive on both ends: a screen asks for
+        # "September" and expects the 30th's evening movements in it.
+        if date_from is not None:
+            clauses.append("created_at >= %s")
+            params.append(datetime.datetime.combine(date_from, datetime.time.min))
+        if date_to is not None:
+            clauses.append("created_at < %s")
+            params.append(datetime.datetime.combine(date_to + datetime.timedelta(days=1), datetime.time.min))
         params.append(limit)
 
         rows = self._connection.execute(
