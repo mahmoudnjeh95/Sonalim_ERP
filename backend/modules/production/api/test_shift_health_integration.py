@@ -144,9 +144,37 @@ def test_completeness_counts_non_empty_sections(db, env):
     assert completeness["average_sections_filled"] == len(SECTION_KEYS) / 2
 
 
+def test_validator_edit_rate_by_section(db, env):
+    from modules.production.api.shift_validation_service import ShiftValidationService as SVS
+
+    shift_id = _open_shift(db, env)
+    service = ShiftReportService(db)
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="staffing",
+                             payload={"staffing": {"control_room": 1, "petrin": 1, "semoule": 1, "broyage": 1}}))
+    for key in SECTION_KEYS:
+        if key == "staffing":
+            _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+
+    edited = SVS(db).edit_section_as_validator(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="staffing",
+        payload={"staffing": {"control_room": 2, "petrin": 1, "semoule": 1, "broyage": 1}}, reason="test edit",
+    )
+    assert isinstance(edited, Ok), getattr(edited, "message", "")
+
+    health = _health(db)
+
+    by_key = {row["section_key"]: row for row in health["validator_edit_rate_by_section"]}
+    assert by_key["staffing"]["edited_count"] == 1
+    assert by_key["staffing"]["edit_rate_pct"] == 100.0
+    assert by_key["runs"]["edited_count"] == 0
+
+
 def test_empty_window_returns_zeroed_shape_not_an_error(db, env):
     health = _health(db, date_from="2030-01-01", date_to="2030-01-31")
     assert health["funnel"] == []
     assert health["time_to_validate_minutes"]["sample_size"] == 0
     assert health["completeness"] == {"average_sections_filled": None, "total_sections": len(SECTION_KEYS), "shift_count": 0}
     assert all(row["return_rate_pct"] is None for row in health["return_rate_by_section"])
+    assert all(row["edit_rate_pct"] is None for row in health["validator_edit_rate_by_section"])

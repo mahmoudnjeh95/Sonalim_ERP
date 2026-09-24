@@ -162,6 +162,35 @@ export function ShiftHealthTab() {
           </Table>
         </CardContent>
       </Card>
+
+      <Card>
+        <CardHeader>
+          <div>
+            <CardTitle>{t("analytics.shiftHealth.validatorEditRate.title")}</CardTitle>
+            <CardDescription>{t("analytics.shiftHealth.validatorEditRate.subtitle")}</CardDescription>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>{t("analytics.shiftHealth.returnRate.section")}</TableHead>
+                <TableHead className="text-right">{t("analytics.shiftHealth.validatorEditRate.title")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {data.validator_edit_rate_by_section.map((row) => (
+                <TableRow key={row.section_key}>
+                  <TableCell className="font-medium">{translated(t, `analytics.shiftHealth.section.${row.section_key}`)}</TableCell>
+                  <TableCell className="text-right tabular-nums">
+                    {formatPercent(row.edit_rate_pct)} ({row.edited_count}/{row.total_count})
+                  </TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
     </div>
   );
 }

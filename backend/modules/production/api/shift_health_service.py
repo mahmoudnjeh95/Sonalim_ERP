@@ -103,6 +103,28 @@ class ShiftHealthService:
             for key in SECTION_KEYS
         ]
 
+        edited_counts = dict(
+            self._connection.execute(
+                f"""
+                SELECT r.section_key, count(DISTINCT r.shift_report_id)
+                FROM production.shift_section_revisions r
+                JOIN production.shift_reports s ON s.id = r.shift_report_id AND s.tenant_id = r.tenant_id
+                WHERE {s_where} AND r.section_key = ANY(%s) AND r.edited_by_validator = TRUE
+                GROUP BY r.section_key
+                """,
+                [*s_params, list(SECTION_KEYS)],
+            ).fetchall()
+        )
+        validator_edit_rate_by_section = [
+            {
+                "section_key": key,
+                "edited_count": int(edited_counts.get(key, 0)),
+                "total_count": handed_in,
+                "edit_rate_pct": (edited_counts.get(key, 0) / handed_in) * 100 if handed_in > 0 else None,
+            }
+            for key in SECTION_KEYS
+        ]
+
         avg_filled, shift_count = self._connection.execute(
             f"""
             SELECT AVG(filled), count(*)
@@ -126,5 +148,6 @@ class ShiftHealthService:
             "funnel": funnel,
             "time_to_validate_minutes": time_to_validate_minutes,
             "return_rate_by_section": return_rate_by_section,
+            "validator_edit_rate_by_section": validator_edit_rate_by_section,
             "completeness": completeness,
         }

@@ -959,6 +959,7 @@ export interface ShiftHealth {
   funnel: { status: string; count: number }[];
   time_to_validate_minutes: { median: number | null; average: number | null; sample_size: number };
   return_rate_by_section: { section_key: string; returned_count: number; total_count: number; return_rate_pct: number | null }[];
+  validator_edit_rate_by_section: { section_key: string; edited_count: number; total_count: number; edit_rate_pct: number | null }[];
   completeness: { average_sections_filled: number | null; total_sections: number; shift_count: number };
 }
 
