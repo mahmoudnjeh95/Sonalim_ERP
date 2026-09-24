@@ -59,11 +59,11 @@ class StockReleaseService:
         """
         rows = self._connection.execute(
             """
-            SELECT COALESCE(c.product_id, w.product_id), c.carton_quantity, c.waste_carton_quantity, c.packets_counted, c.snapshot_packets_per_carton
-            FROM production.conditionnement_reports c
-            JOIN production.production_reports r ON r.id = c.report_id AND r.tenant_id = c.tenant_id
-            JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
-            WHERE r.tenant_id = %s AND r.status = 'validated' AND r.report_date = %s
+            SELECT COALESCE(p.product_id, w.product_id), p.carton_quantity, p.waste_carton_quantity, p.packets_counted, p.snapshot_packets_per_carton
+            FROM production.shift_packing_rows p
+            JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
+            JOIN production.work_orders w ON w.id = p.of_id AND w.tenant_id = p.tenant_id
+            WHERE p.tenant_id = %s AND s.status = 'validated' AND s.report_date = %s
             """,
             (tenant_id, day),
         ).fetchall()
