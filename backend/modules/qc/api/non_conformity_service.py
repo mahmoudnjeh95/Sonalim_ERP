@@ -256,18 +256,21 @@ class NonConformityService:
         `packets_per_carton`, means a caller can never reintroduce the bug of
         posting a carton count straight through as a piece count -- it doesn't
         get to choose the number at all once a quality report is attached.
+
+        Reads the conformity line for this report/of/product -- a shift's QC
+        report can span several products, so the line is what carries the real
+        non_conforming_cartons count, not the report as a whole.
         """
         row = self._connection.execute(
             """
-            SELECT d.non_conforming_cartons
-            FROM qc.quality_report_details d
-            JOIN qc.quality_reports r ON r.id = d.report_id AND r.tenant_id = d.tenant_id
-            WHERE d.report_id = %s AND d.tenant_id = %s AND r.of_id = %s
+            SELECT l.non_conforming_cartons
+            FROM qc.quality_conformity_lines l
+            WHERE l.report_id = %s AND l.tenant_id = %s AND l.of_id = %s AND l.product_id = %s
             """,
-            (quality_report_id, tenant_id, of_id),
+            (quality_report_id, tenant_id, of_id, product_id),
         ).fetchone()
         if row is None:
-            return Err("QUALITY_REPORT_NOT_FOUND", f"no quality report {quality_report_id} found for OF {of_id}")
+            return Err("QUALITY_REPORT_NOT_FOUND", f"no conformity line on report {quality_report_id} for OF {of_id} / product {product_id}")
         non_conforming_cartons = float(row[0])
 
         product = self._core.get_product(tenant_id, product_id)

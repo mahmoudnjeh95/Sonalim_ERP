@@ -725,6 +725,28 @@ def test_a_quality_report_backed_nc_converts_cartons_to_the_products_own_unit(db
     assert _on_hand(db, env["product"], env["location"]) == before_shelf - 20
 
 
+def test_raising_an_nc_from_a_quality_report_derives_quantity_from_its_line(db, env, of):
+    qc = QualityReportService(db)
+    report = _quality_report(db, env, of)
+    line = qc._load_lines(tenant_id=TENANT, report_id=report.id)[0]
+    qc.update_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        lines=[{"shift_packing_row_id": line.shift_packing_row_id, "conforming_cartons": 10, "non_conforming_cartons": 4, "defect_details": "soudure"}],
+    )
+    _ok(qc.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id))
+    _ok(qc.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())))
+
+    nc = NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, product_id=env["product"],
+        quantity=0,  # ignored -- derived from the quality report
+        source_location_id=env["location"], defect_type="soudure défectueuse",
+        correlation_id=str(ULID()), quarantine_location_id=env["quarantine"],
+        quality_report_id=report.id,
+    )
+    assert isinstance(nc, Ok), getattr(nc, "message", "")
+    assert nc.value.quantity == 4  # no packets_per_carton on this test product, so cartons == pieces
+
+
 def test_a_manually_raised_nc_keeps_the_quantity_it_is_given(db, env, of):
     """No quality report attached -- there is no rapport carton count to derive
     from, so the quantity the caller supplies (already in the product's own
