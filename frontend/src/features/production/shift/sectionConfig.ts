@@ -40,6 +40,7 @@ export type OptionSource =
   | "siloSides"
   | "siloPhases"
   | "productsOrMp"
+  | "mpVerse"
   | "moldsForShift"
   | "orderTypes"
   | "moldTypes"
@@ -146,7 +147,7 @@ export const SECTIONS: SectionDef[] = [
         addLabel: L("Add a versement", "Ajouter un versement"),
         serverDerived: ["location_id"],
         columns: [
-          pick("product_id", L("MP versé", "MP versé"), "productsOrMp", true),
+          pick("product_id", L("MP versé", "MP versé"), "mpVerse", true),
           num("quantity", L("Quantity (t)", "Quantité (t)")),
         ],
       },

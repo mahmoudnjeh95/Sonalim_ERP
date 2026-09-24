@@ -91,6 +91,10 @@ export function useShiftReferenceData(enabled: boolean) {
       const productsOrMp = classifications.data
         ? productList.filter((p) => ["finished_good", "raw_material"].includes(classOf.get(p.id)?.category ?? "")).map(asOption)
         : productList.map(asOption);
+      // The versement's "MP versé": semoule inputs only -- raw materials minus water (its own line elsewhere).
+      const mpVerse = classifications.data
+        ? productList.filter((p) => classOf.get(p.id)?.category === "raw_material" && !classOf.get(p.id)?.is_water).map(asOption)
+        : productList.map(asOption);
       const itemsOfKind = (kind: PackagingKind): Option[] =>
         productList.filter((p) => classOf.get(p.id)?.packaging_kind === kind).map(asOption);
       // Products of a packing row: finished goods only (every product while classifications cannot be read).
@@ -119,6 +123,7 @@ export function useShiftReferenceData(enabled: boolean) {
         orders: pickable.map(orderOption),
         products: productList.map(asOption),
         productsOrMp,
+        mpVerse,
         finishedProducts,
         shiftOrders: all.filter((o) => runOrderIds.has(o.id)).map(orderOption),
         packingTypes: productList
