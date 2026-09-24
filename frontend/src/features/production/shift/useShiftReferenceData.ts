@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { useCallback, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
@@ -11,6 +11,7 @@ import { DOWNTIME_CLASSIFICATIONS, DOWNTIME_MOTIFS, DOWNTIME_TYPES } from "../Do
 import { useWasteTypes } from "../wasteTypes";
 import type { Option, OptionMap } from "./ShiftGrid";
 import type { Row, SectionKey, ShiftReport } from "./shiftApi";
+import { listShiftReports } from "./shiftApi";
 import { packingTypeLabel } from "./packingType";
 import { useLabel } from "./shiftText";
 
@@ -34,7 +35,23 @@ export function useShiftReferenceData(enabled: boolean) {
   const locations = useQuery({ queryKey: ["production", "shift", "locations"], queryFn: () => listLocations(token), enabled });
   const molds = useQuery({ queryKey: ["production", "shift", "molds"], queryFn: () => listMolds(token), enabled });
   const equipment = useQuery({ queryKey: ["production", "shift", "equipment"], queryFn: () => listEquipment(token), enabled });
+  const shiftReports = useQuery({ queryKey: ["production", "shift", "all-reports"], queryFn: () => listShiftReports(token), enabled });
   const partners = useQuery({ queryKey: ["production", "shift", "partners"], queryFn: () => listPartners(token), enabled });
+
+  // Filter archived equipment and build report count map
+  const activeEquipment = useMemo(
+    () => (equipment.data ?? []).filter((e) => !e.archived_at).sort((a, b) => a.name.localeCompare(b.name)),
+    [equipment.data],
+  );
+
+  const reportCountByLineDate = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const report of shiftReports.data ?? []) {
+      const key = `${report.report_date}|${report.work_center_id}`;
+      map.set(key, (map.get(key) ?? 0) + 1);
+    }
+    return map;
+  }, [shiftReports.data]);
 
   /** The option lists for one shift: the runs and packing rows it holds are choices for its waste and stop rows. */
   const buildOptions = useCallback(
@@ -152,6 +169,8 @@ export function useShiftReferenceData(enabled: boolean) {
     workCenters: workCenters.data,
     workCentersLoading: workCenters.isLoading,
     windows: settings.data?.shift_windows ?? [],
+    activeEquipment,
+    reportCountByLineDate,
     buildOptions,
   };
 }
