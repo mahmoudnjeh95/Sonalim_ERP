@@ -257,19 +257,20 @@ class NonConformityService:
         posting a carton count straight through as a piece count -- it doesn't
         get to choose the number at all once a quality report is attached.
 
-        Reads the conformity line for this report/of/product -- a shift's QC
-        report can span several products, so the line is what carries the real
-        non_conforming_cartons count, not the report as a whole.
+        The unit of an NC is (report, of_id, product_id): a shift's QC report can
+        span several products, and one shift can pack the same product for the
+        same OF on several packing rows (one line each). The NC covers all of
+        them, so the carton count is the sum over every matching line.
         """
         row = self._connection.execute(
             """
-            SELECT l.non_conforming_cartons
+            SELECT COALESCE(SUM(l.non_conforming_cartons), 0), count(*)
             FROM qc.quality_conformity_lines l
             WHERE l.report_id = %s AND l.tenant_id = %s AND l.of_id = %s AND l.product_id = %s
             """,
             (quality_report_id, tenant_id, of_id, product_id),
         ).fetchone()
-        if row is None:
+        if int(row[1]) == 0:
             return Err("QUALITY_REPORT_NOT_FOUND", f"no conformity line on report {quality_report_id} for OF {of_id} / product {product_id}")
         non_conforming_cartons = float(row[0])
 

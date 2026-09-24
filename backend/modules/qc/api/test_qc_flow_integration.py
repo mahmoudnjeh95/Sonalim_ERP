@@ -108,6 +108,46 @@ def _validated_shift(db, env, of, report_date=datetime.date(2026, 9, 1), shift="
     return shift_id
 
 
+def _validated_shift_with_rows(db, env, rows, report_date=datetime.date(2026, 9, 1), shift="morning") -> str:
+    """A validated shift with one packing row per (of_id, product_id) in `rows`, in order."""
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
+        report_date=report_date, shift=shift,
+    ))["id"]
+    _ok(service.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="packing",
+        payload={"rows": [
+            {
+                "of_id": of_id, "product_id": product_id, "equipment_id": env["equipment"],
+                "finished_product_quantity": 100, "packets_counted": 20,
+            }
+            for of_id, product_id in rows
+        ]},
+    ))
+    for key in SECTION_KEYS:
+        if key == "packing":
+            _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    return shift_id
+
+
+def _second_product(db, env, sku="TEST-QC-2") -> str:
+    product = str(ULID())
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id, default_location_id) "
+        "SELECT %s, %s, %s, 'Second pasta', uom_id, default_location_id FROM core.products WHERE id = %s",
+        (product, TENANT, sku, env["product"]),
+    )
+    StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=product, location_id=env["location"], quantity=1_000,
+        correlation_id=str(ULID()), reference="test-seed", actor_id=env["actor"],
+    )
+    return product
+
+
 def _quality_report(db, env, of, report_date=datetime.date(2026, 9, 1), shift="morning"):
     shift_id = _validated_shift(db, env, of, report_date=report_date, shift=shift)
     result = QualityReportService(db).create_report(
@@ -756,6 +796,34 @@ def test_raising_an_nc_from_a_quality_report_derives_quantity_from_its_line(db, 
     )
     assert isinstance(nc, Ok), getattr(nc, "message", "")
     assert nc.value.quantity == 4  # no packets_per_carton on this test product, so cartons == pieces
+
+
+def test_one_nc_covers_every_line_of_the_same_of_and_product(db, env, of):
+    """Two packing rows, same OF and product: the NC unit is (report, OF, product), so one NC
+    carries the sum of both lines' non-conforming cartons, converted to pieces."""
+    db.execute(
+        "UPDATE core.products SET packets_per_carton = 20 WHERE id = %s AND tenant_id = %s",
+        (env["product"], TENANT),
+    )
+    qc = QualityReportService(db)
+    shift_id = _validated_shift_with_rows(db, env, [(of.id, env["product"]), (of.id, env["product"])])
+    report = _ok(qc.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))["report"]
+    lines = qc._load_lines(tenant_id=TENANT, report_id=report.id)
+    assert len(lines) == 2
+    _ok(qc.update_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report.id,
+        lines=[
+            {"shift_packing_row_id": lines[0].shift_packing_row_id, "non_conforming_cartons": 3, "defect_details": "soudure"},
+            {"shift_packing_row_id": lines[1].shift_packing_row_id, "non_conforming_cartons": 5, "defect_details": "soudure"},
+        ],
+    ))
+
+    nc = _ok(NonConformityService(db).raise_non_conformity(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, product_id=env["product"], quantity=0,
+        source_location_id=env["location"], quarantine_location_id=env["quarantine"],
+        defect_type="soudure", correlation_id=str(ULID()), quality_report_id=report.id,
+    ))
+    assert nc.quantity == 8 * 20
 
 
 def test_a_manually_raised_nc_keeps_the_quantity_it_is_given(db, env, of):

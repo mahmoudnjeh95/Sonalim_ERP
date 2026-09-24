@@ -392,10 +392,26 @@ function ReviewDialog({
   const lineLabel = (line: ConformityLine) =>
     `${products.find((p) => p.id === line.product_id)?.name ?? line.product_id} · ${referenceOf(line.of_id)}`;
 
-  // Each defective line is its own case: its own OF, product and quantity.
+  // One case per (OF, product): a shift can pack the same product for the same
+  // OF on several rows, and one NC covers them all -- the backend derives its
+  // quantity from the sum of those lines, so the figure shown is the group's sum.
   const defectiveLines = lines.filter((line) => Number(line.non_conforming_cartons) > 0);
-  const canRaiseNc = defectiveLines.length > 0;
-  const ncPlan = defectiveLines.map((line) => {
+  const defectiveGroups = Object.values(
+    defectiveLines.reduce<Record<string, typeof defectiveLines[number]>>((groups, line) => {
+      const key = `${line.of_id}:${line.product_id}`;
+      const group = groups[key];
+      groups[key] = group
+        ? {
+            ...group,
+            non_conforming_cartons: Number(group.non_conforming_cartons) + Number(line.non_conforming_cartons),
+            defect_details: [group.defect_details, line.defect_details].filter(Boolean).join(" / ") || null,
+          }
+        : line;
+      return groups;
+    }, {}),
+  );
+  const canRaiseNc = defectiveGroups.length > 0;
+  const ncPlan = defectiveGroups.map((line) => {
     const perCarton = packetsPerCartonOf(line.product_id);
     const cartons = Number(line.non_conforming_cartons);
     return {
@@ -408,8 +424,8 @@ function ReviewDialog({
   });
 
   // Pre-fill the defect type only when there is exactly one case to raise --
-  // with several, each NC falls back to its own line's defect details instead.
-  const singleDefect = defectiveLines.length === 1 ? defectiveLines[0].defect_details : null;
+  // with several, each NC falls back to its own group's defect details instead.
+  const singleDefect = defectiveGroups.length === 1 ? defectiveGroups[0].defect_details : null;
   useEffect(() => {
     if (singleDefect && !ncDefectType) setNcDefectType(singleDefect);
   }, [singleDefect, ncDefectType]);
@@ -433,7 +449,7 @@ function ReviewDialog({
     mutationFn: async (): Promise<void> => {
       await rejectQualityReport(token, item.id, rejectionReason);
 
-      // One NC per non-conforming line, all moved between the same two locations.
+      // One NC per non-conforming (OF, product), all moved between the same two locations.
       if (canRaiseNc && raiseNc && ncSourceLocationId && ncQuarantineLocationId) {
         const settled = await Promise.allSettled(
           ncPlan.map((entry) =>
@@ -679,7 +695,7 @@ function ReviewDialog({
               {raiseNc && (
                 <div className="space-y-3">
                   {ncPlan.map((entry) => (
-                    <div key={entry.line.id} className="grid grid-cols-2 gap-2 text-sm">
+                    <div key={`${entry.line.of_id}:${entry.line.product_id}`} className="grid grid-cols-2 gap-2 text-sm">
                       <div>
                         <p className="text-xs text-muted-foreground">{t("production.validation.nc.field.product")}</p>
                         <p className="font-medium">{lineLabel(entry.line)}</p>

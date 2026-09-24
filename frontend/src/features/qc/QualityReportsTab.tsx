@@ -734,12 +734,28 @@ export function QualityReportDialog({
     queryFn: () => listNonConformities(token),
   });
   const linkedNonConformities = allNonConformities.filter((n) => n.quality_report_id === report.id);
-  // A defective line whose product already has a ticket on this report is
-  // covered; the rest still need one raised.
-  const defectiveLinesWithoutNc = lines.filter(
-    (line) =>
-      line.non_conforming_cartons > 0 &&
-      !linkedNonConformities.some((nc) => nc.of_id === line.of_id && nc.product_id === line.product_id),
+  // The NC unit is (report, OF, product): one shift can pack the same product
+  // for the same OF on several rows, and one NC covers them all (the backend
+  // sums their non-conforming cartons). Defective lines are grouped that way
+  // into one entry carrying the group's total; a group whose OF+product already
+  // has a ticket on this report is covered, the rest still need one raised.
+  const defectiveLinesWithoutNc = Object.values(
+    lines
+      .filter((line) => line.non_conforming_cartons > 0)
+      .reduce<Record<string, ConformityLine>>((groups, line) => {
+        const key = `${line.of_id}:${line.product_id}`;
+        const group = groups[key];
+        groups[key] = group
+          ? {
+              ...group,
+              non_conforming_cartons: group.non_conforming_cartons + line.non_conforming_cartons,
+              defect_details: [group.defect_details, line.defect_details].filter(Boolean).join(" / ") || null,
+            }
+          : line;
+        return groups;
+      }, {}),
+  ).filter(
+    (group) => !linkedNonConformities.some((nc) => nc.of_id === group.of_id && nc.product_id === group.product_id),
   );
 
   // Reference data — a plain useQuery, so it's a cache hit (no extra request)
@@ -871,7 +887,7 @@ export function QualityReportDialog({
           )}
           {defectiveLinesWithoutNc.map((line) => (
             <RaiseNcFromReportBanner
-              key={line.id}
+              key={`${line.of_id}:${line.product_id}`}
               report={report}
               line={line}
               lineLabel={lineLabel(line)}
