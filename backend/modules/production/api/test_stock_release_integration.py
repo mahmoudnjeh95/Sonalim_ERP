@@ -379,3 +379,21 @@ def test_a_packing_row_whose_product_was_corrected_no_longer_counts_as_cleared(d
     assert isinstance(refused, Err)
     refused = _release(db, env, [{"product_id": env["semolina"], "quantity": 1}])
     assert isinstance(refused, Err)
+
+
+def test_a_reversed_shifts_qc_verdict_clears_no_other_shifts_goods(db, env, stores):
+    from modules.production.api.shift_validation_service import ShiftValidationService
+
+    morning = _validated_and_cleared(db, env, shift="morning")
+    # The afternoon packs the same product, validated but not yet inspected by QC.
+    _validate(db, env, _submitted_shift(db, env, shift="afternoon"))
+    _ok(ShiftValidationService(db).reverse_shift(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=morning, reason="packing counted twice",
+    ))
+
+    # The morning's packing rows keep their ids and product, but its shift is no longer validated.
+    assert QualityReportService(db).get_validated_conforming(tenant_id=TENANT, day=DAY) == {}
+    [item] = _list(db)["items"]
+    assert (item["packed"], item["releasable"], item["pending_qc"]) == (120, 0, 120)
+    refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 1}])
+    assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
