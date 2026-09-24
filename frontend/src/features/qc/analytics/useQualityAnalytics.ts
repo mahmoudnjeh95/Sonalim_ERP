@@ -9,7 +9,7 @@ import { listProducts } from "../../warehouse/api";
 import {
   getDispositionSummary,
   listFollowUps,
-  listInspectableConditionnementReports,
+  listInspectableShiftReports,
   listInspectionLedger,
   listNonConformities,
 } from "../api";
@@ -61,7 +61,7 @@ export function useQualityAnalytics(days: number, { withBacklog = false }: { wit
   });
   const awaiting = useQuery({
     queryKey: ["qc", "inspectable-conditionnement"],
-    queryFn: () => listInspectableConditionnementReports(token),
+    queryFn: () => listInspectableShiftReports(token),
     enabled: withBacklog,
   });
   const products = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token) });

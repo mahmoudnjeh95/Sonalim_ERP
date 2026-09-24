@@ -185,6 +185,11 @@ export function ReleaseStockDialog({ unitOf }: { unitOf: (uomId: string) => stri
                       <td className="px-2 py-2 text-right tabular-nums">
                         {formatQuantity(item.packed / factor, unit)}
                         {factor !== 1 ? <span className="block text-xs text-muted-foreground">{formatQuantity(item.packed, unitOf(item.uom_id))}</span> : null}
+                        {item.pending_qc > 0 ? (
+                          <span className="block text-xs text-amber-600">
+                            {formatQuantity(item.pending_qc / factor, unit)} {t("production.board.release.pendingQcShort")}
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-2 py-2 text-right tabular-nums text-muted-foreground">
                         {item.released > 0 ? formatQuantity(item.released / factor, unit) : "—"}
@@ -204,7 +209,13 @@ export function ReleaseStockDialog({ unitOf }: { unitOf: (uomId: string) => stri
                           </div>
                         ) : (
                           <span className="text-xs text-muted-foreground">
-                            {item.remaining <= 0 ? t("production.board.release.alreadyReleased") : item.destination === null ? "" : t("production.board.release.notInLineStore")}
+                            {item.remaining <= 0
+                              ? t("production.board.release.alreadyReleased")
+                              : item.pending_qc > 0 && item.destination !== null
+                                ? t("production.board.release.pendingQc")
+                                : item.destination === null
+                                  ? ""
+                                  : t("production.board.release.notInLineStore")}
                           </span>
                         )}
                       </td>

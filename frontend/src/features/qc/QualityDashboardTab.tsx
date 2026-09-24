@@ -13,7 +13,6 @@ import { ConformityTrendChart } from "./analytics/ConformityTrendChart";
 import { DefectParetoPanel } from "./analytics/DefectParetoPanel";
 import { InspectionCoveragePanel } from "./analytics/InspectionCoveragePanel";
 import { NcPipelinePanel } from "./analytics/NcPipelinePanel";
-import { ProcessReadingsPanel } from "./analytics/ProcessReadingsPanel";
 import { QualityBreakdownPanel } from "./analytics/QualityBreakdownPanel";
 import { QualityInsightsPanel } from "./analytics/QualityInsightCard";
 import { RecoveryPanel } from "./analytics/RecoveryPanel";
@@ -212,7 +211,6 @@ export function QualityDashboardTab() {
           <RecoveryPanel rows={dispositionRows} />
         </div>
 
-        <ProcessReadingsPanel readings={summary.readings} />
       </div>
     </div>
   );

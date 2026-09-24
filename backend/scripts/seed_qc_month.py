@@ -1,28 +1,29 @@
-"""Load a month of QC work, through the real services: one quality report per shift's packing run,
-follow-ups and non-conformities.
+"""Load a month of QC work, through the real services: quality reports, follow-ups and non-conformities.
 
     cd backend
     PYTHONPATH=. .venv/Scripts/python.exe scripts/seed_qc_month.py --dry-run
     PYTHONPATH=. .venv/Scripts/python.exe scripts/seed_qc_month.py
 
-QC inspects the packing reports the month's validated shifts produced (the ones not yet inspected), so
-every fiche de shift older than a day or two gets its quality report -- the dashboards need the whole
-month, not a sample. The newest shifts are where a real week leaves them: some still waiting for QC, the
-freshest reports handed in, sent back or still drafts. Carton counts come from what the packing report
-says was packed; defect wording is the plant's own (taken from the reports already recorded).
+QC inspects the validated shift reports the month's production produced (the ones not yet inspected;
+run `seed_shift_month.py` first so there is something to inspect). Every fiche de shift older than a
+day or two gets its quality report -- the dashboards need the whole month, not a sample -- while the
+newest shifts are where a real week leaves them: some still waiting for QC, the freshest reports
+handed in, sent back or still drafts. Carton counts come from what each shift's packing rows say was
+packed, split per product line; defect wording is the plant's own (taken from the reports already
+recorded).
 
 The defects are not spread evenly, on purpose, so the quality dashboards have something to find: the
 200 g format and the line's third team reject more, night shifts reject a little more, one bad week in
-September rejects a lot more, and each product has its own signature defect. Process readings are set on
-most reports, close to the one reading a person entered by hand (pre-dryer 10, humidity 34.5, cooling 10),
-drifting slowly across the month so the trend charts move. PF and SUMO have no reading to go on and stay empty.
+September rejects a lot more, and each product has its own signature defect. A few rejected reports are
+revised and validated again. Validated reports open their follow-up window, older ones get
+observations, and reports with enough non-conforming cartons raise a non-conformity that is pulled
+into quarantine, dispositioned and (when old enough) closed.
 
-A few rejected reports are revised and validated again. Validated reports open their follow-up window,
-older ones get observations, and reports with enough non-conforming cartons raise a non-conformity that is
-pulled into quarantine, dispositioned and (when old enough) closed.
+Contrôle des paramètres readings are entered the way the paper sheet actually gets filled: two or
+three of its nine groups, on some reports, not all nine every time.
 
-Test data, generated from a fixed seed. Already-inspected packing reports are skipped, so a rerun adds nothing.
-The events the services queue are left unsent, like every other seeder's.
+Test data, generated from a fixed seed. Already-inspected shift reports are skipped, so a rerun adds
+nothing. The events the services queue are left unsent, like every other seeder's.
 """
 from __future__ import annotations
 
@@ -36,6 +37,7 @@ from core.domain.result import Err
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.api.quality_service import FollowUpService, QualityReportService
 from modules.qc.domain.non_conformity import DispositionLine
+from modules.qc.domain.parameters import PARAMETER_GROUPS
 from modules.qc.domain.quality import QualityReportDetail
 from scripts.seed_common import TENANT, TODAY, actor_id, business_time, run, stamp_audit, stamp_events
 
@@ -50,17 +52,30 @@ DEFECTS = [
     "Carton mouillé / taché",
     "Pièces endommagées",
 ]
+OBSERVATIONS = ["Aucun retour client sur ce lot", "Contrôle d'un échantillon en stock : conforme", "Lot revu au magasin, RAS"]
+CORRECTIVE_ACTIONS = ["Contrôle renforcé en fin de ligne", "Sensibilisation de l'équipe", "Réglage de la machine", "Vérification du scellage"]
+REJECTION = "Quantités à revérifier avec le rapport de conditionnement"
+COMMENTS = ["RAS", "Lecture faite en fin de poste", "Contrôle visuel uniquement"]
+NC_MIN_CARTONS = 8
 # Each format has a signature defect it sees more than the others (the sachet weld on the 200 g,
 # crushed cartons on the long pasta) -- so "top defect by product" is a real finding, not noise.
 SIGNATURE_DEFECT = {"doman-pc-200g": "Scellage défectueux", "doman-pl-500g": "Carton écrasé / déformé", "COQ6-500G": "Pièces endommagées"}
-# The one hand-entered process reading in the data.
-LAB_READING = dict(pre_dryer_index=10.0, humidity_percentage=34.5, cooling_index=10.0)
-OBSERVATIONS = ["Aucun retour client sur ce lot", "Contrôle d'un échantillon en stock : conforme", "Lot revu au magasin, RAS"]
-CORRECTIVE_ACTIONS = ["Contrôle renforcé en fin de ligne", "Sensibilisation de l'équipe", "Réglage de la machine", "Vérification du scellage"]
-COMMENTS = ["RAS sur le reste du lot", "Contrôle visuel sur palette complète", "Échantillonnage 1 carton sur 50", "Cartons écartés en bout de ligne"]
-REJECTION = "Quantités à revérifier avec le rapport de conditionnement"
-NC_MIN_CARTONS = 8
 BAD_WEEK = (datetime.date(2026, 9, 7), datetime.date(2026, 9, 12))
+
+# A couple of plausible readings per group, so a seeded entry looks like a real one
+# instead of a wall of zeros. Fields left out of a given entry stay unset, the same
+# as an inspector who only filled part of the row.
+PARAMETER_SAMPLES: dict[str, dict] = {
+    "presse": {"pression": 45.0, "debit_bar": 6.2, "niveau_moulange_percent": 72.0},
+    "pompe_vide": {"niveau_huile": 0.8, "temperature_c": 38.0, "niveau_vide_bar": -0.9},
+    "sechage": {"temperature_c": 78.0, "delta": 4.5},
+    "chaudiere": {"t_aller_c": 90.0, "p_aller_bar": 3.2, "t_retour_c": 70.0, "p_retour_bar": 2.8},
+    "compresseurs": {"pression_bar": 7.5, "temperature_c": 32.0},
+    "traitement_eau": {"niveau_cuve1": 60.0, "niveau_cuve2": 55.0, "niveau_sel": 40.0},
+    "chiller": {"t_entree_c": 12.0, "t_sortie_c": 7.0, "p_entree_bar": 4.0, "p_sortie_bar": 3.5},
+    "additif": {"tableau": "PL", "niveau_tremie": 65.0},
+    "proprete_locaux": {"lave_m": "OK", "chaud": "OK", "silo": "OK"},
+}
 
 
 def at(moment: datetime.datetime) -> datetime.datetime:
@@ -78,7 +93,7 @@ def fate(rng: random.Random, age: int) -> str:
 
 
 def defect_odds(sku: str | None, team: str | None, shift: str | None, day: datetime.date) -> float:
-    """How likely this shift's cartons include rejects -- the patterns the dashboards should surface."""
+    """How likely this product line's cartons include rejects -- the patterns the dashboards should surface."""
     odds = {"doman-pc-200g": 0.55, "COQ6-500G": 0.35, "doman-pc-500g": 0.3}.get(sku or "", 0.25)
     if team and team.endswith("C"):
         odds += 0.12
@@ -90,7 +105,7 @@ def defect_odds(sku: str | None, team: str | None, shift: str | None, day: datet
 
 
 def reject_share(rng: random.Random, sku: str | None, day: datetime.date) -> float:
-    """Share of the shift's cartons rejected, when any are: a few per thousand normally, more in the bad week."""
+    """Share of the line's cartons rejected, when any are: a few per thousand normally, more in the bad week."""
     high = 0.028 if sku == "doman-pc-200g" else 0.02
     if BAD_WEEK[0] <= day <= BAD_WEEK[1]:
         high += 0.02
@@ -104,18 +119,6 @@ def pick_defect(rng: random.Random, sku: str | None) -> str:
     return rng.choice(DEFECTS)
 
 
-def readings(rng: random.Random, day: datetime.date) -> dict:
-    """Most reports carry the three readings, drifting a little week to week (humidity climbs, cooling dips)."""
-    if rng.random() >= 0.8:
-        return {}
-    week = (day - datetime.date(2026, 8, 17)).days / 7
-    return {
-        "pre_dryer_index": round(LAB_READING["pre_dryer_index"] * rng.uniform(0.94, 1.06), 1),
-        "humidity_percentage": round(LAB_READING["humidity_percentage"] * (1 + 0.006 * week) * rng.uniform(0.97, 1.03), 1),
-        "cooling_index": round(LAB_READING["cooling_index"] * (1 - 0.008 * week) * rng.uniform(0.95, 1.05), 1),
-    }
-
-
 def expect(result, what: str):
     if isinstance(result, Err):
         raise RuntimeError(f"{what}: {result.code} {result.message}")
@@ -127,44 +130,88 @@ def work(conn, args) -> int:
     quality, follow_ups, ncs = QualityReportService(conn), FollowUpService(conn), NonConformityService(conn)
     locations = dict(conn.execute("SELECT code, id FROM warehouse.locations WHERE tenant_id = %s", (TENANT,)).fetchall())
     source, quarantine = locations["produits-finis"], locations["QUARANTINE"]
-    product_of = dict(conn.execute("SELECT id, product_id FROM production.work_orders WHERE tenant_id = %s", (TENANT,)).fetchall())
     sku_of = dict(conn.execute("SELECT id, sku FROM core.products WHERE tenant_id = %s", (TENANT,)).fetchall())
-    pack_size = {pid: (float(ppc) if ppc else 1.0) for pid, ppc in conn.execute(
-        "SELECT id, packets_per_carton FROM core.products WHERE tenant_id = %s", (TENANT,)).fetchall()}
+    # What each packing row says was boxed: the count QC actually inspects. Read straight from
+    # production's table, as seed_shift_month does -- this is a dev seeder, not module code.
+    cartons_of_row = {
+        row_id: int(cartons or 0)
+        for row_id, cartons in conn.execute(
+            "SELECT id, carton_quantity FROM production.shift_packing_rows WHERE tenant_id = %s", (TENANT,)
+        ).fetchall()
+    }
 
-    candidates = sorted(quality.list_inspectable_conditionnement_reports(tenant_id=TENANT), key=lambda r: (r["report_date"], r["shift"], r["team"] or ""))
+    candidates = sorted(
+        quality.list_inspectable_shift_reports(tenant_id=TENANT), key=lambda r: (r["report_date"], r["shift"], r["team"] or "")
+    )
+    group_keys = list(PARAMETER_GROUPS)
     outcomes: Counter = Counter()
     failures: list[str] = []
     for row in candidates:
         day = row["report_date"]
+        if isinstance(day, str):
+            day = datetime.date.fromisoformat(day)
         age = (TODAY - day).days
-        rng = random.Random(f"qc-{row['conditionnement_report_id']}")
-        cartons = int(row["carton_quantity"] or 0)
-        product_id = row.get("product_id") or product_of.get(row["of_id"])
-        sku = sku_of.get(product_id)
+        rng = random.Random(f"qc-{row['shift_report_id']}")
         # Every finished shift is inspected; the last two days are still partly on the inspector's desk.
-        if cartons <= 0 or rng.random() >= (0.5 if age <= 1 else 0.97):
+        if rng.random() >= (0.5 if age <= 1 else 0.97):
             outcomes["not inspected"] += 1
             continue
 
-        rejects = rng.random() < defect_odds(sku, row["team"], row["shift"], day)
-        non_conforming = max(1, round(cartons * reject_share(rng, sku, day))) if rejects else 0
-        defect = pick_defect(rng, sku) if non_conforming else None
-        detail = QualityReportDetail(
-            **readings(rng, day),
-            conforming_cartons=cartons - non_conforming, non_conforming_cartons=non_conforming,
-            defect_details=defect,
-            comments=rng.choice(COMMENTS) if rng.random() < 0.4 else None,
-            corrective_action=rng.choice(CORRECTIVE_ACTIONS) if non_conforming and rng.random() < 0.6 else None,
-        )
         outcome = fate(rng, age)
         created = business_time(rng, day + datetime.timedelta(days=1), 7, 10) if row["shift"] == "night" else business_time(rng, day, 16, 19)
         created = at(created)
         try:
             with conn.transaction():
-                report = expect(quality.create_report(tenant_id=TENANT, actor_id=actor, conditionnement_report_id=row["conditionnement_report_id"], detail=detail), "create")
-                rid = report["report"].id if isinstance(report, dict) else report.id
+                report = expect(quality.create_report(tenant_id=TENANT, actor_id=actor, shift_report_id=row["shift_report_id"]), "create")
+                rid = report["report"].id
+                lines = report["lines"]
+                if not lines:
+                    outcomes["no packing rows"] += 1
+                    continue
                 stamp_audit(conn, rid, created)
+
+                # Conformity per product line, on the cartons that line's packing row says were
+                # boxed. Which lines reject, and how much, follows the patterns above.
+                line_edits = []
+                non_conforming_by_line: dict[str, tuple[str, str, int, str | None]] = {}
+                for line in lines:
+                    sku = sku_of.get(line.product_id)
+                    cartons = cartons_of_row.get(line.shift_packing_row_id) or rng.randint(200, 1200)
+                    rejects = rng.random() < defect_odds(sku, row["team"], row["shift"], day)
+                    non_conforming = max(1, round(cartons * reject_share(rng, sku, day))) if rejects else 0
+                    defect = pick_defect(rng, sku) if non_conforming else None
+                    line_edits.append(
+                        {
+                            "shift_packing_row_id": line.shift_packing_row_id,
+                            "conforming_cartons": cartons - non_conforming,
+                            "non_conforming_cartons": non_conforming,
+                            "defect_details": defect,
+                        }
+                    )
+                    if non_conforming:
+                        non_conforming_by_line[line.shift_packing_row_id] = (line.of_id, line.product_id, non_conforming, defect)
+                detail = QualityReportDetail(
+                    comments=rng.choice(COMMENTS) if rng.random() < 0.4 else None,
+                    corrective_action=rng.choice(CORRECTIVE_ACTIONS) if non_conforming_by_line and rng.random() < 0.6 else None,
+                )
+                expect(
+                    quality.update_draft(tenant_id=TENANT, actor_id=actor, report_id=rid, lines=line_edits, detail=detail),
+                    "update draft",
+                )
+
+                # A couple of the nine Contrôle des paramètres groups, filled the way
+                # the paper sheet actually gets filled -- not all nine every shift.
+                for group_key in rng.sample(group_keys, k=rng.choice([0, 2, 2, 3])):
+                    sample = PARAMETER_SAMPLES[group_key]
+                    fields = {k: v for k, v in sample.items() if rng.random() < 0.8}
+                    expect(
+                        quality.save_parameter_entry(
+                            tenant_id=TENANT, actor_id=actor, report_id=rid, group_key=group_key,
+                            entry_label=business_time(rng, day, 6, 22).strftime("%Hh%M"), fields=fields,
+                        ),
+                        "parameter entry",
+                    )
+
                 last, submitted, validated_at = created, None, None
                 if outcome != "draft":
                     submitted = at(created + datetime.timedelta(minutes=rng.randint(20, 90)))
@@ -186,8 +233,10 @@ def work(conn, args) -> int:
                 if outcome in ("validated", "revised"):
                     validated_at = at(last + datetime.timedelta(hours=rng.randint(1, 20), minutes=rng.randint(0, 59)))
                     correlation = str(ULID())
-                    expect(quality.validate_report(tenant_id=TENANT, actor_id=actor, report_id=rid, correlation_id=correlation,
-                                                   product_id=product_id), "validate")
+                    expect(
+                        quality.validate_report(tenant_id=TENANT, actor_id=actor, report_id=rid, correlation_id=correlation),
+                        "validate",
+                    )
                     stamp_audit(conn, rid, validated_at)
                     stamp_events(conn, correlation, validated_at)
                     last = validated_at
@@ -197,10 +246,13 @@ def work(conn, args) -> int:
 
                 if validated_at is not None:
                     seed_follow_up(conn, follow_ups, actor, rng, rid, validated_at)
-                    if non_conforming >= NC_MIN_CARTONS and rng.random() < 0.85:
-                        seed_non_conformity(conn, ncs, actor, rng, outcomes, rid=rid, of_id=row["of_id"], product_id=product_id,
-                                            pack_size=pack_size, source=source, quarantine=quarantine, defect=detail.defect_details, cartons=non_conforming,
-                                            raised_at=validated_at + datetime.timedelta(minutes=rng.randint(30, 120)))
+                    for of_id, product_id, non_conforming, defect in non_conforming_by_line.values():
+                        if non_conforming >= NC_MIN_CARTONS and rng.random() < 0.85:
+                            seed_non_conformity(
+                                conn, ncs, actor, rng, outcomes, rid=rid, of_id=of_id, product_id=product_id,
+                                source=source, quarantine=quarantine, defect=defect, cartons=non_conforming,
+                                raised_at=validated_at + datetime.timedelta(minutes=rng.randint(30, 120)),
+                            )
             outcomes[f"report {outcome}"] += 1
         except Exception as error:  # one bad report must not stop the month
             failures.append(f"{day} {row['team']} {row['shift']}: {error}")
@@ -211,6 +263,7 @@ def work(conn, args) -> int:
         ("quality reports", "SELECT status, count(*) FROM qc.quality_reports GROUP BY 1"),
         ("follow-ups", "SELECT status, count(*) FROM qc.quality_follow_ups GROUP BY 1"),
         ("non-conformities", "SELECT status, count(*) FROM qc.non_conformities GROUP BY 1"),
+        ("parameter entries", "SELECT group_key, count(*) FROM qc.quality_parameters GROUP BY 1"),
     ]:
         print(f"{label} now:", conn.execute(sql).fetchall())
     if failures:
@@ -239,7 +292,7 @@ def seed_follow_up(conn, follow_ups: FollowUpService, actor: str, rng: random.Ra
 
 
 def seed_non_conformity(conn, ncs: NonConformityService, actor: str, rng: random.Random, outcomes: Counter, *, rid: str, of_id: str,
-                        product_id: str | None, pack_size: dict, source: str, quarantine: str, defect: str, cartons: int,
+                        product_id: str | None, source: str, quarantine: str, defect: str | None, cartons: int,
                         raised_at: datetime.datetime) -> None:
     """Raise, disposition and close one non-conformity, stopping wherever its dates run out."""
     if product_id is None or raised_at > NOW:

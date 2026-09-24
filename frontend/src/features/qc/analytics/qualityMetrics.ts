@@ -21,6 +21,8 @@ export const REPORT_STATUSES: QualityReportStatus[] = ["draft", "submitted", "re
 export const NC_STATUSES: NonConformityStatus[] = ["raised", "quarantined", "dispositioned", "closed"];
 export const NC_SEVERITIES: NonConformitySeverity[] = ["minor", "major", "critical"];
 
+// A row is one product line of one report, so report counts are distinct
+// report ids, never row counts: a shift that packed two products is one report.
 export interface ConformityTotals {
   reportCount: number;
   inspected: number;
@@ -53,26 +55,13 @@ export interface DefectRow {
   cumulativePct: number;
 }
 
-export type ReadingKey = "pre_dryer_index" | "humidity_percentage" | "cooling_index" | "pf_index" | "sumo_index";
-export const READING_KEYS: ReadingKey[] = ["pre_dryer_index", "humidity_percentage", "cooling_index", "pf_index", "sumo_index"];
-
-export interface ReadingSeries {
-  key: ReadingKey;
-  /** Daily average of the reports that recorded this reading; days without one are skipped, never zeroed. */
-  points: { date: string; value: number }[];
-  latest: number;
-  min: number;
-  max: number;
-}
-
 export interface LedgerSummary {
   totals: ConformityTotals;
   /** Every report in the window by status, validated included -- what is still on QC's desk. */
   statusCounts: Record<QualityReportStatus, number>;
   byDay: DayPoint[];
   defects: DefectRow[];
-  readings: ReadingSeries[];
-  /** Validated reports that logged rejects but never had a non-conformity raised. */
+  /** Validated product lines that logged rejects but never had a non-conformity raised for them. */
   rejectsWithoutCase: number;
 }
 
@@ -89,8 +78,9 @@ function emptyTotals(): ConformityTotals {
   return { reportCount: 0, inspected: 0, conforming: 0, nonConforming: 0, conformityPct: null };
 }
 
-function addRow(target: ConformityTotals, row: InspectionLedgerRow) {
-  target.reportCount += 1;
+function addRow(target: ConformityTotals, row: InspectionLedgerRow, reports: Set<string>) {
+  reports.add(row.report_id);
+  target.reportCount = reports.size;
   target.conforming += row.conforming_cartons;
   target.nonConforming += row.non_conforming_cartons;
   target.inspected = target.conforming + target.nonConforming;
@@ -126,54 +116,38 @@ export function rankDefects(rows: InspectionLedgerRow[]): DefectRow[] {
 
 export function summarizeLedger(rows: InspectionLedgerRow[]): LedgerSummary {
   const totals = emptyTotals();
-  const statusCounts: Record<QualityReportStatus, number> = { draft: 0, submitted: 0, rejected: 0, validated: 0 };
-  const days = new Map<string, DayPoint>();
-  const readings = new Map<ReadingKey, Map<string, { sum: number; count: number }>>();
+  const validatedReports = new Set<string>();
+  const reportsByStatus: Record<QualityReportStatus, Set<string>> = { draft: new Set(), submitted: new Set(), rejected: new Set(), validated: new Set() };
+  const days = new Map<string, DayPoint & { reports: Set<string> }>();
   let rejectsWithoutCase = 0;
 
   for (const row of rows) {
-    statusCounts[row.status] += 1;
+    reportsByStatus[row.status].add(row.report_id);
     if (row.status !== "validated") continue;
-    addRow(totals, row);
+    addRow(totals, row, validatedReports);
     if (row.non_conforming_cartons > 0 && row.non_conformity_count === 0) rejectsWithoutCase += 1;
 
-    const day = days.get(row.report_date) ?? { date: row.report_date, reportCount: 0, conforming: 0, nonConforming: 0, conformityPct: null };
-    day.reportCount += 1;
+    const day = days.get(row.report_date) ?? { date: row.report_date, reportCount: 0, conforming: 0, nonConforming: 0, conformityPct: null, reports: new Set<string>() };
+    day.reports.add(row.report_id);
+    day.reportCount = day.reports.size;
     day.conforming += row.conforming_cartons;
     day.nonConforming += row.non_conforming_cartons;
     day.conformityPct = ratioPct(day.conforming, day.conforming + day.nonConforming);
     days.set(row.report_date, day);
-
-    for (const key of READING_KEYS) {
-      const value = row[key];
-      if (value === null) continue;
-      const series = readings.get(key) ?? new Map<string, { sum: number; count: number }>();
-      const bucket = series.get(row.report_date) ?? { sum: 0, count: 0 };
-      bucket.sum += value;
-      bucket.count += 1;
-      series.set(row.report_date, bucket);
-      readings.set(key, series);
-    }
-  }
-
-  const readingSeries: ReadingSeries[] = [];
-  for (const key of READING_KEYS) {
-    const series = readings.get(key);
-    if (!series) continue;
-    const points = [...series.entries()]
-      .map(([date, { sum, count }]) => ({ date, value: sum / count }))
-      .sort((a, b) => a.date.localeCompare(b.date));
-    if (points.length === 0) continue;
-    const values = points.map((point) => point.value);
-    readingSeries.push({ key, points, latest: values[values.length - 1], min: Math.min(...values), max: Math.max(...values) });
   }
 
   return {
     totals,
-    statusCounts,
-    byDay: [...days.values()].sort((a, b) => a.date.localeCompare(b.date)),
+    statusCounts: {
+      draft: reportsByStatus.draft.size,
+      submitted: reportsByStatus.submitted.size,
+      rejected: reportsByStatus.rejected.size,
+      validated: reportsByStatus.validated.size,
+    },
+    byDay: [...days.values()]
+      .sort((a, b) => a.date.localeCompare(b.date))
+      .map(({ reports: _reports, ...point }) => point),
     defects: rankDefects(rows),
-    readings: readingSeries,
     rejectsWithoutCase,
   };
 }
@@ -181,7 +155,7 @@ export function summarizeLedger(rows: InspectionLedgerRow[]): LedgerSummary {
 function dimensionKey(row: InspectionLedgerRow, dimension: QualityDimension, labels: LedgerLabels): { key: string; label: string } | null {
   switch (dimension) {
     case "product":
-      return row.product_id ? { key: row.product_id, label: labels.product(row.product_id) } : null;
+      return { key: row.product_id, label: labels.product(row.product_id) };
     case "line": {
       const line = labels.line(row.of_id);
       return line ? { key: line, label: line } : null;
@@ -201,12 +175,12 @@ function dimensionKey(row: InspectionLedgerRow, dimension: QualityDimension, lab
  * resolved, no team on the report) counts in the totals but not here.
  */
 export function breakdown(rows: InspectionLedgerRow[], dimension: QualityDimension, labels: LedgerLabels): BreakdownRow[] {
-  const slices = new Map<string, { label: string; totals: ConformityTotals; rows: InspectionLedgerRow[] }>();
+  const slices = new Map<string, { label: string; totals: ConformityTotals; rows: InspectionLedgerRow[]; reports: Set<string> }>();
   for (const row of validatedRows(rows)) {
     const named = dimensionKey(row, dimension, labels);
     if (!named) continue;
-    const slice = slices.get(named.key) ?? { label: named.label, totals: emptyTotals(), rows: [] };
-    addRow(slice.totals, row);
+    const slice = slices.get(named.key) ?? { label: named.label, totals: emptyTotals(), rows: [], reports: new Set<string>() };
+    addRow(slice.totals, row, slice.reports);
     slice.rows.push(row);
     slices.set(named.key, slice);
   }

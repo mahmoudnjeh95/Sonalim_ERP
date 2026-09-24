@@ -1147,12 +1147,18 @@ export interface OfConsolidation {
     non_conforming_cartons: number;
     conformity_rate: number | null;
     /**
-     * Validated reports that logged a defect but never got a case raised
-     * against it -- nothing pulls that carton off the market until someone
-     * does, so the screen needs to flag it rather than let it hide inside a
-     * conformity percentage that already counts it as lost.
+     * Validated conformity lines (this OF's only) that logged a defect but
+     * never got a case raised against it -- nothing pulls that carton off the
+     * market until someone does, so the screen needs to flag it rather than
+     * let it hide inside a conformity percentage that already counts it as
+     * lost. Keyed by line: one report can carry several defective lines.
      */
-    pending_nc_reports: { report_id: string; report_date: string; non_conforming_cartons: number }[];
+    pending_nc_reports: {
+      conformity_line_id: string;
+      report_id: string;
+      report_date: string;
+      non_conforming_cartons: number;
+    }[];
   };
   report_counts: { daily: number; conditionnement: number; quality: number };
 }

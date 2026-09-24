@@ -18,7 +18,7 @@ Five sections:
    product's own uom_id (procurement.purchase_order_lines) -- these may have
    already posted a wrong quantity to stock before the conversion fix landed.
 4. Non-integer conforming_cartons/non_conforming_cartons
-   (qc.quality_report_details) -- cartons are always a whole count.
+   (qc.quality_conformity_lines) -- cartons are always a whole count.
 5. Product master-data review flags -- products whose own UOM looks wrong
    (a fuel/water product counted in pièces, a semolina product that isn't in
    the same weight unit as its near-duplicates), found generically by grouping
@@ -97,13 +97,12 @@ def mismatched_po_lines(connection, tenant_id: str) -> list[tuple]:
 def non_integer_carton_details(connection, tenant_id: str) -> list[tuple]:
     return connection.execute(
         """
-        SELECT qrd.report_id, qr.of_id, qrd.conforming_cartons, qrd.non_conforming_cartons
-        FROM qc.quality_report_details qrd
-        JOIN qc.quality_reports qr ON qr.id = qrd.report_id AND qr.tenant_id = qrd.tenant_id
-        WHERE qrd.tenant_id = %s
-          AND (qrd.conforming_cartons != round(qrd.conforming_cartons)
-               OR qrd.non_conforming_cartons != round(qrd.non_conforming_cartons))
-        ORDER BY qrd.report_id
+        SELECT l.report_id, l.of_id, l.product_id, l.conforming_cartons, l.non_conforming_cartons
+        FROM qc.quality_conformity_lines l
+        WHERE l.tenant_id = %s
+          AND (l.conforming_cartons != round(l.conforming_cartons)
+               OR l.non_conforming_cartons != round(l.non_conforming_cartons))
+        ORDER BY l.report_id, l.of_id, l.product_id
         """,
         (tenant_id,),
     ).fetchall()
@@ -160,8 +159,8 @@ def run(tenant_id: str) -> None:
     print(f"   Section 3: {len(po_lines)} row(s) found\n")
 
     print("4. Non-integer conforming_cartons / non_conforming_cartons")
-    for report_id, of_id, conforming, non_conforming in carton_details:
-        print(f"   report {report_id} (OF {of_id}): conforming={conforming} non_conforming={non_conforming}")
+    for report_id, of_id, product_id, conforming, non_conforming in carton_details:
+        print(f"   report {report_id} (OF {of_id}, product {product_id}): conforming={conforming} non_conforming={non_conforming}")
     if not carton_details:
         print("   0 rows -- no live cleanup needed here")
     print(f"   Section 4: {len(carton_details)} row(s) found\n")

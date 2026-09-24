@@ -1,7 +1,8 @@
-"""Integration tests for team-conformity aggregation, against a real database.
+"""Integration tests for conformity aggregation, against a real database.
 
-Same validated-only rule as `get_conformity_summary`, just grouped by team and
-a calendar bucket instead of filtered to one OF.
+`get_conformity_summary` sums one OF's conformity lines over its validated
+quality reports; `team_conformity` applies the same validated-only rule,
+grouped by team and a calendar bucket instead of filtered to one OF.
 """
 from __future__ import annotations
 
@@ -11,19 +12,24 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Ok
-from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import ConditionnementReportDetail
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.qc.api.quality_service import QualityReportService
-from modules.qc.domain.quality import QualityReportDetail
 
 TENANT = "integration-test-team-conformity"
+
+
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
 
 
 @pytest.fixture
 def env(db):
     actor = str(ULID())
-    uom, product, work_center = (str(ULID()) for _ in range(3))
+    uom, product, location, work_center, equipment = (str(ULID()) for _ in range(5))
     db.execute(
         "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
         (actor, TENANT, f"{actor}@test.local"),
@@ -33,14 +39,28 @@ def env(db):
         (uom, TENANT),
     )
     db.execute(
-        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TC-PASTA', 'Test pasta', %s)",
-        (product, TENANT, uom),
+        "INSERT INTO warehouse.locations (id, tenant_id, code, name) VALUES (%s, %s, 'TC-FG', 'Finished goods')",
+        (location, TENANT),
+    )
+    # A default location, because validating the shift posts the packed pasta there.
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id, default_location_id) "
+        "VALUES (%s, %s, 'TC-PASTA', 'Test pasta', %s, %s)",
+        (product, TENANT, uom, location),
     )
     db.execute(
         "INSERT INTO production.work_centers (id, tenant_id, code, name) VALUES (%s, %s, 'TC-WC', 'Test line')",
         (work_center, TENANT),
     )
-    return {"actor": actor, "product": product, "work_center": work_center}
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) "
+        "VALUES (%s, %s, %s, 'TC-EQ', 'Test machine')",
+        (equipment, TENANT, work_center),
+    )
+    return {
+        "actor": actor, "product": product, "location": location,
+        "work_center": work_center, "equipment": equipment,
+    }
 
 
 @pytest.fixture
@@ -53,37 +73,170 @@ def of(db, env):
     return created.value
 
 
-def _validated_quality_report(db, env, of, *, team, report_date, conforming, non_conforming):
-    """`team` is set on the conditionnement report, exactly as a real packaging
-    run would carry it -- the quality report only ever derives its team from
-    the run it inspects, it never accepts one directly."""
-    packing = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        team=team, shift="morning",
-        detail=ConditionnementReportDetail(),
-    )
-    assert isinstance(packing, Ok), getattr(packing, "message", "")
+def _validated_shift(db, env, packing_rows, *, report_date, team=None) -> str:
+    """A validated shift whose packing section holds `packing_rows`.
 
+    `team` is set on the shift report, exactly as a real shift would carry it --
+    the quality report only ever derives its team from the shift it inspects.
+    """
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
+        report_date=report_date, shift="morning", team=team,
+    ))["id"]
+    _ok(service.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="packing",
+        payload={"rows": packing_rows},
+    ))
+    for key in SECTION_KEYS:
+        if key == "packing":
+            _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+        else:
+            _ok(service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    return shift_id
+
+
+def _packing_row(env, of_id, finished=500, packets=100):
+    return {
+        "of_id": of_id, "product_id": env["product"], "equipment_id": env["equipment"],
+        "finished_product_quantity": finished, "packets_counted": packets,
+    }
+
+
+def _quality_report(db, env, of, *, team, report_date, conforming, non_conforming, validate=True) -> str:
+    shift_id = _validated_shift(db, env, [_packing_row(env, of.id)], report_date=report_date, team=team)
     service = QualityReportService(db)
-    created = service.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
-        detail=QualityReportDetail(
-            conforming_cartons=conforming,
-            non_conforming_cartons=non_conforming,
-            defect_details="test defect" if non_conforming else None,
-        ),
+    created = _ok(service.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    report_id = created["report"].id
+    _ok(service.update_draft(
+        tenant_id=TENANT, actor_id=env["actor"], report_id=report_id,
+        lines=[{
+            "shift_packing_row_id": created["lines"][0].shift_packing_row_id,
+            "conforming_cartons": conforming,
+            "non_conforming_cartons": non_conforming,
+            "defect_details": "test defect" if non_conforming else None,
+        }],
+    ))
+    if validate:
+        _ok(service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id))
+        _ok(service.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())))
+    return report_id
+
+
+# --- per-OF conformity summary ------------------------------------------------
+
+
+def test_conformity_summary_sums_across_every_line_of_every_of(db, env, of):
+    """A shift can pack two OFs; get_conformity_summary(of_id) only counts that OF's lines."""
+    other_of = _ok(WorkOrderService(db).create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"], planned_quantity=500,
+        work_center_id=env["work_center"],
+    ))
+    shift_id = _validated_shift(
+        db, env,
+        [_packing_row(env, of.id, finished=500, packets=100), _packing_row(env, other_of.id, finished=300, packets=60)],
+        report_date=datetime.date(2026, 9, 2),
     )
-    assert isinstance(created, Ok), getattr(created, "message", "")
-    report_id = created.value["report"].id
-    assert isinstance(service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id), Ok)
-    validated = service.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID()))
-    assert isinstance(validated, Ok), getattr(validated, "message", "")
+
+    qc = QualityReportService(db)
+    report = _ok(qc.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))["report"]
+    lines = qc._load_lines(tenant_id=TENANT, report_id=report.id)
+    of_line = next(l for l in lines if l.of_id == of.id)
+    other_line = next(l for l in lines if l.of_id == other_of.id)
+    _ok(qc.update_draft(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, lines=[
+        {"shift_packing_row_id": of_line.shift_packing_row_id, "conforming_cartons": 8, "non_conforming_cartons": 0},
+        {"shift_packing_row_id": other_line.shift_packing_row_id, "conforming_cartons": 5, "non_conforming_cartons": 0},
+    ]))
+    _ok(qc.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id))
+    _ok(qc.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report.id, correlation_id=str(ULID())))
+
+    summary = qc.get_conformity_summary(tenant_id=TENANT, of_id=of.id)
+    assert summary["conforming_cartons"] == 8
+    assert summary["validated_report_count"] == 1
+
+    other_summary = qc.get_conformity_summary(tenant_id=TENANT, of_id=other_of.id)
+    assert other_summary["conforming_cartons"] == 5
+
+
+def test_conformity_summary_sums_several_validated_reports_and_skips_drafts(db, env, of):
+    _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 1), conforming=90, non_conforming=10)
+    _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 3), conforming=40, non_conforming=0)
+    _quality_report(
+        db, env, of, team="A", report_date=datetime.date(2026, 9, 4), conforming=7, non_conforming=7, validate=False
+    )
+
+    summary = QualityReportService(db).get_conformity_summary(tenant_id=TENANT, of_id=of.id)
+    assert summary["validated_report_count"] == 2
+    assert summary["conforming_cartons"] == 130
+    assert summary["non_conforming_cartons"] == 10
+    assert summary["conformity_rate"] == 130 / 140
+    assert [p["report_date"] for p in summary["pending_nc_reports"]] == ["2026-09-01"]
+    assert summary["pending_nc_reports"][0]["non_conforming_cartons"] == 10.0
+
+
+def test_an_nc_for_one_of_does_not_clear_the_same_products_defect_on_another_of(db, env, of):
+    """One shift packs the same product for two OFs, both with defects. A case
+    raised for OF A's defect must leave OF B's still flagged as unaddressed."""
+    other_of = _ok(WorkOrderService(db).create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"], planned_quantity=500,
+        work_center_id=env["work_center"],
+    ))
+    shift_id = _validated_shift(
+        db, env, [_packing_row(env, of.id), _packing_row(env, other_of.id, finished=300, packets=60)],
+        report_date=datetime.date(2026, 9, 5),
+    )
+    qc = QualityReportService(db)
+    created = _ok(qc.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    report_id = created["report"].id
+    _ok(qc.update_draft(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, lines=[
+        {
+            "shift_packing_row_id": line.shift_packing_row_id, "conforming_cartons": 10,
+            "non_conforming_cartons": 3, "defect_details": "bad seal",
+        }
+        for line in created["lines"]
+    ]))
+    _ok(qc.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id))
+    _ok(qc.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())))
+
+    # Inserted directly: this test is about the pending-NC match, not the raise path.
+    db.execute(
+        """
+        INSERT INTO qc.non_conformities
+            (id, tenant_id, reference, of_id, quality_report_id, product_id, quantity, source_location_id, defect_type)
+        VALUES (%s, %s, %s, %s, %s, %s, 3, %s, 'bad seal')
+        """,
+        (str(ULID()), TENANT, f"NC-{ULID()}", of.id, report_id, env["product"], env["location"]),
+    )
+
+    assert qc.get_conformity_summary(tenant_id=TENANT, of_id=of.id)["pending_nc_reports"] == []
+    other_line = next(l for l in created["lines"] if l.of_id == other_of.id)
+    assert qc.get_conformity_summary(tenant_id=TENANT, of_id=other_of.id)["pending_nc_reports"] == [
+        {
+            "conformity_line_id": other_line.id, "report_id": report_id,
+            "report_date": "2026-09-05", "non_conforming_cartons": 3.0,
+        }
+    ]
+
+
+def test_conformity_summary_of_an_uninspected_of_is_empty(db, env, of):
+    summary = QualityReportService(db).get_conformity_summary(tenant_id=TENANT, of_id=of.id)
+    assert summary == {
+        "validated_report_count": 0,
+        "conforming_cartons": 0.0,
+        "non_conforming_cartons": 0.0,
+        "conformity_rate": None,
+        "pending_nc_reports": [],
+    }
+
+
+# --- team conformity ------------------------------------------------------------
 
 
 def test_conformity_is_bucketed_by_team_and_period(db, env, of):
-    _validated_quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 1), conforming=90, non_conforming=10)
-    _validated_quality_report(db, env, of, team="B", report_date=datetime.date(2026, 9, 2), conforming=50, non_conforming=50)
-    _validated_quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 10), conforming=100, non_conforming=0)
+    _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 1), conforming=90, non_conforming=10)
+    _quality_report(db, env, of, team="B", report_date=datetime.date(2026, 9, 2), conforming=50, non_conforming=50)
+    _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 10), conforming=100, non_conforming=0)
 
     rows = QualityReportService(db).team_conformity(tenant_id=TENANT, grain="week")
 
@@ -98,16 +251,34 @@ def test_conformity_is_bucketed_by_team_and_period(db, env, of):
     assert week1_a["period"] != week2_a["period"]
 
 
-def test_draft_quality_reports_are_excluded(db, env, of):
-    packing = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 15),
-        team="Z", shift="morning",
-        detail=ConditionnementReportDetail(),
+def test_a_report_with_several_lines_counts_once_per_bucket(db, env, of):
+    other_of = _ok(WorkOrderService(db).create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"], planned_quantity=500,
+        work_center_id=env["work_center"],
+    ))
+    shift_id = _validated_shift(
+        db, env, [_packing_row(env, of.id), _packing_row(env, other_of.id, finished=300, packets=60)],
+        report_date=datetime.date(2026, 9, 2), team="C",
     )
-    assert isinstance(packing, Ok), getattr(packing, "message", "")
-    QualityReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
-        detail=QualityReportDetail(conforming_cartons=5, non_conforming_cartons=5),
+    qc = QualityReportService(db)
+    created = _ok(qc.create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    report_id = created["report"].id
+    _ok(qc.update_draft(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, lines=[
+        {"shift_packing_row_id": line.shift_packing_row_id, "conforming_cartons": 10, "non_conforming_cartons": 0}
+        for line in created["lines"]
+    ]))
+    _ok(qc.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id))
+    _ok(qc.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID())))
+
+    rows = [r for r in qc.team_conformity(tenant_id=TENANT, grain="month") if r["team"] == "C"]
+    assert len(rows) == 1
+    assert rows[0]["report_count"] == 1
+    assert rows[0]["conforming_cartons"] == 20
+
+
+def test_draft_quality_reports_are_excluded(db, env, of):
+    _quality_report(
+        db, env, of, team="Z", report_date=datetime.date(2026, 9, 15), conforming=5, non_conforming=5, validate=False
     )
     rows = QualityReportService(db).team_conformity(tenant_id=TENANT, grain="week")
     assert not any(r["team"] == "Z" for r in rows)
@@ -118,92 +289,49 @@ def test_invalid_grain_is_rejected(db):
         QualityReportService(db).team_conformity(tenant_id=TENANT, grain="fortnight")
 
 
-def _validated_quality_report_with_indices(
-    db, env, of, *, report_date, pre_dryer_index=None, humidity_percentage=None,
-    cooling_index=None, pf_index=None, sumo_index=None,
-):
-    packing = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        team="A", shift="morning",
-        detail=ConditionnementReportDetail(),
-    )
-    assert isinstance(packing, Ok), getattr(packing, "message", "")
-
-    service = QualityReportService(db)
-    created = service.create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
-        detail=QualityReportDetail(
-            pre_dryer_index=pre_dryer_index, humidity_percentage=humidity_percentage,
-            cooling_index=cooling_index, pf_index=pf_index, sumo_index=sumo_index,
-            conforming_cartons=1, non_conforming_cartons=0,
-        ),
-    )
-    assert isinstance(created, Ok), getattr(created, "message", "")
-    report_id = created.value["report"].id
-    assert isinstance(service.submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id), Ok)
-    validated = service.validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=report_id, correlation_id=str(ULID()))
-    assert isinstance(validated, Ok), getattr(validated, "message", "")
+def test_index_trend_is_gone(db):
+    """The five process indices were dropped; there is nothing left to trend."""
+    assert not hasattr(QualityReportService(db), "index_trend")
 
 
-def test_index_trend_averages_within_a_period_and_ignores_nulls(db, env, of):
-    _validated_quality_report_with_indices(
-        db, env, of, report_date=datetime.date(2026, 9, 1),
-        pre_dryer_index=10, humidity_percentage=12.5, cooling_index=None, pf_index=None, sumo_index=None,
-    )
-    _validated_quality_report_with_indices(
-        db, env, of, report_date=datetime.date(2026, 9, 2),
-        pre_dryer_index=20, humidity_percentage=None, cooling_index=5, pf_index=None, sumo_index=None,
-    )
-    # A different week -- must land in its own bucket.
-    _validated_quality_report_with_indices(
-        db, env, of, report_date=datetime.date(2026, 9, 20),
-        pre_dryer_index=100, humidity_percentage=None, cooling_index=None, pf_index=None, sumo_index=None,
-    )
-
-    rows = QualityReportService(db).index_trend(tenant_id=TENANT, grain="week")
-
-    week1 = next(r for r in rows if r["report_count"] == 2)
-    assert week1["pre_dryer_index"] == 15, "average of 10 and 20"
-    assert week1["humidity_percentage"] == 12.5, "the single non-null value, not dragged toward zero by the other report's null"
-    assert week1["cooling_index"] == 5
-    assert week1["pf_index"] is None, "no report in the period recorded it"
-
-    week2 = next(r for r in rows if r["report_count"] == 1)
-    assert week2["pre_dryer_index"] == 100
+# --- inspection ledger ---------------------------------------------------------
 
 
-def test_index_trend_invalid_grain_is_rejected(db):
-    with pytest.raises(ValueError):
-        QualityReportService(db).index_trend(tenant_id=TENANT, grain="fortnight")
-
-
-def test_inspection_ledger_lists_every_status_with_verdict_and_readings(db, env, of):
-    _validated_quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 3), conforming=90, non_conforming=10)
+def test_inspection_ledger_lists_every_line_with_status_verdict_and_product(db, env, of):
+    validated = _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 3), conforming=90, non_conforming=10)
     # A draft in the window: listed with its status, so a reader can see what still waits on QC.
-    packing = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 4),
-        team="B", shift="afternoon",
-        detail=ConditionnementReportDetail(),
-    )
-    assert isinstance(packing, Ok), getattr(packing, "message", "")
-    QualityReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
-        detail=QualityReportDetail(conforming_cartons=5, non_conforming_cartons=0, humidity_percentage=12.5),
-    )
+    draft = _quality_report(db, env, of, team="B", report_date=datetime.date(2026, 9, 4), conforming=5, non_conforming=0, validate=False)
     # Outside the window: must not appear.
-    _validated_quality_report(db, env, of, team="A", report_date=datetime.date(2026, 10, 1), conforming=1, non_conforming=0)
+    _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 10, 1), conforming=1, non_conforming=0)
 
     rows = QualityReportService(db).inspection_ledger(tenant_id=TENANT, date_from="2026-09-01", date_to="2026-09-30")
 
     assert [row["report_date"] for row in rows] == ["2026-09-03", "2026-09-04"]
-    validated, draft = rows
-    assert validated["status"] == "validated"
-    assert validated["team"] == "A" and validated["shift"] == "morning"
-    assert validated["conforming_cartons"] == 90 and validated["non_conforming_cartons"] == 10
-    assert validated["defect_details"] == "test defect"
-    assert validated["product_id"] == env["product"], "resolved through production's helper, like list_reports"
-    assert validated["of_id"] == of.id
-    assert validated["validated_at"] is not None
-    assert validated["non_conformity_count"] == 0
-    assert draft["status"] == "draft" and draft["team"] == "B"
-    assert draft["humidity_percentage"] == 12.5 and draft["pf_index"] is None
+    first, second = rows
+    assert first["report_id"] == validated and first["status"] == "validated"
+    assert first["team"] == "A" and first["shift"] == "morning"
+    assert first["of_id"] == of.id and first["product_id"] == env["product"]
+    assert first["conforming_cartons"] == 90 and first["non_conforming_cartons"] == 10
+    assert first["defect_details"] == "test defect"
+    assert first["validated_at"] is not None
+    assert first["non_conformity_count"] == 0
+    assert second["report_id"] == draft and second["status"] == "draft" and second["team"] == "B"
+    assert second["validated_at"] is None
+
+
+def test_inspection_ledger_has_one_row_per_product_line(db, env, of):
+    other_of = _ok(WorkOrderService(db).create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"], planned_quantity=500,
+        work_center_id=env["work_center"],
+    ))
+    shift_id = _validated_shift(
+        db, env, [_packing_row(env, of.id), _packing_row(env, other_of.id, finished=300, packets=60)],
+        report_date=datetime.date(2026, 9, 5), team="C",
+    )
+    report_id = _ok(QualityReportService(db).create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))["report"].id
+
+    rows = QualityReportService(db).inspection_ledger(tenant_id=TENANT, date_from="2026-09-05", date_to="2026-09-05")
+
+    assert len(rows) == 2 and {row["report_id"] for row in rows} == {report_id}
+    assert {row["of_id"] for row in rows} == {of.id, other_of.id}
+    assert len({row["line_id"] for row in rows}) == 2

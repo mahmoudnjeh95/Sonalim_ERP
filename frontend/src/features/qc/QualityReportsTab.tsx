@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -6,12 +6,15 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   AlertTriangle,
   CalendarClock,
+  ChevronDown,
+  ChevronRight,
   FlaskConical,
   History,
   Pencil,
   Plus,
   Send,
   ShieldAlert,
+  Tags,
   Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
@@ -26,8 +29,18 @@ import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
+import { Skeleton } from "../../components/ui/skeleton";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
+import { Popover, PopoverContent, PopoverTrigger } from "../../components/ui/popover";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableRow,
+  TableHead,
+  TableCell,
+  ResizableTableHead,
+} from "../../components/ui/table";
 import {
   Dialog,
   DialogTrigger,
@@ -47,67 +60,76 @@ import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { groupRows, type GroupSpec } from "../../lib/groupRows";
-import { listProducts, listWorkOrders } from "../production/api";
+import { listProducts, listWorkCenters, listWorkOrders, type Product } from "../production/api";
+import { listShiftReports, SHIFT_REPORTS_QUERY_KEY } from "../production/shift/shiftApi";
 import { listLocations, listUoms } from "../warehouse/api";
 import { ReportDetailDialog, type FigureRow } from "../production/ReportDetailDialog";
 import { NonConformityDetailDialog } from "./NonConformityDetailDialog";
 import {
   adminUpdateQualityReport,
   createQualityReport,
+  deleteParameterEntry,
   deleteQualityReport,
   getQualityReport,
   listFollowUps,
-  listInspectableConditionnementReports,
+  listInspectableShiftReports,
   listNonConformities,
+  listParameters,
   listQualityReports,
   raiseNonConformity,
   reviseQualityReport,
+  saveParameterEntry,
   submitQualityReport,
   updateQualityReport,
-  type InspectableConditionnementReport,
+  type ConformityLine,
   type NonConformity,
   type NonConformitySeverity,
+  type ParameterEntry,
   type QualityReport,
-  type QualityReportDetail,
   type QualityReportStatus,
 } from "./api";
 import { AppLoader } from "../../components/patterns/AppLoader";
 
-const detailSchema = z.object({
-  pre_dryer_index: z.coerce.number().min(0).optional(),
-  humidity_percentage: z.coerce.number().min(0).max(100).optional(),
-  cooling_index: z.coerce.number().min(0).optional(),
-  pf_index: z.coerce.number().min(0).optional(),
-  sumo_index: z.coerce.number().min(0).optional(),
-  conforming_cartons: z.coerce.number().min(0).int("Must be a whole number"),
-  non_conforming_cartons: z.coerce.number().min(0).int("Must be a whole number"),
-  defect_details: z.string().optional(),
+// One row per packing row of the inspected shift -- the backend seeds them at
+// creation, so the form only ever edits counts, never adds or drops a product.
+const lineSchema = z
+  .object({
+    shift_packing_row_id: z.string(),
+    conforming_cartons: z.coerce.number().min(0).int("Must be a whole number"),
+    non_conforming_cartons: z.coerce.number().min(0).int("Must be a whole number"),
+    defect_details: z.string().optional(),
+  })
+  // Same rule the backend's validate_conformity_line enforces, caught before
+  // the round trip so the error lands on the row that needs it.
+  .refine((line) => line.non_conforming_cartons === 0 || !!line.defect_details?.trim(), {
+    path: ["defect_details"],
+    message: "Required",
+  });
+
+const editSchema = z.object({
+  lines: z.array(lineSchema),
   comments: z.string().optional(),
   corrective_action: z.string().optional(),
 });
+type EditForm = z.infer<typeof editSchema>;
 
-const createSchema = detailSchema.extend({
-  conditionnement_report_id: z.string().min(1, "Required"),
+const createSchema = z.object({
+  shift_report_id: z.string().min(1, "Required"),
 });
 type CreateForm = z.infer<typeof createSchema>;
 
 const QUERY_KEY = ["qc", "quality-reports"] as const;
 const FOLLOW_UPS_QUERY_KEY = ["qc", "follow-ups"] as const;
 const WORK_ORDERS_QUERY_KEY = ["production", "work-orders"] as const;
-const INSPECTABLE_QUERY_KEY = ["qc", "conditionnement-reports"] as const;
-
-function conditionnementLabel(
-  row: InspectableConditionnementReport,
-  referenceOf: (ofId: string) => string,
-  t: (key: TranslationKey) => string,
-): string {
-  return [referenceOf(row.of_id), row.report_date, row.shift, row.team, t(`status.${row.status}` as TranslationKey)]
-    .filter(Boolean)
-    .join(" · ");
-}
+const WORK_CENTERS_QUERY_KEY = ["production", "work-centers"] as const;
+const INSPECTABLE_QUERY_KEY = ["qc", "shift-reports"] as const;
+// Same key the Non-conformities tab lists under, so the report dialog's
+// linked-NC lookup is a cache hit there and is refreshed by its mutations.
+const NC_QUERY_KEY = ["qc", "non-conformities"] as const;
+const parametersQueryKey = (reportId: string) => ["qc", "parameters", reportId] as const;
 
 type StatusFilter = "all" | QualityReportStatus;
-type GroupByOption = "none" | "of" | "shift";
+type GroupByOption = "none" | "workCenter" | "shift";
 
 const DEFECT_CODES = [
   {
@@ -140,32 +162,72 @@ const DEFECT_CODES = [
   },
 ] as const;
 
-const EMPTY_DETAIL = {
-  pre_dryer_index: undefined,
-  humidity_percentage: undefined,
-  cooling_index: undefined,
-  pf_index: undefined,
-  sumo_index: undefined,
-  conforming_cartons: 0,
-  non_conforming_cartons: 0,
-  defect_details: "",
-  comments: "",
-  corrective_action: "",
-};
+/**
+ * The nine groups of the paper "Contrôle des paramètres" sheet. Mirrors
+ * backend/modules/qc/domain/parameters.py's PARAMETER_GROUPS (the backend
+ * refuses any field not listed there) -- kept client-side because it is small
+ * and static. `entryLabel` says what keys one row of the group: a reading time
+ * for most, a press / compressor number, or the PL/PC line for additif.
+ */
+const PARAMETER_GROUPS = [
+  { key: "presse", entryLabel: "press", fields: ["pression", "debit_bar", "niveau_moulange_percent"] },
+  { key: "pompe_vide", entryLabel: "time", fields: ["niveau_huile", "temperature_c", "niveau_vide_bar"] },
+  { key: "sechage", entryLabel: "time", fields: ["temperature_c", "delta"] },
+  {
+    key: "chaudiere",
+    entryLabel: "time",
+    fields: [
+      "t_aller_c",
+      "p_aller_bar",
+      "t_retour_c",
+      "p_retour_bar",
+      "t_digit_c",
+      "signal_a_elec",
+      "niveau_bac_exp",
+      "niveau_bac_alim",
+      "compteur_cuve1",
+      "compteur_cuve2",
+    ],
+  },
+  { key: "compresseurs", entryLabel: "compressor", fields: ["pression_bar", "temperature_c"] },
+  {
+    key: "traitement_eau",
+    entryLabel: "time",
+    fields: ["niveau_cuve1", "niveau_cuve2", "niveau_sel", "niveau_bicore", "niveau_bache", "niveau_chateau"],
+  },
+  {
+    key: "chiller",
+    entryLabel: "time",
+    fields: [
+      "t_entree_c",
+      "t_sortie_c",
+      "p_entree_bar",
+      "p_sortie_bar",
+      "t_digit_entree_c",
+      "t_digit_sortie_c",
+      "proprete_radiateur",
+      "observation",
+    ],
+  },
+  { key: "additif", entryLabel: "line", fields: ["tableau", "niveau_tremie", "observation"] },
+  {
+    key: "proprete_locaux",
+    entryLabel: "time",
+    fields: ["lave_m", "chaud", "tri_eau", "compr", "b_eau", "presse", "pres_en_h", "sech_en_h", "silo"],
+  },
+] as const;
+type ParameterGroup = (typeof PARAMETER_GROUPS)[number];
 
-function toDetail(input: CreateForm): Partial<QualityReportDetail> {
-  return {
-    pre_dryer_index: input.pre_dryer_index,
-    humidity_percentage: input.humidity_percentage,
-    cooling_index: input.cooling_index,
-    pf_index: input.pf_index,
-    sumo_index: input.sumo_index,
-    conforming_cartons: input.conforming_cartons,
-    non_conforming_cartons: input.non_conforming_cartons,
-    defect_details: input.defect_details || undefined,
-    comments: input.comments || undefined,
-    corrective_action: input.corrective_action || undefined,
-  } as Partial<QualityReportDetail>;
+/** A typed reading is stored as a number when it reads as one, as text otherwise; blank is left out. */
+function parameterValue(raw: string): number | string | undefined {
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  const asNumber = Number(trimmed.replace(",", "."));
+  return Number.isFinite(asNumber) ? asNumber : trimmed;
+}
+
+function hasPacketsPerCarton(product: Product | undefined): boolean {
+  return !!product?.packets_per_carton && product.packets_per_carton > 0;
 }
 
 export function QualityReportsTab() {
@@ -175,11 +237,10 @@ export function QualityReportsTab() {
   const queryClient = useQueryClient();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
-  // QC validates one packaging run at a time, so seeing every quality report
-  // for the same OF together — instead of interleaved by submission date — is
-  // the default: it's what makes a repeat non-conformity on one order visible
-  // at a glance.
-  const [groupBy, setGroupBy] = useState<GroupByOption>("of");
+  // QC inspects one shift of one line at a time, so seeing every quality
+  // report for the same work center together -- instead of interleaved by
+  // date -- is the default: it's what makes a line's repeat defects visible.
+  const [groupBy, setGroupBy] = useState<GroupByOption>("workCenter");
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set());
   // Only the first group starts open; re-collapse the rest each time the
   // grouping changes rather than only on first mount.
@@ -205,68 +266,50 @@ export function QualityReportsTab() {
     queryKey: FOLLOW_UPS_QUERY_KEY,
     queryFn: () => listFollowUps(token),
   });
-  const { data: workOrders = [] } = useQuery({
-    queryKey: WORK_ORDERS_QUERY_KEY,
-    queryFn: () => listWorkOrders(token),
+  const { data: workCenters = [] } = useQuery({
+    queryKey: WORK_CENTERS_QUERY_KEY,
+    queryFn: () => listWorkCenters(token),
   });
-  const { data: products = [] } = useQuery({
-    queryKey: ["core", "products"],
-    queryFn: () => listProducts(token),
+  // A quality report only carries its shift report's id; which line (work
+  // center) that shift ran on is production's to say.
+  const { data: shiftReports = [] } = useQuery({
+    queryKey: [...SHIFT_REPORTS_QUERY_KEY, "qc-lookup"],
+    queryFn: () => listShiftReports(token),
   });
-  // A carton tier is a property of the product, not of one run of it -- so the
-  // "cartons" the rapport counts should read "sacs" for a product with no
-  // packets_per_carton (a sac is its own sellable unit, see packaging_estimate.py).
-  const packetsPerCartonForOf = (ofId: string | undefined): number | null => {
-    const productId = ofId ? workOrders.find((o) => o.id === ofId)?.product_id : undefined;
-    const product = productId ? products.find((p) => p.id === productId) : undefined;
-    return product?.packets_per_carton && product.packets_per_carton > 0 ? product.packets_per_carton : null;
-  };
-  // Conditionnement reports not yet inspected, enriched with the hint figures
-  // (packets, cartons, regrind) shown once one is picked. QC always inspects a
-  // specific packaging run -- never just "an OF" -- so this backs the create
-  // form's only selector.
+  // Validated shift reports not yet inspected. QC always inspects one shift
+  // of one line -- every packing row of it at once -- so this backs the
+  // create form's only selector.
   const { data: inspectable = [] } = useQuery({
     queryKey: INSPECTABLE_QUERY_KEY,
-    queryFn: () => listInspectableConditionnementReports(token),
+    queryFn: () => listInspectableShiftReports(token),
   });
 
-  // Quality outlives production, so a closed OF is still a legitimate target.
-  const referenceOf = (ofId: string) => workOrders.find((o) => o.id === ofId)?.reference ?? ofId;
-  // The generated OF reference is opaque (a long code); the product it's making is what
-  // a user actually recognizes, so every OF label in this tab pairs the two. The report's
-  // own product_id (resolved server-side from the conditionnement run) is the accurate
-  // one -- an OF can pack more than one product -- with the OF's product_id as a fallback
-  // only for reports too old to have that link.
-  const productNameForId = (productId: string | null | undefined) =>
-    productId ? products.find((p) => p.id === productId)?.name ?? null : null;
-  const ofLabel = (r: QualityReport) => {
-    const productName =
-      productNameForId(r.product_id) ?? productNameForId(workOrders.find((o) => o.id === r.of_id)?.product_id);
-    return productName ? `${productName} — ${referenceOf(r.of_id)}` : referenceOf(r.of_id);
-  };
+  const workCenterName = (workCenterId: string | undefined) =>
+    workCenterId ? workCenters.find((w) => w.id === workCenterId)?.name ?? null : null;
+  const workCenterOf = (r: QualityReport) =>
+    workCenterName(shiftReports.find((s) => s.id === r.shift_report_id)?.work_center_id) ?? "—";
+  const inspectableLabel = (row: (typeof inspectable)[number]) =>
+    [workCenterName(row.work_center_id), row.report_date, row.shift, row.team].filter(Boolean).join(" · ");
   // A link may name a report that no longer exists; a miss opens nothing rather
   // than an empty dialog.
   const focusedReport = openReport ?? reports.find((r) => r.id === linkedId) ?? null;
 
   const form = useForm<CreateForm>({
     resolver: zodResolver(createSchema),
-    defaultValues: { conditionnement_report_id: "", ...EMPTY_DETAIL },
+    defaultValues: { shift_report_id: "" },
   });
-  const selectedConditionnementId = form.watch("conditionnement_report_id");
-  const selectedConditionnement = inspectable.find((r) => r.conditionnement_report_id === selectedConditionnementId);
 
   const createMutation = useMutation({
-    mutationFn: (input: CreateForm) =>
-      createQualityReport(token, {
-        conditionnement_report_id: input.conditionnement_report_id,
-        detail: toDetail(input),
-      }),
-    onSuccess: () => {
+    mutationFn: (input: CreateForm) => createQualityReport(token, input.shift_report_id),
+    onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: INSPECTABLE_QUERY_KEY });
       setDialogOpen(false);
-      form.reset({ conditionnement_report_id: "", ...EMPTY_DETAIL });
+      form.reset({ shift_report_id: "" });
       toast.success(t("qc.quality.created"));
+      // The new report arrives with one zeroed line per packed product; the
+      // inspector's next step is always filling them in, so land there.
+      openReportAt(created, "edit");
     },
     onError: (error) => {
       toast.error(t("qc.quality.createError"), {
@@ -301,7 +344,7 @@ export function QualityReportsTab() {
   });
 
   const filterFields: FilterField<QualityReport>[] = [
-    { key: "of", kind: "text", getValue: (r) => ofLabel(r) },
+    { key: "workCenter", kind: "text", getValue: (r) => workCenterOf(r) },
     { key: "date", kind: "text", getValue: (r) => r.report_date },
     { key: "shift", kind: "text", getValue: (r) => r.shift },
   ];
@@ -312,21 +355,21 @@ export function QualityReportsTab() {
 
   const columns: ColumnDef<QualityReport>[] = [
     {
-      key: "of",
-      header: t("production.reports.column.of"),
+      key: "workCenter",
+      header: t("production.workOrders.column.workCenter"),
       defaultWidth: 220,
       cell: (r) => (
-        <span className="block min-w-0 truncate font-medium" title={ofLabel(r)}>
-          {ofLabel(r)}
+        <span className="block min-w-0 truncate font-medium" title={workCenterOf(r)}>
+          {workCenterOf(r)}
         </span>
       ),
       filterCell: {
         type: "text",
         placeholder: t("common.filter"),
-        value: columnFilters.text.of ?? "",
-        onChange: (v) => columnFilters.setTextValue("of", v),
+        value: columnFilters.text.workCenter ?? "",
+        onChange: (v) => columnFilters.setTextValue("workCenter", v),
       },
-      sortValue: (r) => ofLabel(r),
+      sortValue: (r) => workCenterOf(r),
     },
     {
       key: "date",
@@ -414,8 +457,13 @@ export function QualityReportsTab() {
   const groupSpec: GroupSpec<QualityReport> | undefined =
     groupBy === "none"
       ? undefined
-      : groupBy === "of"
-        ? { key: "of", label: t("production.reports.groupBy.of"), getGroupKey: (r) => r.of_id, getGroupLabel: (r) => ofLabel(r) }
+      : groupBy === "workCenter"
+        ? {
+            key: "workCenter",
+            label: t("production.workOrders.column.workCenter"),
+            getGroupKey: (r) => workCenterOf(r),
+            getGroupLabel: (r) => workCenterOf(r),
+          }
         : { key: "shift", label: t("production.reports.groupBy.shift"), getGroupKey: (r) => r.shift ?? "", getGroupLabel: (r) => r.shift || t("common.none") };
   const rowGroups = groupRows(sortedVisible, groupSpec);
 
@@ -471,7 +519,7 @@ export function QualityReportsTab() {
               <FilterTabs
                 options={[
                   { value: "none", label: t("production.reports.groupBy.none") },
-                  { value: "of", label: t("production.reports.groupBy.of") },
+                  { value: "workCenter", label: t("production.workOrders.column.workCenter") },
                   { value: "shift", label: t("production.reports.groupBy.shift") },
                 ]}
                 value={groupBy}
@@ -503,48 +551,21 @@ export function QualityReportsTab() {
                     <DialogDescription>{t("qc.quality.dialog.create.description")}</DialogDescription>
                   </DialogHeader>
                   <form className="space-y-4" onSubmit={form.handleSubmit((input) => createMutation.mutate(input))}>
-                    <div className="grid grid-cols-1 gap-3">
-                      <div className="space-y-1.5">
-                        <Label htmlFor="q_conditionnement_report_id">
-                          {t("qc.quality.field.conditionnementReport")}
-                        </Label>
-                        <Select id="q_conditionnement_report_id" {...form.register("conditionnement_report_id")}>
-                          <option value="">—</option>
-                          {inspectable.map((row) => (
-                            <option key={row.conditionnement_report_id} value={row.conditionnement_report_id}>
-                              {conditionnementLabel(row, referenceOf, t)}
-                            </option>
-                          ))}
-                        </Select>
-                        {form.formState.errors.conditionnement_report_id && (
-                          <p className="text-sm text-destructive">
-                            {form.formState.errors.conditionnement_report_id.message}
-                          </p>
-                        )}
-                      </div>
-                      {selectedConditionnement && (
-                        <div className="rounded-md border border-border bg-muted/30 p-3">
-                          <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                            {t("qc.quality.hint.title")}
-                          </p>
-                          <div className="grid grid-cols-3 gap-2 text-sm">
-                            <div>
-                              <span className="text-muted-foreground">{t("qc.quality.hint.packets")}: </span>
-                              {selectedConditionnement.packets_counted}
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">{t("qc.quality.hint.cartons")}: </span>
-                              {selectedConditionnement.carton_quantity}
-                            </div>
-                            <div>
-                              <span className="text-muted-foreground">{t("qc.quality.hint.regrind")}: </span>
-                              {selectedConditionnement.regrind_quantity ?? t("qc.quality.hint.regrindUnavailable")}
-                            </div>
-                          </div>
-                        </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="q_shift_report_id">{t("qc.quality.field.shiftReport")}</Label>
+                      <Select id="q_shift_report_id" {...form.register("shift_report_id")}>
+                        <option value="">—</option>
+                        {inspectable.map((row) => (
+                          <option key={row.shift_report_id} value={row.shift_report_id}>
+                            {inspectableLabel(row)}
+                          </option>
+                        ))}
+                      </Select>
+                      {form.formState.errors.shift_report_id && (
+                        <p className="text-sm text-destructive">{form.formState.errors.shift_report_id.message}</p>
                       )}
+                      <p className="text-xs text-muted-foreground">{t("qc.quality.help.shiftReport")}</p>
                     </div>
-                    <QualityDetailFields form={form} isSac={!packetsPerCartonForOf(selectedConditionnement?.of_id)} />
                     <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                       {createMutation.isPending ? t("common.saving") : t("qc.quality.create")}
                     </Button>
@@ -640,9 +661,7 @@ export function QualityReportsTab() {
           // tab a previous report was left on.
           key={focusedReport.id}
           report={focusedReport}
-          reference={referenceOf(focusedReport.of_id)}
-          packetsPerCarton={packetsPerCartonForOf(focusedReport.of_id)}
-          productId={workOrders.find((o) => o.id === focusedReport.of_id)?.product_id ?? undefined}
+          reference={workCenterOf(focusedReport)}
           initialMode={openMode}
           autoResubmit={autoResubmit}
           onClose={() => {
@@ -664,28 +683,33 @@ export function QualityReportsTab() {
 
 /**
  * The opened quality report. Nothing here moves stock, so a correction is a
- * straight edit; what a validated report *does* hold is its follow-up window,
- * which the backend takes away with the report when it is deleted.
+ * straight edit; what a validated report *does* hold is its follow-up windows
+ * (one per conformity line), which the backend takes away with the report
+ * when it is deleted.
  */
 export function QualityReportDialog({
   report,
   reference,
-  packetsPerCarton,
-  productId,
   initialMode,
   autoResubmit,
   onClose,
 }: {
   report: QualityReport;
+  /** What the title leads with: the line (work center) here, the OF reference on an OF's page. */
   reference: string;
-  packetsPerCarton: number | null;
+  /**
+   * @deprecated Ignored. Units and product now come from each conformity
+   * line's own product -- one shift can pack several. Still accepted so
+   * existing callers keep compiling until they drop it.
+   */
+  packetsPerCarton?: number | null;
+  /** @deprecated Ignored, see `packetsPerCarton`. */
   productId?: string;
   initialMode?: "view" | "edit" | "history" | "delete";
   autoResubmit?: boolean;
   onClose: () => void;
 }) {
-  const isSac = !packetsPerCarton;
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
@@ -699,35 +723,73 @@ export function QualityReportDialog({
     queryKey: ["qc", "quality-reports", report.id],
     queryFn: () => getQualityReport(token, report.id),
   });
-  const detail = full?.detail as QualityReportDetail | undefined;
+  const detail = full?.detail ?? null;
+  const lines = full?.lines ?? [];
 
-  // A report's own defect count says whether an NC belongs to it; the
-  // non-conformities list is fetched by OF (the only filter the backend
-  // offers) and narrowed to this report client-side.
-  const { data: ofNonConformities = [] } = useQuery({
-    queryKey: ["qc", "non-conformities", "of", report.of_id],
-    queryFn: () => listNonConformities(token, { of_id: report.of_id }),
+  // NCs carry their quality_report_id; the backend's list has no filter by
+  // report, so the full list (shared with the Non-conformities tab's cache) is
+  // narrowed here.
+  const { data: allNonConformities = [] } = useQuery({
+    queryKey: NC_QUERY_KEY,
+    queryFn: () => listNonConformities(token),
   });
-  const linkedNonConformities = ofNonConformities.filter((n) => n.quality_report_id === report.id);
-  const hasDefects = Number(detail?.non_conforming_cartons ?? 0) > 0;
+  const linkedNonConformities = allNonConformities.filter((n) => n.quality_report_id === report.id);
+  // The NC unit is (report, OF, product): one shift can pack the same product
+  // for the same OF on several rows, and one NC covers them all (the backend
+  // sums their non-conforming cartons). Defective lines are grouped that way
+  // into one entry carrying the group's total; a group whose OF+product already
+  // has a ticket on this report is covered, the rest still need one raised.
+  const defectiveLinesWithoutNc = Object.values(
+    lines
+      .filter((line) => line.non_conforming_cartons > 0)
+      .reduce<Record<string, ConformityLine>>((groups, line) => {
+        const key = `${line.of_id}:${line.product_id}`;
+        const group = groups[key];
+        groups[key] = group
+          ? {
+              ...group,
+              non_conforming_cartons: group.non_conforming_cartons + line.non_conforming_cartons,
+              defect_details: [group.defect_details, line.defect_details].filter(Boolean).join(" / ") || null,
+            }
+          : line;
+        return groups;
+      }, {}),
+  ).filter(
+    (group) => !linkedNonConformities.some((nc) => nc.of_id === group.of_id && nc.product_id === group.product_id),
+  );
 
-  // Reference data the linked-NC dialog needs — a plain useQuery, so it's a
-  // cache hit (no extra request) wherever the page that opened this dialog
-  // already loaded the same lists.
+  // Reference data — a plain useQuery, so it's a cache hit (no extra request)
+  // wherever the page that opened this dialog already loaded the same lists.
   const { data: ncProducts = [] } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token) });
   const { data: ncUoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const { data: ncLocations = [] } = useQuery({ queryKey: ["warehouse", "locations"], queryFn: () => listLocations(token) });
+  const { data: workOrders = [] } = useQuery({ queryKey: WORK_ORDERS_QUERY_KEY, queryFn: () => listWorkOrders(token) });
 
-  const form = useForm<CreateForm>({
-    resolver: zodResolver(createSchema),
+  const productOf = (line: ConformityLine) => ncProducts.find((p) => p.id === line.product_id);
+  // The product is what the inspector recognizes; the OF reference tells two
+  // runs of the same product in one shift apart.
+  const lineLabel = (line: ConformityLine) => {
+    const productName = productOf(line)?.name ?? line.product_id;
+    const ofReference = workOrders.find((o) => o.id === line.of_id)?.reference;
+    return ofReference ? `${productName} — ${ofReference}` : productName;
+  };
+  // A carton tier is a property of the product: one with no packets_per_carton
+  // is counted in sacs (a sac is its own sellable unit, see packaging_estimate.py).
+  const lineUnit = (line: ConformityLine) =>
+    t(hasPacketsPerCarton(productOf(line)) ? "qc.quality.unit.cartons" : "qc.quality.unit.sacs");
+
+  const form = useForm<EditForm>({
+    resolver: zodResolver(editSchema),
     values: {
-      conditionnement_report_id: report.conditionnement_report_id ?? "",
-      ...EMPTY_DETAIL,
-      ...(detail ?? {}),
-      defect_details: detail?.defect_details ?? "",
+      lines: lines.map((line) => ({
+        shift_packing_row_id: line.shift_packing_row_id,
+        conforming_cartons: line.conforming_cartons,
+        non_conforming_cartons: line.non_conforming_cartons,
+        defect_details: line.defect_details ?? "",
+      })),
       comments: detail?.comments ?? "",
       corrective_action: detail?.corrective_action ?? "",
-    } as CreateForm,
+    },
   });
 
   function invalidate() {
@@ -737,11 +799,23 @@ export function QualityReportDialog({
   }
 
   const saveMutation = useMutation({
-    mutationFn: async (input: CreateForm) => {
+    mutationFn: async (input: EditForm) => {
+      const payload = {
+        lines: input.lines.map((line) => ({
+          shift_packing_row_id: line.shift_packing_row_id,
+          conforming_cartons: line.conforming_cartons,
+          non_conforming_cartons: line.non_conforming_cartons,
+          defect_details: line.defect_details?.trim() || null,
+        })),
+        detail: {
+          comments: input.comments?.trim() || null,
+          corrective_action: input.corrective_action?.trim() || null,
+        },
+      };
       const updated =
         report.status === "draft"
-          ? await updateQualityReport(token, report.id, toDetail(input))
-          : await adminUpdateQualityReport(token, report.id, { detail: toDetail(input), reason });
+          ? await updateQualityReport(token, report.id, payload)
+          : await adminUpdateQualityReport(token, report.id, { ...payload, reason });
 
       // If this is a resubmit flow, chain a submit call after save succeeds
       if (autoResubmit) {
@@ -762,44 +836,34 @@ export function QualityReportDialog({
     },
   });
 
+  // Conformity is per product now (see the lines table in the banner); what
+  // stays report-level is the inspector's own notes.
   const figures: FigureRow[] = [
-    { label: t("qc.quality.field.preDryer"), value: detail?.pre_dryer_index },
-    { label: t("qc.quality.field.humidity"), value: detail?.humidity_percentage, unit: "%" },
-    { label: t("qc.quality.field.cooling"), value: detail?.cooling_index },
-    { label: t("qc.quality.field.pf"), value: detail?.pf_index },
-    { label: t("qc.quality.field.sumo"), value: detail?.sumo_index },
-    {
-      label: t(isSac ? "qc.quality.field.conformingSacs" : "qc.quality.field.conforming"),
-      value: detail?.conforming_cartons,
-      unit: t(isSac ? "qc.quality.unit.sacs" : "qc.quality.unit.cartons"),
-    },
-    {
-      label: t(isSac ? "qc.quality.field.nonConformingSacs" : "qc.quality.field.nonConforming"),
-      value: detail?.non_conforming_cartons,
-      unit: t(isSac ? "qc.quality.unit.sacs" : "qc.quality.unit.cartons"),
-    },
-    { label: t("qc.quality.field.defectDetails"), value: detail?.defect_details ?? "\u2014" },
-    { label: t("qc.quality.field.comments"), value: detail?.comments ?? "\u2014" },
-    { label: t("qc.quality.field.correctiveAction"), value: detail?.corrective_action ?? "\u2014" },
+    { label: t("qc.quality.field.comments"), value: detail?.comments ?? "—" },
+    { label: t("qc.quality.field.correctiveAction"), value: detail?.corrective_action ?? "—" },
   ];
 
   const needsReason = report.status !== "draft";
+  // Mirrors the backend: parameter entries are writable on a draft, otherwise
+  // only by an admin correcting the report in place.
+  const parametersEditable = report.status === "draft" || hasPermission("qc.admin_quality_reports");
 
   return (
     <>
     <ReportDetailDialog
       open
       onOpenChange={(next) => !next && onClose()}
-      title={`${reference} \u00b7 ${report.report_date}`}
-      subtitle={[report.shift, report.team].filter(Boolean).join(" \u00b7 ") || t("common.none")}
+      title={`${reference} · ${report.report_date}`}
+      subtitle={[report.shift, report.team].filter(Boolean).join(" · ") || t("common.none")}
       status={report.status}
       revision={report.revision}
       reportId={report.id}
       historyEntityType="quality_report"
       figures={figures}
       banner={
-        hasDefects ? (
-          linkedNonConformities.length > 0 ? (
+        <div className="space-y-4">
+          <ConformityLinesView lines={lines} lineLabel={lineLabel} lineUnit={lineUnit} isLoading={!full} />
+          {linkedNonConformities.length > 0 && (
             <div className="space-y-2">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                 {t("qc.quality.nc.linkedTitle")}
@@ -823,10 +887,18 @@ export function QualityReportDialog({
                 </motion.button>
               ))}
             </div>
-          ) : (
-            <RaiseNcFromReportBanner report={report} detail={detail} productId={productId} />
-          )
-        ) : undefined
+          )}
+          {defectiveLinesWithoutNc.map((line) => (
+            <RaiseNcFromReportBanner
+              key={`${line.of_id}:${line.product_id}`}
+              report={report}
+              line={line}
+              lineLabel={lineLabel(line)}
+              comments={detail?.comments ?? null}
+            />
+          ))}
+          <QualityParametersSection reportId={report.id} editable={false} />
+        </div>
       }
       initialMode={initialMode}
       onDelete={async (deleteReason) => {
@@ -835,7 +907,8 @@ export function QualityReportDialog({
       }}
       editForm={
         <form className="space-y-4" onSubmit={form.handleSubmit((input) => saveMutation.mutate(input))}>
-          <QualityDetailFields form={form} isSac={isSac} />
+          <QualityDetailFields form={form} lines={lines} lineLabel={lineLabel} lineUnit={lineUnit} />
+          <QualityParametersSection reportId={report.id} editable={parametersEditable} />
           {needsReason && (
             <div className="space-y-1.5">
               <Label htmlFor="q_correction_reason">{t("production.reports.correctionReason")}</Label>
@@ -851,7 +924,7 @@ export function QualityReportDialog({
           <Button
             type="submit"
             className="w-full"
-            disabled={saveMutation.isPending || (needsReason && !reason.trim())}
+            disabled={saveMutation.isPending || !full || (needsReason && !reason.trim())}
           >
             {saveMutation.isPending ? t("common.saving") : t("common.save")}
           </Button>
@@ -861,7 +934,7 @@ export function QualityReportDialog({
     {openLinkedNc && (
       <NonConformityDetailDialog
         nonConformity={openLinkedNc}
-        ofReference={reference}
+        ofReference={workOrders.find((o) => o.id === openLinkedNc.of_id)?.reference ?? reference}
         products={ncProducts}
         uoms={ncUoms}
         locations={ncLocations}
@@ -872,22 +945,80 @@ export function QualityReportDialog({
   );
 }
 
+/** The conformity lines, read-only: one row per product the shift packed. */
+function ConformityLinesView({
+  lines,
+  lineLabel,
+  lineUnit,
+  isLoading,
+}: {
+  lines: ConformityLine[];
+  lineLabel: (line: ConformityLine) => string;
+  lineUnit: (line: ConformityLine) => string;
+  isLoading: boolean;
+}) {
+  const { t } = useI18n();
+  return (
+    <section className="space-y-2">
+      <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {t("qc.quality.section.conformity")}
+      </p>
+      {isLoading ? (
+        <Skeleton className="h-16 w-full" />
+      ) : lines.length === 0 ? (
+        <p className="rounded-lg border border-border p-3 text-sm text-muted-foreground">{t("qc.quality.lines.empty")}</p>
+      ) : (
+        <div className="rounded-lg border border-border">
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead className="px-3">{t("qc.quality.line.product")}</TableHead>
+                <TableHead className="px-3 text-right">{t("qc.quality.line.conforming")}</TableHead>
+                <TableHead className="px-3 text-right">{t("qc.quality.line.nonConforming")}</TableHead>
+                <TableHead className="px-3">{t("qc.quality.field.defectDetails")}</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {lines.map((line) => (
+                <TableRow key={line.id}>
+                  <TableCell className="px-3 py-2 font-medium">{lineLabel(line)}</TableCell>
+                  <TableCell className="px-3 py-2 text-right tabular-nums">
+                    {formatQuantity(line.conforming_cartons, lineUnit(line))}
+                  </TableCell>
+                  <TableCell
+                    className={`px-3 py-2 text-right tabular-nums ${line.non_conforming_cartons > 0 ? "text-destructive" : ""}`}
+                  >
+                    {formatQuantity(line.non_conforming_cartons, lineUnit(line))}
+                  </TableCell>
+                  <TableCell className="px-3 py-2 text-muted-foreground">{line.defect_details || "—"}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </div>
+      )}
+    </section>
+  );
+}
+
 /**
  * A validated report can carry non-conforming cartons with no non-conformity
  * ticket ever raised for them — the only automatic path is the Validation
  * Center's reject step, which is unavailable once the report is already
- * validated. This lets someone raise one after the fact, straight from the
- * report they found the defect on, pre-filled and linked via
- * `quality_report_id` so it shows up back here next time.
+ * validated. This lets someone raise one after the fact for one conformity
+ * line, straight from the report they found the defect on, pre-filled and
+ * linked via `quality_report_id` so it shows up back here next time.
  */
 function RaiseNcFromReportBanner({
   report,
-  detail,
-  productId,
+  line,
+  lineLabel,
+  comments,
 }: {
   report: QualityReport;
-  detail: QualityReportDetail | undefined;
-  productId: string | undefined;
+  line: ConformityLine;
+  lineLabel: string;
+  comments: string | null;
 }) {
   const { session } = useAuth();
   const { t } = useI18n();
@@ -896,7 +1027,7 @@ function RaiseNcFromReportBanner({
   const [open, setOpen] = useState(false);
   const [sourceLocationId, setSourceLocationId] = useState("");
   const [quarantineLocationId, setQuarantineLocationId] = useState("");
-  const [defectType, setDefectType] = useState(detail?.defect_details ?? "");
+  const [defectType, setDefectType] = useState(line.defect_details ?? "");
   const [severity, setSeverity] = useState<NonConformitySeverity>("minor");
 
   const { data: products = [] } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token) });
@@ -904,28 +1035,28 @@ function RaiseNcFromReportBanner({
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
   const blockedLocations = locations.filter((l) => l.is_blocked);
 
-  const product = products.find((p) => p.id === productId);
-  const packetsPerCarton = product?.packets_per_carton && product.packets_per_carton > 0 ? product.packets_per_carton : null;
-  const cartonCount = Number(detail?.non_conforming_cartons ?? 0);
+  const product = products.find((p) => p.id === line.product_id);
+  const packetsPerCarton = hasPacketsPerCarton(product) ? product!.packets_per_carton! : null;
+  const cartonCount = Number(line.non_conforming_cartons ?? 0);
   const quantity = packetsPerCarton ? cartonCount * packetsPerCarton : cartonCount;
-  const unit = productUnit(productId, products, uoms);
+  const unit = productUnit(line.product_id, products, uoms);
 
   const raiseMutation = useMutation({
     mutationFn: () =>
       raiseNonConformity(token, {
-        of_id: report.of_id,
-        product_id: productId!,
+        of_id: line.of_id,
+        product_id: line.product_id,
         quantity,
         source_location_id: sourceLocationId,
         quarantine_location_id: quarantineLocationId,
         defect_type: defectType || "Non-conformity",
         severity,
         quality_report_id: report.id,
-        description: detail?.comments || undefined,
+        description: comments || undefined,
         correlation_id: crypto.randomUUID(),
       }),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["qc", "non-conformities"] });
+      queryClient.invalidateQueries({ queryKey: NC_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: ["warehouse", "stock"] });
       queryClient.invalidateQueries({ queryKey: ["warehouse", "stock", "moves"] });
       toast.success(t("qc.nc.raised"));
@@ -940,10 +1071,12 @@ function RaiseNcFromReportBanner({
     <div className="flex items-start gap-3 rounded-lg border border-warning/30 bg-warning-soft p-3">
       <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
       <div className="flex-1 space-y-2">
-        <p className="text-sm text-warning">{t("qc.quality.nc.noneYet")}</p>
+        <p className="text-sm text-warning">
+          <span className="font-medium">{lineLabel}</span> — {t("qc.quality.nc.noneYet")}
+        </p>
         <Dialog open={open} onOpenChange={setOpen}>
           <DialogTrigger asChild>
-            <Button size="sm" variant="outline" disabled={!productId}>
+            <Button size="sm" variant="outline">
               <ShieldAlert className="h-3.5 w-3.5" />
               {t("qc.quality.nc.openTicket")}
             </Button>
@@ -1024,117 +1157,399 @@ function RaiseNcFromReportBanner({
   );
 }
 
+/**
+ * The editable part of a report: one conformity row per packed product, then
+ * the report-level notes. Rows come from the report itself (seeded by the
+ * backend from the shift's packing rows) and are addressed by index in the
+ * form, carrying their shift_packing_row_id through to the save.
+ */
 function QualityDetailFields({
   form,
-  isSac = false,
+  lines,
+  lineLabel,
+  lineUnit,
 }: {
-  form: ReturnType<typeof useForm<CreateForm>>;
-  isSac?: boolean;
+  form: ReturnType<typeof useForm<EditForm>>;
+  lines: ConformityLine[];
+  lineLabel: (line: ConformityLine) => string;
+  lineUnit: (line: ConformityLine) => string;
 }) {
   const { t } = useI18n();
-  const defectDetails = form.watch("defect_details") ?? "";
+  const lineErrors = form.formState.errors.lines;
 
-  const addDefectCode = (label: string) => {
-    const current = defectDetails.trim();
-    const newText = current ? `${current}; ${label}` : label;
-    form.setValue("defect_details", newText);
+  const addDefectCode = (index: number, label: string) => {
+    const current = (form.getValues(`lines.${index}.defect_details`) ?? "").trim();
+    form.setValue(`lines.${index}.defect_details`, current ? `${current}; ${label}` : label, {
+      shouldDirty: true,
+      shouldValidate: form.formState.isSubmitted,
+    });
   };
 
   return (
     <div className="space-y-4">
       <section className="space-y-2">
-        <div className="flex items-center gap-1.5">
-          <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            {t("qc.quality.section.indices")}
-          </p>
-          <HelpTooltip text={t("qc.quality.help.indices")} />
-        </div>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-          <div className="space-y-1.5">
-            <Label htmlFor="pre_dryer_index">{t("qc.quality.field.preDryer")}</Label>
-            <Input id="pre_dryer_index" type="number" step="any" {...form.register("pre_dryer_index")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="humidity_percentage">{t("qc.quality.field.humidity")} (%)</Label>
-            <Input id="humidity_percentage" type="number" step="any" {...form.register("humidity_percentage")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="cooling_index">{t("qc.quality.field.cooling")}</Label>
-            <Input id="cooling_index" type="number" step="any" {...form.register("cooling_index")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="pf_index">{t("qc.quality.field.pf")}</Label>
-            <Input id="pf_index" type="number" step="any" {...form.register("pf_index")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="sumo_index">{t("qc.quality.field.sumo")}</Label>
-            <Input id="sumo_index" type="number" step="any" {...form.register("sumo_index")} />
-          </div>
-        </div>
-      </section>
-
-      <section className="space-y-2">
         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           {t("qc.quality.section.conformity")}
         </p>
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-          <div className="space-y-1.5">
-            <Label htmlFor="conforming_cartons">
-              {t(isSac ? "qc.quality.field.conformingSacs" : "qc.quality.field.conforming")} (
-              {t(isSac ? "qc.quality.unit.sacs" : "qc.quality.unit.cartons")})
-            </Label>
-            <Input id="conforming_cartons" type="number" step="1" {...form.register("conforming_cartons")} />
+        {lines.length === 0 ? (
+          <p className="rounded-lg border border-border p-3 text-sm text-muted-foreground">{t("qc.quality.lines.empty")}</p>
+        ) : (
+          <div className="rounded-lg border border-border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="px-3">{t("qc.quality.line.product")}</TableHead>
+                  <TableHead className="w-28 px-2">{t("qc.quality.line.conforming")}</TableHead>
+                  <TableHead className="w-28 px-2">{t("qc.quality.line.nonConforming")}</TableHead>
+                  <TableHead className="px-2">{t("qc.quality.field.defectDetails")}</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {lines.map((line, index) => {
+                  const errors = lineErrors?.[index];
+                  return (
+                    <TableRow key={line.shift_packing_row_id} className="align-top hover:bg-transparent">
+                      <TableCell className="px-3 py-2">
+                        <p className="font-medium">{lineLabel(line)}</p>
+                        <p className="text-xs text-muted-foreground">{lineUnit(line)}</p>
+                      </TableCell>
+                      <TableCell className="px-2 py-2">
+                        <Input
+                          type="number"
+                          step="1"
+                          min="0"
+                          aria-label={`${t("qc.quality.line.conforming")} — ${lineLabel(line)}`}
+                          {...form.register(`lines.${index}.conforming_cartons`)}
+                        />
+                        {errors?.conforming_cartons && (
+                          <p className="mt-1 text-xs text-destructive">{errors.conforming_cartons.message}</p>
+                        )}
+                      </TableCell>
+                      <TableCell className="px-2 py-2">
+                        <Input
+                          type="number"
+                          step="1"
+                          min="0"
+                          aria-label={`${t("qc.quality.line.nonConforming")} — ${lineLabel(line)}`}
+                          {...form.register(`lines.${index}.non_conforming_cartons`)}
+                        />
+                        {errors?.non_conforming_cartons && (
+                          <p className="mt-1 text-xs text-destructive">{errors.non_conforming_cartons.message}</p>
+                        )}
+                      </TableCell>
+                      <TableCell className="overflow-visible px-2 py-2">
+                        <div className="flex items-center gap-1">
+                          <Input
+                            aria-label={`${t("qc.quality.field.defectDetails")} — ${lineLabel(line)}`}
+                            {...form.register(`lines.${index}.defect_details`)}
+                          />
+                          <Popover>
+                            <PopoverTrigger asChild>
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="ghost"
+                                aria-label={t("qc.quality.defectCodes.title")}
+                                title={t("qc.quality.defectCodes.title")}
+                              >
+                                <Tags className="h-3.5 w-3.5" />
+                              </Button>
+                            </PopoverTrigger>
+                            <PopoverContent className="w-72 space-y-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                {t("qc.quality.defectCodes.title")}
+                              </p>
+                              {DEFECT_CODES.map((section) => (
+                                <div key={section.category} className="space-y-1.5">
+                                  <p className="text-xs font-medium text-muted-foreground">
+                                    {t(section.category as TranslationKey)}
+                                  </p>
+                                  <div className="flex flex-wrap gap-1.5">
+                                    {section.items.map((item) => (
+                                      <Button
+                                        key={item.key}
+                                        type="button"
+                                        size="sm"
+                                        variant="outline"
+                                        className="text-xs"
+                                        onClick={() => addDefectCode(index, t(item.label as TranslationKey))}
+                                      >
+                                        {t(item.label as TranslationKey)}
+                                      </Button>
+                                    ))}
+                                  </div>
+                                </div>
+                              ))}
+                            </PopoverContent>
+                          </Popover>
+                        </div>
+                        {errors?.defect_details && (
+                          <p className="mt-1 text-xs text-destructive">{t("qc.quality.help.defectDetails")}</p>
+                        )}
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
           </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="non_conforming_cartons">
-              {t(isSac ? "qc.quality.field.nonConformingSacs" : "qc.quality.field.nonConforming")} (
-              {t(isSac ? "qc.quality.unit.sacs" : "qc.quality.unit.cartons")})
-            </Label>
-            <Input id="non_conforming_cartons" type="number" step="1" {...form.register("non_conforming_cartons")} />
-          </div>
-          <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="defect_details">{t("qc.quality.field.defectDetails")}</Label>
-            <Input id="defect_details" {...form.register("defect_details")} />
-            <p className="text-xs text-muted-foreground">{t("qc.quality.help.defectDetails")}</p>
-          </div>
-
-          <div className="space-y-1.5 sm:col-span-2">
-            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-              {t("qc.quality.defectCodes.title")}
-            </p>
-            <div className="space-y-3">
-              {DEFECT_CODES.map((section) => (
-                <div key={section.category} className="space-y-2">
-                  <p className="text-xs font-medium text-muted-foreground">{t(section.category as TranslationKey)}</p>
-                  <div className="flex flex-wrap gap-2">
-                    {section.items.map((item) => (
-                      <Button
-                        key={item.key}
-                        type="button"
-                        size="sm"
-                        variant="outline"
-                        className="text-xs"
-                        onClick={() => addDefectCode(t(item.label as TranslationKey))}
-                      >
-                        {t(item.label as TranslationKey)}
-                      </Button>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="comments">{t("qc.quality.field.comments")}</Label>
-            <Input id="comments" {...form.register("comments")} />
-          </div>
-          <div className="space-y-1.5">
-            <Label htmlFor="corrective_action">{t("qc.quality.field.correctiveAction")}</Label>
-            <Input id="corrective_action" {...form.register("corrective_action")} />
-          </div>
-        </div>
+        )}
+        {lines.length > 0 && <p className="text-xs text-muted-foreground">{t("qc.quality.help.defectDetails")}</p>}
       </section>
+
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label htmlFor="comments">{t("qc.quality.field.comments")}</Label>
+          <Input id="comments" {...form.register("comments")} />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="corrective_action">{t("qc.quality.field.correctiveAction")}</Label>
+          <Input id="corrective_action" {...form.register("corrective_action")} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Contrôle des paramètres: the nine instrument groups of the paper sheet, each
+ * a list of readings. Entries are saved (and deleted) one at a time straight
+ * against the backend -- they are not part of the report form's Save, so the
+ * section works the same whether it sits in the edit form or the read-only view.
+ */
+function QualityParametersSection({ reportId, editable }: { reportId: string; editable: boolean }) {
+  const { session } = useAuth();
+  const { t } = useI18n();
+  const token = session!.token;
+  const [openGroups, setOpenGroups] = useState<Set<string>>(new Set());
+
+  const { data: entries = [], isLoading } = useQuery({
+    queryKey: parametersQueryKey(reportId),
+    queryFn: () => listParameters(token, reportId),
+  });
+
+  function toggle(key: string) {
+    setOpenGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  return (
+    <section className="space-y-2">
+      <div className="flex items-center gap-1.5">
+        <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {t("qc.quality.params.title")}
+        </p>
+        <HelpTooltip text={t("qc.quality.params.help")} />
+      </div>
+      {isLoading ? (
+        <Skeleton className="h-24 w-full" />
+      ) : (
+        <div className="divide-y divide-border rounded-lg border border-border">
+          {PARAMETER_GROUPS.map((group) => {
+            const groupEntries = entries.filter((entry) => entry.group_key === group.key);
+            // A read-only report only lists the groups someone actually filled.
+            if (!editable && groupEntries.length === 0) return null;
+            const isOpen = openGroups.has(group.key);
+            return (
+              <div key={group.key}>
+                <button
+                  type="button"
+                  onClick={() => toggle(group.key)}
+                  aria-expanded={isOpen}
+                  className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm transition-colors hover:bg-muted/40"
+                >
+                  {isOpen ? (
+                    <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+                  ) : (
+                    <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+                  )}
+                  <span className="font-medium">{t(`qc.quality.params.group.${group.key}` as TranslationKey)}</span>
+                  <span className="ml-auto text-xs tabular-nums text-muted-foreground">{groupEntries.length}</span>
+                </button>
+                <AnimatePresence initial={false}>
+                  {isOpen && (
+                    <motion.div
+                      initial={{ height: 0, opacity: 0 }}
+                      animate={{ height: "auto", opacity: 1 }}
+                      exit={{ height: 0, opacity: 0 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      className="overflow-hidden"
+                    >
+                      <ParameterGroupTable
+                        reportId={reportId}
+                        group={group}
+                        entries={groupEntries}
+                        editable={editable}
+                      />
+                    </motion.div>
+                  )}
+                </AnimatePresence>
+              </div>
+            );
+          })}
+          {!editable && entries.length === 0 && (
+            <p className="p-3 text-sm text-muted-foreground">{t("qc.quality.params.empty")}</p>
+          )}
+        </div>
+      )}
+    </section>
+  );
+}
+
+function ParameterGroupTable({
+  reportId,
+  group,
+  entries,
+  editable,
+}: {
+  reportId: string;
+  group: ParameterGroup;
+  entries: ParameterEntry[];
+  editable: boolean;
+}) {
+  const { session } = useAuth();
+  const { t } = useI18n();
+  const token = session!.token;
+  const queryClient = useQueryClient();
+  const emptyDraft = () => ({ label: "", fields: {} as Record<string, string> });
+  const [draft, setDraft] = useState(emptyDraft);
+
+  const saveMutation = useMutation({
+    mutationFn: () => {
+      const fields: Record<string, number | string | null> = {};
+      for (const field of group.fields) {
+        const value = parameterValue(draft.fields[field] ?? "");
+        if (value !== undefined) fields[field] = value;
+      }
+      return saveParameterEntry(token, reportId, {
+        group_key: group.key,
+        entry_label: draft.label.trim() || null,
+        fields,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: parametersQueryKey(reportId) });
+      setDraft(emptyDraft());
+    },
+    onError: (error) => {
+      toast.error(t("qc.quality.params.saveError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (entryId: string) => deleteParameterEntry(token, reportId, entryId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: parametersQueryKey(reportId) });
+    },
+    onError: (error) => {
+      toast.error(t("qc.quality.params.deleteError"), {
+        description: error instanceof ApiError ? error.message : undefined,
+      });
+    },
+  });
+
+  const draftIsEmpty = !draft.label.trim() && group.fields.every((field) => !(draft.fields[field] ?? "").trim());
+  // The add row sits inside the report's edit <form>; Enter adds the entry
+  // instead of submitting the whole report.
+  const onDraftKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    if (!draftIsEmpty && !saveMutation.isPending) saveMutation.mutate();
+  };
+  const entryLabelHeader = t(`qc.quality.params.entryLabel.${group.entryLabel}` as TranslationKey);
+  const fieldHeader = (field: string) => t(`qc.quality.params.field.${field}` as TranslationKey);
+
+  return (
+    <div className="border-t border-border bg-muted/20">
+      <Table>
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead className="whitespace-nowrap px-2 normal-case">{entryLabelHeader}</TableHead>
+            {group.fields.map((field) => (
+              <TableHead key={field} className="whitespace-nowrap px-2 normal-case">
+                {fieldHeader(field)}
+              </TableHead>
+            ))}
+            {editable && <TableHead className="w-10 px-2" />}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {entries.map((entry) => (
+            <TableRow key={entry.id}>
+              <TableCell className="whitespace-nowrap px-2 py-1.5 font-medium">{entry.entry_label || "—"}</TableCell>
+              {group.fields.map((field) => {
+                const value = entry.fields[field];
+                return (
+                  <TableCell key={field} className="whitespace-nowrap px-2 py-1.5 tabular-nums">
+                    {value === null || value === undefined || value === "" ? "—" : String(value)}
+                  </TableCell>
+                );
+              })}
+              {editable && (
+                <TableCell className="px-2 py-1.5 text-right">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="ghost"
+                    aria-label={t("common.delete")}
+                    disabled={deleteMutation.isPending && deleteMutation.variables === entry.id}
+                    onClick={() => deleteMutation.mutate(entry.id)}
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </TableCell>
+              )}
+            </TableRow>
+          ))}
+          {editable && (
+            <TableRow className="hover:bg-transparent">
+              <TableCell className="min-w-[6rem] px-2 py-1.5">
+                <Input
+                  type={group.entryLabel === "time" ? "time" : "text"}
+                  aria-label={entryLabelHeader}
+                  value={draft.label}
+                  onChange={(event) => setDraft((prev) => ({ ...prev, label: event.target.value }))}
+                  onKeyDown={onDraftKeyDown}
+                />
+              </TableCell>
+              {group.fields.map((field) => (
+                <TableCell key={field} className="min-w-[5.5rem] px-2 py-1.5">
+                  <Input
+                    aria-label={fieldHeader(field)}
+                    value={draft.fields[field] ?? ""}
+                    onChange={(event) =>
+                      setDraft((prev) => ({ ...prev, fields: { ...prev.fields, [field]: event.target.value } }))
+                    }
+                    onKeyDown={onDraftKeyDown}
+                  />
+                </TableCell>
+              ))}
+              <TableCell className="px-2 py-1.5 text-right">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  aria-label={t("qc.quality.params.addEntry")}
+                  title={t("qc.quality.params.addEntry")}
+                  disabled={draftIsEmpty || saveMutation.isPending}
+                  onClick={() => saveMutation.mutate()}
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+              </TableCell>
+            </TableRow>
+          )}
+        </TableBody>
+      </Table>
+      {editable && entries.length === 0 && (
+        <p className="px-3 pb-2 text-xs text-muted-foreground">{t("qc.quality.params.addHint")}</p>
+      )}
     </div>
   );
 }

@@ -43,6 +43,29 @@ def finished_products_of_reports(
     return {row[0]: row[1] for row in rows}
 
 
+def packing_row_packets_per_carton(
+    connection: psycopg.Connection, *, tenant_id: str, shift_packing_row_ids: list[str]
+) -> dict[str, tuple[float | None, str | None]]:
+    """Each packing row's own frozen packets-per-carton snapshot and its current product, for a
+    caller converting a carton count against that row to pieces without re-reading the product's
+    current (possibly since-changed) setting. A packets-per-carton of None means no carton tier (a
+    sac), counted one by one. A row id missing from the result no longer exists, or belongs to a
+    shift that is no longer validated (reversed and awaiting correction); a product that differs
+    from the caller's copy means the row was corrected since the caller looked at it."""
+    if not shift_packing_row_ids:
+        return {}
+    rows = connection.execute(
+        "SELECT p.id, p.snapshot_packets_per_carton, p.product_id FROM production.shift_packing_rows p "
+        "JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id "
+        "WHERE p.tenant_id = %s AND p.id = ANY(%s) AND s.status = 'validated'",
+        (tenant_id, shift_packing_row_ids),
+    ).fetchall()
+    return {
+        row_id: (float(per_carton) if per_carton else None, product_id)
+        for row_id, per_carton, product_id in rows
+    }
+
+
 def stamp_order_products(connection: psycopg.Connection, *, tenant_id: str, shift_report_id: str) -> None:
     """An order with no product yet takes the product of its first packing row in this shift.
 
