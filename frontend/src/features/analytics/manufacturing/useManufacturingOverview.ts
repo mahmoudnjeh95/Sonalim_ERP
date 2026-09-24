@@ -4,6 +4,7 @@ import { useAuth } from "../../../lib/auth";
 import {
   getProductionAnalytics,
   listDowntimeBreakdown,
+  listHumidity,
   listMachinePerformance,
   listMachines,
   listTeamPerformance,
@@ -18,6 +19,7 @@ import {
   localTodayIso,
   summarizeConformity,
   summarizeCost,
+  summarizeHumidity,
   summarizeMachines,
   summarizeOperations,
   summarizeOrders,
@@ -54,7 +56,14 @@ export function useOperationsData(days: number) {
     [ops.byPeriod, previousOps.byPeriod, windows, days],
   );
 
-  return { token, today, windows, teamCurrent, teamPrevious, ops, previousOps, trend };
+  const humidityCurrent = useQuery({
+    queryKey: [...ROOT, "humidity", current.from, current.to],
+    placeholderData: keepPreviousData,
+    queryFn: () => listHumidity(token, { date_from: current.from, date_to: current.to }),
+  });
+  const humidity = useMemo(() => summarizeHumidity(humidityCurrent.data ?? []), [humidityCurrent.data]);
+
+  return { token, today, windows, teamCurrent, teamPrevious, ops, previousOps, trend, humidityCurrent, humidity };
 }
 
 /**

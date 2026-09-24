@@ -220,6 +220,26 @@ export function summarizeOperations(rows: TeamPerformanceRow[]): OperationsSumma
 }
 
 /** Waste stages ranked by declared kg, largest first, each with its share of the total. */
+export interface HumidityPoint {
+  date: string;
+  averageHumidityPct: number;
+}
+
+/** Average humidity per day, across every line -- skips nothing (every row already
+ * has a non-null humidity_percentage per list_humidity's own filter). */
+export function summarizeHumidity(rows: { report_date: string; humidity_percentage: number }[]): HumidityPoint[] {
+  const byDate = new Map<string, { sum: number; count: number }>();
+  for (const row of rows) {
+    const bucket = byDate.get(row.report_date) ?? { sum: 0, count: 0 };
+    bucket.sum += row.humidity_percentage;
+    bucket.count += 1;
+    byDate.set(row.report_date, bucket);
+  }
+  return [...byDate.entries()]
+    .map(([date, { sum, count }]) => ({ date, averageHumidityPct: sum / count }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+
 export function rankWasteStages(totals: OperationsTotals): { stage: WasteCategory; kg: number; sharePct: number }[] {
   const entries = Object.entries(totals.wasteByStageKg)
     .map(([stage, kg]) => ({ stage: stage as WasteCategory, kg: kg ?? 0 }))

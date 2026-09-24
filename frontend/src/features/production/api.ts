@@ -967,6 +967,16 @@ export function getShiftHealth(token: string, params: { date_from?: string; date
   return apiFetch<ShiftHealth>(`/production/analytics/shift-health${windowQuery(params)}`, { token });
 }
 
+export interface HumidityRow {
+  report_date: string;
+  work_center_id: string;
+  humidity_percentage: number;
+}
+
+export function listHumidity(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  return apiFetch<HumidityRow[]>(`/production/analytics/humidity${windowQuery(params)}`, { token });
+}
+
 // --- Recipe correlation ------------------------------------------------------
 //
 // Each shift's water dosage and flow rate against its own OF's yield —
