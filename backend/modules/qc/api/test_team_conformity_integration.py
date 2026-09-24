@@ -175,3 +175,35 @@ def test_index_trend_averages_within_a_period_and_ignores_nulls(db, env, of):
 def test_index_trend_invalid_grain_is_rejected(db):
     with pytest.raises(ValueError):
         QualityReportService(db).index_trend(tenant_id=TENANT, grain="fortnight")
+
+
+def test_inspection_ledger_lists_every_status_with_verdict_and_readings(db, env, of):
+    _validated_quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 3), conforming=90, non_conforming=10)
+    # A draft in the window: listed with its status, so a reader can see what still waits on QC.
+    packing = ConditionnementReportService(db).create_report(
+        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=datetime.date(2026, 9, 4),
+        team="B", shift="afternoon",
+        detail=ConditionnementReportDetail(),
+    )
+    assert isinstance(packing, Ok), getattr(packing, "message", "")
+    QualityReportService(db).create_report(
+        tenant_id=TENANT, actor_id=env["actor"], conditionnement_report_id=packing.value["report"].id,
+        detail=QualityReportDetail(conforming_cartons=5, non_conforming_cartons=0, humidity_percentage=12.5),
+    )
+    # Outside the window: must not appear.
+    _validated_quality_report(db, env, of, team="A", report_date=datetime.date(2026, 10, 1), conforming=1, non_conforming=0)
+
+    rows = QualityReportService(db).inspection_ledger(tenant_id=TENANT, date_from="2026-09-01", date_to="2026-09-30")
+
+    assert [row["report_date"] for row in rows] == ["2026-09-03", "2026-09-04"]
+    validated, draft = rows
+    assert validated["status"] == "validated"
+    assert validated["team"] == "A" and validated["shift"] == "morning"
+    assert validated["conforming_cartons"] == 90 and validated["non_conforming_cartons"] == 10
+    assert validated["defect_details"] == "test defect"
+    assert validated["product_id"] == env["product"], "resolved through production's helper, like list_reports"
+    assert validated["of_id"] == of.id
+    assert validated["validated_at"] is not None
+    assert validated["non_conformity_count"] == 0
+    assert draft["status"] == "draft" and draft["team"] == "B"
+    assert draft["humidity_percentage"] == 12.5 and draft["pf_index"] is None

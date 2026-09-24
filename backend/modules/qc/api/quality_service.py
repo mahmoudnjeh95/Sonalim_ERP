@@ -388,6 +388,84 @@ class QualityReportService:
             ) in rows
         ]
 
+    def inspection_ledger(
+        self,
+        *,
+        tenant_id: str,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict]:
+        """Every quality report in the window, one row each, with its verdict and readings.
+
+        The dashboards need conformity sliced by product, team, shift, defect and
+        day at once, and `team_conformity` only knows teams. Rather than one
+        endpoint per slice, this hands back the report grain and lets the
+        reader group it -- a month of shifts is a few hundred rows, well under
+        what a screen can hold. Every status is included so the reader can also
+        tell what is still waiting on QC; a caller wanting the official figure
+        filters on `status == "validated"` exactly as `team_conformity` does.
+        `product_id` is resolved through production's own service helper, the
+        same way `list_reports` does, never by joining production's tables here.
+        """
+        clauses = ["r.tenant_id = %s"]
+        params: list[object] = [tenant_id]
+        if date_from is not None:
+            clauses.append("r.report_date >= %s")
+            params.append(date_from)
+        if date_to is not None:
+            clauses.append("r.report_date <= %s")
+            params.append(date_to)
+
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                r.id, r.of_id, r.report_date, r.shift, r.team, r.status, r.revision,
+                r.conditionnement_report_id, r.submitted_at, r.validated_at,
+                d.conforming_cartons, d.non_conforming_cartons, d.defect_details, d.corrective_action,
+                d.pre_dryer_index, d.humidity_percentage, d.cooling_index, d.pf_index, d.sumo_index,
+                (SELECT count(*) FROM qc.non_conformities n WHERE n.tenant_id = r.tenant_id AND n.quality_report_id = r.id)
+            FROM qc.quality_reports r
+            LEFT JOIN qc.quality_report_details d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY r.report_date, r.shift, r.team, r.id
+            """,
+            params,
+        ).fetchall()
+
+        from modules.production.api.report_product import finished_products_of_reports
+
+        packing_ids = [row[7] for row in rows if row[7] is not None]
+        products_by_report = finished_products_of_reports(self._connection, tenant_id=tenant_id, report_ids=packing_ids)
+
+        def number(value) -> float | None:
+            return None if value is None else float(value)
+
+        return [
+            {
+                "report_id": row[0],
+                "of_id": row[1],
+                "report_date": row[2].isoformat(),
+                "shift": row[3],
+                "team": row[4],
+                "status": row[5],
+                "revision": int(row[6]),
+                "product_id": products_by_report.get(row[7]) if row[7] is not None else None,
+                "submitted_at": row[8].isoformat() if row[8] is not None else None,
+                "validated_at": row[9].isoformat() if row[9] is not None else None,
+                "conforming_cartons": float(row[10] or 0),
+                "non_conforming_cartons": float(row[11] or 0),
+                "defect_details": row[12],
+                "corrective_action": row[13],
+                "pre_dryer_index": number(row[14]),
+                "humidity_percentage": number(row[15]),
+                "cooling_index": number(row[16]),
+                "pf_index": number(row[17]),
+                "sumo_index": number(row[18]),
+                "non_conformity_count": int(row[19]),
+            }
+            for row in rows
+        ]
+
     def list_reports(
         self, *, tenant_id: str, of_id: str | None = None, status: str | None = None
     ) -> list[QualityReport]:

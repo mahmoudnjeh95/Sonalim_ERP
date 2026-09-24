@@ -134,6 +134,43 @@ export function listQualityIndexTrend(
   return apiFetch<QualityIndexTrendRow[]>(`/qc/quality-reports/index-trend?${query.toString()}`, { token });
 }
 
+// One row per quality report in the window, every status -- the grain the
+// quality dashboards slice by product, team, shift, defect and day. A caller
+// wanting the official figure keeps `status === "validated"`, exactly the
+// rule team_conformity applies server-side.
+export interface InspectionLedgerRow {
+  report_id: string;
+  of_id: string;
+  report_date: string;
+  shift: string | null;
+  team: string | null;
+  status: QualityReportStatus;
+  revision: number;
+  /** Resolved from the packing run inspected; null for a report with no run linked. */
+  product_id: string | null;
+  submitted_at: string | null;
+  validated_at: string | null;
+  conforming_cartons: number;
+  non_conforming_cartons: number;
+  defect_details: string | null;
+  corrective_action: string | null;
+  pre_dryer_index: number | null;
+  humidity_percentage: number | null;
+  cooling_index: number | null;
+  pf_index: number | null;
+  sumo_index: number | null;
+  /** Non-conformities raised from this report. */
+  non_conformity_count: number;
+}
+
+export function listInspectionLedger(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<InspectionLedgerRow[]>(`/qc/quality-reports/inspection-ledger${suffix}`, { token });
+}
+
 export function listQualityReports(
   token: string,
   params: { of_id?: string; status?: QualityReportStatus } = {},
