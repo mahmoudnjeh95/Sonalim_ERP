@@ -8,6 +8,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
+from modules.qc.domain.parameters import validate_parameter_entry
 from modules.qc.domain.quality import (
     DEFAULT_FOLLOW_UP_WINDOW_DAYS,
     ConformityLine,
@@ -803,6 +804,10 @@ class QualityReportService:
             (tenant_id, report_id),
         )
         self._connection.execute(
+            "DELETE FROM qc.quality_parameters WHERE tenant_id = %s AND report_id = %s",
+            (tenant_id, report_id),
+        )
+        self._connection.execute(
             "DELETE FROM qc.quality_report_details WHERE tenant_id = %s AND report_id = %s",
             (tenant_id, report_id),
         )
@@ -838,6 +843,54 @@ class QualityReportService:
             "detail": self._load_detail(tenant_id=tenant_id, report_id=report_id),
             "lines": self._load_lines(tenant_id=tenant_id, report_id=report_id),
         }
+
+    # ---- Contrôle des paramètres ------------------------------------------
+
+    def list_parameters(self, *, tenant_id: str, report_id: str) -> list[dict]:
+        rows = self._connection.execute(
+            "SELECT id, group_key, entry_label, fields FROM qc.quality_parameters "
+            "WHERE tenant_id = %s AND report_id = %s ORDER BY group_key, created_at",
+            (tenant_id, report_id),
+        ).fetchall()
+        return [{"id": r[0], "group_key": r[1], "entry_label": r[2], "fields": r[3]} for r in rows]
+
+    def save_parameter_entry(
+        self, *, tenant_id: str, actor_id: str, report_id: str, group_key: str,
+        entry_label: str | None, fields: dict,
+    ) -> Result[dict]:
+        import json
+
+        report = self._load_report(tenant_id=tenant_id, report_id=report_id)
+        if report is None:
+            return Err("NOT_FOUND", f"quality report {report_id} not found")
+        validation = validate_parameter_entry(group_key, fields)
+        if isinstance(validation, Err):
+            return validation
+
+        entry_id = str(ULID())
+        self._connection.execute(
+            "INSERT INTO qc.quality_parameters (id, tenant_id, report_id, group_key, entry_label, fields) "
+            "VALUES (%s, %s, %s, %s, %s, %s)",
+            (entry_id, tenant_id, report_id, group_key, entry_label, json.dumps(fields)),
+        )
+        record_audit(
+            self._connection, tenant_id=tenant_id, actor_id=actor_id, action="quality_parameter.saved",
+            entity_type="quality_report", entity_id=report_id, payload={"group_key": group_key, "entry_label": entry_label},
+        )
+        return Ok({"id": entry_id, "group_key": group_key, "entry_label": entry_label, "fields": fields})
+
+    def delete_parameter_entry(self, *, tenant_id: str, actor_id: str, report_id: str, entry_id: str) -> Result[None]:
+        deleted = self._connection.execute(
+            "DELETE FROM qc.quality_parameters WHERE tenant_id = %s AND report_id = %s AND id = %s RETURNING id",
+            (tenant_id, report_id, entry_id),
+        ).fetchone()
+        if deleted is None:
+            return Err("NOT_FOUND", f"parameter entry {entry_id} not found on report {report_id}")
+        record_audit(
+            self._connection, tenant_id=tenant_id, actor_id=actor_id, action="quality_parameter.deleted",
+            entity_type="quality_report", entity_id=report_id, payload={"entry_id": entry_id},
+        )
+        return Ok(None)
 
 
 class FollowUpService:
