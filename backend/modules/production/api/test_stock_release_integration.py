@@ -340,3 +340,42 @@ def test_what_was_already_released_counts_against_the_qc_cap(db, env, stores):
     refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 11}])
     assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
     _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 10}]))
+
+
+# ---- a QC verdict on a packing row that has since changed clears nothing ------------
+
+
+def _two_cleared_shifts(db, env) -> tuple[str, str]:
+    """Morning and afternoon shifts of DAY, each packing 120 pasta that QC cleared in full."""
+    morning = _validated_and_cleared(db, env, shift="morning")
+    afternoon = _validated_and_cleared(db, env, shift="afternoon")
+    assert QualityReportService(db).get_validated_conforming(tenant_id=TENANT, day=DAY) == {env["pasta"]: 240.0}
+    return morning, afternoon
+
+
+def test_a_packing_row_recorded_again_under_a_new_id_no_longer_counts_as_cleared(db, env, stores):
+    morning, _afternoon = _two_cleared_shifts(db, env)
+    # A correction re-saves the morning's packing row: same goods, new row, so QC's line points at nothing.
+    db.execute("CREATE TEMP TABLE fix5_rows ON COMMIT DROP AS SELECT * FROM production.shift_packing_rows WHERE shift_report_id = %s", (morning,))
+    db.execute("DELETE FROM production.shift_packing_rows WHERE shift_report_id = %s", (morning,))
+    db.execute("UPDATE fix5_rows SET id = %s", (str(ULID()),))
+    db.execute("INSERT INTO production.shift_packing_rows SELECT * FROM fix5_rows")
+
+    assert QualityReportService(db).get_validated_conforming(tenant_id=TENANT, day=DAY) == {env["pasta"]: 120.0}
+    [item] = _list(db)["items"]
+    assert (item["packed"], item["releasable"], item["pending_qc"]) == (240, 120, 120)
+    refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 121}])
+    assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
+    _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 120}]))
+
+
+def test_a_packing_row_whose_product_was_corrected_no_longer_counts_as_cleared(db, env, stores):
+    morning, _afternoon = _two_cleared_shifts(db, env)
+    db.execute("UPDATE production.shift_packing_rows SET product_id = %s WHERE shift_report_id = %s", (env["semolina"], morning))
+
+    # Neither the old product nor the new one is cleared by a verdict about other goods.
+    assert QualityReportService(db).get_validated_conforming(tenant_id=TENANT, day=DAY) == {env["pasta"]: 120.0}
+    refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 121}])
+    assert isinstance(refused, Err)
+    refused = _release(db, env, [{"product_id": env["semolina"], "quantity": 1}])
+    assert isinstance(refused, Err)

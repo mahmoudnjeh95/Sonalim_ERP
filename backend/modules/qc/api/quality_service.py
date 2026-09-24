@@ -266,6 +266,10 @@ class QualityReportService:
         turned into pieces with the packets-per-carton frozen on its packing row (asked of
         production, never read here) and the same `finished_quantity_from_count` the packed
         figure uses, so the two stay comparable. No carton tier (a sac) passes the count through.
+
+        A line whose packing row no longer exists, or now names a different product (the shift was
+        reversed or corrected after QC looked at it), clears nothing: the verdict was about goods
+        that are no longer on record as packed.
         """
         from modules.production.api.report_product import packing_row_packets_per_carton
         from modules.production.domain.packaging_estimate import finished_quantity_from_count
@@ -279,14 +283,20 @@ class QualityReportService:
             """,
             (tenant_id, day),
         ).fetchall()
-        per_carton_by_row = packing_row_packets_per_carton(
+        current_by_row = packing_row_packets_per_carton(
             self._connection, tenant_id=tenant_id, shift_packing_row_ids=[row[1] for row in rows]
         )
         totals: dict[str, float] = {}
         for product_id, row_id, conforming_cartons in rows:
+            current = current_by_row.get(row_id)
+            if current is None:
+                continue
+            packets_per_carton, current_product_id = current
+            if current_product_id != product_id:
+                continue
             cartons = float(conforming_cartons)
             pieces = finished_quantity_from_count(
-                packets_per_carton=per_carton_by_row.get(row_id), carton_quantity=cartons, packets_counted=cartons,
+                packets_per_carton=packets_per_carton, carton_quantity=cartons, packets_counted=cartons,
             )
             totals[product_id] = totals.get(product_id, 0.0) + pieces
         return totals
