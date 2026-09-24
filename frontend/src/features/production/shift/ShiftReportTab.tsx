@@ -122,6 +122,14 @@ export function ShiftReportTab() {
     });
   }, [date, workCenterId, token, queryClient]);
 
+  // When leaving the shift form, invalidate equipment and reports so next visit fetches fresh data
+  useEffect(() => {
+    return () => {
+      queryClient.invalidateQueries({ queryKey: ["production", "shift", "equipment"] });
+      queryClient.invalidateQueries({ queryKey: ["production", "shift", "all-reports"] });
+    };
+  }, [queryClient]);
+
   const fail = (error: unknown) =>
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
 
