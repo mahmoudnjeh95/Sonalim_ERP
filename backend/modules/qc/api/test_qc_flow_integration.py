@@ -191,6 +191,17 @@ def test_an_unknown_shift_report_is_refused(db, env):
     assert result.code == "NOT_FOUND"
 
 
+def test_a_shift_not_yet_validated_cannot_be_inspected(db, env, of):
+    """An open shift can still change what it packed, so QC has nothing on record to judge."""
+    shift_id = _ok(ShiftReportService(db).open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
+        report_date=datetime.date(2026, 9, 3), shift="morning",
+    ))["id"]
+    result = QualityReportService(db).create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id)
+    assert isinstance(result, Err)
+    assert result.code == "SHIFT_NOT_VALIDATED"
+
+
 # --- conformity lines -------------------------------------------------------
 
 

@@ -27,6 +27,7 @@ def _err_status(code: str) -> int:
         "OUTSIDE_WINDOW",
         "LOCATION_NOT_BLOCKED",
         "NON_CONFORMITY_ATTACHED",
+        "SHIFT_NOT_VALIDATED",
     ):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST

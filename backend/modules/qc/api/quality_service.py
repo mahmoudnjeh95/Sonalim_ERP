@@ -387,6 +387,19 @@ class QualityReportService:
             }
         )
 
+    def _resolve_validated_shift(self, *, tenant_id: str, shift_report_id: str) -> Result[dict]:
+        """_resolve_shift, refused unless production has validated the shift.
+
+        An open or submitted shift can still change what it packed, so a QC verdict on it
+        would be about goods that are not on record yet.
+        """
+        resolved = self._resolve_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
+        if isinstance(resolved, Err):
+            return resolved
+        if resolved.value["status"] != "validated":
+            return Err("SHIFT_NOT_VALIDATED", "a quality report can only inspect a validated shift")
+        return resolved
+
     def list_inspectable_shift_reports(self, *, tenant_id: str) -> list[dict]:
         """Validated shift reports with no QC report yet."""
         already_linked = {
@@ -411,7 +424,7 @@ class QualityReportService:
         if not shift_report_id.strip():
             return Err("MISSING_SHIFT_REPORT", "a quality report must inspect a shift report")
 
-        resolved = self._resolve_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
+        resolved = self._resolve_validated_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
         if isinstance(resolved, Err):
             return resolved
         link = resolved.value
