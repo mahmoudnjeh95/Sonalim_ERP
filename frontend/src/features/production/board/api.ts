@@ -137,6 +137,12 @@ export interface ReleaseItem {
   destination: { id: string; name: string | null } | null;
 }
 
+/** What an earlier day, within the lookback window, still has unreleased. */
+export interface StockReleaseBacklogDay {
+  day: string;
+  items: ReleaseItem[];
+}
+
 export interface StockReleaseList {
   /** The day whose packing reports are listed (YYYY-MM-DD), and today's date. */
   day: string;
@@ -144,6 +150,8 @@ export interface StockReleaseList {
   /** null when the production settings name no single line store. */
   line_store: { id: string; name: string | null } | null;
   items: ReleaseItem[];
+  /** Earlier days (oldest first) that still have something unreleased, `day` itself excluded. */
+  backlog: StockReleaseBacklogDay[];
 }
 
 /** Without a day the server opens on yesterday, or on today once yesterday has nothing left to release. */
@@ -151,8 +159,9 @@ export function getStockRelease(token: string, day?: string | null) {
   return apiFetch<StockReleaseList>(`/production/stock-release${day ? `?day=${day}` : ""}`, { token });
 }
 
-export function releaseStock(token: string, day: string, items: { product_id: string; quantity: number }[]) {
-  return apiFetch<{ reference: string; day: string; released: { product_id: string; quantity: number; to_location_id: string }[] }>(
+/** `packed_on` defaults to `day` for an item that omits it; set it to clear a backlog row instead. */
+export function releaseStock(token: string, day: string, items: { product_id: string; quantity: number; packed_on?: string }[]) {
+  return apiFetch<{ reference: string; day: string; released: { product_id: string; quantity: number; to_location_id: string; packed_on: string }[] }>(
     "/production/stock-release",
     { method: "POST", token, body: { day, items } },
   );

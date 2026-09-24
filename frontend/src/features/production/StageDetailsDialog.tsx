@@ -80,7 +80,10 @@ export function StageDetailsDialog({
 }: Props) {
   const { t } = useI18n();
   const step = productionSteps.find((entry) => entry.id === stepId);
-  const status: StageStatus = loading ? "empty" : (state?.status ?? "empty");
+  // Real from the moment the popup opens: `state` comes from the cheap
+  // stage-signals call the page already made, not from `loading` below, which
+  // only gates the per-report figures the list underneath still has to fetch.
+  const status: StageStatus = state?.status ?? "empty";
 
   const moveLabels = useMoveTypeLabels();
   // A product with no carton line is sold by the sac, and the line counts sacs
@@ -223,7 +226,7 @@ export function StageDetailsDialog({
                 <p className="flex items-center gap-1.5 text-sm font-medium">
                   <span className={cn("h-2 w-2 rounded-full", STATUS_DOT[status])} />
                   {t(STATUS_KEY[status])}
-                  {!loading && state && state.reportCount > 0 && (
+                  {state && state.reportCount > 0 && (
                     <span className="font-normal text-muted-foreground">
                       · {state.reportCount}{" "}
                       {t(state.reportCount === 1 ? "production.flow.report.one" : "production.flow.report.many")}

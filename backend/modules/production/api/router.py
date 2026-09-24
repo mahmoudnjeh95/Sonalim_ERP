@@ -162,10 +162,12 @@ class CompleteRegrindBatchRequest(BaseModel):
 class ReleaseStockItem(BaseModel):
     product_id: str
     quantity: float
+    # A backlog row clearing an earlier day than the one open in the dialog; None means `day`.
+    packed_on: datetime.date | None = None
 
 
 class ReleaseStockRequest(BaseModel):
-    day: datetime.date  # the day the goods were packed
+    day: datetime.date  # the day open in the dialog; also the default packed_on for its items
     items: list[ReleaseStockItem]
 
 
@@ -1880,6 +1882,19 @@ def list_reports(
             tenant_id=tenant.tenant_id, of_id=of_id, status=status_filter, report_type=report_type
         )
     return [_serialize_report(report) for report in reports]
+
+
+@router.get("/work-orders/{work_order_id}/stage-signals")
+def get_stage_signals(
+    work_order_id: str, tenant: TenantContext = Depends(require_permission("production.view_reports"))
+) -> dict[str, dict[str, bool]]:
+    """One query's worth of yes/no signals per report, for the OF page's Flux de
+    production card -- replaces fetching every report's full detail to answer
+    the same three booleans (see ProductionReportService.list_stage_signals)."""
+    with get_connection() as connection:
+        return ProductionReportService(connection).list_stage_signals(
+            tenant_id=tenant.tenant_id, of_id=work_order_id
+        )
 
 
 @router.get("/reports/team-performance")

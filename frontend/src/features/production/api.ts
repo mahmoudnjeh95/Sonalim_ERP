@@ -1096,6 +1096,12 @@ export interface OfConsolidation {
   // recycled back into the mix — rather than against the schedule.
   material_input_quantity: number;
   transformation_ratio: number | null;
+  /** Tonnes the press weighed off the line (the daily side's produit fini). */
+  pressed_quantity: number;
+  /** Pressed over poured — the same "Rendement" the OF list shows. */
+  yield_ratio: number | null;
+  /** Tonnage pressed and packed per report date, oldest first. */
+  by_day: { date: string; pressed_quantity: number; packed_quantity: number }[];
   // The product ids say which unit each total is in. Null when the validated
   // reports named different products, in which case no unit is true of the sum.
   raw_material: {
@@ -1119,7 +1125,13 @@ export interface OfConsolidation {
     ruban_quantity: number;
     ruban_product_id: string | null;
   };
-  utilities: { water_quantity: number; fuel_quantity: number; electricity_quantity: number };
+  utilities: {
+    water_quantity: number;
+    /** Some of the litres were worked out from the shift's dosage %, not typed in. */
+    water_derived: boolean;
+    fuel_quantity: number;
+    electricity_quantity: number;
+  };
   waste: {
     /** Per stage, the way the plant's own form is laid out. */
     by_category: Partial<Record<WasteCategory, number>>;
@@ -1140,7 +1152,13 @@ export interface OfConsolidation {
      */
     net_semoule_waste: number;
   };
-  time: { production_minutes: number; downtime_minutes: number };
+  /** The line and the packing machines apart: they run through the same hours. */
+  time: {
+    production_minutes: number;
+    downtime_minutes: number;
+    packing_minutes: number;
+    packing_downtime_minutes: number;
+  };
   quality: {
     validated_report_count: number;
     conforming_cartons: number;
@@ -1548,6 +1566,17 @@ export function listReports(
 
 export function getReport(token: string, reportId: string) {
   return apiFetch<ProductionReportWithDetail>(`/production/reports/${reportId}`, { token });
+}
+
+/** Per-report id: did it pour semoule, weigh finished product, or count packets. */
+export interface StageSignal {
+  poured_semoule: boolean;
+  weighed_finished_product: boolean;
+  counted_packets: boolean;
+}
+
+export function getStageSignals(token: string, workOrderId: string) {
+  return apiFetch<Record<string, StageSignal>>(`/production/work-orders/${workOrderId}/stage-signals`, { token });
 }
 
 export function createDailyReport(token: string, input: CreateDailyReportInput) {

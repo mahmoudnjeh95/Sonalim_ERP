@@ -94,6 +94,15 @@ class TeamPerformanceService:
                     / COALESCE(sr.ratio_to_base, 1)
                 ), 0) AS regrind_input_quantity_normalized,
                 COALESCE(SUM(d.regrind_quantity), 0) AS regrind_quantity,
+                -- Rebroyat made, in kilos: `regrind_quantity` is counted in its
+                -- own rebroyat product's unit (tonnes, from the shift form),
+                -- while `net_semoule_waste` below nets against raw kilos --
+                -- same fix as OfConsolidationService._daily_totals, applied
+                -- here so the Analytics team-performance chart stops reading
+                -- as though 150 kg of rebroyat cancelled 150 t of déchet.
+                COALESCE(SUM(
+                    d.regrind_quantity * CASE WHEN rgu.category = 'weight' THEN rgu.ratio_to_base ELSE 1 END
+                ), 0) AS regrind_quantity_kg,
                 -- The daily report's own Produit fini -- the tonnage off the
                 -- scale at the press, available before packaging catches up.
                 -- See WorkOrderYieldService for the same choice.
@@ -108,6 +117,13 @@ class TeamPerformanceService:
             LEFT JOIN core.products rip ON rip.id = d.regrind_input_product_id AND rip.tenant_id = r.tenant_id
             LEFT JOIN core.uoms riu ON riu.id = rip.uom_id AND riu.tenant_id = rip.tenant_id
             LEFT JOIN sem_ratio sr ON sr.team IS NOT DISTINCT FROM r.team AND sr.period = r.period
+            -- regrind_quantity's own unit: the report's named rebroyat product
+            -- when there is one, else the tenant's default rebroyat product --
+            -- a shift that names none still has its rebroyat become that
+            -- default on validation (shift_stock_service.record_regrind).
+            LEFT JOIN production.regrind_defaults rgd0 ON rgd0.tenant_id = r.tenant_id AND rgd0.input_product_id IS NULL
+            LEFT JOIN core.products rgp ON rgp.id = COALESCE(d.regrind_product_id, rgd0.output_product_id) AND rgp.tenant_id = r.tenant_id
+            LEFT JOIN core.uoms rgu ON rgu.id = rgp.uom_id AND rgu.tenant_id = rgp.tenant_id
             -- Pre-aggregated per report before joining, same reason as the
             -- yield service: a report can carry several semoule lines, and
             -- joining that many-rows table straight in would multiply every
@@ -202,7 +218,7 @@ class TeamPerformanceService:
         rows = []
         for (
             team, period, report_count, semolina_quantity, regrind_input_quantity,
-            regrind_input_quantity_normalized, regrind_quantity,
+            regrind_input_quantity_normalized, regrind_quantity, regrind_quantity_kg,
             produced_quantity, production_minutes, downtime_minutes,
         ) in totals:
             key = (team, period.isoformat())
@@ -231,8 +247,12 @@ class TeamPerformanceService:
                     # figure). This is the écart the plant wants to minimise:
                     # material that is genuinely gone, never coming back into a mix.
                     "daily_waste_by_category": waste_by_category,
+                    # Native figure (the rebroyat product's own unit), left alone for display.
                     "regrind_quantity": float(regrind_quantity),
-                    "net_semoule_waste": raw_kg_by_key.get(key, 0.0) - float(regrind_quantity),
+                    # Netted in kilos, against regrind_quantity_kg — never the
+                    # native figure above, which is in the rebroyat product's own
+                    # unit (tonnes) and would net tonnes against kilos.
+                    "net_semoule_waste": raw_kg_by_key.get(key, 0.0) - float(regrind_quantity_kg),
                 }
             )
         return rows

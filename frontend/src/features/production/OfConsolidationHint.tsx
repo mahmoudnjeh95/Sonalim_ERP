@@ -39,14 +39,14 @@ export function OfConsolidationHint({ workOrderId }: { workOrderId: string | und
           {formatQuantity(consolidation.produced_quantity, "t")}
         </div>
         <div>
-          <span className="text-muted-foreground">{t("production.hint.completion")}: </span>
-          {consolidation.completion_ratio !== null
-            ? `${Math.round(consolidation.completion_ratio * 100)}%`
-            : "—"}
+          {/* Not produced / planned: the plant runs an order past its plan, so that
+              share reads 600 % on a healthy order. Yield is the figure that means something. */}
+          <span className="text-muted-foreground">{t("production.workOrders.column.yield")}: </span>
+          {consolidation.yield_ratio !== null ? `${(consolidation.yield_ratio * 100).toFixed(1)}%` : "—"}
         </div>
         <div>
           <span className="text-muted-foreground">{t("production.hint.semolinaSoFar")}: </span>
-          {formatQuantity(consolidation.raw_material.semolina_quantity, "kg")}
+          {formatQuantity(consolidation.raw_material.semolina_quantity, "t")}
         </div>
         <div>
           <span className="text-muted-foreground">{t("production.hint.reportsFiled")}: </span>

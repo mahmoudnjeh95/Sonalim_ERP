@@ -62,32 +62,51 @@ class DashboardLinesService:
                 key=lambda e: e["team"].lower(),
             )
 
-        # Keyed by (shift, team) rather than shift alone: the rotation schedule says
-        # who is *supposed* to be on a shift, but the report says who actually filed
-        # it. When those disagree (a swap, or the rotation anchor drifting out of
-        # sync with reality) a status must not be borrowed onto the wrong team --
-        # that reads as if the scheduled team worked when someone else did.
-        report_status_by_line: dict[str, dict[tuple[str, str], str]] = {}
-        for work_center_id, shift, team, report_status in self._connection.execute(
-            "SELECT work_center_id, shift, team, status FROM production.shift_reports WHERE tenant_id = %s AND report_date = %s",
-            (tenant_id, date),
-        ).fetchall():
-            report_status_by_line.setdefault(work_center_id, {})[(shift.lower(), team)] = report_status
+        # The rotation schedule says who is *supposed* to be on a shift; the reports
+        # say who actually worked it. When those disagree (a swap, or the rotation
+        # anchor drifting out of sync with reality) the reports win: a team that
+        # filed a report sits on the shift it filed, and a team whose scheduled
+        # slot was filed by someone else is shown off shift rather than borrowing
+        # that report's status. The schedule only places teams that filed nothing.
+        reports_by_line: dict[str, list[tuple[str, str, str]]] = {}
+        shift_rank = {shift.lower(): rank for rank, shift in enumerate(sorted_shifts)}
+        for work_center_id, shift, team, report_status in sorted(
+            self._connection.execute(
+                "SELECT work_center_id, shift, team, status FROM production.shift_reports WHERE tenant_id = %s AND report_date = %s",
+                (tenant_id, date),
+            ).fetchall(),
+            key=lambda r: shift_rank.get(r[1].lower(), len(shift_rank)),
+        ):
+            reports_by_line.setdefault(work_center_id, []).append((shift, team, report_status))
 
         def team_status_for(line_id: str) -> list[dict]:
-            statuses = report_status_by_line.get(line_id, {})
-            return [
-                {
-                    "team": entry["team"],
-                    "shift": entry["shift"],
-                    "status": statuses.get((entry["shift"].lower(), entry["team"])) if entry["shift"] else None,
-                    "is_current": bool(
-                        is_today and running is not None and entry["shift"] is not None
-                        and entry["shift"].lower() == running.shift.lower()
-                    ),
-                }
-                for entry in schedule
-            ]
+            if not schedule:
+                return []
+            filed_by_team: dict[str, tuple[str, str]] = {}
+            for shift, team, report_status in reports_by_line.get(line_id, []):
+                filed_by_team.setdefault(team, (shift, report_status))
+            filed_shifts = {shift.lower() for shift, _ in filed_by_team.values()}
+
+            entries = []
+            for team in sorted({e["team"] for e in schedule} | filed_by_team.keys(), key=str.lower):
+                if team in filed_by_team:
+                    shift, report_status = filed_by_team[team]
+                else:
+                    scheduled = next((e["shift"] for e in schedule if e["team"] == team), None)
+                    shift = scheduled if scheduled and scheduled.lower() not in filed_shifts else None
+                    report_status = None
+                entries.append(
+                    {
+                        "team": team,
+                        "shift": shift,
+                        "status": report_status,
+                        "is_current": bool(
+                            is_today and running is not None and shift is not None
+                            and shift.lower() == running.shift.lower()
+                        ),
+                    }
+                )
+            return entries
 
         equipment_by_line: dict[str, list] = {}
         for machine in EquipmentService(self._connection).list_equipment(tenant_id=tenant_id):

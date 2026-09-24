@@ -454,7 +454,9 @@ def test_a_plants_own_daily_waste_type_is_restated_and_netted_like_a_built_in(db
     assert waste["net_semoule_waste"] == 200 - 10
 
 
-def test_time_is_summed_across_both_report_types(db, env, of):
+def test_line_and_packing_time_are_reported_apart(db, env, of):
+    """The line and the packing machines run through the same hours of the same
+    shift. Adding them counted every shift twice."""
     _daily(
         db, env, of, date=datetime.date(2026, 9, 1),
         semolina_quantity=1000, production_minutes=400,
@@ -466,8 +468,70 @@ def test_time_is_summed_across_both_report_types(db, env, of):
     )
 
     time = _consolidate(db, of)["time"]
-    assert time["production_minutes"] == 780
-    assert time["downtime_minutes"] == 35
+    assert time == {
+        "production_minutes": 400,
+        "downtime_minutes": 20,
+        "packing_minutes": 380,
+        "packing_downtime_minutes": 15,
+    }
+
+
+def test_water_is_derived_from_the_dosage_when_no_litres_were_typed(db, env, of):
+    """The shift form records only the water %, of the semoule poured."""
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, water_percentage=30)
+    _daily(db, env, of, date=datetime.date(2026, 9, 2), semolina_quantity=500, water_quantity=40, water_percentage=30)
+
+    utilities = _consolidate(db, of)["utilities"]
+    # 30 % of 1000 kg, plus the 40 L the second report typed itself.
+    assert utilities["water_quantity"] == pytest.approx(300 + 40)
+    assert utilities["water_derived"] is True
+
+
+def test_typed_water_is_not_flagged_as_derived(db, env, of):
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, water_quantity=50)
+
+    utilities = _consolidate(db, of)["utilities"]
+    assert utilities["water_quantity"] == 50
+    assert utilities["water_derived"] is False
+
+
+def test_rebroyat_in_tonnes_is_netted_in_kilos(db, env, of):
+    """A shift's rebroyat is counted in the rebroyat product's unit -- tonnes
+    here -- while the daily déchet is weighed in kilos."""
+    tonne_uom, rebroyat = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (tonne_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'CONSO-REB-T', 'Rebroyat', %s)",
+        (rebroyat, TENANT, tonne_uom),
+    )
+    RegrindDefaultsService(db).set_default(tenant_id=TENANT, actor_id=env["actor"], output_product_id=rebroyat)
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, regrind_quantity=0.15,
+        waste_lines=(WasteLine(category="press", product_id=env["product"], quantity=200),),
+    )
+
+    waste = _consolidate(db, of)["waste"]
+    assert waste["net_semoule_waste"] == pytest.approx(200 - 150)
+    # The report named no rebroyat product, so the figure takes the default's unit.
+    assert waste["regrind"]["product_id"] == rebroyat
+
+
+def test_yield_is_pressed_over_poured_and_matches_the_list(db, env, of):
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, finished_product_quantity=900)
+    _packing(db, env, of, date=datetime.date(2026, 9, 2), packets_counted=850)
+
+    result = _consolidate(db, of)
+    assert result["pressed_quantity"] == 900
+    assert result["yield_ratio"] == pytest.approx(0.9)
+    assert result["by_day"] == [
+        {"date": "2026-09-01", "pressed_quantity": 900, "packed_quantity": 0},
+        {"date": "2026-09-02", "pressed_quantity": 0, "packed_quantity": 850},
+    ]
 
 
 def test_completion_is_measured_against_the_plan(db, env, of):

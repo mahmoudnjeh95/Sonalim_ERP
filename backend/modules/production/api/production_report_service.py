@@ -257,6 +257,44 @@ class ProductionReportService:
         ).fetchall()
         return [_row_to_header(row) for row in rows]
 
+    def list_stage_signals(self, *, tenant_id: str, of_id: str) -> dict[str, dict[str, bool]]:
+        """Whether each of an OF's reports carries figures, keyed by report id.
+
+        The production-flow card (deriveStageStates on the frontend) only ever
+        asks a report's detail three yes/no questions: did it pour semoule
+        (melange), weigh finished product (petrissage), or count packets
+        (extrusion/conditionnement/stockage, all the same figure). Fetching a
+        full detail per report to answer that -- report_id -> GET
+        /reports/{id}, once per report -- turned a long-running OF's page load
+        into as many round trips as it has reports (OF-000085: 138, one per
+        daily/conditionnement report). One query against both detail tables,
+        restated to these three booleans, replaces every one of those trips.
+        """
+        rows = self._connection.execute(
+            """
+            SELECT r.id,
+                   EXISTS (
+                       SELECT 1 FROM production.report_semolina_lines sl
+                       WHERE sl.report_id = r.id AND sl.tenant_id = r.tenant_id AND sl.quantity > 0
+                   ) AS poured_semoule,
+                   COALESCE(d.finished_product_quantity, 0) > 0 AS weighed_finished_product,
+                   COALESCE(c.packets_counted, 0) > 0 AS counted_packets
+            FROM production.production_reports r
+            LEFT JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            LEFT JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+            WHERE r.tenant_id = %s AND r.of_id = %s AND r.status != 'rejected'
+            """,
+            (tenant_id, of_id),
+        ).fetchall()
+        return {
+            report_id: {
+                "poured_semoule": bool(poured_semoule),
+                "weighed_finished_product": bool(weighed_finished_product),
+                "counted_packets": bool(counted_packets),
+            }
+            for report_id, poured_semoule, weighed_finished_product, counted_packets in rows
+        }
+
     def list_revisions(self, *, tenant_id: str, report_id: str) -> list[dict]:
         rows = self._connection.execute(
             """

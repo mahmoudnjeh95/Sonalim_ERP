@@ -329,6 +329,42 @@ def test_team_status_does_not_borrow_another_teams_report_for_the_same_slot(db, 
     assert team_b["status"] is None
 
 
+def test_team_status_places_every_team_that_filed_on_the_shift_it_actually_worked(db, env):
+    """The rotation drifted: it says A=Shift 3, B off, C=Shift 1, D=Shift 2, but A, B and
+    C filed Shift 2, Shift 3 and Shift 1. All three that worked must show, on their real
+    shift, and D -- whose slot A filed -- is the one off shift."""
+    line_id = _line(db, "L1")
+    settings = DashboardSettingsService(db)
+    settings.replace_shift_windows(
+        tenant_id=TENANT, actor_id=env["actor"],
+        windows=[
+            ShiftWindow(shift="Shift 1", start=T(7, 0), end=T(15, 0)),
+            ShiftWindow(shift="Shift 2", start=T(15, 0), end=T(23, 0)),
+            ShiftWindow(shift="Shift 3", start=T(23, 0), end=T(7, 0)),
+        ],
+    )
+    _team(db, env["actor"], "B", "C", "D", "A")
+    settings.replace_team_rotation(
+        tenant_id=TENANT, actor_id=env["actor"],
+        entries=[
+            {"team": "B", "anchor_date": "2026-09-19", "anchor_stop": 0},
+            {"team": "C", "anchor_date": "2026-09-19", "anchor_stop": 1},
+            {"team": "D", "anchor_date": "2026-09-19", "anchor_stop": 2},
+            {"team": "A", "anchor_date": "2026-09-19", "anchor_stop": 3},
+        ],
+    )
+    for shift, team in (("Shift 1", "C"), ("Shift 2", "A"), ("Shift 3", "B")):
+        db.execute(
+            "INSERT INTO production.shift_reports (id, tenant_id, work_center_id, report_date, shift, team, status) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+            (str(ULID()), TENANT, line_id, datetime.date(2026, 9, 22), shift, team, "validated"),
+        )
+    team_status = _by_code(_lines(db, date=datetime.date(2026, 9, 22), today=datetime.date(2026, 9, 23)))["L1"]["team_status"]
+    assert {(e["team"], e["shift"], e["status"]) for e in team_status} == {
+        ("A", "Shift 2", "validated"), ("B", "Shift 3", "validated"), ("C", "Shift 1", "validated"), ("D", None, None),
+    }
+
+
 def test_team_status_is_empty_when_the_rotation_no_longer_matches_the_shift_count(db, env):
     _line(db, "L1")
     settings = DashboardSettingsService(db)

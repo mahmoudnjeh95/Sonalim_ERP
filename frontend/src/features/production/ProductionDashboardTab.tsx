@@ -76,6 +76,7 @@ import {
   type WorkOrder,
 } from "./api";
 import { downtimeLabel } from "./downtimeOptions";
+import { OrderStatusLine } from "./OrderStatusLine";
 import { useWasteTypes } from "./wasteTypes";
 import { listNonConformities } from "../qc/api";
 import { listLots, type Lot } from "../products/api";
@@ -97,8 +98,10 @@ const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const PRODUCED_UNIT = "t";
 
 /** "produced / poured in", both in tonnes, to the precision the plant records them. */
-function progressLabel(c: { produced_quantity: number; material_input_quantity: number }): string {
-  return `${formatQuantity(c.produced_quantity)} / ${formatQuantity(c.material_input_quantity, PRODUCED_UNIT)}`;
+// Packed tonnage and the yield (pressed over poured), the same pair the OF list shows.
+function progressLabel(c: { produced_quantity: number; yield_ratio: number | null }): string {
+  const tonnage = formatQuantity(c.produced_quantity, PRODUCED_UNIT);
+  return c.yield_ratio === null ? tonnage : `${tonnage} · ${(c.yield_ratio * 100).toFixed(1)} %`;
 }
 // How many lots the expiry card lists; a display cap, not a judgement.
 const LOTS_SHOWN = 8;
@@ -752,7 +755,6 @@ export function ProductionDashboardTab() {
           ) : (
             activeOrders.map((order) => {
               const consolidation = loadedConsolidations.find((c) => c.of_id === order.id);
-              const ratio = consolidation?.transformation_ratio ?? 0;
               return (
                 <div key={order.id} className="rounded-lg border border-border p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -764,14 +766,7 @@ export function ProductionDashboardTab() {
                       {consolidation ? progressLabel(consolidation) : "—"}
                     </span>
                   </div>
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <motion.div
-                      className="h-full rounded-full bg-success"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
-                      transition={{ duration: 0.4, ease: "easeOut" }}
-                    />
-                  </div>
+                  <OrderStatusLine status={order.status} className="mt-2 h-1.5" />
                 </div>
               );
             })

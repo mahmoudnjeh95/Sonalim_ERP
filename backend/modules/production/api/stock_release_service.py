@@ -34,6 +34,11 @@ from modules.warehouse.api.service import StockService
 # A quantity typed with decimals may differ from the stored one in the last binary digit.
 _EPSILON = 1e-9
 
+# How far back the backlog looks for goods packed but never released. Older than this, an
+# unreleased balance is taken as a deliberate hold (quarantine, a write-off pending) rather
+# than something forgotten, and stays out of the supervisor's way.
+_BACKLOG_LOOKBACK_DAYS = 7
+
 
 class _Abort(Exception):
     """Carries an `Err` out of the savepoint so every transfer already posted is undone."""
@@ -98,14 +103,33 @@ class StockReleaseService:
         Without a `day` it opens on yesterday while anything packed then is still unreleased,
         and on today otherwise (a quiet Sunday, or everything already released). A product the
         line store cannot cover is still listed, greyed out, so it is never silently missing.
+
+        Alongside `day`'s own `items`, `backlog` lists what earlier days (within the lookback
+        window, excluding `day` itself) still have unreleased, so a supervisor who has moved
+        on to a later day is not left to hunt for what an older one left behind.
         """
         today = today or datetime.date.today()
         if day is not None:
-            return self._list_for(tenant_id, day, today)
-        yesterday = self._list_for(tenant_id, today - datetime.timedelta(days=1), today)
-        if any(item["remaining"] > 0 for item in yesterday["items"]):
-            return yesterday
-        return self._list_for(tenant_id, today, today)
+            result = self._list_for(tenant_id, day, today)
+        else:
+            yesterday = self._list_for(tenant_id, today - datetime.timedelta(days=1), today)
+            result = yesterday if any(item["remaining"] > 0 for item in yesterday["items"]) else self._list_for(tenant_id, today, today)
+        result["backlog"] = self._backlog(tenant_id, exclude_day=datetime.date.fromisoformat(result["day"]), today=today)
+        return result
+
+    def _backlog(self, tenant_id: str, *, exclude_day: datetime.date, today: datetime.date) -> list[dict]:
+        """Earlier days, within the lookback window, that still have something unreleased."""
+        backlog = []
+        for offset in range(1, _BACKLOG_LOOKBACK_DAYS + 1):
+            day = today - datetime.timedelta(days=offset)
+            if day == exclude_day:
+                continue
+            listed = self._list_for(tenant_id, day, today)
+            items = [item for item in listed["items"] if item["remaining"] > 0]
+            if items:
+                backlog.append({"day": listed["day"], "items": items})
+        backlog.sort(key=lambda entry: entry["day"])
+        return backlog
 
     def _list_for(self, tenant_id: str, day: datetime.date, today: datetime.date) -> dict:
         header = {"day": day.isoformat(), "today": today.isoformat()}
@@ -152,6 +176,12 @@ class StockReleaseService:
         return {**header, "line_store": {"id": line_id, "name": names.get(line_id)}, "items": items}
 
     def release(self, *, tenant_id: str, actor_id: str, day: datetime.date, items: list[dict]) -> Result[dict]:
+        """Releases `items`, each against the day it was packed on.
+
+        `day` is the day the dialog had open; an item with no `packed_on` of its own (the
+        common case) is taken as packed on `day`. An item naming an earlier `packed_on` is a
+        backlog row the supervisor is clearing alongside `day`'s own goods.
+        """
         line_id = self._line_store(tenant_id)
         if line_id is None:
             return Err("NO_LINE_STORE", "no line store is set in the production settings, so there is nothing to release")
@@ -159,16 +189,26 @@ class StockReleaseService:
             return Err("NOTHING_TO_RELEASE", "choose at least one product to release")
 
         on_hand = {level.product_id: level.quantity_on_hand for level in self._stock.list_stock_items(tenant_id, location_id=line_id)}
-        packed = self._packed_on(tenant_id, day)
-        released = self._released_on(tenant_id, day)
-        qc_validated = self._qc_validated_on(tenant_id, day)
-        plan: list[tuple[str, str, float, str]] = []  # (product id, name, quantity, destination)
-        seen: set[str] = set()
+        packed_cache: dict[datetime.date, dict[str, float]] = {}
+        released_cache: dict[datetime.date, dict[str, float]] = {}
+        qc_cache: dict[datetime.date, dict[str, float]] = {}
+
+        def _for_day(cache: dict[datetime.date, dict[str, float]], loader, packed_on: datetime.date) -> dict[str, float]:
+            if packed_on not in cache:
+                cache[packed_on] = loader(tenant_id, packed_on)
+            return cache[packed_on]
+
+        plan: list[tuple[str, str, float, str, datetime.date]] = []  # (product id, name, quantity, destination, packed_on)
+        seen: set[tuple[str, datetime.date]] = set()
         for item in items:
             product_id = str(item.get("product_id") or "")
-            if product_id in seen:
-                return Err("DUPLICATE_ENTRY", f"product {product_id} is listed twice")
-            seen.add(product_id)
+            packed_on = item.get("packed_on") or day
+            if isinstance(packed_on, str):
+                packed_on = datetime.date.fromisoformat(packed_on)
+            key = (product_id, packed_on)
+            if key in seen:
+                return Err("DUPLICATE_ENTRY", f"product {product_id} is listed twice for {packed_on.isoformat()}")
+            seen.add(key)
             product = self._core.get_product(tenant_id, product_id)
             if product is None:
                 return Err("NOT_FOUND", f"product {product_id} not found")
@@ -180,11 +220,14 @@ class StockReleaseService:
                     "INSUFFICIENT_STOCK",
                     f"{product.name}: only {on_hand.get(product_id, 0.0):g} is in the line store, {quantity:g} asked",
                 )
+            packed = _for_day(packed_cache, self._packed_on, packed_on)
+            released = _for_day(released_cache, self._released_on, packed_on)
+            qc_validated = _for_day(qc_cache, self._qc_validated_on, packed_on)
             left = packed.get(product_id, 0.0) - released.get(product_id, 0.0)
             if quantity > left + _EPSILON:
                 return Err(
                     "EXCEEDS_PACKED",
-                    f"{product.name}: only {max(left, 0.0):g} of what was packed on {day.isoformat()} is left to release, {quantity:g} asked",
+                    f"{product.name}: only {max(left, 0.0):g} of what was packed on {packed_on.isoformat()} is left to release, {quantity:g} asked",
                 )
             # Checked here too, not only in the list: a stale or forged request must not move
             # goods QC has not validated as conforming, whatever the line store holds.
@@ -198,13 +241,16 @@ class StockReleaseService:
                 return Err("NO_DEFAULT_LOCATION", f"{product.name} has no default storage location to be released into")
             if product.default_location_id == line_id:
                 return Err("INVALID_TRANSFER", f"{product.name}: its default storage location is the line store itself")
-            plan.append((product_id, product.name, quantity, product.default_location_id))
+            # Two lines for the same product on different days would draw from the same on-hand
+            # pool twice; keep it honest by charging the second line against what the first left.
+            on_hand[product_id] = on_hand.get(product_id, 0.0) - quantity
+            plan.append((product_id, product.name, quantity, product.default_location_id, packed_on))
 
         reference = f"stock_release:{datetime.date.today().isoformat()}"
         correlation_id = str(ULID())
         try:
             with self._connection.transaction():
-                for product_id, name, quantity, destination in plan:
+                for product_id, name, quantity, destination, packed_on in plan:
                     moved = self._stock.transfer_stock(
                         tenant_id=tenant_id,
                         product_id=product_id,
@@ -221,12 +267,12 @@ class StockReleaseService:
                         "INSERT INTO production.stock_release_lines "
                         "(id, tenant_id, release_id, packed_on, product_id, quantity, from_location_id, to_location_id, released_by) "
                         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                        (str(ULID()), tenant_id, correlation_id, day, product_id, quantity, line_id, destination, actor_id),
+                        (str(ULID()), tenant_id, correlation_id, packed_on, product_id, quantity, line_id, destination, actor_id),
                     )
         except _Abort as abort:
             return abort.err
 
-        moved_lines = [{"product_id": p, "quantity": q, "to_location_id": d} for p, _n, q, d in plan]
+        moved_lines = [{"product_id": p, "quantity": q, "to_location_id": d, "packed_on": po.isoformat()} for p, _n, q, d, po in plan]
         record_audit(
             self._connection,
             tenant_id=tenant_id,

@@ -67,7 +67,7 @@ def _validated_report(
     downtime_reason=None, water_percentage=0, semolina_flow_rate=0, downtime_lines=None,
     waste_lines=(), regrind_quantity=0, recipe_id=None,
     semolina_product_id=None, regrind_input_quantity=0, regrind_input_product_id=None,
-    equipment_id=None,
+    equipment_id=None, regrind_product_id=...,
 ):
     orders = WorkOrderService(db)
     created = orders.create_work_order(
@@ -104,7 +104,9 @@ def _validated_report(
         semolina_flow_rate=semolina_flow_rate,
         waste_lines=waste_lines,
         regrind_quantity=regrind_quantity,
-        regrind_product_id=env["product"] if regrind_quantity else None,
+        regrind_product_id=(
+            (env["product"] if regrind_quantity else None) if regrind_product_id is ... else regrind_product_id
+        ),
         regrind_input_quantity=regrind_input_quantity,
         regrind_input_product_id=regrind_input_product_id,
     )
@@ -172,6 +174,38 @@ def test_net_semoule_waste_is_daily_waste_net_of_declared_regrind(db, env):
     assert row["daily_waste_by_category"] == {"press": 30.0, "kneading": 10.0}
     assert row["regrind_quantity"] == 25.0
     assert row["net_semoule_waste"] == 15.0
+
+
+def test_net_semoule_waste_nets_rebroyat_in_tonnes_as_kilos(db, env):
+    """`regrind_quantity` is counted in the rebroyat product's own unit —
+    tonnes here, same as OfConsolidationService's fixture — while
+    `net_semoule_waste` nets against the daily déchet's raw kilos. Netting the
+    native tonnes figure straight against kilos would read 150 kg of rebroyat
+    as cancelling 150 t of déchet."""
+    tonne_uom, rebroyat = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (tonne_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TP-REB-T', 'Rebroyat', %s)",
+        (rebroyat, TENANT, tonne_uom),
+    )
+    RegrindDefaultsService(db).set_default(tenant_id=TENANT, actor_id=env["actor"], output_product_id=rebroyat)
+
+    _validated_report(
+        db, env, team="A", report_date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, production_minutes=400, downtime_minutes=0,
+        waste_lines=(WasteLine(category="press", product_id=env["product"], quantity=200),),
+        regrind_quantity=0.15, regrind_product_id=None,
+    )
+
+    rows = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="week")
+    row = next(r for r in rows if r["team"] == "A")
+
+    assert row["regrind_quantity"] == 0.15
+    assert row["net_semoule_waste"] == pytest.approx(200 - 150)
 
 
 def test_daily_waste_by_category_is_not_restated_against_the_item_unit(db, env):

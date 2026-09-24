@@ -3,21 +3,14 @@ import { motion } from "framer-motion";
 import { ArrowRight, CalendarDays, Factory, Gauge, Layers, User } from "lucide-react";
 import { useI18n } from "../../lib/i18n";
 import { formatQuantity } from "../../lib/units";
-import { cn } from "../../lib/utils";
+
 import { rowEnterProps, highlightRowEnterProps } from "../../components/motion/rowMotion";
 import { Badge } from "../../components/ui/badge";
 import { Skeleton } from "../../components/ui/skeleton";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { RowActionsMenu, type RowAction } from "../../components/patterns/RowActionsMenu";
-import type { WorkOrder, WorkOrderOverview, WorkOrderStatus } from "./api";
-
-const BAR_TONE: Record<WorkOrderStatus, string> = {
-  planned: "bg-primary",
-  ongoing: "bg-warning",
-  suspended: "bg-accent",
-  closed: "bg-success",
-  cancelled: "bg-destructive",
-};
+import type { WorkOrder, WorkOrderOverview } from "./api";
+import { OrderStatusLine } from "./OrderStatusLine";
 
 /**
  * One order, compact. Official figures come from validated shifts; what is still waiting is shown
@@ -45,7 +38,6 @@ export function WorkOrderCard({
 }) {
   const { t } = useI18n();
   const produced = overview?.produced_quantity ?? 0;
-  const ratio = overview?.completion_ratio ?? null;
   const pending = overview?.pending_quantity ?? 0;
   const shifts = overview?.shifts ?? { validated: 0, submitted: 0, in_progress: 0, returned: 0 };
   const shiftParts = [
@@ -114,29 +106,18 @@ export function WorkOrderCard({
       </dl>
 
       <div className="mt-3 space-y-1">
-        {ratio !== null ? (
-          <>
-            <div className="flex items-baseline justify-between text-xs">
-              <span className="tabular-nums text-foreground">
-                {formatQuantity(produced, "t")} / {formatQuantity(order.planned_quantity, "t")} {t("production.workOrders.card.planned")}
-              </span>
-              <span className="font-medium tabular-nums">{Math.round(ratio * 100)}%</span>
-            </div>
-            <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-              <motion.div
-                className={cn("h-full rounded-full", BAR_TONE[order.status])}
-                initial={{ width: 0 }}
-                animate={{ width: `${Math.min(100, ratio * 100)}%` }}
-                transition={{ duration: 0.4, ease: "easeOut" }}
-              />
-            </div>
-          </>
-        ) : (
-          <div className="flex items-baseline justify-between gap-2 text-xs">
-            <span className="tabular-nums text-foreground">{formatQuantity(produced, "t")}</span>
-            <span className="text-muted-foreground">{t("production.workOrders.card.noPlan")}</span>
-          </div>
-        )}
+        <div className="flex items-baseline justify-between gap-2 text-xs">
+          <span className="tabular-nums text-foreground">
+            <span className="font-semibold">{formatQuantity(produced, "t")}</span>{" "}
+            <span className="text-muted-foreground">{t("production.workOrders.card.produced")}</span>
+          </span>
+          <span className="tabular-nums text-muted-foreground">
+            {order.planned_quantity !== null
+              ? `${t("production.workOrders.card.planned")} ${formatQuantity(order.planned_quantity, "t")}`
+              : t("production.workOrders.card.noPlan")}
+          </span>
+        </div>
+        <OrderStatusLine status={order.status} />
         {pending > 0 && (
           <p className="text-xs text-muted-foreground">
             + {formatQuantity(pending, "t")} {t("production.workOrders.card.pending")}
