@@ -337,6 +337,70 @@ class QualityReportService:
             for team, period, count, c, nc in rows
         ]
 
+    def inspection_ledger(
+        self, *, tenant_id: str, date_from: str | None = None, date_to: str | None = None
+    ) -> list[dict]:
+        """Every conformity line of every quality report in the window, one row each.
+
+        The dashboards need conformity sliced by product, line, team, shift,
+        defect and day at once, and `team_conformity` only knows teams. Rather
+        than one endpoint per slice, this hands back the line grain (a report
+        has one line per product packed that shift) and lets the reader group
+        it -- a month of shifts is a few hundred rows, well under what a screen
+        can hold. Every status is included so the reader can also tell what is
+        still waiting on QC; a caller wanting the official figure keeps
+        `status == "validated"`, exactly the rule `team_conformity` applies.
+        A report whose shift packed nothing has no line and so no row here; it
+        still counts in `list_reports`.
+        """
+        clauses = ["r.tenant_id = %s"]
+        params: list[object] = [tenant_id]
+        if date_from is not None:
+            clauses.append("r.report_date >= %s")
+            params.append(date_from)
+        if date_to is not None:
+            clauses.append("r.report_date <= %s")
+            params.append(date_to)
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                l.id, r.id, r.shift_report_id, r.report_date, r.shift, r.team, r.status, r.revision,
+                r.submitted_at, r.validated_at, l.of_id, l.product_id,
+                l.conforming_cartons, l.non_conforming_cartons, l.defect_details, d.corrective_action,
+                (SELECT count(*) FROM qc.non_conformities n
+                 WHERE n.tenant_id = r.tenant_id AND n.quality_report_id = r.id
+                   AND n.of_id = l.of_id AND n.product_id = l.product_id)
+            FROM qc.quality_reports r
+            JOIN qc.quality_conformity_lines l ON l.report_id = r.id AND l.tenant_id = r.tenant_id
+            LEFT JOIN qc.quality_report_details d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY r.report_date, r.shift, r.team, r.id, l.id
+            """,
+            params,
+        ).fetchall()
+        return [
+            {
+                "line_id": row[0],
+                "report_id": row[1],
+                "shift_report_id": row[2],
+                "report_date": row[3].isoformat(),
+                "shift": row[4],
+                "team": row[5],
+                "status": row[6],
+                "revision": int(row[7]),
+                "submitted_at": row[8].isoformat() if row[8] is not None else None,
+                "validated_at": row[9].isoformat() if row[9] is not None else None,
+                "of_id": row[10],
+                "product_id": row[11],
+                "conforming_cartons": float(row[12] or 0),
+                "non_conforming_cartons": float(row[13] or 0),
+                "defect_details": row[14],
+                "corrective_action": row[15],
+                "non_conformity_count": int(row[16]),
+            }
+            for row in rows
+        ]
+
     def list_reports(self, *, tenant_id: str, status: str | None = None) -> list[QualityReport]:
         clauses = ["tenant_id = %s"]
         params: list[object] = [tenant_id]

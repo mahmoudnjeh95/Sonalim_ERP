@@ -5,10 +5,16 @@
     PYTHONPATH=. .venv/Scripts/python.exe scripts/seed_qc_month.py
 
 QC inspects the validated shift reports the month's production produced (the ones not yet inspected;
-run `seed_shift_month.py` first so there is something to inspect). Not every shift is inspected, the
-newest ones are still waiting for QC, and the newest reports are handed in, sent back or still drafts.
-Carton counts come from what each shift's packing rows say was packed, split per product line; defect
-wording is the plant's own (taken from the reports already recorded). A few rejected reports are
+run `seed_shift_month.py` first so there is something to inspect). Every fiche de shift older than a
+day or two gets its quality report -- the dashboards need the whole month, not a sample -- while the
+newest shifts are where a real week leaves them: some still waiting for QC, the freshest reports
+handed in, sent back or still drafts. Carton counts come from what each shift's packing rows say was
+packed, split per product line; defect wording is the plant's own (taken from the reports already
+recorded).
+
+The defects are not spread evenly, on purpose, so the quality dashboards have something to find: the
+200 g format and the line's third team reject more, night shifts reject a little more, one bad week in
+September rejects a lot more, and each product has its own signature defect. A few rejected reports are
 revised and validated again. Validated reports open their follow-up window, older ones get
 observations, and reports with enough non-conforming cartons raise a non-conformity that is pulled
 into quarantine, dispositioned and (when old enough) closed.
@@ -50,7 +56,11 @@ OBSERVATIONS = ["Aucun retour client sur ce lot", "Contrôle d'un échantillon e
 CORRECTIVE_ACTIONS = ["Contrôle renforcé en fin de ligne", "Sensibilisation de l'équipe", "Réglage de la machine", "Vérification du scellage"]
 REJECTION = "Quantités à revérifier avec le rapport de conditionnement"
 COMMENTS = ["RAS", "Lecture faite en fin de poste", "Contrôle visuel uniquement"]
-NC_MIN_CARTONS = 6
+NC_MIN_CARTONS = 8
+# Each format has a signature defect it sees more than the others (the sachet weld on the 200 g,
+# crushed cartons on the long pasta) -- so "top defect by product" is a real finding, not noise.
+SIGNATURE_DEFECT = {"doman-pc-200g": "Scellage défectueux", "doman-pl-500g": "Carton écrasé / déformé", "COQ6-500G": "Pièces endommagées"}
+BAD_WEEK = (datetime.date(2026, 9, 7), datetime.date(2026, 9, 12))
 
 # A couple of plausible readings per group, so a seeded entry looks like a real one
 # instead of a wall of zeros. Fields left out of a given entry stay unset, the same
@@ -73,11 +83,40 @@ def at(moment: datetime.datetime) -> datetime.datetime:
 
 
 def fate(rng: random.Random, age: int) -> str:
-    if age >= 6:
+    if age >= 10:
         return rng.choices(["validated", "revised"], weights=[9, 1])[0]
+    if age >= 6:
+        return rng.choices(["validated", "revised", "submitted", "draft", "rejected"], weights=[12, 2, 3, 1, 1])[0]
     if age >= 3:
         return rng.choices(["validated", "submitted", "draft", "rejected"], weights=[5, 5, 3, 2])[0]
     return rng.choices(["submitted", "draft", "rejected", "validated"], weights=[4, 4, 2, 2])[0]
+
+
+def defect_odds(sku: str | None, team: str | None, shift: str | None, day: datetime.date) -> float:
+    """How likely this product line's cartons include rejects -- the patterns the dashboards should surface."""
+    odds = {"doman-pc-200g": 0.55, "COQ6-500G": 0.35, "doman-pc-500g": 0.3}.get(sku or "", 0.25)
+    if team and team.endswith("C"):
+        odds += 0.12
+    if shift == "night":
+        odds += 0.08
+    if BAD_WEEK[0] <= day <= BAD_WEEK[1]:
+        odds += 0.25
+    return min(odds, 0.95)
+
+
+def reject_share(rng: random.Random, sku: str | None, day: datetime.date) -> float:
+    """Share of the line's cartons rejected, when any are: a few per thousand normally, more in the bad week."""
+    high = 0.028 if sku == "doman-pc-200g" else 0.02
+    if BAD_WEEK[0] <= day <= BAD_WEEK[1]:
+        high += 0.02
+    return rng.uniform(0.003, high)
+
+
+def pick_defect(rng: random.Random, sku: str | None) -> str:
+    signature = SIGNATURE_DEFECT.get(sku or "")
+    if signature and rng.random() < 0.5:
+        return signature
+    return rng.choice(DEFECTS)
 
 
 def expect(result, what: str):
@@ -91,6 +130,15 @@ def work(conn, args) -> int:
     quality, follow_ups, ncs = QualityReportService(conn), FollowUpService(conn), NonConformityService(conn)
     locations = dict(conn.execute("SELECT code, id FROM warehouse.locations WHERE tenant_id = %s", (TENANT,)).fetchall())
     source, quarantine = locations["produits-finis"], locations["QUARANTINE"]
+    sku_of = dict(conn.execute("SELECT id, sku FROM core.products WHERE tenant_id = %s", (TENANT,)).fetchall())
+    # What each packing row says was boxed: the count QC actually inspects. Read straight from
+    # production's table, as seed_shift_month does -- this is a dev seeder, not module code.
+    cartons_of_row = {
+        row_id: int(cartons or 0)
+        for row_id, cartons in conn.execute(
+            "SELECT id, carton_quantity FROM production.shift_packing_rows WHERE tenant_id = %s", (TENANT,)
+        ).fetchall()
+    }
 
     candidates = sorted(
         quality.list_inspectable_shift_reports(tenant_id=TENANT), key=lambda r: (r["report_date"], r["shift"], r["team"] or "")
@@ -104,7 +152,8 @@ def work(conn, args) -> int:
             day = datetime.date.fromisoformat(day)
         age = (TODAY - day).days
         rng = random.Random(f"qc-{row['shift_report_id']}")
-        if rng.random() >= (0.3 if age <= 1 else 0.7):
+        # Every finished shift is inspected; the last two days are still partly on the inspector's desk.
+        if rng.random() >= (0.5 if age <= 1 else 0.97):
             outcomes["not inspected"] += 1
             continue
 
@@ -121,14 +170,16 @@ def work(conn, args) -> int:
                     continue
                 stamp_audit(conn, rid, created)
 
-                # Split conformity per product line: most lines are clean, roughly
-                # three in ten carry a handful of non-conforming cartons.
+                # Conformity per product line, on the cartons that line's packing row says were
+                # boxed. Which lines reject, and how much, follows the patterns above.
                 line_edits = []
                 non_conforming_by_line: dict[str, tuple[str, str, int, str | None]] = {}
                 for line in lines:
-                    cartons = rng.randint(20, 250)
-                    non_conforming = rng.randint(1, 12) if rng.random() < 0.3 else 0
-                    defect = rng.choice(DEFECTS) if non_conforming else None
+                    sku = sku_of.get(line.product_id)
+                    cartons = cartons_of_row.get(line.shift_packing_row_id) or rng.randint(200, 1200)
+                    rejects = rng.random() < defect_odds(sku, row["team"], row["shift"], day)
+                    non_conforming = max(1, round(cartons * reject_share(rng, sku, day))) if rejects else 0
+                    defect = pick_defect(rng, sku) if non_conforming else None
                     line_edits.append(
                         {
                             "shift_packing_row_id": line.shift_packing_row_id,
@@ -139,7 +190,10 @@ def work(conn, args) -> int:
                     )
                     if non_conforming:
                         non_conforming_by_line[line.shift_packing_row_id] = (line.of_id, line.product_id, non_conforming, defect)
-                detail = QualityReportDetail(comments=rng.choice(COMMENTS) if rng.random() < 0.4 else None)
+                detail = QualityReportDetail(
+                    comments=rng.choice(COMMENTS) if rng.random() < 0.4 else None,
+                    corrective_action=rng.choice(CORRECTIVE_ACTIONS) if non_conforming_by_line and rng.random() < 0.6 else None,
+                )
                 expect(
                     quality.update_draft(tenant_id=TENANT, actor_id=actor, report_id=rid, lines=line_edits, detail=detail),
                     "update draft",
@@ -244,7 +298,7 @@ def seed_non_conformity(conn, ncs: NonConformityService, actor: str, rng: random
     if product_id is None or raised_at > NOW:
         return
     correlation = str(ULID())
-    severity = "major" if cartons >= 10 else "minor"
+    severity = "critical" if cartons >= 30 else "major" if cartons >= 15 else "minor"
     # A savepoint, so a refusal (say, no stock of that product in the finished store) leaves the report itself intact.
     try:
         with conn.transaction():

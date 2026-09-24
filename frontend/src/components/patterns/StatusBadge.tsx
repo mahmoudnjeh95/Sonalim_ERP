@@ -1,4 +1,5 @@
 import { useI18n } from "../../lib/i18n";
+import { CategoryIcon } from "./CategoryIcon";
 import { Badge, type BadgeProps } from "../ui/badge";
 
 type Status =
@@ -102,7 +103,12 @@ export function CategoryBadge({ category }: { category: string }) {
   const variant = CATEGORY_VARIANT[category as Category] ?? ("default" as const);
   const key = `production.classifications.category.${category}` as Parameters<typeof t>[0];
   const label = CATEGORY_VARIANT[category as Category] ? t(key) : category;
-  return <Badge variant={variant}>{label}</Badge>;
+  return (
+    <Badge variant={variant}>
+      <CategoryIcon category={category} className="h-3 w-3" />
+      {label}
+    </Badge>
+  );
 }
 
 type Priority = "low" | "medium" | "high";

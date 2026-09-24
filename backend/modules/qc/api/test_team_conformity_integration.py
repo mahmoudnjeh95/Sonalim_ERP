@@ -292,3 +292,46 @@ def test_invalid_grain_is_rejected(db):
 def test_index_trend_is_gone(db):
     """The five process indices were dropped; there is nothing left to trend."""
     assert not hasattr(QualityReportService(db), "index_trend")
+
+
+# --- inspection ledger ---------------------------------------------------------
+
+
+def test_inspection_ledger_lists_every_line_with_status_verdict_and_product(db, env, of):
+    validated = _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 9, 3), conforming=90, non_conforming=10)
+    # A draft in the window: listed with its status, so a reader can see what still waits on QC.
+    draft = _quality_report(db, env, of, team="B", report_date=datetime.date(2026, 9, 4), conforming=5, non_conforming=0, validate=False)
+    # Outside the window: must not appear.
+    _quality_report(db, env, of, team="A", report_date=datetime.date(2026, 10, 1), conforming=1, non_conforming=0)
+
+    rows = QualityReportService(db).inspection_ledger(tenant_id=TENANT, date_from="2026-09-01", date_to="2026-09-30")
+
+    assert [row["report_date"] for row in rows] == ["2026-09-03", "2026-09-04"]
+    first, second = rows
+    assert first["report_id"] == validated and first["status"] == "validated"
+    assert first["team"] == "A" and first["shift"] == "morning"
+    assert first["of_id"] == of.id and first["product_id"] == env["product"]
+    assert first["conforming_cartons"] == 90 and first["non_conforming_cartons"] == 10
+    assert first["defect_details"] == "test defect"
+    assert first["validated_at"] is not None
+    assert first["non_conformity_count"] == 0
+    assert second["report_id"] == draft and second["status"] == "draft" and second["team"] == "B"
+    assert second["validated_at"] is None
+
+
+def test_inspection_ledger_has_one_row_per_product_line(db, env, of):
+    other_of = _ok(WorkOrderService(db).create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"], planned_quantity=500,
+        work_center_id=env["work_center"],
+    ))
+    shift_id = _validated_shift(
+        db, env, [_packing_row(env, of.id), _packing_row(env, other_of.id, finished=300, packets=60)],
+        report_date=datetime.date(2026, 9, 5), team="C",
+    )
+    report_id = _ok(QualityReportService(db).create_report(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))["report"].id
+
+    rows = QualityReportService(db).inspection_ledger(tenant_id=TENANT, date_from="2026-09-05", date_to="2026-09-05")
+
+    assert len(rows) == 2 and {row["report_id"] for row in rows} == {report_id}
+    assert {row["of_id"] for row in rows} == {of.id, other_of.id}
+    assert len({row["line_id"] for row in rows}) == 2

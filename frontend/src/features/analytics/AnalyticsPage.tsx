@@ -1,6 +1,6 @@
 import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
-import { Cog, Factory, FileSpreadsheet, Gauge, HeartPulse, PackageSearch, Recycle, TrendingUp, Users, Zap } from "lucide-react";
+import { Cog, Factory, FileSpreadsheet, Gauge, HeartPulse, PackageSearch, Recycle, ShieldCheck, TrendingUp, Users, Zap } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { useI18n } from "../../lib/i18n";
 import { AnalyticsOverviewSection } from "./AnalyticsOverviewSection";
@@ -10,6 +10,7 @@ import { MachinePerformanceTab } from "./MachinePerformanceTab";
 import { DowntimeAnalyticsTab } from "./DowntimeAnalyticsTab";
 import { EnergyAnalyticsTab } from "./EnergyAnalyticsTab";
 import { ShiftHealthTab } from "./ShiftHealthTab";
+import { QualityAnalyticsTab } from "./QualityAnalyticsTab";
 import { ConsumptionReportTab } from "./ConsumptionReportTab";
 import { ProductionRecapExportTab } from "./ProductionRecapExportTab";
 import { PriceHistoryTab } from "./PriceHistoryTab";
@@ -22,7 +23,10 @@ import { PriceHistoryTab } from "./PriceHistoryTab";
 // performance rather than inside a Production tab because it answers the same
 // kind of cross-cutting "who/what is producing well" question, at a different grain.
 // Consumption-by-supplier reads production's report tables *and* procurement's
-// order history (for costing), so it belongs here for the same reason.
+// order history (for costing), so it belongs here for the same reason. Quality
+// reads qc's verdicts against production's lines, orders and team output --
+// the QC page keeps the operational view (backlog, cases, follow-ups), this
+// tab keeps the cross-module one.
 //
 // Two visual groups: "production" (how is the plant running) and "cost" (what
 // does it cost) — same ?tab= param, grouped only for the reader's sake now that
@@ -34,6 +38,7 @@ const TABS = [
   { value: "machine-performance", labelKey: "analytics.tabs.machinePerformance", icon: Cog, Component: MachinePerformanceTab, group: "production" },
   { value: "downtime", labelKey: "analytics.tabs.downtime", icon: Gauge, Component: DowntimeAnalyticsTab, group: "production" },
   { value: "energy", labelKey: "analytics.tabs.energy", icon: Zap, Component: EnergyAnalyticsTab, group: "production" },
+  { value: "quality", labelKey: "analytics.tabs.quality", icon: ShieldCheck, Component: QualityAnalyticsTab, group: "production" },
   { value: "shift-health", labelKey: "analytics.tabs.shiftHealth", icon: HeartPulse, Component: ShiftHealthTab, group: "production" },
   {
     value: "consumption-report",
@@ -75,7 +80,7 @@ export function AnalyticsPage() {
           <p className="text-sm text-muted-foreground">{t("analytics.subtitle")}</p>
         </motion.div>
 
-        <div className="flex flex-wrap gap-x-6 gap-y-3">
+        <div className="sticky top-0 z-20 -mx-1 flex flex-wrap gap-x-6 gap-y-3 bg-background/85 px-1 py-2 backdrop-blur-sm">
           {GROUPS.map(({ group, labelKey }) => (
             <div key={group} className="min-w-0 space-y-1.5">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t(labelKey)}</p>

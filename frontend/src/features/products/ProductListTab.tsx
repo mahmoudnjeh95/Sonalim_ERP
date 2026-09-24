@@ -19,11 +19,15 @@ import { Dialog, DialogTrigger, DialogContent, DialogHeader, DialogTitle, Dialog
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
+import { CategoryIcon } from "../../components/patterns/CategoryIcon";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { listProducts, listUoms, listLocations, type Product } from "../warehouse/api";
+import { listUoms, listLocations } from "../warehouse/api";
+import { CATEGORY_ORDER, CLASSIFICATIONS_QUERY_KEY, PRODUCTS_QUERY_KEY, useCatalogLabels, useProductCatalog, type CatalogProduct } from "./catalog";
+import { setClassification, type ProductCategory } from "../production/api";
+import { CategoryBadge } from "../../components/patterns/StatusBadge";
 import {
   createProduct,
   createProductTag,
@@ -33,18 +37,19 @@ import {
   setProductTags,
   updateProduct,
 } from "./api";
-import { ProductWizard, productWizardSchema, type ProductWizardForm } from "./ProductWizard";
+import { ClassificationFields, ProductWizard, productWizardSchema, type ProductWizardForm } from "./ProductWizard";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
-const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 const TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 
 // Convert wizard form to API input (handles string-to-boolean conversions)
 function toApiInput(input: ProductWizardForm) {
+  // category / packaging_kind go to the production module's classification, not the product row.
+  const { category: _category, packaging_kind: _packagingKind, ...productFields } = input;
   return {
-    ...input,
+    ...productFields,
     is_sellable: input.is_sellable === "true",
     is_purchasable: input.is_purchasable === "true",
     default_location_id: input.default_location_id || undefined,
@@ -53,8 +58,10 @@ function toApiInput(input: ProductWizardForm) {
 }
 
 // Convert Product entity to form defaults for edit mode (would need to add this to wizard)
-function productToFormDefaults(product: Product): ProductWizardForm {
+function productToFormDefaults(product: CatalogProduct): ProductWizardForm {
   return {
+    category: product.category ?? undefined,
+    packaging_kind: product.packaging_kind ?? undefined,
     sku: product.sku,
     name: product.name,
     product_type: (product as any).product_type ?? "PL",
@@ -88,17 +95,22 @@ function productToFormDefaults(product: Product): ProductWizardForm {
 type FormFieldsProps = Pick<UseFormReturn<ProductWizardForm>, "register" | "formState" | "watch">;
 
 export function ProductListTab() {
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [categoryFilter, setCategoryFilter] = useState<"all" | "unclassified" | ProductCategory>("all");
+  const catalogLabels = useCatalogLabels();
+  // Classifying needs production's permission; without it the product is still
+  // created, it just stays "Unclassified" until someone with the right does it.
+  const canClassify = hasPermission("production.manage_product_classifications");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [lotTrackingFilter, setLotTrackingFilter] = useState<"all" | "none" | "lot" | "serial">("all");
   const [sellableFilter, setSellableFilter] = useState<"sellable" | "all">("sellable");
 
-  const { data: products = [], isLoading } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { catalog: products, isLoading } = useProductCatalog();
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: tags = [] } = useQuery({ queryKey: TAGS_QUERY_KEY, queryFn: () => listProductTags(token) });
@@ -106,18 +118,39 @@ export function ProductListTab() {
   const topLevelProducts = products
     .filter((p) => !p.parent_product_id)
     .filter((p) => lotTrackingFilter === "all" || p.lot_serial_tracking === lotTrackingFilter)
-    .filter((p) => sellableFilter === "all" || p.is_sellable);
+    .filter((p) => sellableFilter === "all" || p.is_sellable)
+    .filter((p) => categoryFilter === "all" || (categoryFilter === "unclassified" ? p.category === null : p.category === categoryFilter));
 
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
+
+  async function saveClassification(productId: string, input: ProductWizardForm, existing?: CatalogProduct) {
+    if (!canClassify || !input.category) return;
+    const unchanged =
+      existing && existing.category === input.category && (existing.packaging_kind ?? undefined) === (input.category === "packaging_component" ? input.packaging_kind : undefined);
+    if (unchanged) return;
+    // Flags production owns (regrind, water, packet/carton format) are kept as
+    // they are: this form only sets the category, it must not silently reset them.
+    const keepsCategory = existing?.category === input.category;
+    await setClassification(token, {
+      product_id: productId,
+      category: input.category,
+      is_regrind: keepsCategory ? (existing?.is_regrind ?? false) : false,
+      is_water: keepsCategory ? (existing?.is_water ?? false) : false,
+      packaging_format: keepsCategory && input.category === "finished_good" ? (existing?.packaging_format ?? undefined) : undefined,
+      packaging_kind: input.category === "packaging_component" ? input.packaging_kind : undefined,
+    });
+  }
 
   const createMutation = useMutation({
     mutationFn: async (input: ProductWizardForm) => {
       const product = await createProduct(token, toApiInput(input));
       if (selectedTagIds.length > 0) await setProductTags(token, product.id, selectedTagIds);
+      await saveClassification(product.id, input);
       return product;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: CLASSIFICATIONS_QUERY_KEY });
       setWizardOpen(false);
       setSelectedTagIds([]);
       toast.success(t("products.created"));
@@ -144,10 +177,12 @@ export function ProductListTab() {
     mutationFn: async ({ id, input }: { id: string; input: ProductWizardForm }) => {
       const product = await updateProduct(token, id, toApiInput(input));
       await setProductTags(token, id, editTagIds);
+      await saveClassification(id, input, products.find((p) => p.id === id));
       return product;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: PRODUCTS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: CLASSIFICATIONS_QUERY_KEY });
       setEditingId(null);
       toast.success(t("products.updated"));
     },
@@ -168,7 +203,7 @@ export function ProductListTab() {
     },
   });
 
-  function openEditDialog(product: Product | null) {
+  function openEditDialog(product: CatalogProduct | null) {
     if (!product) {
       setEditingId(null);
       return;
@@ -183,7 +218,7 @@ export function ProductListTab() {
   });
   const [newTagName, setNewTagName] = useState("");
 
-  const columnFilterFields: FilterField<Product>[] = [
+  const columnFilterFields: FilterField<CatalogProduct>[] = [
     { key: "sku", kind: "text", getValue: (p) => p.sku },
     { key: "name", kind: "text", getValue: (p) => p.name },
     { key: "selling_price", kind: "range", getValue: (p) => p.selling_price },
@@ -191,7 +226,7 @@ export function ProductListTab() {
   const columnFilters = useColumnFilters(columnFilterFields);
   const filteredProducts = columnFilters.apply(topLevelProducts);
 
-  const columns: ColumnDef<Product>[] = [
+  const columns: ColumnDef<CatalogProduct>[] = [
     {
       key: "sku",
       header: t("products.column.ref"),
@@ -217,6 +252,26 @@ export function ProductListTab() {
         placeholder: t("products.column.label"),
       },
       sortValue: (product) => product.name,
+    },
+    {
+      key: "category",
+      header: (
+        <span className="inline-flex items-center gap-1">
+          {t("products.column.category")}
+          <HelpTooltip text={t("products.help.category")} />
+        </span>
+      ),
+      defaultWidth: 200,
+      cell: (product) =>
+        product.category ? (
+          <span className="inline-flex flex-wrap items-center gap-1">
+            <CategoryBadge category={product.category} />
+            {product.packaging_kind && <Badge variant="outline">{catalogLabels.packagingKind[product.packaging_kind]}</Badge>}
+          </span>
+        ) : (
+          <Badge variant="warning">{catalogLabels.unclassified}</Badge>
+        ),
+      sortValue: (product) => (product.category ? `${product.category}:${product.packaging_kind ?? ""}` : "~"),
     },
     {
       key: "sellPurchase",
@@ -402,6 +457,11 @@ export function ProductListTab() {
             <Label htmlFor={`${idPrefix}_family`}>{t("products.field.family")}</Label>
             <Input id={`${idPrefix}_family`} placeholder="e.g., Spaghetti 1,1" {...form.register("product_family")} />
           </div>
+          {canClassify && (
+            <div className="col-span-2">
+              <ClassificationFields form={form} idPrefix={idPrefix} t={t} />
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label htmlFor={`${idPrefix}_weight`}>{t("products.field.netWeight")}</Label>
             <Input id={`${idPrefix}_weight`} type="number" step="any" placeholder="N/A" {...form.register("net_weight_grams")} />
@@ -571,6 +631,15 @@ export function ProductListTab() {
               ]}
             />
             <FilterTabs
+              value={categoryFilter}
+              onChange={setCategoryFilter}
+              options={[
+                { value: "all", label: t("common.all") },
+                ...CATEGORY_ORDER.map((category) => ({ value: category, label: catalogLabels.category[category], icon: <CategoryIcon category={category} /> })),
+                { value: "unclassified", label: catalogLabels.unclassified },
+              ]}
+            />
+            <FilterTabs
               value={lotTrackingFilter}
               onChange={setLotTrackingFilter}
               options={[
@@ -599,6 +668,7 @@ export function ProductListTab() {
             locations={locations}
             onSubmit={(input) => createMutation.mutate(input)}
             isLoading={createMutation.isPending}
+            canClassify={canClassify}
             t={t}
           />
         </CardHeader>

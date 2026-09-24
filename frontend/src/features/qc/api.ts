@@ -91,6 +91,40 @@ export function listQualityTeamPerformance(
   return apiFetch<TeamConformityRow[]>(`/qc/quality-reports/team-performance?${query.toString()}`, { token });
 }
 
+// One row per conformity line (one product packed on one shift) of every
+// quality report in the window, every status -- the grain the quality
+// dashboards slice by product, line, team, shift, defect and day. A caller
+// wanting the official figure keeps `status === "validated"`, exactly the
+// rule team_conformity applies server-side.
+export interface InspectionLedgerRow {
+  line_id: string;
+  report_id: string;
+  shift_report_id: string;
+  report_date: string;
+  shift: string | null;
+  team: string | null;
+  status: QualityReportStatus;
+  revision: number;
+  submitted_at: string | null;
+  validated_at: string | null;
+  of_id: string;
+  product_id: string;
+  conforming_cartons: number;
+  non_conforming_cartons: number;
+  defect_details: string | null;
+  corrective_action: string | null;
+  /** Non-conformities raised from this report for this line's OF and product. */
+  non_conformity_count: number;
+}
+
+export function listInspectionLedger(token: string, params: { date_from?: string; date_to?: string } = {}) {
+  const query = new URLSearchParams();
+  if (params.date_from) query.set("date_from", params.date_from);
+  if (params.date_to) query.set("date_to", params.date_to);
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return apiFetch<InspectionLedgerRow[]>(`/qc/quality-reports/inspection-ledger${suffix}`, { token });
+}
+
 // No OF filter: a report follows a shift, and each of its conformity lines
 // names its own OF. Scope to an OF client-side (see WorkOrderDetailsPage).
 export function listQualityReports(

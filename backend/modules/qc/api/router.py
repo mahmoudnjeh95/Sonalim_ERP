@@ -209,6 +209,21 @@ def list_quality_team_performance(
         )
 
 
+@router.get("/quality-reports/inspection-ledger")
+def list_quality_inspection_ledger(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("qc.view_quality_reports")),
+) -> list[dict]:
+    """One row per conformity line of every quality report in the window,
+    every status -- the grain the quality dashboards slice by product, line,
+    team, shift, defect and day."""
+    with get_connection() as connection:
+        return QualityReportService(connection).inspection_ledger(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to
+        )
+
+
 @router.get("/quality-reports/{report_id}")
 def get_quality_report(
     report_id: str, tenant: TenantContext = Depends(require_permission("qc.view_quality_reports"))
