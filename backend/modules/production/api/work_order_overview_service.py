@@ -73,15 +73,14 @@ class WorkOrderOverviewService:
         found: dict[str, list[str]] = {}
         for of_id, product_id in self._connection.execute(
             """
-            SELECT r.of_id, COALESCE(c.product_id, w.product_id) AS product_id
-            FROM production.production_reports r
-            JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
-            JOIN production.work_orders w ON w.id = r.of_id AND w.tenant_id = r.tenant_id
-            LEFT JOIN production.shift_packing_rows p ON p.id = r.id AND p.tenant_id = r.tenant_id
-            WHERE r.tenant_id = %s AND r.report_type = 'conditionnement' AND r.status = 'validated'
-            GROUP BY r.of_id, COALESCE(c.product_id, w.product_id)
-            HAVING COALESCE(c.product_id, w.product_id) IS NOT NULL
-            ORDER BY r.of_id, MIN(r.report_date), MIN(p.line_order) NULLS LAST, MIN(r.created_at), 2
+            SELECT p.of_id, COALESCE(p.product_id, w.product_id) AS product_id
+            FROM production.shift_packing_rows p
+            JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
+            JOIN production.work_orders w ON w.id = p.of_id AND w.tenant_id = p.tenant_id
+            WHERE p.tenant_id = %s AND s.status = 'validated'
+            GROUP BY p.of_id, COALESCE(p.product_id, w.product_id)
+            HAVING COALESCE(p.product_id, w.product_id) IS NOT NULL
+            ORDER BY p.of_id, MIN(s.report_date), MIN(p.line_order), MIN(p.created_at), 2
             """,
             (tenant_id,),
         ).fetchall():
@@ -93,11 +92,11 @@ class WorkOrderOverviewService:
             of_id: float(total)
             for of_id, total in self._connection.execute(
                 """
-                SELECT r.of_id, COALESCE(SUM(c.finished_product_quantity), 0)
-                FROM production.production_reports r
-                JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
-                WHERE r.tenant_id = %s AND r.report_type = 'conditionnement' AND r.status = 'validated'
-                GROUP BY r.of_id
+                SELECT p.of_id, COALESCE(SUM(p.finished_product_quantity), 0)
+                FROM production.shift_packing_rows p
+                JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
+                WHERE p.tenant_id = %s AND s.status = 'validated'
+                GROUP BY p.of_id
                 """,
                 (tenant_id,),
             ).fetchall()
