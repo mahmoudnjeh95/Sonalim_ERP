@@ -39,6 +39,12 @@ def test_percentage_field_in_range_is_accepted():
     assert isinstance(result, Ok)
 
 
+def test_percentage_field_non_numeric_is_rejected():
+    result = validate_parameter_entry("presse", {"niveau_moulange_percent": "50"})
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_NUMBER"
+
+
 @pytest.mark.parametrize("group_key", list(PARAMETER_GROUPS))
 def test_empty_fields_is_always_valid(group_key):
     """A row can be saved with only its entry_label typed so far; fields fill in as the inspector reads the gauge."""

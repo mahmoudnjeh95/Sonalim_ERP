@@ -47,6 +47,9 @@ def validate_parameter_entry(group_key: str, fields: dict) -> Result[None]:
     for key, value in fields.items():
         if key not in declared:
             return Err("INVALID_FIELD", f"{key} is not a field of group {group_key}")
-        if key in _PERCENTAGE_FIELDS and value is not None and not 0 <= value <= 100:
-            return Err("INVALID_PERCENTAGE", f"{key} must be between 0 and 100")
+        if key in _PERCENTAGE_FIELDS and value is not None:
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return Err("INVALID_NUMBER", f"{key} must be a number")
+            if not 0 <= value <= 100:
+                return Err("INVALID_PERCENTAGE", f"{key} must be between 0 and 100")
     return Ok(None)
