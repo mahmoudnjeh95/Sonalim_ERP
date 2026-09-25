@@ -20,7 +20,8 @@ import {
   Wrench,
 } from "lucide-react";
 import EmptyStockIllustration from "../../assets/illustrations/empty-states/empty-no-stock.svg?react";
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -1098,7 +1099,7 @@ export function StockTab() {
                   <p className="text-xs text-muted-foreground">
                     {t("warehouse.stock.cartons.stat.perCarton")}: <span className="tabular-nums">{formatQty(perCarton)}</span>
                   </p>
-                  <ResponsiveContainer width="100%" height={220}>
+                  <InteractiveChart height={220}>
                     <BarChart data={chartData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                       <XAxis dataKey="label" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -1113,7 +1114,7 @@ export function StockTab() {
                         ))}
                       </Bar>
                     </BarChart>
-                  </ResponsiveContainer>
+                  </InteractiveChart>
                 </div>
               );
             })()}

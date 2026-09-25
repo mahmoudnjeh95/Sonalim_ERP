@@ -2,6 +2,7 @@ import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, MotionConfig, motion } from "framer-motion";
 import { Cog, Factory, FileSpreadsheet, Gauge, HeartPulse, PackageSearch, Recycle, ShieldCheck, TrendingUp, Users, Zap } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n } from "../../lib/i18n";
 import { AnalyticsOverviewSection } from "./AnalyticsOverviewSection";
 import { YieldWasteTab } from "./YieldWasteTab";
@@ -80,7 +81,7 @@ export function AnalyticsPage() {
           <p className="text-sm text-muted-foreground">{t("analytics.subtitle")}</p>
         </motion.div>
 
-        <div className="sticky top-0 z-20 -mx-1 flex flex-wrap gap-x-6 gap-y-3 bg-background/85 px-1 py-2 backdrop-blur-sm">
+        <StickyTabBar className="flex flex-wrap gap-x-6 gap-y-3">
           {GROUPS.map(({ group, labelKey }) => (
             <div key={group} className="min-w-0 space-y-1.5">
               <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">{t(labelKey)}</p>
@@ -99,7 +100,7 @@ export function AnalyticsPage() {
               </Tabs>
             </div>
           ))}
-        </div>
+        </StickyTabBar>
 
         <AnimatePresence mode="wait">
           <motion.div

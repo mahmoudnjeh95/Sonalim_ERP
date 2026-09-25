@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
@@ -88,7 +89,7 @@ export function EnergyAnalyticsTab() {
         </CardHeader>
         <CardContent className="grid gap-4 lg:grid-cols-2">
           <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
+            <InteractiveChart height="100%">
               <LineChart data={summary.byDate} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke={GRID} vertical={false} />
                 <XAxis dataKey="date" tick={TICK} tickLine={false} axisLine={false} minTickGap={32} />
@@ -98,10 +99,10 @@ export function EnergyAnalyticsTab() {
                 <Line type="linear" dataKey="fuel" name={t("analytics.energy.fuel")} stroke={FUEL_COLOR} strokeWidth={2} dot={summary.byDate.length < 3} />
                 <Line type="linear" dataKey="gasoil" name={t("analytics.energy.gasoil")} stroke={GASOIL_COLOR} strokeWidth={2} dot={summary.byDate.length < 3} />
               </LineChart>
-            </ResponsiveContainer>
+            </InteractiveChart>
           </div>
           <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
+            <InteractiveChart height="100%">
               <LineChart data={summary.byDate} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke={GRID} vertical={false} />
                 <XAxis dataKey="date" tick={TICK} tickLine={false} axisLine={false} minTickGap={32} />
@@ -117,7 +118,7 @@ export function EnergyAnalyticsTab() {
                   dot={summary.byDate.length < 3}
                 />
               </LineChart>
-            </ResponsiveContainer>
+            </InteractiveChart>
           </div>
         </CardContent>
       </Card>
@@ -160,7 +161,7 @@ export function EnergyAnalyticsTab() {
           </CardHeader>
           <CardContent>
             <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              <InteractiveChart height="100%">
                 <BarChart data={byLine} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid stroke={GRID} vertical={false} />
                   <XAxis dataKey="line" tick={TICK} tickLine={false} axisLine={false} />
@@ -168,7 +169,7 @@ export function EnergyAnalyticsTab() {
                   <Tooltip formatter={(value) => `${formatNumber(Number(value), 2)} l/t`} />
                   <Bar dataKey="gasoil" name={t("analytics.energy.gasoil")} fill={GASOIL_COLOR} radius={[4, 4, 0, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
+              </InteractiveChart>
             </div>
           </CardContent>
         </Card>

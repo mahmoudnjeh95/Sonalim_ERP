@@ -472,12 +472,9 @@ export function WorkOrderDetailsPage() {
             label={t("production.ofDetails.kpi.packed")}
             value={formatQuantity(consolidation?.produced_quantity, "t")}
             sub={
-              <>
-                {order.planned_quantity !== null
-                  ? `${t("production.workOrders.card.planned")} ${formatQuantity(order.planned_quantity, "t")}`
-                  : t("production.workOrders.card.noPlan")}
-                {pendingQuantity > 0 && ` · + ${formatQuantity(pendingQuantity, "t")} ${t("production.ofDetails.pending")}`}
-              </>
+              pendingQuantity > 0
+                ? `+ ${formatQuantity(pendingQuantity, "t")} ${t("production.ofDetails.pending")}`
+                : undefined
             }
           />
           <KpiTile

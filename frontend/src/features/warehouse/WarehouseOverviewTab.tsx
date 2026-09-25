@@ -11,7 +11,8 @@ import ForkliftIcon from "../../assets/icons/warehouse/forklift.svg?react";
 import AdjustmentIcon from "../../assets/icons/warehouse/adjustment-confirm.svg?react";
 import EmptyStockIllustration from "../../assets/illustrations/empty-states/empty-no-stock.svg?react";
 import AllClearIllustration from "../../assets/illustrations/empty-states/empty-all-clear.svg?react";
-import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { Badge } from "../../components/ui/badge";
@@ -631,7 +632,7 @@ export function WarehouseOverviewTab() {
             <EmptyState icon={<EmptyStockIllustration className="h-5 w-5" />} title={t("warehouse.overview.chart.empty.title")} description={t("warehouse.overview.chart.empty.description")} />
           ) : (
             <div className="h-64">
-              <ResponsiveContainer width="100%" height="100%">
+              <InteractiveChart height="100%">
                 <BarChart data={chartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }} barGap={2}>
                   <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="hsl(214 20% 90%)" />
                   <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} minTickGap={16} />
@@ -644,7 +645,7 @@ export function WarehouseOverviewTab() {
                   <Bar dataKey="inbound" name={t("warehouse.overview.chart.inbound")} fill={CHART_COLORS.inbound} radius={[4, 4, 0, 0]} animationDuration={600} animationEasing="ease-out" />
                   <Bar dataKey="outbound" name={t("warehouse.overview.chart.outbound")} fill={CHART_COLORS.outbound} radius={[4, 4, 0, 0]} animationDuration={600} animationEasing="ease-out" />
                 </BarChart>
-              </ResponsiveContainer>
+              </InteractiveChart>
             </div>
           )}
         </CardContent>

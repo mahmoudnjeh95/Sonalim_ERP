@@ -3,7 +3,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Boxes, Coins, Send, TrendingUp } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -533,7 +534,7 @@ export function AnalysisTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={280}>
+                <InteractiveChart height={280}>
                   <BarChart data={designationRows} layout="vertical" margin={{ left: 24 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
                     <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -551,7 +552,7 @@ export function AnalysisTab() {
                     />
                     <Bar dataKey="avgCostPerTon" fill={CHART_COLORS.primary} radius={[0, 4, 4, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </CardContent>
             </Card>
 
@@ -563,7 +564,7 @@ export function AnalysisTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={280}>
+                <InteractiveChart height={280}>
                   <LineChart data={trendData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                     <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -574,7 +575,7 @@ export function AnalysisTab() {
                     />
                     <Line type="monotone" dataKey="avgCostPerTon" stroke={CHART_COLORS.accent} strokeWidth={2} dot={{ r: 3 }} />
                   </LineChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </CardContent>
             </Card>
           </div>

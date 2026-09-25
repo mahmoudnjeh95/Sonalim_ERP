@@ -2,6 +2,7 @@ import { Navigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { Boxes, ClipboardList, Factory, FileSpreadsheet, Recycle, Settings, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { outlineIcon } from "../../components/patterns/outlineIcon";
 import { useI18n } from "../../lib/i18n";
 import ApprovalIcon from "../../assets/icons/quality/approval.svg?react";
@@ -62,18 +63,20 @@ export function ProductionPage() {
         <p className="text-sm text-muted-foreground">{t("production.subtitle")}</p>
       </motion.div>
 
-      <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
-        <TabsList>
-          {TABS.map((tabDef) => (
-            <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="production-tab-indicator">
-              <span className="flex items-center gap-1.5">
-                <tabDef.icon className="h-4 w-4" />
-                {t(tabDef.labelKey)}
-              </span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <StickyTabBar>
+        <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
+          <TabsList>
+            {TABS.map((tabDef) => (
+              <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="production-tab-indicator">
+                <span className="flex items-center gap-1.5">
+                  <tabDef.icon className="h-4 w-4" />
+                  {t(tabDef.labelKey)}
+                </span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      </StickyTabBar>
 
       <AnimatePresence mode="wait">
         <motion.div

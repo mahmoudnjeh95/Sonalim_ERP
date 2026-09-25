@@ -1,6 +1,8 @@
 import { memo } from "react";
 import { useReducedMotion } from "framer-motion";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, type TooltipContentProps } from "recharts";
+import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis, type TooltipContentProps } from "recharts";
+import { InteractiveChart } from "../../../components/charts/InteractiveChart";
+import { percentAxisMax } from "../../../components/charts/percentDomain";
 import { currentLocale, useI18n } from "../../../lib/i18n";
 import { formatNumber } from "../../analytics/manufacturing/format";
 import type { ConformityTrendPoint } from "./qualityMetrics";
@@ -81,7 +83,7 @@ function ConformityTrendChartImpl({ trend, height = 256 }: { trend: ConformityTr
         </span>
       </div>
       <div className="w-full" style={{ height }}>
-        <ResponsiveContainer width="100%" height="100%">
+        <InteractiveChart height="100%">
           <LineChart data={trend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke={GRID} vertical={false} />
             <XAxis
@@ -98,7 +100,7 @@ function ConformityTrendChartImpl({ trend, height = 256 }: { trend: ConformityTr
               tickLine={false}
               axisLine={false}
               width={44}
-              domain={[floor, 100]}
+              domain={[floor, percentAxisMax]}
               tickFormatter={(value: number) => `${formatNumber(value, 0)}%`}
             />
             <Tooltip content={<TrendTooltip />} />
@@ -125,7 +127,7 @@ function ConformityTrendChartImpl({ trend, height = 256 }: { trend: ConformityTr
               animationDuration={300}
             />
           </LineChart>
-        </ResponsiveContainer>
+        </InteractiveChart>
       </div>
     </div>
   );

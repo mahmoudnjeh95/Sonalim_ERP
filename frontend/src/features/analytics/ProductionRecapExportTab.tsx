@@ -12,11 +12,11 @@ import {
   LineChart,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { Button } from "../../components/ui/button";
@@ -342,7 +342,7 @@ export function ProductionRecapExportTab() {
                 {current.cost_breakdown.length === 0 ? (
                   <EmptyState icon={<Layers className="h-5 w-5" />} title={t("analytics.productionRecap.chart.costBreakdown.empty")} description="" />
                 ) : (
-                  <ResponsiveContainer width="100%" height={220}>
+                  <InteractiveChart height={220}>
                     <ComposedChart data={current.cost_breakdown} layout="vertical" margin={{ left: 16 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} horizontal={false} />
                       <XAxis type="number" tick={TICK_STYLE} axisLine={false} tickLine={false} tickFormatter={(v) => cfa(Number(v))} />
@@ -354,7 +354,7 @@ export function ProductionRecapExportTab() {
                         ))}
                       </Bar>
                     </ComposedChart>
-                  </ResponsiveContainer>
+                  </InteractiveChart>
                 )}
               </CardContent>
             </Card>
@@ -368,7 +368,7 @@ export function ProductionRecapExportTab() {
                   <EmptyState icon={<PieChartIcon className="h-5 w-5" />} title={t("analytics.productionRecap.chart.costBreakdown.empty")} description="" />
                 ) : (
                   <>
-                    <ResponsiveContainer width="100%" height={180}>
+                    <InteractiveChart height={180}>
                       <PieChart>
                         <Pie data={current.cost_breakdown} dataKey="cost" nameKey="category" innerRadius={45} outerRadius={75} paddingAngle={2}>
                           {current.cost_breakdown.map((entry, index) => (
@@ -377,7 +377,7 @@ export function ProductionRecapExportTab() {
                         </Pie>
                         <Tooltip formatter={(value) => cfa(Number(value))} contentStyle={TOOLTIP_STYLE} />
                       </PieChart>
-                    </ResponsiveContainer>
+                    </InteractiveChart>
                     <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1.5">
                       {current.cost_breakdown.map((entry, index) => (
                         <div key={entry.category} className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -402,7 +402,7 @@ export function ProductionRecapExportTab() {
                 <CardDescription>{t("analytics.productionRecap.chart.trend.description")}</CardDescription>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={280}>
+                <InteractiveChart height={280}>
                   <ComposedChart data={trend}>
                     <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
                     <XAxis dataKey="label" tick={TICK_STYLE} axisLine={false} tickLine={false} />
@@ -432,7 +432,7 @@ export function ProductionRecapExportTab() {
                       connectNulls
                     />
                   </ComposedChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </CardContent>
             </Card>
           )}
@@ -445,7 +445,7 @@ export function ProductionRecapExportTab() {
                   <CardDescription>{t("analytics.productionRecap.chart.histogram.description")}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={240}>
+                  <InteractiveChart height={240}>
                     <ComposedChart data={buildHistogram(costPerTonneValues)} margin={{ bottom: 24 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} vertical={false} />
                       <XAxis dataKey="bin" tick={{ fontSize: 10, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} angle={-20} textAnchor="end" height={50} />
@@ -453,7 +453,7 @@ export function ProductionRecapExportTab() {
                       <Tooltip contentStyle={TOOLTIP_STYLE} />
                       <Bar dataKey="count" fill={CHART_COLORS.accent} radius={[4, 4, 0, 0]} />
                     </ComposedChart>
-                  </ResponsiveContainer>
+                  </InteractiveChart>
                 </CardContent>
               </Card>
             )}
@@ -465,7 +465,7 @@ export function ProductionRecapExportTab() {
                   <CardDescription>{t("analytics.productionRecap.chart.scatter.description")}</CardDescription>
                 </CardHeader>
                 <CardContent>
-                  <ResponsiveContainer width="100%" height={240}>
+                  <InteractiveChart height={240}>
                     <LineChart data={trend.filter((p) => p.cost_per_tonne !== null && p.tonnage > 0)}>
                       <CartesianGrid strokeDasharray="3 3" stroke={GRID_STROKE} />
                       <XAxis
@@ -493,7 +493,7 @@ export function ProductionRecapExportTab() {
                       />
                       <Line type="linear" dataKey="cost_per_tonne" stroke={CHART_COLORS.destructive} strokeWidth={1.5} dot={{ r: 4 }} activeDot={{ r: 6 }} />
                     </LineChart>
-                  </ResponsiveContainer>
+                  </InteractiveChart>
                 </CardContent>
               </Card>
             )}

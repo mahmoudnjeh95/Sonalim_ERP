@@ -1,7 +1,8 @@
 import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { AlertTriangle, Boxes, ClipboardCheck, Coins, Package, PackageX, Tags } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
@@ -225,7 +226,7 @@ export function StatisticsTab() {
                   {t("products.statistics.concentration")}: <span className="font-medium text-foreground">{top3Share.toFixed(0)}%</span>
                 </p>
               )}
-              <ResponsiveContainer width="100%" height={320}>
+              <InteractiveChart height={320}>
                 <BarChart data={stockValueRows} layout="vertical" margin={{ left: 24 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
                   <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -236,7 +237,7 @@ export function StatisticsTab() {
                   />
                   <Bar dataKey="value" fill="hsl(217 91% 45%)" radius={[0, 4, 4, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
+              </InteractiveChart>
             </>
           )}
         </CardContent>
@@ -257,7 +258,7 @@ export function StatisticsTab() {
             {typeRows.length === 0 ? (
               <EmptyState icon={<Boxes className="h-5 w-5" />} title={t("products.statistics.empty.title")} description={t("products.statistics.empty.description")} />
             ) : (
-              <ResponsiveContainer width="100%" height={Math.max(120, typeRows.length * 60)}>
+              <InteractiveChart height={Math.max(120, typeRows.length * 60)}>
                 <BarChart data={typeRows} layout="vertical" margin={{ left: 24 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
                   <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -269,7 +270,7 @@ export function StatisticsTab() {
                     ))}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </InteractiveChart>
             )}
           </CardContent>
         </Card>
@@ -288,7 +289,7 @@ export function StatisticsTab() {
             {familyRows.length === 0 ? (
               <EmptyState icon={<Tags className="h-5 w-5" />} title={t("products.statistics.empty.title")} description={t("products.statistics.empty.description")} />
             ) : (
-              <ResponsiveContainer width="100%" height={Math.max(200, familyRows.length * 32)}>
+              <InteractiveChart height={Math.max(200, familyRows.length * 32)}>
                 <BarChart data={familyRows} layout="vertical" margin={{ left: 24 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
                   <XAxis type="number" allowDecimals={false} tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -296,7 +297,7 @@ export function StatisticsTab() {
                   <Tooltip contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }} />
                   <Bar dataKey="count" fill="hsl(271 76% 53%)" radius={[0, 4, 4, 0]} />
                 </BarChart>
-              </ResponsiveContainer>
+              </InteractiveChart>
             )}
           </CardContent>
         </Card>
@@ -324,7 +325,7 @@ export function StatisticsTab() {
               <div>
                 <p className="mb-3 text-sm font-medium text-foreground">{t("products.statistics.packaging.chart.title")}</p>
                 <p className="mb-3 text-sm text-muted-foreground">{t("products.statistics.packaging.chart.description")}</p>
-                <ResponsiveContainer width="100%" height={320}>
+                <InteractiveChart height={320}>
                   <BarChart data={packagingChartRows} layout="vertical" margin={{ left: 24 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
                     <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -335,7 +336,7 @@ export function StatisticsTab() {
                     />
                     <Bar dataKey="value" fill="hsl(31 91% 48%)" radius={[0, 4, 4, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </div>
 
               <div>

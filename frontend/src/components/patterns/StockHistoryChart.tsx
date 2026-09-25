@@ -1,4 +1,5 @@
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../charts/InteractiveChart";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../ui/card";
 import { useI18n } from "../../lib/i18n";
 import { signedMoveQuantity } from "../../lib/stockMoveTypes";
@@ -44,7 +45,7 @@ export function StockHistoryChart({ moves, unit }: { moves: StockMove[]; unit?: 
         <CardDescription>{t("warehouse.stockHistory.chart.description")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={180}>
+        <InteractiveChart height={180}>
           <BarChart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
             <XAxis dataKey="period" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -56,7 +57,7 @@ export function StockHistoryChart({ moves, unit }: { moves: StockMove[]; unit?: 
             <Bar dataKey="added" name={t("warehouse.stockHistory.chart.added")} stackId="stock" fill="hsl(152 69% 31%)" radius={[4, 4, 0, 0]} />
             <Bar dataKey="used" name={t("warehouse.stockHistory.chart.used")} stackId="stock" fill="hsl(0 72% 51%)" radius={[0, 0, 4, 4]} />
           </BarChart>
-        </ResponsiveContainer>
+        </InteractiveChart>
       </CardContent>
     </Card>
   );

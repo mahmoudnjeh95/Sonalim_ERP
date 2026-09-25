@@ -22,11 +22,11 @@ import {
   Legend,
   Pie,
   PieChart,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+import { InteractiveChart } from "../../../components/charts/InteractiveChart";
 import { useAuth } from "../../../lib/auth";
 import { currentLocale, useI18n, type Language } from "../../../lib/i18n";
 import { cn } from "../../../lib/utils";
@@ -269,7 +269,7 @@ export function CrmDashboardPage() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={280}>
+                <InteractiveChart height={280}>
                   <BarChart data={monthlyData}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                     <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -294,7 +294,7 @@ export function CrmDashboardPage() {
                       radius={[4, 4, 0, 0]}
                     />
                   </BarChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </CardContent>
             </Card>
 
@@ -314,7 +314,7 @@ export function CrmDashboardPage() {
                   />
                 ) : (
                   <>
-                    <ResponsiveContainer width="100%" height={200}>
+                    <InteractiveChart height={200}>
                       <PieChart>
                         <Pie data={pipelineData} dataKey="count" nameKey="stage" innerRadius={50} outerRadius={80} paddingAngle={2}>
                           {pipelineData.map((entry) => (
@@ -325,7 +325,7 @@ export function CrmDashboardPage() {
                           contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13 }}
                         />
                       </PieChart>
-                    </ResponsiveContainer>
+                    </InteractiveChart>
                     <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1.5">
                       {pipelineData.map((entry) => (
                         <div key={entry.stage} className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -381,7 +381,7 @@ export function CrmDashboardPage() {
                   {activityMixData.length === 0 ? (
                     <p className="py-6 text-center text-sm text-muted-foreground">{t("crm.dashboard.activityMix.empty")}</p>
                   ) : (
-                    <ResponsiveContainer width="100%" height={140}>
+                    <InteractiveChart height={140}>
                       <PieChart>
                         <Pie data={activityMixData} dataKey="count" nameKey="kind" innerRadius={30} outerRadius={55} paddingAngle={2}>
                           {activityMixData.map((entry) => (
@@ -394,7 +394,7 @@ export function CrmDashboardPage() {
                           formatter={(value: string) => t(`crm.activity.kind.${value}` as Parameters<typeof t>[0])}
                         />
                       </PieChart>
-                    </ResponsiveContainer>
+                    </InteractiveChart>
                   )}
                 </CardContent>
               </Card>

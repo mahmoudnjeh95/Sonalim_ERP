@@ -1,4 +1,5 @@
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useI18n } from "../../lib/i18n";
 import { formatQuantity } from "../../lib/units";
 
@@ -35,7 +36,7 @@ export function OfTrendChart({ days }: { days: Day[] }) {
         ))}
       </div>
       <div className="h-56 w-full" role="img" aria-label={t("production.ofDetails.trend.title")}>
-        <ResponsiveContainer width="100%" height="100%">
+        <InteractiveChart height="100%">
           <LineChart data={days} margin={{ top: 8, right: 12, bottom: 0, left: -8 }}>
             <CartesianGrid stroke={GRID_STROKE} vertical={false} />
             <XAxis
@@ -90,7 +91,7 @@ export function OfTrendChart({ days }: { days: Day[] }) {
               />
             ))}
           </LineChart>
-        </ResponsiveContainer>
+        </InteractiveChart>
       </div>
     </div>
   );

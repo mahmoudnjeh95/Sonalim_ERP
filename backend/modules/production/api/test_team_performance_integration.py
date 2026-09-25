@@ -205,6 +205,7 @@ def test_net_semoule_waste_nets_rebroyat_in_tonnes_as_kilos(db, env):
     row = next(r for r in rows if r["team"] == "A")
 
     assert row["regrind_quantity"] == 0.15
+    assert row["regrind_quantity_kg"] == pytest.approx(150)
     assert row["net_semoule_waste"] == pytest.approx(200 - 150)
 
 

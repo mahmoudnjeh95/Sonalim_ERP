@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
@@ -81,7 +82,7 @@ export function ShiftHealthTab() {
         </CardHeader>
         <CardContent>
           <div className="h-56 w-full">
-            <ResponsiveContainer width="100%" height="100%">
+            <InteractiveChart height="100%">
               <BarChart data={funnelData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                 <CartesianGrid stroke={GRID} vertical={false} />
                 <XAxis dataKey="status" tick={TICK} tickLine={false} axisLine={false} />
@@ -89,7 +90,7 @@ export function ShiftHealthTab() {
                 <Tooltip />
                 <Bar dataKey="count" fill={BAR} radius={[4, 4, 0, 0]} />
               </BarChart>
-            </ResponsiveContainer>
+            </InteractiveChart>
           </div>
         </CardContent>
       </Card>

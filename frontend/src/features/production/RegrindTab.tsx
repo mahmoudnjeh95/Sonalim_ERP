@@ -811,8 +811,7 @@ export function RegrindTab() {
                           <option value="">—</option>
                           {ongoingWorkOrders.map((wo) => (
                             <option key={wo.id} value={wo.id}>
-                              {wo.reference} · {productName(wo.product_id)} · {wo.planned_quantity}
-                            </option>
+                              {wo.reference} · {productName(wo.product_id)}                            </option>
                           ))}
                         </Select>
                       </div>

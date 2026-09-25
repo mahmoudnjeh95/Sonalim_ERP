@@ -19,7 +19,8 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
@@ -793,7 +794,7 @@ export function ProductionDashboardTab() {
             />
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={260}>
+            <InteractiveChart height={260}>
               <LineChart data={performanceTrend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -812,7 +813,7 @@ export function ProductionDashboardTab() {
                 <Line type="monotone" dataKey="wastePercent" name={t("production.dashboard.trend.waste")} stroke="hsl(0 72% 51%)" strokeWidth={2} dot={{ r: 3 }} connectNulls />
                 <Line type="monotone" dataKey="downtimePercent" name={t("production.dashboard.trend.downtime")} stroke="hsl(38 92% 42%)" strokeWidth={2} dot={{ r: 3 }} connectNulls />
               </LineChart>
-            </ResponsiveContainer>
+            </InteractiveChart>
           </CardContent>
         </Card>
       )}
@@ -885,7 +886,7 @@ export function ProductionDashboardTab() {
           ) : (
             <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2">
               <div className="w-full min-w-0 overflow-hidden" style={{ minHeight: Math.max(200, Math.min(8, teamSemouleWaste.length) * 48) }}>
-                <ResponsiveContainer width="100%" height="100%">
+                <InteractiveChart height="100%">
                   <BarChart data={wasteChart.data} layout="vertical" margin={{ left: 24 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
                     <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -906,7 +907,7 @@ export function ProductionDashboardTab() {
                       <Bar key={series.key} dataKey={series.key} stackId="semoule-waste" name={series.name} fill={series.color} />
                     ))}
                   </BarChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
@@ -942,7 +943,7 @@ export function ProductionDashboardTab() {
               description={t("production.dashboard.chart.downtimeReasons.empty.description")}
             />
           ) : (
-            <ResponsiveContainer width="100%" height={Math.max(160, Math.min(8, downtimeReasons.length) * 36)}>
+            <InteractiveChart height={Math.max(160, Math.min(8, downtimeReasons.length) * 36)}>
               <BarChart
                 data={downtimeReasons.slice(0, 8).map((row) => ({ ...row, reason: downtimeLabel(t, "motif", row.reason) }))}
                 layout="vertical"
@@ -957,7 +958,7 @@ export function ProductionDashboardTab() {
                 />
                 <Bar dataKey="minutes" name={t("production.dashboard.chart.downtimeReasons.minutes")} fill="hsl(38 92% 42%)" radius={[0, 4, 4, 0]} />
               </BarChart>
-            </ResponsiveContainer>
+            </InteractiveChart>
           )}
         </CardContent>
       </Card>
@@ -1485,7 +1486,7 @@ function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string;
   return (
     <div>
       <p className="mb-2 text-sm font-medium text-foreground">{title}</p>
-      <ResponsiveContainer width="100%" height={220}>
+      <InteractiveChart height={220}>
         <ScatterChart margin={{ left: 8, right: 8, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" />
           <XAxis
@@ -1516,7 +1517,7 @@ function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string;
           />
           <Scatter data={data} fill="hsl(217 91% 45%)" />
         </ScatterChart>
-      </ResponsiveContainer>
+      </InteractiveChart>
     </div>
   );
 }
@@ -1672,13 +1673,11 @@ function buildTeamSemouleWaste(rows: TeamPerformanceRow[], noTeamLabel: string):
     for (const [category, kg] of Object.entries(row.daily_waste_by_category)) {
       entry.byCategory[category] = (entry.byCategory[category] ?? 0) + (kg ?? 0);
     }
-    entry.regrindQuantity += row.regrind_quantity;
-    // Not derived from the categories above minus regrindQuantity: those
-    // categories are each converted into their own product's unit (e.g. tons
-    // for semoule stocked by the ton), while regrind_quantity is always raw
-    // kilograms off the report form — subtracting one from the other would
-    // net tons against kilos. net_semoule_waste is the backend's own figure,
-    // computed on a consistent raw-kg basis on both sides (see
+    // Kilos, like the categories above: regrind_quantity itself is in the
+    // rebroyat product's own unit (tonnes from the shift form).
+    entry.regrindQuantity += row.regrind_quantity_kg;
+    // net_semoule_waste is the backend's own figure, computed on a
+    // consistent raw-kg basis on both sides (see
     // TeamPerformanceService.list_team_performance), and is additive across
     // periods since kilograms don't need converting to be summed.
     entry.netSemouleWaste += row.net_semoule_waste;

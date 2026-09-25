@@ -2,6 +2,7 @@ import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChart3, Boxes, History as HistoryIcon, LayoutDashboard, ListTree, Package } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n } from "../../lib/i18n";
 import { StockTab } from "./StockTab";
 import { WarehouseOverviewTab } from "./WarehouseOverviewTab";
@@ -33,18 +34,20 @@ export function WarehousePage() {
         <p className="text-sm text-muted-foreground">{t("warehouse.subtitle")}</p>
       </motion.div>
 
-      <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
-        <TabsList>
-          {TABS.map((tabDef) => (
-            <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="warehouse-tab-indicator">
-              <span className="flex items-center gap-1.5">
-                <tabDef.icon className="h-4 w-4" />
-                {t(tabDef.labelKey)}
-              </span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <StickyTabBar>
+        <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
+          <TabsList>
+            {TABS.map((tabDef) => (
+              <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="warehouse-tab-indicator">
+                <span className="flex items-center gap-1.5">
+                  <tabDef.icon className="h-4 w-4" />
+                  {t(tabDef.labelKey)}
+                </span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      </StickyTabBar>
 
       <AnimatePresence mode="wait">
         <motion.div

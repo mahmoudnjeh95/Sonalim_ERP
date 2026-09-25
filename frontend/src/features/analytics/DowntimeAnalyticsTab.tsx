@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { Bar, BarChart, CartesianGrid, Cell, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Cell, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { cn } from "../../lib/utils";
 import { useI18n } from "../../lib/i18n";
@@ -92,7 +93,7 @@ export function DowntimeAnalyticsTab() {
           </CardHeader>
           <CardContent>
             <div className="h-64 w-full">
-              <ResponsiveContainer width="100%" height="100%">
+              <InteractiveChart height="100%">
                 <BarChart data={classificationData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid stroke={GRID} vertical={false} />
                   <XAxis dataKey="label" tick={TICK} tickLine={false} axisLine={false} interval={0} />
@@ -109,7 +110,7 @@ export function DowntimeAnalyticsTab() {
                     ))}
                   </Bar>
                 </BarChart>
-              </ResponsiveContainer>
+              </InteractiveChart>
             </div>
           </CardContent>
         </Card>

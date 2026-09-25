@@ -154,7 +154,7 @@ function addRow(target: OperationsTotals, row: TeamPerformanceRow) {
   target.productionMinutes += row.production_minutes;
   target.downtimeMinutes += row.downtime_minutes;
   target.netWasteKg += row.net_semoule_waste;
-  target.regrindKg += row.regrind_quantity;
+  target.regrindKg += row.regrind_quantity_kg;
   for (const [category, kg] of Object.entries(row.daily_waste_by_category)) {
     const key = category as WasteCategory;
     target.wasteByStageKg[key] = (target.wasteByStageKg[key] ?? 0) + (kg ?? 0);

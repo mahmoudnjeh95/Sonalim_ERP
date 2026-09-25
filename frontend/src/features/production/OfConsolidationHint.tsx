@@ -31,10 +31,6 @@ export function OfConsolidationHint({ workOrderId }: { workOrderId: string | und
       </p>
       <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
         <div>
-          <span className="text-muted-foreground">{t("production.hint.planned")}: </span>
-          {consolidation.planned_quantity !== null ? formatQuantity(consolidation.planned_quantity, "t") : "—"}
-        </div>
-        <div>
           <span className="text-muted-foreground">{t("production.hint.producedSoFar")}: </span>
           {formatQuantity(consolidation.produced_quantity, "t")}
         </div>

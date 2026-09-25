@@ -249,6 +249,9 @@ class TeamPerformanceService:
                     "daily_waste_by_category": waste_by_category,
                     # Native figure (the rebroyat product's own unit), left alone for display.
                     "regrind_quantity": float(regrind_quantity),
+                    # The same rebroyat in kilos — what every "kg" display reads,
+                    # on the same basis as daily_waste_by_category and the net below.
+                    "regrind_quantity_kg": float(regrind_quantity_kg),
                     # Netted in kilos, against regrind_quantity_kg — never the
                     # native figure above, which is in the rebroyat product's own
                     # unit (tonnes) and would net tonnes against kilos.

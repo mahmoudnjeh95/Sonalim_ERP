@@ -36,7 +36,6 @@ from modules.production.domain.production_report import (
     validate_daily_stock_targets,
     validate_downtime_lines,
     validate_waste_lines,
-    validate_waste_products,
 )
 
 # Work orders that still take reports; the same rule the old report flow uses.
@@ -824,13 +823,9 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
             if isinstance(checked, Err):
                 return _wrap_run_check(index, checked)
     elif section_key in _WASTE_REPORT_TYPE:
-        if section_key == "waste_packing":
-            return Ok(None)
-        lines = tuple(
-            WasteLine(category=line["category"], product_id=line.get("product_id"), quantity=float(line.get("quantity") or 0))
-            for line in payload.get("waste_lines") or []
-        )
-        return validate_waste_products(lines)
+        # The shift's waste lines track a quantity per kind; the form has no product column and
+        # nothing is posted to stock from them, so a line need not name what was lost.
+        return Ok(None)
     elif section_key == "packing":
         for index, row in enumerate(payload.get("rows") or [], start=1):
             if not row.get("product_id"):

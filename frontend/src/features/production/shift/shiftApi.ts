@@ -130,7 +130,12 @@ export function listSectionRevisions(token: string, id: string, key: SectionKey)
 export function validateShiftReport(
   token: string,
   id: string,
-  body: { seen_revisions?: Record<string, number>; shortfall_comment?: string | null } = {},
+  body: {
+    seen_revisions?: Record<string, number>;
+    shortfall_comment?: string | null;
+    /** Where the OFR opened for the shift's rebroyat runs; left out, the production order's own line. */
+    regrind_work_center_id?: string | null;
+  } = {},
 ) {
   return apiFetch<ShiftReport>(`${base}/${id}/validate`, { method: "POST", body, token });
 }

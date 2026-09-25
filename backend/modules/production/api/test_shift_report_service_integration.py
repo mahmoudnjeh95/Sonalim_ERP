@@ -447,12 +447,10 @@ def test_submitting_runs_needs_the_store_of_every_mp_poured(db, env):
     assert "versement row 1" in refused.message
 
 
-def test_submitting_a_waste_section_needs_to_say_what_was_lost(db, env):
+def test_submitting_a_waste_section_needs_only_the_quantity(db, env):
     shift_id = _open(db, env)
+    # The form has no product column: a kind and a quantity are enough to hand the section in.
     _ok(_save(db, env, shift_id, "waste_production", {"waste_lines": [{"category": "press", "quantity": 6.4}]}))
-    refused = _submit(db, env, shift_id, "waste_production")
-    assert isinstance(refused, Err) and refused.code == "MISSING_WASTE_PRODUCT"
-    _ok(_save(db, env, shift_id, "waste_production", {"waste_lines": [{"category": "press", "quantity": 6.4, "product_id": "dough"}]}))
     assert isinstance(_submit(db, env, shift_id, "waste_production"), Ok)
 
 

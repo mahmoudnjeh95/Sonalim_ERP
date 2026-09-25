@@ -1,7 +1,9 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ClipboardList, Gauge, Recycle, ShieldCheck, Timer, Users } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
+import { percentAxisMax } from "../../components/charts/percentDomain";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
@@ -472,7 +474,7 @@ function TeamChart({
         </div>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={240}>
+        <InteractiveChart height={240}>
           <Chart data={data}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
             <XAxis dataKey="period" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -481,7 +483,7 @@ function TeamChart({
               axisLine={false}
               tickLine={false}
               allowDecimals={!percent}
-              domain={percent ? [0, 100] : undefined}
+              domain={percent ? [0, percentAxisMax] : undefined}
               tickFormatter={(value) => (percent ? `${value}%` : `${value}`)}
             />
             <Tooltip
@@ -506,7 +508,7 @@ function TeamChart({
               ),
             )}
           </Chart>
-        </ResponsiveContainer>
+        </InteractiveChart>
       </CardContent>
     </Card>
   );

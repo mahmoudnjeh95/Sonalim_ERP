@@ -708,7 +708,9 @@ export interface TeamPerformanceRow {
   daily_waste_by_category: Partial<Record<WasteCategory, number>>;
   /** What the team declared as rebroyat over the same reports — recovered, not lost. */
   regrind_quantity: number;
-  /** daily_waste_by_category summed, minus regrind_quantity: semoule genuinely lost. */
+  /** The same rebroyat in kilos (regrind_quantity is in the rebroyat product's own unit, usually tonnes). */
+  regrind_quantity_kg: number;
+  /** daily_waste_by_category summed, minus regrind_quantity_kg: semoule genuinely lost. */
   net_semoule_waste: number;
 }
 

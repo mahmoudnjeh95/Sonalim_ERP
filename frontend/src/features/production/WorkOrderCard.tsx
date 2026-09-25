@@ -111,11 +111,6 @@ export function WorkOrderCard({
             <span className="font-semibold">{formatQuantity(produced, "t")}</span>{" "}
             <span className="text-muted-foreground">{t("production.workOrders.card.produced")}</span>
           </span>
-          <span className="tabular-nums text-muted-foreground">
-            {order.planned_quantity !== null
-              ? `${t("production.workOrders.card.planned")} ${formatQuantity(order.planned_quantity, "t")}`
-              : t("production.workOrders.card.noPlan")}
-          </span>
         </div>
         <OrderStatusLine status={order.status} />
         {pending > 0 && (
