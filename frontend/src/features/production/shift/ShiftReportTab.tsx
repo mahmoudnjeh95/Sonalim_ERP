@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
-import { CalendarDays, ClipboardList, Lock, RotateCcw, ShieldCheck } from "lucide-react";
+import { CalendarDays, ClipboardList, Lock, Maximize2, RotateCcw, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
@@ -13,6 +13,7 @@ import { Card, CardContent } from "../../../components/ui/card";
 import { Input } from "../../../components/ui/input";
 import { Label as FieldLabel } from "../../../components/ui/label";
 import { SectionCard } from "./SectionCard";
+import { FullscreenOverlay } from "./FullscreenOverlay";
 import { ShiftRail } from "./ShiftRail";
 import { DateNavigator } from "./DateNavigator";
 import { LineCardsSelector } from "./LineCardsSelector";
@@ -80,6 +81,7 @@ export function ShiftReportTab() {
   const [workCenterId, setWorkCenterId] = useState(() => params.get("line") ?? "");
   const [shiftName, setShiftName] = useState(() => params.get("shift") ?? "");
   const [openKeys, setOpenKeys] = useState<Set<SectionKey>>(new Set());
+  const [wholeMaximized, setWholeMaximized] = useState(false);
 
   // ---- reference data -------------------------------------------------------
   const reference = useShiftReferenceData(canView);
@@ -253,8 +255,14 @@ export function ShiftReportTab() {
         </Card>
       )}
 
-      {shift && (
+      {shift && !wholeMaximized && (
         <div className="space-y-3">
+          <div className="flex items-center justify-end">
+            <Button size="sm" variant="outline" onClick={() => setWholeMaximized(true)} className="h-7 gap-1.5 px-2.5 text-xs">
+              <Maximize2 className="h-3.5 w-3.5" />
+              {label(T.kioskWholeSheet)}
+            </Button>
+          </div>
           <ShiftRail states={shift.sections} onJump={jump} />
           <div className="space-y-3">
             {SECTIONS.map((def) => {
@@ -279,6 +287,38 @@ export function ShiftReportTab() {
       )}
 
       {shift && <ShiftStatusBar shift={shift} />}
+
+      {shift && (
+        <FullscreenOverlay
+          open={wholeMaximized}
+          onOpenChange={setWholeMaximized}
+          title={label(T.title)}
+          icon={<ClipboardList className="h-[18px] w-[18px]" />}
+        >
+          <div className="space-y-3 p-4">
+            <ShiftRail states={shift.sections} onJump={jump} />
+            <div className="space-y-3">
+              {SECTIONS.map((def) => {
+                const state = shift.sections.find((s) => s.key === def.key);
+                if (!state) return null;
+                return (
+                  <SectionCard
+                    key={def.key}
+                    def={def}
+                    state={state}
+                    shift={shift}
+                    canEdit={hasPermission(`production.shift.edit.${def.key}`)}
+                    options={options}
+                    open={openKeys.has(def.key)}
+                    onToggle={() => toggle(def.key)}
+                    onChanged={refresh}
+                  />
+                );
+              })}
+            </div>
+          </div>
+        </FullscreenOverlay>
+      )}
     </div>
   );
 }

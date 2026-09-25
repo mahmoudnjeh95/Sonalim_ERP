@@ -883,29 +883,31 @@ export function ProductionDashboardTab() {
               description={t("production.dashboard.chart.semouleWaste.empty.description")}
             />
           ) : (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <ResponsiveContainer width="100%" height={Math.max(200, Math.min(8, teamSemouleWaste.length) * 48)}>
-                <BarChart data={wasteChart.data} layout="vertical" margin={{ left: 24 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    type="category"
-                    dataKey="team"
-                    width={110}
-                    tick={{ fontSize: 11, fill: "hsl(215 16% 47%)" }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <Tooltip
-                    formatter={(value) => formatWasteStageQuantity(Number(value))}
-                    contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {wasteChart.series.map((series) => (
-                    <Bar key={series.key} dataKey={series.key} stackId="semoule-waste" name={series.name} fill={series.color} />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="w-full min-w-0 overflow-hidden" style={{ minHeight: Math.max(200, Math.min(8, teamSemouleWaste.length) * 48) }}>
+                <ResponsiveContainer width="100%" height="100%">
+                  <BarChart data={wasteChart.data} layout="vertical" margin={{ left: 24 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
+                    <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
+                    <YAxis
+                      type="category"
+                      dataKey="team"
+                      width={110}
+                      tick={{ fontSize: 11, fill: "hsl(215 16% 47%)" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      formatter={(value) => formatWasteStageQuantity(Number(value))}
+                      contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {wasteChart.series.map((series) => (
+                      <Bar key={series.key} dataKey={series.key} stackId="semoule-waste" name={series.name} fill={series.color} />
+                    ))}
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   {t("production.dashboard.chart.semouleWaste.netLabel")}

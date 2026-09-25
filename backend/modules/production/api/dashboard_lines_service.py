@@ -77,6 +77,11 @@ class DashboardLinesService:
             ).fetchall(),
             key=lambda r: shift_rank.get(r[1].lower(), len(shift_rank)),
         ):
+            if team is None:
+                # An open report saved before its team was picked. It isn't
+                # attributable to a team slot yet, so the board simply doesn't
+                # show it until the team is set.
+                continue
             reports_by_line.setdefault(work_center_id, []).append((shift, team, report_status))
 
         def team_status_for(line_id: str) -> list[dict]:

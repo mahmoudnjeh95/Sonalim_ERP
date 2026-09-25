@@ -32,6 +32,9 @@ export function QuantityExpressionInput({
   // by its own partial result.
   useEffect(() => {
     if (!Number.isFinite(value)) return;
+    // A number still mid-typing ("100.") is not yet a valid expression -- its evaluateQuantity
+    // is null, which is never `=== value`. Don't clobber it with the last good value.
+    if (text.trim() !== "" && evaluateQuantity(text) === null) return;
     if (evaluateQuantity(text) !== value && !(text.trim() === "" && value === 0)) setText(String(value));
     // Only when the form's value moves, not on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps

@@ -53,6 +53,7 @@ export const T = {
   lastUpdated: L("Updated at", "Mis à jour à"),
   kiosk: L("Fullscreen mode", "Mode plein écran"),
   exitKiosk: L("Exit fullscreen", "Quitter le plein écran"),
+  kioskWholeSheet: L("Whole sheet, fullscreen", "Toute la fiche en plein écran"),
   printSheet: L("Print shift sheet", "Imprimer la feuille de poste"),
   kpiSemolina: L("Semoule poured", "Semoule versée"),
   kpiFinished: L("Finished output", "Produit fini"),
