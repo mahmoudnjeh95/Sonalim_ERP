@@ -38,7 +38,8 @@ from modules.production.api.recipe_service import RecipeService
 from modules.production.api.regrind_service import RegrindDefaultsService, RegrindService, ScrapService
 from modules.production.api.of_consolidation_service import OfConsolidationService
 from modules.production.api.dashboard_day_service import GRANULARITIES, DashboardDayService
-from modules.production.api.day_sheet_service import DaySheetService
+from modules.production.api.day_sheet_service import DAY_GROUPINGS, MONTH_GROUPINGS, DaySheetService
+from modules.production.api.month_recap_export import build_month_recap_workbook, collect_month_recap, workbook_filename
 from modules.production.api.lot_suggestion_service import LotSuggestionService
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.shift_validation_service import ShiftValidationService
@@ -2701,35 +2702,73 @@ def get_day_sheet(
     date: datetime.date = Query(...),
     work_center_id: str = Query(...),
     include_pending: bool = Query(default=False),
+    group_by: str = Query(default="shift", description="'shift' (the plant's sheet) or 'lot'"),
     tenant: TenantContext = Depends(require_permission("production.view_reports")),
 ) -> dict:
     """One line's Daily and Conditionnement reports for a day on one grid, the way the
-    plant's Excel day sheet lays them out: a column per shift and a total. Validated
-    reports only unless `include_pending`, which adds the ones still being filled in."""
+    plant's Excel day sheet lays them out: a column per shift (or per lot) and a total.
+    Validated reports only unless `include_pending`, which adds the ones still being
+    filled in."""
+    if group_by not in DAY_GROUPINGS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _grouping_error(DAY_GROUPINGS))
     with get_connection() as connection:
         result = DaySheetService(connection).get_day_sheet(
-            tenant_id=tenant.tenant_id, date=date, work_center_id=work_center_id, include_pending=include_pending
+            tenant_id=tenant.tenant_id, date=date, work_center_id=work_center_id, include_pending=include_pending,
+            group_by=group_by,
         )
     if isinstance(result, Err):
         raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     return result.value
+
+
+def _grouping_error(allowed: tuple[str, ...]) -> dict:
+    choices = " ou ".join(f"'{g}'" for g in allowed)
+    return {
+        "code": "INVALID_GROUPING",
+        "message": f"group_by must be one of {', '.join(allowed)}",
+        "message_fr": f"group_by doit être {choices}",
+    }
 
 
 @router.get("/month-recap")
 def get_month_recap(
     month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM"),
     work_center_id: str = Query(...),
+    group_by: str = Query(default="product", description="'product' (the plant's recap) or 'lot'"),
     tenant: TenantContext = Depends(require_permission("production.view_reports")),
 ) -> dict:
     """A line's month on the same rows as the day sheet, every validated Daily and
-    Conditionnement report added up, with a column per product produced."""
+    Conditionnement report added up, with a column per product produced (or per lot)."""
+    if group_by not in MONTH_GROUPINGS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _grouping_error(MONTH_GROUPINGS))
     with get_connection() as connection:
         result = DaySheetService(connection).get_month_recap(
-            tenant_id=tenant.tenant_id, month=datetime.date.fromisoformat(f"{month}-01"), work_center_id=work_center_id
+            tenant_id=tenant.tenant_id, month=datetime.date.fromisoformat(f"{month}-01"), work_center_id=work_center_id,
+            group_by=group_by,
         )
     if isinstance(result, Err):
         raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     return result.value
+
+
+@router.get("/month-recap/export")
+def export_month_recap(
+    month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM"),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> Response:
+    """The month's production workbook for every production line: the recap (per
+    product, then per lot), one day sheet per line and per day (PC days first, then
+    PL), consumption during production and during conditionnement, energy, and the
+    analyses behind them (stops, waste, teams, day-by-day trend with charts) -- see
+    month_recap_export.py. Validated reports only, like the recap on screen."""
+    first = datetime.date.fromisoformat(f"{month}-01")
+    with get_connection() as connection:
+        data = collect_month_recap(connection, tenant_id=tenant.tenant_id, month=first)
+    return Response(
+        content=build_month_recap_workbook(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook_filename(first)}"'},
+    )
 
 
 @router.get("/lot-suggestion")

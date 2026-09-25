@@ -391,3 +391,150 @@ def test_the_recap_lists_the_lots_a_product_was_packed_under(db, env):
             lot_number=lot, dlc_date=DAY + datetime.timedelta(days=700),
         )
     assert _recap(db, env)["columns"][0]["lots"] == ["4187SNL", "4188SNL"]
+
+
+# -- by lot ---------------------------------------------------------------------
+
+def _shift_run(db, env, of_id, *, day=DAY, shift="morning", team="Équipe A", lot, semolina=10.0, packed_t=None, minutes=420):
+    """A shift filed on the shift screen: a production run under `lot`, and a packing
+    row drawing from it when `packed_t` is given. Validated, so the sheet counts it."""
+    from modules.production.api.shift_report_service import ShiftReportService
+    from modules.production.domain.shift_report import SECTION_KEYS
+    from modules.production.api.shift_validation_service import ShiftValidationService
+
+    service = ShiftReportService(db)
+    opened = service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["line"], report_date=day, shift=shift, team=team
+    )
+    assert isinstance(opened, Ok), getattr(opened, "message", "")
+    shift_id = opened.value["id"]
+    run = {
+        "of_id": of_id, "equipment_id": env["machine"], "lot_number": lot, "start_time": "07:00", "end_time": "14:00",
+        "production_minutes": minutes, "finished_product_quantity": semolina * 900, "raw_material_location_id": env["silo"],
+    }
+    versements = [{"product_id": env["semolina"], "location_id": env["silo"], "quantity": semolina}]
+    saved = service.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
+        payload={"runs": [run], "versements": versements},
+    )
+    assert isinstance(saved, Ok), getattr(saved, "message", "")
+    shift = service.get_shift(tenant_id=TENANT, shift_report_id=shift_id).value
+    run_id = next(s for s in shift["sections"] if s["key"] == "runs")["payload"]["runs"][0]["id"]
+    filled: dict = {"runs": None}
+    if packed_t is not None:
+        filled["packing"] = {"rows": [{
+            "of_id": of_id, "run_id": run_id, "equipment_id": env["machine"], "lot_number": lot,
+            "packets_counted": packed_t * 2000, "film_quantity": 10, "carton_quantity": packed_t * 100,
+            "film_product_id": env["film"], "carton_product_id": env["carton"], "scotch_product_id": env["scotch"],
+            "ruban_product_id": env["ruban"], "packaging_location_id": env["packaging_store"],
+            "finished_goods_location_id": env["goods_store"], "dlc_date": (day + datetime.timedelta(days=700)).isoformat(),
+        }]}
+    for key in SECTION_KEYS:
+        if key in filled:
+            if filled[key] is not None:
+                done = service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key, payload=filled[key])
+                assert isinstance(done, Ok), getattr(done, "message", "")
+            done = service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key)
+        else:
+            done = service.declare_nothing(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key)
+        assert isinstance(done, Ok), getattr(done, "message", "")
+    validated = ShiftValidationService(db).validate_shift(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, correlation_id=str(ULID())
+    )
+    assert isinstance(validated, Ok), getattr(validated, "message", "")
+    return shift_id
+
+
+def test_a_day_read_by_lot_puts_a_runs_reports_under_the_lot_it_was_filed_under(db, env):
+    of_id = _open_of(db, env)
+    _shift_run(db, env, of_id, shift="morning", lot="4187SNL", semolina=10, packed_t=9)
+    _shift_run(db, env, of_id, shift="night", team="Équipe C", lot="4188SNL", semolina=5)
+    result = DaySheetService(db).get_day_sheet(tenant_id=TENANT, date=DAY, work_center_id=env["line"], group_by="lot")
+    assert isinstance(result, Ok), getattr(result, "message", "")
+    sheet = result.value
+    assert sheet["group_by"] == "lot"
+    assert [(c["key"], c["name"], c["teams"], c["products"]) for c in sheet["columns"]] == [
+        ("4187SNL", "4187SNL", ["Équipe A"], ["Douman 500 g"]),
+        ("4188SNL", "4188SNL", ["Équipe C"], ["Douman 500 g"]),
+    ]
+    assert _row(sheet, "total_mp")["by_column"] == {"4187SNL": pytest.approx(10), "4188SNL": pytest.approx(5)}
+    assert _row(sheet, "total_finished")["by_column"] == {"4187SNL": pytest.approx(9)}
+    # A lot is a whole run, so its yield is read per column.
+    assert _row(sheet, "yield")["by_column"] == {"4187SNL": pytest.approx(90)}
+
+
+def test_an_old_style_daily_report_borrows_the_lot_of_the_packing_that_drew_from_it_else_has_none(db, env):
+    of_id = _open_of(db, env)
+    daily_id = _daily(db, env, of_id, shift="morning", semolina=10)
+    _packing(db, env, of_id, shift="morning", tonnes=9, lot_number="4187SNL", daily_report_id=daily_id, dlc_date=DAY + datetime.timedelta(days=700))
+    _daily(db, env, of_id, shift="night", team="Équipe C", semolina=5)
+    sheet = DaySheetService(db).get_day_sheet(tenant_id=TENANT, date=DAY, work_center_id=env["line"], group_by="lot").value
+    assert [c["key"] for c in sheet["columns"]] == ["4187SNL", ""]
+    assert sheet["columns"][1]["name"] is None
+    assert _row(sheet, "total_mp")["by_column"] == {"4187SNL": pytest.approx(10), "": pytest.approx(5)}
+
+
+def test_the_month_read_by_lot_orders_the_lots_as_they_were_started_and_says_their_days(db, env):
+    of_id = _open_of(db, env)
+    _shift_run(db, env, of_id, day=DAY + datetime.timedelta(days=2), lot="4189SNL", semolina=3)
+    _shift_run(db, env, of_id, day=DAY, lot="4187SNL", semolina=10, packed_t=9)
+    _shift_run(db, env, of_id, day=DAY + datetime.timedelta(days=1), lot="4187SNL", semolina=4, packed_t=3)
+    result = DaySheetService(db).get_month_recap(tenant_id=TENANT, month=MONTH, work_center_id=env["line"], group_by="lot")
+    assert isinstance(result, Ok), getattr(result, "message", "")
+    recap = result.value
+    assert recap["group_by"] == "lot"
+    assert [(c["key"], c["date_from"], c["date_to"]) for c in recap["columns"]] == [
+        ("4187SNL", "2026-09-10", "2026-09-11"),
+        ("4189SNL", "2026-09-12", "2026-09-12"),
+    ]
+    assert _row(recap, "total_mp")["by_column"] == {"4187SNL": pytest.approx(14), "4189SNL": pytest.approx(3)}
+    assert _row(recap, "yield")["by_column"] == {"4187SNL": pytest.approx(12 / 14 * 100)}
+    # Read by product, the same month lists both lots under the one product.
+    by_product = _recap(db, env)
+    assert by_product["columns"][0]["lots"] == ["4187SNL", "4189SNL"]
+
+
+def test_an_unknown_grouping_is_refused(db, env):
+    result = DaySheetService(db).get_day_sheet(tenant_id=TENANT, date=DAY, work_center_id=env["line"], group_by="team")
+    assert isinstance(result, Err) and result.code == "INVALID_GROUPING"
+    result = DaySheetService(db).get_month_recap(tenant_id=TENANT, month=MONTH, work_center_id=env["line"], group_by="shift")
+    assert isinstance(result, Err) and result.code == "INVALID_GROUPING"
+
+
+# -- the month workbook -----------------------------------------------------------
+
+def test_the_month_workbook_lists_the_pc_lines_days_before_the_pl_lines_and_leaves_grinders_out(db, env):
+    import io
+
+    from openpyxl import load_workbook
+
+    from modules.production.api.month_recap_export import build_month_recap_workbook, collect_month_recap
+
+    db.execute("UPDATE production.work_centers SET name = 'Line_1_PL' WHERE id = %s", (env["line"],))
+    db.execute("UPDATE production.work_centers SET name = 'Line_2_PC' WHERE id = %s", (env["other_line"],))
+    db.execute(
+        "INSERT INTO production.work_centers (id, tenant_id, code, name, line_type) VALUES (%s, %s, 'DS-BRY', 'Broyeur', 'grinder')",
+        (str(ULID()), TENANT),
+    )
+    of_id = _open_of(db, env)
+    _shift_run(db, env, of_id, lot="4187SNL", semolina=10, packed_t=9)
+    _daily(db, env, of_id, day=DAY + datetime.timedelta(days=1), semolina=99, validate=False)
+
+    data = collect_month_recap(db, tenant_id=TENANT, month=MONTH, today=DAY + datetime.timedelta(days=2))
+    assert [(l.tag, l.line["name"], l.sheet_prefix) for l in data.lines] == [("PC", "Line_2_PC", "PC"), ("PL", "Line_1_PL", "PL")]
+    pl = data.lines[1]
+    assert [c["name"] for c in pl.by_product["columns"]] == ["Douman 500 g"]
+    # The report still being filled in named no lot: it is a waiting column, not a figure.
+    assert [(c["key"], c["reports"]["daily"]["pending"]) for c in pl.by_lot["columns"]] == [("4187SNL", 0), ("", 1)]
+    # One sheet per day from the 1st to "today", the idle days included.
+    assert [d["date"].day for d in pl.days] == list(range(1, 13))
+    assert [(d["validated"], d["pending"]) for d in pl.days[9:]] == [(2, 0), (0, 1), (0, 0)]
+
+    workbook = load_workbook(io.BytesIO(build_month_recap_workbook(data)))
+    assert workbook.sheetnames == [
+        "Récap", "Récap par lot", *[f"PC {d:02d}" for d in range(1, 13)], *[f"PL {d:02d}" for d in range(1, 13)],
+        "Conso production", "Conso conditionnement", "Énergie", "Arrêts", "Déchets", "Équipes", "Tendance",
+    ]
+    day_sheet = workbook["PL 10"]
+    header = next(r for r in range(1, 12) if day_sheet.cell(row=r, column=1).value == "Line_1_PL")
+    assert [day_sheet.cell(row=header, column=c).value for c in range(3, 7)] == ["Morning", "Afternoon", "Night", "Total"]

@@ -1418,13 +1418,23 @@ export interface DaySheetRow {
   total: number | null;
 }
 
+/** What a day sheet's columns stand for: the plant's sheet has a column per shift; read by lot instead when a day ran several lots. */
+export type DaySheetGrouping = "shift" | "lot";
+/** What a month recap's columns stand for: a column per product (the plant's recap) or per lot. */
+export type MonthRecapGrouping = "product" | "lot";
+
 export interface DaySheetColumn {
-  /** The shift as filed (empty for reports filed with none) on a day sheet; the product's id on the month recap. */
+  /** The shift as filed (empty for reports filed with none), the product's id, or the lot number, depending on the grouping. */
   key: string;
-  /** The recap's column title, the product's name. */
+  /** The column's title: the shift, the product's name or the lot number. Null when the reports named none. */
   name?: string | null;
   teams: string[];
   lots: string[];
+  /** The names of the products made under this column (one per column on the recap by product). */
+  products: string[];
+  /** The first and last day a counted report was filed in this column. */
+  date_from: string | null;
+  date_to: string | null;
   reports: Record<ReportType, { validated: number; pending: number }>;
 }
 
@@ -1432,24 +1442,30 @@ export interface DaySheet {
   date: string;
   work_center: { id: string; code: string; name: string };
   include_pending: boolean;
+  group_by: DaySheetGrouping;
   columns: DaySheetColumn[];
   rows: DaySheetRow[];
   ofs: { id: string; reference: string | null; product_name: string | null }[];
 }
 
-/** The same rows as a day sheet, added up over a month, with a column per product. */
+/** The same rows as a day sheet, added up over a month, with a column per product (or per lot). */
 export interface MonthRecap {
   month: string;
   work_center: { id: string; code: string; name: string };
+  group_by: MonthRecapGrouping;
   columns: DaySheetColumn[];
   rows: DaySheetRow[];
 }
 
-export function getDaySheet(token: string, params: { date: string; workCenterId: string; includePending: boolean }) {
+export function getDaySheet(
+  token: string,
+  params: { date: string; workCenterId: string; includePending: boolean; groupBy?: DaySheetGrouping },
+) {
   const query = new URLSearchParams({
     date: params.date,
     work_center_id: params.workCenterId,
     include_pending: String(params.includePending),
+    group_by: params.groupBy ?? "shift",
   });
   return apiFetch<DaySheet>(`/production/day-sheet?${query}`, { token });
 }
@@ -1465,9 +1481,35 @@ export function getLotSuggestion(token: string, params: { workCenterId: string; 
   return apiFetch<LotSuggestion>(`/production/lot-suggestion?${query}`, { token });
 }
 
-export function getMonthRecap(token: string, params: { month: string; workCenterId: string }) {
-  const query = new URLSearchParams({ month: params.month, work_center_id: params.workCenterId });
+export function getMonthRecap(token: string, params: { month: string; workCenterId: string; groupBy?: MonthRecapGrouping }) {
+  const query = new URLSearchParams({
+    month: params.month,
+    work_center_id: params.workCenterId,
+    group_by: params.groupBy ?? "product",
+  });
   return apiFetch<MonthRecap>(`/production/month-recap?${query}`, { token });
+}
+
+/**
+ * The month's production workbook for every line — the recap (per product, then per
+ * lot), one day sheet per line and per day (PC days first, then PL), consumption during
+ * production and during conditionnement, energy, and the analyses behind them — see
+ * month_recap_export.py. Bypasses apiFetch since that always parses JSON.
+ */
+export async function exportMonthRecapWorkbook(token: string, params: { month: string }): Promise<Blob> {
+  const query = new URLSearchParams({ month: params.month });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/production/month-recap/export?${query.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw networkError();
+  }
+  if (!response.ok) {
+    throw await apiErrorFromResponse(response);
+  }
+  return response.blob();
 }
 
 export interface WasteLine {
