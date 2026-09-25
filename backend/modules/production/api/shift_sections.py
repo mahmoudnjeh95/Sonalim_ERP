@@ -24,7 +24,7 @@ from ulid import ULID
 
 from core.api.service import CoreService
 from core.domain.result import Err, Ok, Result
-from modules.production.api.packing_derivation_service import derive_packing_rows
+from modules.production.api.packing_derivation_service import derive_packing_rows, derive_waste_cartons
 from modules.production.domain.shift_report import split_proportionally
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
@@ -490,13 +490,13 @@ def _validate_orders(
 def _validate_shift_waste(
     connection: psycopg.Connection, tenant_id: str, section_key: str, rows: list[dict]
 ) -> Result[None]:
-    """One place per loss, and every packaging loss in kilos.
+    """One place per loss.
 
     Finished product lost while packing is filed on the packing side as `product`; the
     old Daily form's `finished_product_conditioning` would be a second place for the same
-    kilos, counted twice in the sheet's total. A packaging line is typed in kilos, so it
-    may only name an item stocked by weight (film): a wasted carton is a count, and it
-    already has its own field on the packing row (`waste_carton_quantity`).
+    kilos, counted twice in the sheet's total. A packaging line is in its item's own unit
+    (film in kg, a carton, scotch or ruban in pieces); the sheet keeps counted items out
+    of the kilo total.
     """
     if section_key == "waste_production":
         for index, row in enumerate(rows, start=1):
@@ -505,28 +505,6 @@ def _validate_shift_waste(
                     f"waste {index}: finished product lost while packing is recorded under packing waste, as Product",
                     f"déchet {index} : le produit perdu au conditionnement se saisit dans les déchets de conditionnement, en Produit",
                 )
-        return Ok(None)
-    items = sorted({row["product_id"] for row in rows if row["category"] == "packaging" and row["product_id"]})
-    if not items:
-        return Ok(None)
-    by_weight = dict(
-        connection.execute(
-            """
-            SELECT p.id, COALESCE(u.category = 'weight', FALSE)
-            FROM core.products p LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
-            WHERE p.tenant_id = %s AND p.id = ANY(%s)
-            """,
-            (tenant_id, items),
-        ).fetchall()
-    )
-    for index, row in enumerate(rows, start=1):
-        if row["category"] == "packaging" and row["product_id"] and not by_weight.get(row["product_id"], False):
-            return _bad(
-                f"waste {index}: packaging waste is weighed in kg, so the item must be stocked by weight "
-                "(wasted cartons go in the packing row's waste cartons)",
-                f"déchet {index} : le déchet d'emballage se pèse en kg, l'article doit donc être géré au poids "
-                "(les cartons perdus se saisissent dans « cartons déchet » de la ligne de conditionnement)",
-            )
     return Ok(None)
 
 
@@ -813,6 +791,8 @@ def save_section_rows(
             _sync_rowset(connection, tenant_id, shift_report_id, part, value)
     if section_key == "runs":
         _derive_run_inputs(connection, tenant_id=tenant_id, shift_id=shift_report_id)
+    if section_key in ("packing", "waste_packing"):
+        derive_waste_cartons(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     return Ok(None)
 
 

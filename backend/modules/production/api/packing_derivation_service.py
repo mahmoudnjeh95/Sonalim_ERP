@@ -16,6 +16,7 @@ from modules.production.api.dashboard_settings_service import DashboardSettingsS
 from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.domain.packaging_estimate import finished_quantity_from_count
 from modules.production.domain.packing_derivation import (
+    carton_waste_owners,
     packing_type_label,
     pick_packaging_location,
     resolve_packing_order,
@@ -119,3 +120,58 @@ def derive_packing_rows(connection: psycopg.Connection, *, tenant_id: str, shift
                 )
             row["packaging_location_id"] = location
     return Ok(None)
+
+
+def shift_carton_waste_owners(connection: psycopg.Connection, *, tenant_id: str, shift_id: str) -> dict[str, str]:
+    """The shift's lost-carton lines and the packing row each belongs to (see `carton_waste_owners`)."""
+    rows = connection.execute(
+        "SELECT id, carton_product_id FROM production.shift_packing_rows "
+        "WHERE tenant_id = %s AND shift_report_id = %s ORDER BY line_order, id",
+        (tenant_id, shift_id),
+    ).fetchall()
+    lines = connection.execute(
+        "SELECT id, product_id, packing_row_id FROM production.shift_waste_lines "
+        "WHERE tenant_id = %s AND shift_report_id = %s AND section_key = 'waste_packing' AND category = 'packaging' "
+        "ORDER BY line_order, id",
+        (tenant_id, shift_id),
+    ).fetchall()
+    return carton_waste_owners(rows, lines)
+
+
+def derive_waste_cartons(connection: psycopg.Connection, *, tenant_id: str, shift_id: str) -> None:
+    """A packing row's empty cartons are the cartons lost in the packing-waste section, not a figure of its own.
+
+    Each row's `waste_carton_quantity` is the sum of the lost-carton lines that belong to it, and
+    its packets are counted again from its cartons less those, so stock, release and the variance
+    signals keep reading the same two columns.
+    """
+    owners = shift_carton_waste_owners(connection, tenant_id=tenant_id, shift_id=shift_id)
+    lost: dict[str, float] = {}
+    for line_id, quantity in connection.execute(
+        "SELECT id, quantity FROM production.shift_waste_lines WHERE tenant_id = %s AND id = ANY(%s)",
+        (tenant_id, list(owners)),
+    ).fetchall():
+        lost[owners[line_id]] = lost.get(owners[line_id], 0.0) + float(quantity or 0)
+    core = CoreService(connection)
+    for row_id, product_id, cartons, packets in connection.execute(
+        "SELECT id, product_id, carton_quantity, packets_counted FROM production.shift_packing_rows "
+        "WHERE tenant_id = %s AND shift_report_id = %s",
+        (tenant_id, shift_id),
+    ).fetchall():
+        product = core.get_product(tenant_id, product_id) if product_id else None
+        waste = lost.get(row_id, 0.0)
+        connection.execute(
+            "UPDATE production.shift_packing_rows SET waste_carton_quantity = %s, packets_counted = %s "
+            "WHERE id = %s AND tenant_id = %s",
+            (
+                waste,
+                finished_quantity_from_count(
+                    packets_per_carton=float(product.packets_per_carton) if product and product.packets_per_carton else None,
+                    carton_quantity=float(cartons or 0),
+                    packets_counted=float(packets or 0),
+                    waste_carton_quantity=waste,
+                ),
+                row_id,
+                tenant_id,
+            ),
+        )

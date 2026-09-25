@@ -289,7 +289,7 @@ def test_finished_product_lost_while_packing_has_one_place_only(db, env):
     assert "conditionnement" in result.message_fr
 
 
-def test_packaging_waste_is_weighed_so_it_may_only_name_an_item_stocked_by_weight(db, env):
+def test_packaging_waste_may_name_a_counted_item_as_well_as_a_weighed_one(db, env):
     shift_id = _open(db, env)
     pieces, carton = str(ULID()), str(ULID())
     db.execute(
@@ -300,19 +300,13 @@ def test_packaging_waste_is_weighed_so_it_may_only_name_an_item_stocked_by_weigh
         "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'SH-CARTON', 'Carton', %s)",
         (carton, TENANT, pieces),
     )
-    refused = _save(
-        db, env, shift_id, "waste_packing", {"waste_lines": [{"category": "packaging", "product_id": carton, "quantity": 3}]}
-    )
-    assert isinstance(refused, Err) and result_mentions(refused, "cartons déchet")
-    # The shift pasta is stocked in kilos: a weighed item is accepted.
     _ok(_save(
         db, env, shift_id, "waste_packing",
-        {"waste_lines": [{"category": "packaging", "product_id": env["product"], "quantity": 2.5}]},
+        {"waste_lines": [
+            {"category": "packaging", "product_id": carton, "quantity": 3},
+            {"category": "packaging", "product_id": env["product"], "quantity": 2.5},
+        ]},
     ))
-
-
-def result_mentions(result, text: str) -> bool:
-    return text in result.message_fr
 
 
 def test_a_stop_cannot_end_before_it_starts_and_needs_a_known_motif(db, env):

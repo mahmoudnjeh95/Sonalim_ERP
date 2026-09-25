@@ -53,3 +53,30 @@ def pick_packaging_location(locations: Iterable[str | None]) -> tuple[str | None
     if len(found) == 1:
         return next(iter(found)), False
     return None, len(found) > 1
+
+
+def carton_waste_owners(
+    packing_rows: Iterable[tuple[str, str | None]], waste_lines: Iterable[tuple[str, str | None, str | None]]
+) -> dict[str, str]:
+    """Which packing row each lost-carton line belongs to: `{line id: packing row id}`.
+
+    `packing_rows` are `(id, carton_product_id)` in the shift's order; `waste_lines` are
+    `(id, product_id, packing_row_id)` packaging-waste lines. A line naming a carton belongs to
+    the row it names when that row packs with that carton, else to the first row that does.
+    A line whose item no row packs with belongs to none: it stays a plain packaging loss.
+    """
+    carton_of = {}
+    first_with: dict[str, str] = {}
+    for row_id, carton in packing_rows:
+        carton_of[row_id] = carton
+        if carton and carton not in first_with:
+            first_with[carton] = row_id
+    owners: dict[str, str] = {}
+    for line_id, product_id, packing_row_id in waste_lines:
+        if not product_id:
+            continue
+        if packing_row_id and carton_of.get(packing_row_id) == product_id:
+            owners[line_id] = packing_row_id
+        elif product_id in first_with:
+            owners[line_id] = first_with[product_id]
+    return owners

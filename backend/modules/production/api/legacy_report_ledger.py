@@ -23,6 +23,7 @@ from core.api.service import CoreService
 from core.domain.result import Err, Ok, Result
 from modules.maintenance.api.equipment_service import EquipmentService
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.packing_derivation_service import shift_carton_waste_owners
 from modules.production.domain.line_machines import pick_stage_machine
 from modules.production.domain.shift_report import split_proportionally
 
@@ -238,7 +239,11 @@ def materialize_shift(
         "SELECT * FROM production.shift_waste_lines WHERE shift_report_id = %s AND tenant_id = %s ORDER BY line_order, id",
         (shift_report_id, tenant_id),
     )
+    # A lost carton is already its packing row's empty cartons; written again as a line it would count twice.
+    counted_as_empty_cartons = shift_carton_waste_owners(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     for line in waste:
+        if line["id"] in counted_as_empty_cartons:
+            continue
         default = first_run if line["section_key"] == "waste_production" else first_packing
         owner = line["run_id"] or line["packing_row_id"] or default
         if owner is None:

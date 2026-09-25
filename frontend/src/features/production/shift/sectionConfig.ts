@@ -51,6 +51,7 @@ export type OptionSource =
   | "itemsScotch"
   | "itemsRuban"
   | "itemsPackaging"
+  | "itemUnits"
   | "fuelSuppliers"
   | "gasoilSuppliers"
   | "packedProducts"
@@ -128,6 +129,10 @@ const SAVE_RUNS_FIRST = L(
   "Save the Production section first",
   "Enregistrez d'abord la section Production",
 );
+const SAVE_PACKING_FIRST = L(
+  "Save the Packing section first",
+  "Enregistrez d'abord la section Conditionnement",
+);
 const NO_SUPPLIER = L(
   "No supplier is linked to this item (tag it on the supplier)",
   "Aucun fournisseur lié à cet article (étiquetez-le sur le fournisseur)",
@@ -151,6 +156,12 @@ export function packingWasteItems(row: Row, options: OptionMap): Option[] {
 /** Picking "product" names the product packed first this shift; any other kind starts with no item. */
 export function packingWasteItemFor(value: unknown, _row: Row, options: OptionMap): Row {
   return { product_id: value === "product" ? options.packedProducts[0]?.value ?? null : null };
+}
+
+/** A packing-waste line's unit: product lost is weighed in kg, an item lost is in its own unit (a carton is a piece). */
+export function packingWasteUnitFor(row: Row, options: OptionMap): string | null {
+  if (row.category === "product" || !row.product_id) return "kg";
+  return options.itemUnits.find((option) => option.value === row.product_id)?.label || null;
 }
 
 /** The packing type of the row's chosen product, read from the option list built from the products. */
@@ -338,7 +349,9 @@ export const SECTIONS: SectionDef[] = [
       {
         payloadKey: "rows",
         shape: "rows",
-        serverDerived: ["run_id", "packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id"],
+        serverDerived: [
+          "run_id", "packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id", "waste_carton_quantity",
+        ],
         addLabel: L("Add a lot", "Ajouter un lot"),
         columns: [
           { ...pick("product_id", L("Product", "Produit"), "finishedProducts", true), resets: ["of_id"] },
@@ -349,7 +362,7 @@ export const SECTIONS: SectionDef[] = [
           { key: "film_quantity", label: L("Film (kg)", "Film (kg)"), kind: "expression" },
           pick("carton_product_id", L("Carton type", "Type carton"), "itemsCarton"),
           num("carton_quantity", L("Cartons", "Cartons")),
-          num("waste_carton_quantity", L("Empty cartons", "Cartons vides")),
+          derived("waste_carton_quantity", L("Empty cartons (from packing waste)", "Cartons vides (des déchets cond.)")),
           pick("tape_product_id", L("Reel type", "Type bobine"), "itemsBobine"),
           num("tape_quantity", L("Reels", "Bobines")),
           pick("scotch_product_id", L("Scotch type", "Type scotch"), "itemsScotch"),
@@ -388,7 +401,10 @@ export const SECTIONS: SectionDef[] = [
     icon: PackageX,
     short: L("Packing waste", "Déchets cond."),
     title: L("Packing waste", "Déchets de conditionnement"),
-    hint: L("Product, film and cartons lost while packing.", "Produit, film et cartons perdus au conditionnement."),
+    hint: L(
+      "Product, film, cartons, scotch and ribbon lost while packing; film and product in kg, the others in pieces. Lost cartons are the lot's empty cartons.",
+      "Produit, film, cartons, scotch et ruban perdus au conditionnement ; film et produit en kg, le reste en pièces. Les cartons perdus sont les cartons vides du lot.",
+    ),
     parts: [
       {
         payloadKey: "waste_lines",
@@ -398,7 +414,9 @@ export const SECTIONS: SectionDef[] = [
           when("occurred_at", L("Time", "Heure")),
           { ...pick("category", L("Kind", "Type"), "wastePacking", true), fills: packingWasteItemFor },
           { ...pick("product_id", L("Item", "Article"), "products"), optionsFor: packingWasteItems },
-          num("quantity", L("Quantity (kg)", "Quantité (kg)")),
+          num("quantity", L("Quantity", "Quantité")),
+          { ...derived("unit", L("Unit", "Unité")), valueFor: packingWasteUnitFor },
+          { ...pick("packing_row_id", L("Lot", "Lot"), "packingRows"), emptyHint: SAVE_PACKING_FIRST },
           text("note", L("Cause", "Cause")),
         ],
       },
