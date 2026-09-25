@@ -11,11 +11,11 @@ from ulid import ULID
 
 from core.domain.result import Ok
 from modules.procurement.api.service import PurchaseOrderService
-from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.api.production_analytics_service import _trend_windows, build_analytics_payload
-from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import ConditionnementReportDetail, DailyReportDetail, SemolinaLine
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-production-analytics"
@@ -129,28 +129,32 @@ def _confirm_a_receipt(db, env, *, quantity: float, base_cost: float, invoice_da
     assert isinstance(confirmed, Ok), getattr(confirmed, "message", "")
 
 
-def _validate_a_day(db, env, of, *, report_date: datetime.date, semoule_qty: float, packets: int) -> None:
-    daily = ProductionReportService(db).create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        equipment_id=env["equipment"], shift="morning",
-        detail=DailyReportDetail(
-            semolina_lines=(SemolinaLine(product_id=env["semoule"], quantity=semoule_qty, location_id=env["location"]),),
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    validated = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    assert isinstance(validated, Ok), getattr(validated, "message", "")
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
 
-    cond = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        shift="morning", equipment_id=env["equipment"],
-        detail=ConditionnementReportDetail(
-            packets_counted=packets, packaging_location_id=env["location"], finished_goods_location_id=env["location"],
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    validated_cond = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    assert isinstance(validated_cond, Ok), getattr(validated_cond, "message", "")
+
+def _validate_a_day(db, env, of, *, report_date: datetime.date, semoule_qty: float, packets: int) -> None:
+    """One validated shift: a run pouring `semoule_qty` tonnes and a packing row counting `packets`."""
+    service = ShiftReportService(db)
+    actor = env["actor"]
+    shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=actor, work_center_id=env["work_center"], report_date=report_date, shift="morning"))["id"]
+    run = {
+        "of_id": of.id, "equipment_id": env["equipment"], "start_time": "07:00", "end_time": "14:00",
+        "production_minutes": 420, "finished_product_quantity": 0, "raw_material_location_id": env["location"],
+    }
+    versements = [{"product_id": env["semoule"], "quantity": semoule_qty, "location_id": env["location"]}]
+    _ok(service.save_section(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key="runs",
+                             payload={"runs": [run], "versements": versements}))
+    packing = {
+        "of_id": of.id, "equipment_id": env["equipment"], "packets_counted": packets,
+        "packaging_location_id": env["location"], "finished_goods_location_id": env["location"],
+    }
+    _ok(service.save_section(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key="packing", payload={"rows": [packing]}))
+    for key in SECTION_KEYS:
+        hand_in = service.submit_section if key in ("runs", "packing") else service.declare_nothing
+        _ok(hand_in(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id))
 
 
 def test_analytics_payload_current_period_matches_totals_and_never_includes_fixed_charges(db, env, of):
