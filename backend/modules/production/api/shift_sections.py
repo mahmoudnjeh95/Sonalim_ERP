@@ -231,7 +231,8 @@ _PACKING = RowSet(
         *_text(
             "film_product_id", "carton_product_id", "tape_product_id", "scotch_product_id", "ruban_product_id",
             "film_supplier_id", "carton_supplier_id", "tape_supplier_id", "scotch_supplier_id", "ruban_supplier_id",
-            "packaging_location_id", "finished_goods_location_id",
+            "packaging_location_id", "film_location_id", "carton_location_id", "scotch_location_id", "ruban_location_id",
+            "finished_goods_location_id",
         ),
         _num("snapshot_net_weight_grams", None),
         _num("snapshot_packets_per_carton", None),
@@ -867,17 +868,21 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
                     f"ligne de conditionnement {index} : le produit n'a pas d'emplacement de stockage par défaut ; "
                     "définissez-en un sur le produit, puis enregistrez à nouveau la section",
                 )
-            uses_packaging = any(
-                float(row.get(quantity) or 0) > 0
-                for quantity in ("film_quantity", "carton_quantity", "tape_quantity", "scotch_quantity", "ruban_quantity")
-            )
-            if uses_packaging and not row.get("packaging_location_id"):
-                return Err(
-                    "NO_DEFAULT_LOCATION",
-                    f"packing row {index}: a packaging item has no default storage location; set one on the item, then save the section again",
-                    f"ligne de conditionnement {index} : un article d'emballage n'a pas d'emplacement de stockage par défaut ; "
-                    "définissez-en un sur l'article, puis enregistrez à nouveau la section",
-                )
+            # Each packaging item posts from its own default store; a row with several items
+            # no longer needs them to share one (see packing_derivation_service).
+            for quantity_key, location_key in (
+                ("film_quantity", "film_location_id"),
+                ("carton_quantity", "carton_location_id"),
+                ("scotch_quantity", "scotch_location_id"),
+                ("ruban_quantity", "ruban_location_id"),
+            ):
+                if float(row.get(quantity_key) or 0) > 0 and not (row.get(location_key) or row.get("packaging_location_id")):
+                    return Err(
+                        "NO_DEFAULT_LOCATION",
+                        f"packing row {index}: a packaging item has no default storage location; set one on the item, then save the section again",
+                        f"ligne de conditionnement {index} : un article d'emballage n'a pas d'emplacement de stockage par défaut ; "
+                        "définissez-en un sur l'article, puis enregistrez à nouveau la section",
+                    )
             detail = ConditionnementReportDetail(
                 packets_counted=float(row.get("packets_counted") or 0),
                 film_quantity=float(row.get("film_quantity") or 0),
@@ -889,6 +894,10 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
                 scotch_product_id=row.get("scotch_product_id"),
                 ruban_product_id=row.get("ruban_product_id"),
                 packaging_location_id=row.get("packaging_location_id"),
+                film_location_id=row.get("film_location_id"),
+                carton_location_id=row.get("carton_location_id"),
+                scotch_location_id=row.get("scotch_location_id"),
+                ruban_location_id=row.get("ruban_location_id"),
                 finished_goods_location_id=row.get("finished_goods_location_id"),
             )
             checked = validate_conditionnement_stock_targets(detail)
