@@ -43,18 +43,6 @@ def resolve_packing_order(
     return None, "OF_AMBIGUOUS"
 
 
-def pick_packaging_location(locations: Iterable[str | None]) -> tuple[str | None, bool]:
-    """The one store all of a row's packaging comes from: `(location, conflict)`.
-
-    Stock posting draws every packaging item of a row from a single store, so items with
-    different default stores cannot be posted as one row: that is a conflict, not a guess.
-    """
-    found = {location for location in locations if location}
-    if len(found) == 1:
-        return next(iter(found)), False
-    return None, len(found) > 1
-
-
 def carton_waste_owners(
     packing_rows: Iterable[tuple[str, str | None]], waste_lines: Iterable[tuple[str, str | None, str | None]]
 ) -> dict[str, str]:
