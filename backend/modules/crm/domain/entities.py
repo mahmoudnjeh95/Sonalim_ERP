@@ -26,7 +26,11 @@ class Lead:
 
 def transition(lead: Lead, new_status: str) -> Result[Lead]:
     if new_status not in VALID_TRANSITIONS.get(lead.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move lead from {lead.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move lead from {lead.status} to {new_status}",
+            f"impossible de faire passer le prospect de {lead.status} à {new_status}",
+        )
     return Ok(
         Lead(
             id=lead.id,
@@ -43,5 +47,9 @@ def transition(lead: Lead, new_status: str) -> Result[Lead]:
 
 def validate_disqualify_reason(reason: str) -> Result[None]:
     if not reason.strip():
-        return Err("EMPTY_REASON", "a reason is required to disqualify a lead")
+        return Err(
+            "EMPTY_REASON",
+            "a reason is required to disqualify a lead",
+            "un motif est obligatoire pour disqualifier un prospect",
+        )
     return Ok(None)

@@ -78,14 +78,14 @@ class LocationService:
             (location_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"location {location_id} not found")
+            return Err("NOT_FOUND", f"location {location_id} not found", f"emplacement {location_id} introuvable")
 
         updated_code = code if code is not None else row[1]
         updated_name = name if name is not None else row[2]
         if not updated_code.strip():
-            return Err("INVALID_CODE", "code is required")
+            return Err("INVALID_CODE", "code is required", "le code est obligatoire")
         if not updated_name.strip():
-            return Err("INVALID_NAME", "name is required")
+            return Err("INVALID_NAME", "name is required", "le nom est obligatoire")
 
         updated_blocked = is_blocked if is_blocked is not None else row[3]
         updated_reason = blocked_reason if blocked_reason is not None else row[4]

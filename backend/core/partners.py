@@ -6,7 +6,7 @@ from pydantic import BaseModel
 from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.partner import Partner, PartnerTagLink
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 
 router = APIRouter(prefix="/core/partners", tags=["core.partners"])
@@ -82,7 +82,7 @@ def create_partner(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, err_detail(result))
         connection.commit()
     return partner_response(result.value)
 
@@ -105,7 +105,10 @@ def get_partner(partner_id: str, tenant: TenantContext = Depends(require_permiss
         service = CoreService(connection)
         partner = service.get_partner(tenant.tenant_id, partner_id)
     if partner is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"partner {partner_id} not found"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "NOT_FOUND", "message": f"partner {partner_id} not found", "message_fr": f"partenaire {partner_id} introuvable"},
+        )
     return partner_response(partner)
 
 
@@ -129,7 +132,7 @@ def update_partner(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return partner_response(result.value)
 
@@ -142,7 +145,7 @@ def archive_partner(partner_id: str, tenant: TenantContext = Depends(require_per
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return partner_response(result.value)
 
@@ -155,7 +158,7 @@ def activate_partner(partner_id: str, tenant: TenantContext = Depends(require_pe
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return partner_response(result.value)
 
@@ -182,7 +185,7 @@ def set_partner_tags(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return [partner_tag_link_response(link) for link in result.value]
 
@@ -208,6 +211,6 @@ def update_partner_tag_link(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return partner_tag_link_response(result.value)

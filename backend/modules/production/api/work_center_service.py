@@ -63,7 +63,7 @@ class WorkCenterService:
             (work_center_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"work center {work_center_id} not found")
+            return Err("NOT_FOUND", f"work center {work_center_id} not found", f"poste de charge {work_center_id} introuvable")
 
         current = WorkCenter(id=row[0], code=row[1], name=row[2], hourly_rate=float(row[3]), is_blocked=row[4], blocked_reason=row[5])
         updated_code = code if code is not None else current.code
@@ -110,7 +110,7 @@ class WorkCenterService:
             (work_center_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"work center {work_center_id} not found")
+            return Err("NOT_FOUND", f"work center {work_center_id} not found", f"poste de charge {work_center_id} introuvable")
 
         work_center = WorkCenter(id=row[0], code=row[1], name=row[2], hourly_rate=float(row[3]), is_blocked=row[4], blocked_reason=row[5])
         result = block_work_center(work_center, reason)
@@ -141,7 +141,7 @@ class WorkCenterService:
             (work_center_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"work center {work_center_id} not found")
+            return Err("NOT_FOUND", f"work center {work_center_id} not found", f"poste de charge {work_center_id} introuvable")
 
         work_center = WorkCenter(id=row[0], code=row[1], name=row[2], hourly_rate=float(row[3]), is_blocked=row[4], blocked_reason=row[5])
         result = unblock_work_center(work_center)

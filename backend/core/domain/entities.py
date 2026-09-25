@@ -21,11 +21,15 @@ class Currency:
 
 def validate_new_currency(*, code: str, name: str, decimal_places: int) -> Result[None]:
     if len(code.strip()) != 3 or not code.strip().isalpha():
-        return Err("INVALID_CODE", "currency code must be a 3-letter ISO 4217 code")
+        return Err(
+            "INVALID_CODE",
+            "currency code must be a 3-letter ISO 4217 code",
+            "le code devise doit être un code ISO 4217 à 3 lettres",
+        )
     if not name.strip():
-        return Err("INVALID_NAME", "currency name is required")
+        return Err("INVALID_NAME", "currency name is required", "le nom de la devise est obligatoire")
     if decimal_places < 0:
-        return Err("INVALID_DECIMAL_PLACES", "decimal_places must be >= 0")
+        return Err("INVALID_DECIMAL_PLACES", "decimal_places must be >= 0", "decimal_places doit être >= 0")
     return Ok(None)
 
 
@@ -60,7 +64,11 @@ def validate_quantity_for_uom(quantity: float, uom: UnitOfMeasure) -> Result[Non
     the intent is "must be a whole count", not "must be exactly representable
     in binary"."""
     if uom.is_integer_only and abs(quantity - round(quantity)) > 1e-6:
-        return Err("QUANTITY_MUST_BE_INTEGER", f"{uom.display} is a whole-count unit; {quantity} is not a whole number")
+        return Err(
+            "QUANTITY_MUST_BE_INTEGER",
+            f"{uom.display} is a whole-count unit; {quantity} is not a whole number",
+            f"{uom.display} est une unité de mesure à quantité entière ; {quantity} n'est pas un nombre entier",
+        )
     return Ok(None)
 
 
@@ -130,40 +138,64 @@ def validate_new_product(
     tax_rate: float = 0,
 ) -> Result[None]:
     if not sku.strip():
-        return Err("INVALID_SKU", "sku is required")
+        return Err("INVALID_SKU", "sku is required", "sku est obligatoire")
     if not name.strip():
-        return Err("INVALID_NAME", "name is required")
+        return Err("INVALID_NAME", "name is required", "le nom est obligatoire")
     if product_type not in PRODUCT_TYPES:
-        return Err("INVALID_PRODUCT_TYPE", f"product_type must be one of {sorted(PRODUCT_TYPES)}")
+        return Err(
+            "INVALID_PRODUCT_TYPE",
+            f"product_type must be one of {sorted(PRODUCT_TYPES)}",
+            f"product_type doit être l'un de {sorted(PRODUCT_TYPES)}",
+        )
     if not uom_id.strip():
-        return Err("INVALID_UOM", "uom_id is required")
+        return Err("INVALID_UOM", "uom_id is required", "uom_id est obligatoire")
     if net_weight_grams is not None and net_weight_grams <= 0:
-        return Err("INVALID_WEIGHT", "net_weight_grams must be positive")
+        return Err("INVALID_WEIGHT", "net_weight_grams must be positive", "net_weight_grams doit être positif")
     if empty_packaging_weight_grams is not None and empty_packaging_weight_grams <= 0:
-        return Err("INVALID_WEIGHT", "empty_packaging_weight_grams must be positive")
+        return Err(
+            "INVALID_WEIGHT",
+            "empty_packaging_weight_grams must be positive",
+            "empty_packaging_weight_grams doit être positif",
+        )
     if sachets_per_package is not None and sachets_per_package <= 0:
-        return Err("INVALID_QUANTITY", "sachets_per_package must be positive")
+        return Err("INVALID_QUANTITY", "sachets_per_package must be positive", "sachets_per_package doit être positif")
     if packets_per_carton is not None and packets_per_carton <= 0:
-        return Err("INVALID_PACKETS_PER_CARTON", "packets_per_carton must be positive")
+        return Err(
+            "INVALID_PACKETS_PER_CARTON",
+            "packets_per_carton must be positive",
+            "packets_per_carton doit être positif",
+        )
     if carton_weight_grams is not None and carton_weight_grams <= 0:
-        return Err("INVALID_WEIGHT", "carton_weight_grams must be positive")
+        return Err("INVALID_WEIGHT", "carton_weight_grams must be positive", "carton_weight_grams doit être positif")
     if cartons_per_pallet is not None and cartons_per_pallet <= 0:
-        return Err("INVALID_QUANTITY", "cartons_per_pallet must be positive")
+        return Err("INVALID_QUANTITY", "cartons_per_pallet must be positive", "cartons_per_pallet doit être positif")
     if lot_serial_tracking not in LOT_SERIAL_TRACKING_MODES:
-        return Err("INVALID_LOT_SERIAL_TRACKING", f"lot_serial_tracking must be one of {sorted(LOT_SERIAL_TRACKING_MODES)}")
+        return Err(
+            "INVALID_LOT_SERIAL_TRACKING",
+            f"lot_serial_tracking must be one of {sorted(LOT_SERIAL_TRACKING_MODES)}",
+            f"lot_serial_tracking doit être l'un de {sorted(LOT_SERIAL_TRACKING_MODES)}",
+        )
     if expiry_date_policy not in EXPIRY_DATE_POLICIES:
-        return Err("INVALID_EXPIRY_DATE_POLICY", f"expiry_date_policy must be one of {sorted(EXPIRY_DATE_POLICIES)}")
+        return Err(
+            "INVALID_EXPIRY_DATE_POLICY",
+            f"expiry_date_policy must be one of {sorted(EXPIRY_DATE_POLICIES)}",
+            f"expiry_date_policy doit être l'un de {sorted(EXPIRY_DATE_POLICIES)}",
+        )
     if selling_price < 0:
-        return Err("INVALID_PRICE", "selling_price cannot be negative")
+        return Err("INVALID_PRICE", "selling_price cannot be negative", "selling_price ne peut pas être négatif")
     if purchase_price < 0:
-        return Err("INVALID_PRICE", "purchase_price cannot be negative")
+        return Err("INVALID_PRICE", "purchase_price cannot be negative", "purchase_price ne peut pas être négatif")
     if tax_rate < 0:
-        return Err("INVALID_TAX_RATE", "tax_rate cannot be negative")
+        return Err("INVALID_TAX_RATE", "tax_rate cannot be negative", "tax_rate ne peut pas être négatif")
     if min_selling_price is not None:
         if min_selling_price < 0:
-            return Err("INVALID_PRICE", "min_selling_price cannot be negative")
+            return Err("INVALID_PRICE", "min_selling_price cannot be negative", "min_selling_price ne peut pas être négatif")
         if min_selling_price > selling_price:
-            return Err("INVALID_PRICE", "min_selling_price cannot exceed selling_price")
+            return Err(
+                "INVALID_PRICE",
+                "min_selling_price cannot exceed selling_price",
+                "min_selling_price ne peut pas dépasser selling_price",
+            )
     return Ok(None)
 
 
@@ -176,7 +208,7 @@ class ProductAttribute:
 
 def validate_new_product_attribute(*, name: str) -> Result[None]:
     if not name.strip():
-        return Err("INVALID_NAME", "attribute name is required")
+        return Err("INVALID_NAME", "attribute name is required", "le nom de l'attribut est obligatoire")
     return Ok(None)
 
 
@@ -190,7 +222,7 @@ class ProductAttributeValue:
 
 def validate_new_product_attribute_value(*, value: str) -> Result[None]:
     if not value.strip():
-        return Err("INVALID_VALUE", "attribute value is required")
+        return Err("INVALID_VALUE", "attribute value is required", "la valeur de l'attribut est obligatoire")
     return Ok(None)
 
 
@@ -203,5 +235,5 @@ class ProductTag:
 
 def validate_new_product_tag(*, name: str) -> Result[None]:
     if not name.strip():
-        return Err("INVALID_NAME", "tag name is required")
+        return Err("INVALID_NAME", "tag name is required", "le nom de l'étiquette est obligatoire")
     return Ok(None)

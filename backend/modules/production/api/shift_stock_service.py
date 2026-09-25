@@ -111,6 +111,8 @@ class ShiftStockService:
             return Err(
                 "REGRIND_DEFAULT_MISSING",
                 "no regrind output product is configured — set one in Production Settings before regrinding",
+                "aucun produit de sortie de rebroyat n'est configuré — définissez-en un dans les paramètres de"
+                " production avant de rebroyer",
             )
 
         work_center_id = regrind_work_center_id or run.get("work_center_id")
@@ -121,7 +123,11 @@ class ShiftStockService:
             ).fetchone()
             work_center_id = row[0] if row is not None else None
         if work_center_id is None:
-            return Err("MISSING_WORK_CENTER", "cannot open a regrind order without a work center")
+            return Err(
+                "MISSING_WORK_CENTER",
+                "cannot open a regrind order without a work center",
+                "impossible d'ouvrir un OF de rebroyat sans poste de charge",
+            )
 
         scrap = ScrapService(self._connection).record_scrap(
             tenant_id=tenant_id, actor_id=actor_id, work_order_id=run["of_id"], work_center_id=work_center_id,
@@ -359,6 +365,8 @@ class ShiftStockService:
                         "REGRIND_ALREADY_COMPLETED",
                         "the rebroyat order this run opened has already been ground and received into stock;"
                         " it cannot be unwound automatically",
+                        "l'OF de rebroyat que ce passage a ouvert a déjà été broyé et reçu en stock ;"
+                        " il ne peut pas être annulé automatiquement",
                     )
 
         stock = self._stock
@@ -374,6 +382,7 @@ class ShiftStockService:
                 return Err(
                     "REGRIND_STOCK_MOVE_NOT_FOUND",
                     f"no stock receipt found for regrind order {batch_of_id}; refusing to force-delete blind",
+                    f"aucune réception de stock trouvée pour l'OF de rebroyat {batch_of_id} ; suppression forcée refusée à l'aveugle",
                 )
             location_id = receipt[0]["location_id"]
             quantity = float(actual_output_quantity)
@@ -414,7 +423,11 @@ class ShiftStockService:
         other = [row for row in batch_rows if row[1] != "closed"]
 
         if len(closed) > 1:
-            return Err("REGRIND_MULTIPLE_CLOSED_BATCHES", "more than one closed rebroyat order is tied to this run; resolve manually")
+            return Err(
+                "REGRIND_MULTIPLE_CLOSED_BATCHES",
+                "more than one closed rebroyat order is tied to this run; resolve manually",
+                "plus d'un OF de rebroyat clôturé est lié à ce passage ; résolvez manuellement",
+            )
 
         removed_scrap = 0
         if other:
@@ -448,6 +461,9 @@ class ShiftStockService:
                     f"the rebroyat order this run opened already ground {input_quantity_total:g} kg and is"
                     f" closed; the corrected {new_regrind_quantity:g} kg is {delta:g} kg more — confirm to open a"
                     " new rebroyat order for the difference",
+                    f"l'OF de rebroyat que ce passage a ouvert a déjà broyé {input_quantity_total:g} kg et est"
+                    f" clôturé ; le chiffre corrigé de {new_regrind_quantity:g} kg est {delta:g} kg de plus — confirmez pour ouvrir un"
+                    " nouvel OF de rebroyat pour la différence",
                 )
             scrap = self.record_regrind(tenant_id=tenant_id, actor_id=actor_id, run=run, regrind_work_center_id=None, quantity_override=delta)
             if isinstance(scrap, Err):
@@ -457,7 +473,11 @@ class ShiftStockService:
         stock = self._stock
         receipt = stock.list_stock_moves(tenant_id=tenant_id, product_id=product_id, move_type="production", reference=f"work_order:{batch_of_id}", limit=1)
         if not receipt:
-            return Err("REGRIND_STOCK_MOVE_NOT_FOUND", f"no stock receipt found for regrind order {batch_of_id}; refusing to adjust stock blind")
+            return Err(
+                "REGRIND_STOCK_MOVE_NOT_FOUND",
+                f"no stock receipt found for regrind order {batch_of_id}; refusing to adjust stock blind",
+                f"aucune réception de stock trouvée pour l'OF de rebroyat {batch_of_id} ; ajustement de stock refusé à l'aveugle",
+            )
         location_id = receipt[0]["location_id"]
         adjusted = stock.adjust_stock(
             tenant_id=tenant_id, product_id=product_id, location_id=location_id, delta=delta,

@@ -73,13 +73,21 @@ class FollowUp:
 
 def transition_quality_report(report: QualityReport, new_status: str) -> Result[QualityReport]:
     if new_status not in QUALITY_REPORT_TRANSITIONS.get(report.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move quality report from {report.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move quality report from {report.status} to {new_status}",
+            f"impossible de faire passer le rapport qualité de {report.status} à {new_status}",
+        )
     return Ok(replace(report, status=new_status))
 
 
 def transition_follow_up(follow_up: FollowUp, new_status: str) -> Result[FollowUp]:
     if new_status not in FOLLOW_UP_TRANSITIONS.get(follow_up.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move follow-up from {follow_up.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move follow-up from {follow_up.status} to {new_status}",
+            f"impossible de faire passer le suivi de {follow_up.status} à {new_status}",
+        )
     return Ok(replace(follow_up, status=new_status))
 
 
@@ -93,11 +101,15 @@ def validate_conformity_line(line: ConformityLine) -> Result[None]:
     for field in ("conforming_cartons", "non_conforming_cartons"):
         value = getattr(line, field)
         if value < 0:
-            return Err("INVALID_QUANTITY", f"{field} cannot be negative")
+            return Err("INVALID_QUANTITY", f"{field} cannot be negative", f"{field} ne peut pas être négatif")
         if abs(value - round(value)) > 1e-6:
-            return Err("QUANTITY_MUST_BE_INTEGER", f"{field} must be a whole number of cartons")
+            return Err(
+                "QUANTITY_MUST_BE_INTEGER", f"{field} must be a whole number of cartons", f"{field} doit être un nombre entier de cartons"
+            )
     if line.non_conforming_cartons > 0 and not (line.defect_details or "").strip():
-        return Err("MISSING_DEFECT_DETAILS", "non-conforming cartons need defect details")
+        return Err(
+            "MISSING_DEFECT_DETAILS", "non-conforming cartons need defect details", "les cartons non conformes ont besoin du détail du défaut"
+        )
     return Ok(None)
 
 
@@ -111,7 +123,11 @@ def follow_up_window_end(report_date: datetime.date, window_days: int) -> dateti
 
 def validate_window_days(window_days: int) -> Result[None]:
     if window_days <= 0:
-        return Err("INVALID_WINDOW", "the follow-up window must be at least one day")
+        return Err("INVALID_WINDOW", "the follow-up window must be at least one day", "la fenêtre de suivi doit être d'au moins un jour")
     if window_days > 3650:
-        return Err("INVALID_WINDOW", "a follow-up window longer than ten years is almost certainly a typo")
+        return Err(
+            "INVALID_WINDOW",
+            "a follow-up window longer than ten years is almost certainly a typo",
+            "une fenêtre de suivi de plus de dix ans est presque certainement une erreur de saisie",
+        )
     return Ok(None)

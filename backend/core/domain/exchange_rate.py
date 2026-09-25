@@ -19,7 +19,7 @@ class ExchangeRate:
 
 def validate_rate(rate_to_base: float) -> Result[None]:
     if rate_to_base <= 0:
-        return Err("INVALID_RATE", "rate_to_base must be positive")
+        return Err("INVALID_RATE", "rate_to_base must be positive", "rate_to_base doit être positif")
     return Ok(None)
 
 

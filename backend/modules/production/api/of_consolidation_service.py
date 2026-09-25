@@ -83,7 +83,7 @@ class OfConsolidationService:
             (of_id, tenant_id),
         ).fetchone()
         if work_order is None:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         reference, product_id, planned_quantity, status, work_center_id, start_date, closed_at = work_order
 
         # Every product the order's validated packing reports cover, earliest first: one order can

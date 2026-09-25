@@ -40,7 +40,7 @@ class RecipeCheckService:
             (of_id, tenant_id),
         ).fetchone()
         if work_order is None:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         reference, recipe_id = work_order
 
         poured = self._poured_mix(tenant_id=tenant_id, of_id=of_id)

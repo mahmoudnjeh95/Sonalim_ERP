@@ -27,7 +27,7 @@ class Partner:
 
 def validate_partner_name(name: str) -> Result[None]:
     if not name.strip():
-        return Err("INVALID_NAME", "partner name is required")
+        return Err("INVALID_NAME", "partner name is required", "le nom du partenaire est obligatoire")
     return Ok(None)
 
 
@@ -43,9 +43,9 @@ class PartnerTagLink:
 
 def validate_partner_tag_link(*, lead_time_days: int | None, min_order_qty: float | None) -> Result[None]:
     if lead_time_days is not None and lead_time_days < 0:
-        return Err("INVALID_LEAD_TIME", "lead_time_days cannot be negative")
+        return Err("INVALID_LEAD_TIME", "lead_time_days cannot be negative", "lead_time_days ne peut pas être négatif")
     if min_order_qty is not None and min_order_qty < 0:
-        return Err("INVALID_MIN_ORDER_QTY", "min_order_qty cannot be negative")
+        return Err("INVALID_MIN_ORDER_QTY", "min_order_qty cannot be negative", "min_order_qty ne peut pas être négatif")
     return Ok(None)
 
 
@@ -64,7 +64,11 @@ class SuggestedVendor:
 
 def transition_partner(partner: Partner, new_status: str) -> Result[Partner]:
     if new_status not in PARTNER_VALID_TRANSITIONS.get(partner.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move partner from {partner.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move partner from {partner.status} to {new_status}",
+            f"impossible de faire passer le partenaire de {partner.status} à {new_status}",
+        )
     return Ok(
         Partner(
             id=partner.id,

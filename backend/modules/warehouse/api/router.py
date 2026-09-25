@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from core.db import get_connection
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
 from modules.warehouse.api.location_service import LocationService
@@ -126,7 +126,7 @@ def update_location(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _location_response(result.value)
 
@@ -231,7 +231,7 @@ def reserve_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_409_CONFLICT, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_409_CONFLICT, err_detail(result))
         connection.commit()
     return {
         "location_id": result.value.location_id,
@@ -257,7 +257,7 @@ def issue_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_409_CONFLICT, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_409_CONFLICT, err_detail(result))
         connection.commit()
     return {
         "location_id": result.value.location_id,
@@ -283,7 +283,7 @@ def adjust_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_409_CONFLICT, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_409_CONFLICT, err_detail(result))
         connection.commit()
     return {
         "location_id": result.value.location_id,
@@ -311,7 +311,7 @@ def transfer_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_409_CONFLICT, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_409_CONFLICT, err_detail(result))
         connection.commit()
     issued, received = result.value
     return {
@@ -342,7 +342,7 @@ def admin_set_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return {
         "location_id": result.value.location_id,
@@ -368,7 +368,7 @@ def delete_stock_item(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
 
 
@@ -446,7 +446,7 @@ def set_lot_expiry(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_lot_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_lot_err_status(result.code), err_detail(result))
         connection.commit()
     return _lot_response(result.value)
 
@@ -464,6 +464,6 @@ def transition_lot(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_lot_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_lot_err_status(result.code), err_detail(result))
         connection.commit()
     return _lot_response(result.value)

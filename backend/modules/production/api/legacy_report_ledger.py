@@ -60,7 +60,11 @@ def _delete_old_rows(connection: psycopg.Connection, tenant_id: str, report_ids:
         (tenant_id, report_ids),
     ).fetchone()
     if posted is not None:
-        return Err("ALREADY_POSTED", f"report {posted[0]} is already validated and has posted its stock")
+        return Err(
+            "ALREADY_POSTED",
+            f"report {posted[0]} is already validated and has posted its stock",
+            f"le rapport {posted[0]} est déjà validé et a versé son stock",
+        )
     for table in ("report_waste_lines", "report_semolina_lines", "report_downtime_lines"):
         connection.execute(f"DELETE FROM production.{table} WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
     # Packing reports point at their daily report, so they go first.
@@ -124,7 +128,11 @@ def materialize_shift(
         (shift_report_id, tenant_id),
     )
     if not runs and not packing:
-        return Err("NOTHING_TO_VALIDATE", "the shift has no production run and no packing row to validate")
+        return Err(
+            "NOTHING_TO_VALIDATE",
+            "the shift has no production run and no packing row to validate",
+            "le shift n'a ni passage de production ni ligne de conditionnement à valider",
+        )
 
     machines = [
         (machine.id, machine.production_stage, machine.status)
@@ -142,7 +150,11 @@ def materialize_shift(
         (shift_report_id, tenant_id),
     ).fetchone()
     if open_stop is not None and not provisional:
-        return Err("OPEN_STOP", "a machine stop is still ongoing; end it before validating the shift")
+        return Err(
+            "OPEN_STOP",
+            "a machine stop is still ongoing; end it before validating the shift",
+            "un arrêt machine est toujours en cours ; terminez-le avant de valider le shift",
+        )
 
     report_ids = [r["id"] for r in runs] + [p["id"] for p in packing]
     cleared = _delete_old_rows(connection, tenant_id, report_ids)
@@ -230,7 +242,11 @@ def materialize_shift(
         default = first_run if line["section_key"] == "waste_production" else first_packing
         owner = line["run_id"] or line["packing_row_id"] or default
         if owner is None:
-            return Err("INVALID_VALUE", f"a {line['section_key']} line has no report to belong to")
+            return Err(
+                "INVALID_VALUE",
+                f"a {line['section_key']} line has no report to belong to",
+                f"une ligne {line['section_key']} n'a pas de rapport auquel appartenir",
+            )
         connection.execute(
             "INSERT INTO production.report_waste_lines (id, tenant_id, report_id, category, product_id, quantity, note, line_order) "
             "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",

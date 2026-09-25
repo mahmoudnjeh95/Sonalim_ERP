@@ -1,4 +1,4 @@
-import { apiFetch, ApiError } from "../../lib/api";
+import { apiFetch, apiErrorFromResponse, networkError } from "../../lib/api";
 
 // --- Products & units of measure -----------------------------------------
 
@@ -803,11 +803,16 @@ export async function exportConsumptionBySupplier(
 ): Promise<Blob> {
   const query = consumptionQuery(params);
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  const response = await fetch(`${API_BASE_URL}/production/reports/consumption-by-supplier/export${suffix}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/production/reports/consumption-by-supplier/export${suffix}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw networkError();
+  }
   if (!response.ok) {
-    throw new ApiError(response.status, "EXPORT_FAILED", response.statusText);
+    throw await apiErrorFromResponse(response);
   }
   return response.blob();
 }
@@ -822,11 +827,16 @@ export async function exportProductionRecap(
   params: { date: string; period: ProductionRecapPeriod },
 ): Promise<Blob> {
   const query = new URLSearchParams({ date: params.date, period: params.period });
-  const response = await fetch(`${API_BASE_URL}/production/reports/daily-recap/export?${query.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/production/reports/daily-recap/export?${query.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw networkError();
+  }
   if (!response.ok) {
-    throw new ApiError(response.status, "EXPORT_FAILED", response.statusText);
+    throw await apiErrorFromResponse(response);
   }
   return response.blob();
 }

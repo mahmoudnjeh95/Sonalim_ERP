@@ -22,7 +22,11 @@ class Invoice:
 
 def transition(invoice: Invoice, new_status: str) -> Result[Invoice]:
     if new_status not in VALID_TRANSITIONS.get(invoice.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move invoice from {invoice.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move invoice from {invoice.status} to {new_status}",
+            f"impossible de faire passer la facture de {invoice.status} à {new_status}",
+        )
     return Ok(
         Invoice(
             id=invoice.id,

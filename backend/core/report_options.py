@@ -23,7 +23,7 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.db import get_connection
-from core.domain.result import Err, Ok, Result
+from core.domain.result import Err, err_detail, Ok, Result
 from core.tenancy import TenantContext, require_permission, require_session
 
 router = APIRouter(prefix="/core", tags=["core.report_options"])
@@ -121,10 +121,10 @@ class ReportOptionsService:
         self, *, tenant_id: str, actor_id: str, kind: str, label: str, sort_order: int = 0
     ) -> Result[dict]:
         if kind not in VALID_KINDS:
-            return Err("INVALID_KIND", f"kind must be one of {VALID_KINDS}")
+            return Err("INVALID_KIND", f"kind must be one of {VALID_KINDS}", f"kind doit être l'un de {VALID_KINDS}")
         label = label.strip()
         if not label:
-            return Err("INVALID_LABEL", "an option needs a name")
+            return Err("INVALID_LABEL", "an option needs a name", "une option doit avoir un nom")
 
         existing = self._connection.execute(
             "SELECT id, is_active FROM core.report_options "
@@ -138,7 +138,7 @@ class ReportOptionsService:
                 return self.update_option(
                     tenant_id=tenant_id, actor_id=actor_id, option_id=existing[0], is_active=True
                 )
-            return Err("DUPLICATE_OPTION", f"a {kind} called {label!r} already exists")
+            return Err("DUPLICATE_OPTION", f"a {kind} called {label!r} already exists", f"un {kind} nommé {label!r} existe déjà")
 
         option_id = str(ULID())
         self._connection.execute(
@@ -171,12 +171,12 @@ class ReportOptionsService:
             (option_id, tenant_id),
         ).fetchone()
         if current is None:
-            return Err("NOT_FOUND", f"report option {option_id} not found")
+            return Err("NOT_FOUND", f"report option {option_id} not found", f"option de rapport {option_id} introuvable")
         kind, current_label, current_sort, current_active = current
 
         new_label = current_label if label is None else label.strip()
         if not new_label:
-            return Err("INVALID_LABEL", "an option needs a name")
+            return Err("INVALID_LABEL", "an option needs a name", "une option doit avoir un nom")
         if new_label.lower() != current_label.lower():
             clash = self._connection.execute(
                 "SELECT 1 FROM core.report_options "
@@ -184,7 +184,11 @@ class ReportOptionsService:
                 (tenant_id, kind, new_label, option_id),
             ).fetchone()
             if clash is not None:
-                return Err("DUPLICATE_OPTION", f"a {kind} called {new_label!r} already exists")
+                return Err(
+                    "DUPLICATE_OPTION",
+                    f"a {kind} called {new_label!r} already exists",
+                    f"un {kind} nommé {new_label!r} existe déjà",
+                )
 
         self._connection.execute(
             "UPDATE core.report_options SET label = %s, sort_order = %s, is_active = %s, updated_at = NOW() "
@@ -227,7 +231,7 @@ class ReportOptionsService:
             (option_id, tenant_id),
         ).fetchone()
         if current is None:
-            return Err("NOT_FOUND", f"report option {option_id} not found")
+            return Err("NOT_FOUND", f"report option {option_id} not found", f"option de rapport {option_id} introuvable")
         kind, label = current
 
         if self._is_in_use(tenant_id=tenant_id, kind=kind, label=label):
@@ -290,7 +294,7 @@ def _err_status(code: str) -> int:
 
 
 def _raise(result: Err) -> None:
-    raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+    raise HTTPException(_err_status(result.code), err_detail(result))
 
 
 @router.get("/report-options")

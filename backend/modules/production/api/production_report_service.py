@@ -347,15 +347,23 @@ class ProductionReportService:
             (of_id, tenant_id),
         ).fetchone()
         if work_order is None:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         of_status, of_work_center_id = work_order
         if of_status not in _OF_STATUSES_ACCEPTING_REPORTS:
-            return Err("OF_NOT_OPEN", f"work order {of_id} is {of_status} and accepts no new reports")
+            return Err(
+                "OF_NOT_OPEN",
+                f"work order {of_id} is {of_status} and accepts no new reports",
+                f"l'OF {of_id} est {of_status} et n'accepte plus de nouveaux rapports",
+            )
 
         if self._duplicate_report_exists(
             tenant_id=tenant_id, of_id=of_id, report_type="daily", report_date=report_date, shift=shift
         ):
-            return Err("DUPLICATE_REPORT", "a daily report already exists for this work order, date and shift")
+            return Err(
+                "DUPLICATE_REPORT",
+                "a daily report already exists for this work order, date and shift",
+                "un rapport journalier existe déjà pour cet OF, cette date et ce shift",
+            )
 
         report_id = str(ULID())
         self._connection.execute(
@@ -402,11 +410,19 @@ class ProductionReportService:
         """Edit a report the team still owns. Allowed only while it is a draft."""
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
         if header.report_type != "daily":
-            return Err("WRONG_REPORT_TYPE", f"report {report_id} is not a daily report")
+            return Err(
+                "WRONG_REPORT_TYPE",
+                f"report {report_id} is not a daily report",
+                f"le rapport {report_id} n'est pas un rapport journalier",
+            )
         if header.status != "draft":
-            return Err("NOT_EDITABLE", f"a {header.status} report cannot be edited as a draft")
+            return Err(
+                "NOT_EDITABLE",
+                f"a {header.status} report cannot be edited as a draft",
+                f"un rapport {header.status} ne peut pas être modifié comme brouillon",
+            )
 
         validation = validate_daily_detail(
             detail, waste_categories=custom_waste_categories(self._connection, tenant_id=tenant_id, report_type="daily")
@@ -442,7 +458,7 @@ class ProductionReportService:
         """
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
 
         result = transition_report(header, "submitted")
         if isinstance(result, Err):
@@ -453,11 +469,19 @@ class ProductionReportService:
         # attributed to a machine again -- so this is enforced here, not at
         # creation, the same way stock targets are.
         if not header.equipment_id:
-            return Err("MISSING_MACHINE", "a report must name the machine it ran on before it can be submitted")
+            return Err(
+                "MISSING_MACHINE",
+                "a report must name the machine it ran on before it can be submitted",
+                "un rapport doit nommer la machine sur laquelle il a tourné avant de pouvoir être rendu",
+            )
 
         detail = self._load_detail(tenant_id=tenant_id, report_id=report_id, report_type=header.report_type)
         if detail is None:
-            return Err("NOT_FOUND", f"report {report_id} has no detail to submit")
+            return Err(
+                "NOT_FOUND",
+                f"report {report_id} has no detail to submit",
+                f"le rapport {report_id} n'a pas de détail à rendre",
+            )
         validation = self._validate_detail(header.report_type, detail, tenant_id=tenant_id)
         if isinstance(validation, Err):
             return validation
@@ -504,17 +528,29 @@ class ProductionReportService:
         stay one query away.
         """
         if not reason.strip():
-            return Err("MISSING_REASON", "a correction must record why the figures were changed")
+            return Err(
+                "MISSING_REASON",
+                "a correction must record why the figures were changed",
+                "une correction doit enregistrer pourquoi les chiffres ont changé",
+            )
 
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
         if header.report_type != "daily":
-            return Err("WRONG_REPORT_TYPE", f"report {report_id} is not a daily report")
+            return Err(
+                "WRONG_REPORT_TYPE",
+                f"report {report_id} is not a daily report",
+                f"le rapport {report_id} n'est pas un rapport journalier",
+            )
         if header.status != "submitted":
             # Correcting a validated report means reversing stock that was already
             # posted against its figures; that path ships with Phase 5, not here.
-            return Err("NOT_CORRECTABLE", f"only a submitted report can be corrected, not a {header.status} one")
+            return Err(
+                "NOT_CORRECTABLE",
+                f"only a submitted report can be corrected, not a {header.status} one",
+                f"seul un rapport rendu peut être corrigé, pas un rapport {header.status}",
+            )
 
         validation = validate_daily_detail(
             detail, waste_categories=custom_waste_categories(self._connection, tenant_id=tenant_id, report_type="daily")
@@ -585,7 +621,7 @@ class ProductionReportService:
 
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
 
         result = transition_report(header, "validated")
         if isinstance(result, Err):
@@ -593,7 +629,11 @@ class ProductionReportService:
 
         detail = self._load_detail(tenant_id=tenant_id, report_id=report_id, report_type=header.report_type)
         if detail is None:
-            return Err("NOT_FOUND", f"report {report_id} has no detail to validate")
+            return Err(
+                "NOT_FOUND",
+                f"report {report_id} has no detail to validate",
+                f"le rapport {report_id} n'a pas de détail à valider",
+            )
 
         targets = self._validate_stock_targets(header.report_type, detail)
         if isinstance(targets, Err):
@@ -613,6 +653,7 @@ class ProductionReportService:
             return Err(
                 "SHORTFALL_COMMENT_REQUIRED",
                 "this report consumes more than the stock figure holds; validating it needs a comment explaining why",
+                "ce rapport consomme plus que ce que le stock détient ; le valider nécessite un commentaire expliquant pourquoi",
             )
 
         self._connection.execute(
@@ -661,7 +702,7 @@ class ProductionReportService:
                 (header.of_id, tenant_id),
             ).fetchone()
             if work_order is None:
-                return Err("NOT_FOUND", f"work order {header.of_id} not found")
+                return Err("NOT_FOUND", f"work order {header.of_id} not found", f"OF {header.of_id} introuvable")
 
             from modules.production.api.conditionnement_service import freeze_packaging_parameters
 
@@ -751,7 +792,7 @@ class ProductionReportService:
         """
         detail = self._load_detail(tenant_id=tenant_id, report_id=header.id, report_type=header.report_type)
         if detail is None:
-            return Err("NOT_FOUND", f"report {header.id} has no detail")
+            return Err("NOT_FOUND", f"report {header.id} has no detail", f"le rapport {header.id} n'a pas de détail")
 
         stock = ReportStockService(self._connection)
         if header.report_type == "daily":
@@ -765,7 +806,7 @@ class ProductionReportService:
                 (header.of_id, tenant_id),
             ).fetchone()
             if work_order is None:
-                return Err("NOT_FOUND", f"work order {header.of_id} not found")
+                return Err("NOT_FOUND", f"work order {header.of_id} not found", f"OF {header.of_id} introuvable")
 
             from modules.production.api.conditionnement_service import load_snapshot_packets_per_carton
 
@@ -866,6 +907,8 @@ class ProductionReportService:
                         "REGRIND_ALREADY_COMPLETED",
                         "the rebroyat order this report opened has already been ground and received into stock;"
                         " it cannot be unwound automatically",
+                        "l'OF de rebroyat ouvert par ce rapport a déjà été broyé et reçu en stock ;"
+                        " il ne peut pas être défait automatiquement",
                     )
 
         stock = StockService(self._connection)
@@ -884,6 +927,7 @@ class ProductionReportService:
                 return Err(
                     "REGRIND_STOCK_MOVE_NOT_FOUND",
                     f"no stock receipt found for regrind order {batch_of_id}; refusing to force-delete blind",
+                    f"aucune réception de stock trouvée pour l'OF de rebroyat {batch_of_id} ; suppression forcée refusée à l'aveugle",
                 )
             location_id = receipt[0]["location_id"]
             quantity = float(actual_output_quantity)
@@ -953,6 +997,7 @@ class ProductionReportService:
             return Err(
                 "REGRIND_MULTIPLE_CLOSED_BATCHES",
                 "more than one closed rebroyat order is tied to this report; resolve manually",
+                "plus d'un OF de rebroyat clôturé est lié à ce rapport ; à résoudre manuellement",
             )
 
         # Any other (non-closed) batch this report opened -- e.g. a still-open
@@ -1001,6 +1046,9 @@ class ProductionReportService:
                     f"the rebroyat order this report opened already ground {input_quantity_total:g} kg and is"
                     f" closed; the corrected {new_regrind_quantity:g} kg is {delta:g} kg more — confirm to open a"
                     " new rebroyat order for the difference",
+                    f"l'OF de rebroyat ouvert par ce rapport a déjà broyé {input_quantity_total:g} kg et est"
+                    f" clôturé ; les {new_regrind_quantity:g} kg corrigés sont {delta:g} kg de plus — confirmez pour"
+                    " ouvrir un nouvel OF de rebroyat pour la différence",
                 )
             scrap = self._record_regrind_scrap(
                 tenant_id=tenant_id, actor_id=actor_id, header=header, quantity_override=delta
@@ -1025,6 +1073,7 @@ class ProductionReportService:
             return Err(
                 "REGRIND_STOCK_MOVE_NOT_FOUND",
                 f"no stock receipt found for regrind order {batch_of_id}; refusing to adjust stock blind",
+                f"aucune réception de stock trouvée pour l'OF de rebroyat {batch_of_id} ; ajustement de stock refusé à l'aveugle",
             )
         location_id = receipt[0]["location_id"]
         adjusted = stock.adjust_stock(
@@ -1066,11 +1115,11 @@ class ProductionReportService:
         report, rather than leaving stock and a now-deleted report disagreeing.
         """
         if not reason.strip():
-            return Err("MISSING_REASON", "deleting a report must record why")
+            return Err("MISSING_REASON", "deleting a report must record why", "supprimer un rapport doit enregistrer pourquoi")
 
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
 
         detail = self._load_detail(tenant_id=tenant_id, report_id=report_id, report_type=header.report_type)
         effects: dict = {}
@@ -1135,14 +1184,22 @@ class ProductionReportService:
         Everywhere else it's a no-op, same as `delete_report`'s own `force`.
         """
         if not reason.strip():
-            return Err("MISSING_REASON", "a correction must record why the figures were changed")
+            return Err(
+                "MISSING_REASON",
+                "a correction must record why the figures were changed",
+                "une correction doit enregistrer pourquoi les chiffres ont changé",
+            )
 
         correlation_id = correlation_id or str(ULID())
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
         if header.status != "validated":
-            return Err("NOT_CORRECTABLE", "this path is for validated reports; a submitted one is corrected in place")
+            return Err(
+                "NOT_CORRECTABLE",
+                "this path is for validated reports; a submitted one is corrected in place",
+                "ce chemin est pour les rapports validés ; un rapport rendu se corrige directement",
+            )
 
         targets = self._validate_stock_targets(header.report_type, detail)
         if isinstance(targets, Err):
@@ -1267,7 +1324,7 @@ class ProductionReportService:
             (scrap_record_id, tenant_id),
         ).fetchone()
         if scrap_row is None:
-            return Err("NOT_FOUND", f"scrap record {scrap_record_id} not found")
+            return Err("NOT_FOUND", f"scrap record {scrap_record_id} not found", f"rebut {scrap_record_id} introuvable")
 
         # The output product itself is resolved inside create_regrind_batch, from
         # the tenant-wide regrind default only — never per-input — so this and the
@@ -1280,7 +1337,11 @@ class ProductionReportService:
             ).fetchone()
             work_center_id = row[0] if row is not None else None
         if work_center_id is None:
-            return Err("MISSING_WORK_CENTER", "cannot open a regrind order without a work center")
+            return Err(
+                "MISSING_WORK_CENTER",
+                "cannot open a regrind order without a work center",
+                "impossible d'ouvrir un OF de rebroyat sans poste de charge",
+            )
 
         # output_quantity is left unset: the scrap this report just wrote is
         # recorded in whatever unit its own product uses (tonnes for a raw
@@ -1303,11 +1364,15 @@ class ProductionReportService:
         self, *, tenant_id: str, actor_id: str, report_id: str, reason: str, correlation_id: str | None = None
     ) -> Result[ProductionReport]:
         if not reason.strip():
-            return Err("MISSING_REASON", "a rejection must say what is wrong with the report")
+            return Err(
+                "MISSING_REASON",
+                "a rejection must say what is wrong with the report",
+                "un renvoi doit préciser ce qui ne va pas dans le rapport",
+            )
 
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
 
         result = transition_report(header, "rejected")
         if isinstance(result, Err):
@@ -1349,7 +1414,7 @@ class ProductionReportService:
         """
         header = self._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
 
         result = transition_report(header, "draft")
         if isinstance(result, Err):
@@ -1426,7 +1491,7 @@ class ProductionReportService:
             (header.of_id, tenant_id),
         ).fetchone()
         if order_row is None:
-            return Err("NOT_FOUND", f"work order {header.of_id} not found")
+            return Err("NOT_FOUND", f"work order {header.of_id} not found", f"OF {header.of_id} introuvable")
 
         # Imported here rather than at module scope: regrind_service imports the
         # work order service, and a top-level import would close the cycle.
@@ -1450,6 +1515,8 @@ class ProductionReportService:
             return Err(
                 "REGRIND_DEFAULT_MISSING",
                 "no regrind output product is configured — set one in Production Settings before regrinding",
+                "aucun produit de sortie de rebroyat n'est configuré — définissez-en un dans les paramètres de"
+                " production avant de rebroyer",
             )
 
         scrap = ScrapService(self._connection).record_scrap(

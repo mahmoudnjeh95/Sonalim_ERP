@@ -15,9 +15,9 @@ class ResourceType:
 
 def validate_resource_type(*, code: str, name: str, unit: str) -> Result[None]:
     if not code.strip():
-        return Err("INVALID_CODE", "code is required")
+        return Err("INVALID_CODE", "code is required", "le code est obligatoire")
     if not name.strip():
-        return Err("INVALID_NAME", "name is required")
+        return Err("INVALID_NAME", "name is required", "le nom est obligatoire")
     if not unit.strip():
-        return Err("INVALID_UNIT", "unit is required")
+        return Err("INVALID_UNIT", "unit is required", "l'unité est obligatoire")
     return Ok(None)

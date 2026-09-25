@@ -31,15 +31,19 @@ def validate_scrap(
     *, scrap_type: str, quantity: float, work_order_id: str | None, source_note: str | None
 ) -> Result[None]:
     if scrap_type not in VALID_SCRAP_TYPES:
-        return Err("INVALID_SCRAP_TYPE", f"scrap_type must be one of {sorted(VALID_SCRAP_TYPES)}")
+        return Err(
+            "INVALID_SCRAP_TYPE",
+            f"scrap_type must be one of {sorted(VALID_SCRAP_TYPES)}",
+            f"scrap_type doit être l'un de {sorted(VALID_SCRAP_TYPES)}",
+        )
     if quantity <= 0:
-        return Err("INVALID_QUANTITY", "scrap quantity must be positive")
+        return Err("INVALID_QUANTITY", "scrap quantity must be positive", "la quantité de rebut doit être positive")
     if not (work_order_id or (source_note and source_note.strip())):
-        return Err("MISSING_SOURCE", "either a work order or a source note is required")
+        return Err("MISSING_SOURCE", "either a work order or a source note is required", "un OF ou une note de source est obligatoire")
     return Ok(None)
 
 
 def validate_team_assignment(team: str) -> Result[None]:
     if not team.strip():
-        return Err("MISSING_TEAM", "a regrind batch needs a team to assign it to")
+        return Err("MISSING_TEAM", "a regrind batch needs a team to assign it to", "un lot de rebroyat a besoin d'une équipe à qui l'assigner")
     return Ok(None)

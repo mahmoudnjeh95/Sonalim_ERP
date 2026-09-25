@@ -28,7 +28,7 @@ export function LoginPage() {
       await login(email, password);
       navigate("/crm", { replace: true });
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Unable to sign in");
+      setError(cause instanceof ApiError ? cause.message : t("login.failed"));
     } finally {
       setPending(false);
     }

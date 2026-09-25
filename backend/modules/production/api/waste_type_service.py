@@ -81,7 +81,11 @@ class WasteTypeService:
                 return self.update_type(
                     tenant_id=tenant_id, actor_id=actor_id, waste_type_id=existing[0], is_active=True
                 )
-            return Err("DUPLICATE_WASTE_TYPE", f"a {report_type} waste type called {name!r} already exists")
+            return Err(
+                "DUPLICATE_WASTE_TYPE",
+                f"a {report_type} waste type called {name!r} already exists",
+                f"un type de déchet {report_type} appelé {name!r} existe déjà",
+            )
 
         waste_type_id = str(ULID())
         self._connection.execute(
@@ -118,7 +122,7 @@ class WasteTypeService:
             (waste_type_id, tenant_id),
         ).fetchone()
         if current is None:
-            return Err("NOT_FOUND", f"waste type {waste_type_id} not found")
+            return Err("NOT_FOUND", f"waste type {waste_type_id} not found", f"type de déchet {waste_type_id} introuvable")
         _, current_name, report_type, current_sort, current_active = current
 
         new_name = current_name
@@ -134,7 +138,11 @@ class WasteTypeService:
                 (tenant_id, report_type, new_name, waste_type_id),
             ).fetchone()
             if clash is not None:
-                return Err("DUPLICATE_WASTE_TYPE", f"a {report_type} waste type called {new_name!r} already exists")
+                return Err(
+                    "DUPLICATE_WASTE_TYPE",
+                    f"a {report_type} waste type called {new_name!r} already exists",
+                    f"un type de déchet {report_type} appelé {new_name!r} existe déjà",
+                )
 
         new_sort = int(current_sort) if sort_order is None else sort_order
         new_active = current_active if is_active is None else is_active

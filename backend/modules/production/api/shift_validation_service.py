@@ -99,16 +99,20 @@ class ShiftValidationService:
         """
         locked = self._locked_status_and_date(tenant_id, shift_report_id)
         if locked is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         status, shift_date = locked
         if status != "submitted":
-            return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be validated")
+            return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be validated", f"un shift {status} ne peut pas être validé")
 
         sections = {s["key"]: s for s in self._shifts.list_section_states(tenant_id=tenant_id, shift_report_id=shift_report_id)}
         if seen_revisions:
             moved = sorted(k for k, rev in seen_revisions.items() if k in sections and sections[k]["revision"] != rev)
             if moved:
-                return Err("CHANGED_SINCE_OPENED", f"sections changed since you opened the shift: {', '.join(moved)}")
+                return Err(
+                    "CHANGED_SINCE_OPENED",
+                    f"sections changed since you opened the shift: {', '.join(moved)}",
+                    f"des sections ont changé depuis l'ouverture du shift : {', '.join(moved)}",
+                )
 
         correlation_id = correlation_id or str(ULID())
         try:
@@ -119,14 +123,22 @@ class ShiftValidationService:
                 runs = _runs(self._connection, tenant_id, shift_report_id)
                 packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
                 if not runs and not packing:
-                    raise _Abort(Err("NOTHING_TO_VALIDATE", "the shift has no production run and no packing row to validate"))
+                    raise _Abort(Err(
+                        "NOTHING_TO_VALIDATE",
+                        "the shift has no production run and no packing row to validate",
+                        "le shift n'a ni passage de production ni ligne de conditionnement à valider",
+                    ))
 
                 open_stop = self._connection.execute(
                     "SELECT 1 FROM production.machine_stops WHERE shift_report_id = %s AND tenant_id = %s AND ended_at IS NULL LIMIT 1",
                     (shift_report_id, tenant_id),
                 ).fetchone()
                 if open_stop is not None:
-                    raise _Abort(Err("OPEN_STOP", "a machine stop is still ongoing; end it before validating the shift"))
+                    raise _Abort(Err(
+                        "OPEN_STOP",
+                        "a machine stop is still ongoing; end it before validating the shift",
+                        "un arrêt machine est toujours en cours ; terminez-le avant de valider le shift",
+                    ))
 
                 stock = ShiftStockService(self._connection)
                 shortfalls: list[dict] = []
@@ -138,6 +150,7 @@ class ShiftValidationService:
                     raise _Abort(Err(
                         "SHORTFALL_COMMENT_REQUIRED",
                         "this shift consumes more than the stock figure holds; validating it needs a comment explaining why",
+                        "ce shift consomme plus que ce que le stock indique ; le valider nécessite un commentaire expliquant pourquoi",
                     ))
 
                 for run in runs:
@@ -158,7 +171,11 @@ class ShiftValidationService:
                 for row in packing:
                     finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
                     if finished_product_id is None:
-                        raise _Abort(Err("NOT_FOUND", f"work order {row['of_id']} has no product to pack"))
+                        raise _Abort(Err(
+                            "NOT_FOUND",
+                            f"work order {row['of_id']} has no product to pack",
+                            f"l'OF {row['of_id']} n'a pas de produit à conditionner",
+                        ))
                     # The store is settled once, here, and kept on the row: reversal reads it back
                     # and must hand the goods back from exactly where they were posted.
                     row["finished_goods_location_id"] = stock.finished_goods_store(
@@ -218,7 +235,11 @@ class ShiftValidationService:
         except _Abort as abort:
             return abort.err
         except psycopg.errors.IntegrityError as exc:
-            return Err("INVALID_VALUE", f"the shift cannot be posted as entered: {exc.diag.message_primary or exc}")
+            return Err(
+                "INVALID_VALUE",
+                f"the shift cannot be posted as entered: {exc.diag.message_primary or exc}",
+                f"le shift ne peut pas être versé en stock tel que saisi : {exc.diag.message_primary or exc}",
+            )
         return self._shifts.get_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
 
     def _freeze_shift(self, tenant_id: str, actor_id: str, shift_report_id: str) -> None:
@@ -259,21 +280,25 @@ class ShiftValidationService:
         status; the revision it freezes is tagged `edited_by_validator` at write time.
         """
         if section_key not in SECTION_KEYS:
-            return Err("INVALID_SECTION", f"unknown section {section_key!r}")
+            return Err("INVALID_SECTION", f"unknown section {section_key!r}", f"section {section_key!r} inconnue")
         if not (reason or "").strip():
-            return Err("MISSING_REASON", "editing a section as validator must record why")
+            return Err("MISSING_REASON", "editing a section as validator must record why", "modifier une section en tant que validateur doit enregistrer pourquoi")
         status = self._locked_status(tenant_id, shift_report_id)
         if status is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         if status != "submitted":
-            return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be edited by a validator")
+            return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be edited by a validator", f"un shift {status} ne peut pas être modifié par un validateur")
         section = next(
             (s for s in self._shifts.list_section_states(tenant_id=tenant_id, shift_report_id=shift_report_id) if s["key"] == section_key),
             None,
         )
         if section is None or section["status"] != "submitted":
             # "Nothing to report" has no rows to correct; giving it rows would contradict its status.
-            return Err("INVALID_TRANSITION", "only a section the team submitted with content can be corrected")
+            return Err(
+                "INVALID_TRANSITION",
+                "only a section the team submitted with content can be corrected",
+                "seule une section que l'équipe a rendue avec du contenu peut être corrigée",
+            )
 
         saved = save_section_rows(
             self._connection,
@@ -327,12 +352,16 @@ class ShiftValidationService:
         the revision it freezes is tagged `edited_after_validation` at write time.
         """
         if section_key not in SECTION_KEYS:
-            return Err("INVALID_SECTION", f"unknown section {section_key!r}")
+            return Err("INVALID_SECTION", f"unknown section {section_key!r}", f"section {section_key!r} inconnue")
         status = self._locked_status(tenant_id, shift_report_id)
         if status is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         if status != "validated":
-            return Err("INVALID_TRANSITION", f"a shift that is {status} does not need an unlock to be edited")
+            return Err(
+                "INVALID_TRANSITION",
+                f"a shift that is {status} does not need an unlock to be edited",
+                f"un shift {status} n'a pas besoin d'être déverrouillé pour être modifié",
+            )
 
         saved = save_section_rows(
             self._connection,
@@ -375,17 +404,17 @@ class ShiftValidationService:
     ) -> Result[dict]:
         """Send the named sections back to their team; the rest stay submitted."""
         if not (reason or "").strip():
-            return Err("MISSING_REASON", "rejecting a section must record why")
+            return Err("MISSING_REASON", "rejecting a section must record why", "renvoyer une section doit enregistrer pourquoi")
         if not section_keys:
-            return Err("INVALID_VALUE", "name at least one section to send back")
+            return Err("INVALID_VALUE", "name at least one section to send back", "nommez au moins une section à renvoyer")
         unknown = [k for k in section_keys if k not in SECTION_KEYS]
         if unknown:
-            return Err("INVALID_SECTION", f"unknown section {unknown[0]!r}")
+            return Err("INVALID_SECTION", f"unknown section {unknown[0]!r}", f"section {unknown[0]!r} inconnue")
         status = self._locked_status(tenant_id, shift_report_id)
         if status is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         if status != "submitted":
-            return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be rejected")
+            return Err("INVALID_TRANSITION", f"a shift that is {status} cannot be rejected", f"un shift {status} ne peut pas être renvoyé")
 
         self._connection.execute(
             "UPDATE production.shift_report_sections SET status = 'returned', return_reason = %s, updated_at = NOW() "
@@ -423,12 +452,12 @@ class ShiftValidationService:
     ) -> Result[dict]:
         """Undo a validated shift: stock goes back, sections that had data return to their team."""
         if not (reason or "").strip():
-            return Err("MISSING_REASON", "reversing a shift must record why")
+            return Err("MISSING_REASON", "reversing a shift must record why", "annuler un shift doit enregistrer pourquoi")
         status = self._locked_status(tenant_id, shift_report_id)
         if status is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         if status != "validated":
-            return Err("INVALID_TRANSITION", f"a shift that is {status} has nothing to reverse")
+            return Err("INVALID_TRANSITION", f"a shift that is {status} has nothing to reverse", f"un shift {status} n'a rien à annuler")
 
         correlation_id = correlation_id or str(ULID())
         try:

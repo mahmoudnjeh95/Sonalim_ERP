@@ -48,7 +48,7 @@ class MoldService:
             (mold_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"mold {mold_id} not found")
+            return Err("NOT_FOUND", f"mold {mold_id} not found", f"moule {mold_id} introuvable")
 
         current = Mold(id=row[0], code=row[1], name=row[2], type=row[3])
         updated_code = code if code is not None else current.code

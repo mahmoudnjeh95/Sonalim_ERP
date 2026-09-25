@@ -31,7 +31,11 @@ class ResourceTypeService:
             "SELECT 1 FROM production.resource_types WHERE tenant_id = %s AND code = %s", (tenant_id, code)
         ).fetchone()
         if existing is not None:
-            return Err("DUPLICATE_CODE", f"a resource type with code {code!r} already exists")
+            return Err(
+                "DUPLICATE_CODE",
+                f"a resource type with code {code!r} already exists",
+                f"un type de ressource avec le code {code!r} existe déjà",
+            )
 
         resource_type_id = str(ULID())
         self._connection.execute(
@@ -64,7 +68,7 @@ class ResourceTypeService:
             (resource_type_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"resource type {resource_type_id} not found")
+            return Err("NOT_FOUND", f"resource type {resource_type_id} not found", f"type de ressource {resource_type_id} introuvable")
 
         current = ResourceType(id=row[0], code=row[1], name=row[2], unit=row[3])
         updated_code = code if code is not None else current.code
@@ -80,7 +84,11 @@ class ResourceTypeService:
                 (tenant_id, updated_code, resource_type_id),
             ).fetchone()
             if existing is not None:
-                return Err("DUPLICATE_CODE", f"a resource type with code {updated_code!r} already exists")
+                return Err(
+                    "DUPLICATE_CODE",
+                    f"a resource type with code {updated_code!r} already exists",
+                    f"un type de ressource avec le code {updated_code!r} existe déjà",
+                )
 
         self._connection.execute(
             "UPDATE production.resource_types SET code = %s, name = %s, unit = %s WHERE id = %s",

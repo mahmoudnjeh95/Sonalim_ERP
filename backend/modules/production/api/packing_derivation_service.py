@@ -24,8 +24,15 @@ from modules.production.domain.packing_derivation import (
 _PACKAGING_PRODUCTS = ("film_product_id", "carton_product_id", "tape_product_id", "scotch_product_id", "ruban_product_id")
 
 _ORDER_PROBLEMS = {
-    "PRODUCTION_FIRST": "packing row {n}: enter and save this shift's production first; a lot is filed under its work order",
-    "OF_AMBIGUOUS": "packing row {n}: this shift ran several work orders; pick the OF for this lot",
+    "PRODUCTION_FIRST": (
+        "packing row {n}: pick this lot's OF, or save this shift's production first so it can be taken from there",
+        "ligne de conditionnement {n} : choisissez l'OF de ce lot, "
+        "ou enregistrez d'abord la production de ce shift pour qu'il en soit repris",
+    ),
+    "OF_AMBIGUOUS": (
+        "packing row {n}: this shift ran several work orders; pick the OF for this lot",
+        "ligne de conditionnement {n} : ce shift a tourné sur plusieurs OF ; choisissez l'OF de ce lot",
+    ),
 }
 
 
@@ -70,7 +77,8 @@ def derive_packing_rows(connection: psycopg.Connection, *, tenant_id: str, shift
             product_id=row["product_id"],
         )
         if problem:
-            return Err(problem, _ORDER_PROBLEMS[problem].format(n=index))
+            en, fr = _ORDER_PROBLEMS[problem]
+            return Err(problem, en.format(n=index), fr.format(n=index))
         row["of_id"] = of_id
         if not row["run_id"] and len(runs_of_order.get(of_id, [])) == 1:
             row["run_id"] = runs_of_order[of_id][0]
@@ -106,6 +114,8 @@ def derive_packing_rows(connection: psycopg.Connection, *, tenant_id: str, shift
                     "PACKAGING_STORES_DIFFER",
                     f"packing row {index}: its packaging items have different default storage locations; "
                     "packaging is taken from one store per row",
+                    f"ligne de conditionnement {index} : ses articles d'emballage ont des emplacements par défaut différents ; "
+                    "l'emballage est pris dans un seul magasin par ligne",
                 )
             row["packaging_location_id"] = location
     return Ok(None)

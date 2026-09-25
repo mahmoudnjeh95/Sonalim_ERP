@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from core.db import get_connection
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.partners import partner_response
 from core.tenancy import TenantContext, require_permission
 from modules.crm.api.activity_service import ActivityService
@@ -132,7 +132,7 @@ def create_contact(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return result.value
 
@@ -158,7 +158,7 @@ def update_contact(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return result.value
 
@@ -195,7 +195,7 @@ def update_lead(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _lead_response(result.value)
 
@@ -211,7 +211,7 @@ def qualify_lead(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _lead_response(result.value)
 
@@ -229,7 +229,7 @@ def disqualify_lead(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code == "EMPTY_REASON" else _err_status(result.code)
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _lead_response(result.value)
 
@@ -246,7 +246,7 @@ def convert_lead(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return {
         "id": result.value["lead"].id,
@@ -312,7 +312,7 @@ def create_opportunity(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, err_detail(result))
         connection.commit()
     return _opportunity_response(result.value)
 
@@ -350,7 +350,7 @@ def update_opportunity(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _opportunity_response(result.value)
 
@@ -383,7 +383,7 @@ def transition_opportunity(
             connection.rollback()
             validation_codes = {"EMPTY_REASON", "EMPTY_LINES", "INVALID_QUANTITY", "MISSING_LOCATION"}
             code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code in validation_codes else _err_status(result.code)
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _opportunity_response(result.value)
 
@@ -437,7 +437,7 @@ def create_activity(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, err_detail(result))
         connection.commit()
     return _activity_response(result.value)
 
@@ -469,7 +469,7 @@ def update_activity(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_422_UNPROCESSABLE_ENTITY if result.code == "EMPTY_NOTE" else _err_status(result.code)
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _activity_response(result.value)
 
@@ -483,7 +483,7 @@ def complete_activity(
         result = service.complete_activity(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, activity_id=activity_id)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _activity_response(result.value)
 

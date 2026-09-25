@@ -311,6 +311,7 @@ const en = {
   "login.password": "Password",
   "login.submit": "Sign in",
   "login.submitting": "Signing in…",
+  "login.failed": "Unable to sign in",
 
   "app.loading": "Loading…",
   "app.startingUp": "Starting up…",
@@ -3774,6 +3775,7 @@ const fr: Record<TranslationKey, string> = {
   "login.password": "Mot de passe",
   "login.submit": "Se connecter",
   "login.submitting": "Connexion…",
+  "login.failed": "Connexion impossible",
 
   "app.loading": "Chargement…",
   "app.startingUp": "Démarrage en cours…",
@@ -6938,7 +6940,8 @@ interface I18nContextValue {
 
 const I18nContext = createContext<I18nContextValue | null>(null);
 
-function readStoredLanguage(): Language {
+/** The language the user picked, readable outside React (the API client uses it for error text). */
+export function readStoredLanguage(): Language {
   try {
     return localStorage.getItem(STORAGE_KEY) === "fr" ? "fr" : "en";
   } catch {

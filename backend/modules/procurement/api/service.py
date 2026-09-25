@@ -131,11 +131,13 @@ class PurchaseOrderService:
         product_uom = core_service.get_product_uom(tenant_id, product_id)
         line_uom = core_service.get_uom(tenant_id, uom_id)
         if product_uom is None or line_uom is None:
-            return Err("NOT_FOUND", "product or unit of measure not found")
+            return Err("NOT_FOUND", "product or unit of measure not found", "produit ou unité de mesure introuvable")
         if line_uom.category != product_uom.category:
             return Err(
                 "UOM_CATEGORY_MISMATCH",
                 f"line unit {line_uom.code} ({line_uom.category}) does not match product's unit "
+                f"{product_uom.code} ({product_uom.category})",
+                f"l'unité de la ligne {line_uom.code} ({line_uom.category}) ne correspond pas à l'unité du produit "
                 f"{product_uom.code} ({product_uom.category})",
             )
         return Ok(None)
@@ -159,7 +161,7 @@ class PurchaseOrderService:
         if isinstance(header_validation, Err):
             return header_validation
         if not lines:
-            return Err("INVALID_LINES", "a purchase order needs at least one line")
+            return Err("INVALID_LINES", "a purchase order needs at least one line", "une commande d'achat nécessite au moins une ligne")
         for line in lines:
             line_validation = validate_new_purchase_order_line(
                 quantity_ordered=line["quantity_ordered"], unit_price=line.get("unit_price", 0)
@@ -380,9 +382,13 @@ class PurchaseOrderService:
     ) -> Result[PurchaseOrderLine]:
         order = self._get_order(tenant_id, purchase_order_id, for_update=True)
         if order is None:
-            return Err("NOT_FOUND", f"purchase order {purchase_order_id} not found")
+            return Err("NOT_FOUND", f"purchase order {purchase_order_id} not found", f"commande d'achat {purchase_order_id} introuvable")
         if order.status != "draft":
-            return Err("INVALID_TRANSITION", "lines can only be added while the order is in draft")
+            return Err(
+                "INVALID_TRANSITION",
+                "lines can only be added while the order is in draft",
+                "des lignes ne peuvent être ajoutées que lorsque la commande est en brouillon",
+            )
         validation = validate_new_purchase_order_line(quantity_ordered=quantity_ordered, unit_price=unit_price)
         if isinstance(validation, Err):
             return validation
@@ -416,7 +422,7 @@ class PurchaseOrderService:
     def _transition(self, *, tenant_id: str, actor_id: str, order_id: str, new_status: str) -> Result[PurchaseOrder]:
         order = self._get_order(tenant_id, order_id, for_update=True)
         if order is None:
-            return Err("NOT_FOUND", f"purchase order {order_id} not found")
+            return Err("NOT_FOUND", f"purchase order {order_id} not found", f"commande d'achat {order_id} introuvable")
         result = transition_purchase_order(order, new_status)
         if isinstance(result, Err):
             return result
@@ -473,7 +479,7 @@ class PurchaseOrderService:
         blast radius here, matching warehouse.admin_material_receipts."""
         current = self._get_order(tenant_id, order_id, for_update=True)
         if current is None:
-            return Err("NOT_FOUND", f"purchase order {order_id} not found")
+            return Err("NOT_FOUND", f"purchase order {order_id} not found", f"commande d'achat {order_id} introuvable")
 
         merged_currency = currency_code if currency_code is not None else current.currency_code
         validation = validate_new_purchase_order(currency_code=merged_currency)
@@ -541,16 +547,24 @@ class PurchaseOrderService:
         can be corrected freely before it's committed."""
         order = self._get_order(tenant_id, purchase_order_id)
         if order is None:
-            return Err("NOT_FOUND", f"purchase order {purchase_order_id} not found")
+            return Err("NOT_FOUND", f"purchase order {purchase_order_id} not found", f"commande d'achat {purchase_order_id} introuvable")
         if order.status not in ("ordered", "partially_received"):
-            return Err("INVALID_TRANSITION", f"cannot record a receipt against a purchase order in status {order.status}")
+            return Err(
+                "INVALID_TRANSITION",
+                f"cannot record a receipt against a purchase order in status {order.status}",
+                f"impossible d'enregistrer une réception sur une commande d'achat au statut {order.status}",
+            )
         if not currency_code or not currency_code.strip():
-            return Err("INVALID_CURRENCY", "currency_code is required when recording a receipt")
+            return Err(
+                "INVALID_CURRENCY",
+                "currency_code is required when recording a receipt",
+                "currency_code est obligatoire lors de l'enregistrement d'une réception",
+            )
         if not lines:
-            return Err("INVALID_LINES", "a goods receipt needs at least one line")
+            return Err("INVALID_LINES", "a goods receipt needs at least one line", "une réception nécessite au moins une ligne")
         for line in lines:
             if line["quantity"] <= 0:
-                return Err("INVALID_QUANTITY", "received quantity must be positive")
+                return Err("INVALID_QUANTITY", "received quantity must be positive", "la quantité reçue doit être positive")
 
         fee_validation = validate_receipt_fees(
             is_import=order.is_import,
@@ -658,7 +672,7 @@ class PurchaseOrderService:
             (receipt_id, tenant_id),
         ).fetchone()
         if receipt_row is None:
-            return Err("NOT_FOUND", f"purchase order receipt {receipt_id} not found")
+            return Err("NOT_FOUND", f"purchase order receipt {receipt_id} not found", f"réception de commande d'achat {receipt_id} introuvable")
         receipt = _row_to_receipt(receipt_row)
 
         transition_result = confirm_purchase_order_receipt(receipt.status)
@@ -667,7 +681,11 @@ class PurchaseOrderService:
 
         order = self._get_order(tenant_id, receipt.purchase_order_id, for_update=True)
         if order is None:
-            return Err("NOT_FOUND", f"purchase order {receipt.purchase_order_id} not found")
+            return Err(
+                "NOT_FOUND",
+                f"purchase order {receipt.purchase_order_id} not found",
+                f"commande d'achat {receipt.purchase_order_id} introuvable",
+            )
 
         receipt_lines = self.list_receipt_lines(tenant_id=tenant_id, purchase_order_receipt_id=receipt_id)
         event_lines: list[dict] = []
@@ -677,7 +695,11 @@ class PurchaseOrderService:
                 (receipt_line.purchase_order_line_id, tenant_id),
             ).fetchone()
             if line_row is None:
-                return Err("NOT_FOUND", f"purchase order line {receipt_line.purchase_order_line_id} not found")
+                return Err(
+                    "NOT_FOUND",
+                    f"purchase order line {receipt_line.purchase_order_line_id} not found",
+                    f"ligne de commande d'achat {receipt_line.purchase_order_line_id} introuvable",
+                )
             line = _row_to_line(line_row)
             applied = apply_receipt_to_line(line, receipt_line.quantity)
             if isinstance(applied, Err):
@@ -753,11 +775,12 @@ class PurchaseOrderService:
             product_uom = core_service.get_product_uom(tenant_id, event_line["product_id"])
             line_uom = core_service.get_uom(tenant_id, event_line["uom_id"])
             if product_uom is None or line_uom is None:
-                return Err("NOT_FOUND", "product or unit of measure not found")
+                return Err("NOT_FOUND", "product or unit of measure not found", "produit ou unité de mesure introuvable")
             if line_uom.category != product_uom.category:
                 return Err(
                     "UOM_CATEGORY_MISMATCH",
                     f"line unit {line_uom.code} does not match product unit {product_uom.code}",
+                    f"l'unité de la ligne {line_uom.code} ne correspond pas à l'unité du produit {product_uom.code}",
                 )
             converted_quantity = event_line["quantity"] * float(line_uom.ratio_to_base) / float(product_uom.ratio_to_base)
 

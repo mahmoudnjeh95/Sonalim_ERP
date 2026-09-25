@@ -78,7 +78,7 @@ class LeadService:
             (lead_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"lead {lead_id} not found")
+            return Err("NOT_FOUND", f"lead {lead_id} not found", f"prospect {lead_id} introuvable")
 
         current = _lead_from_row(row)
         updated = Lead(
@@ -125,7 +125,7 @@ class LeadService:
             (lead_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"lead {lead_id} not found")
+            return Err("NOT_FOUND", f"lead {lead_id} not found", f"prospect {lead_id} introuvable")
 
         current = _lead_from_row(row)
         result = transition(current, "disqualified")
@@ -163,7 +163,7 @@ class LeadService:
             (lead_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"lead {lead_id} not found")
+            return Err("NOT_FOUND", f"lead {lead_id} not found", f"prospect {lead_id} introuvable")
 
         current = _lead_from_row(row)
         result = transition(current, "qualified")
@@ -204,7 +204,7 @@ class LeadService:
             (lead_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"lead {lead_id} not found")
+            return Err("NOT_FOUND", f"lead {lead_id} not found", f"prospect {lead_id} introuvable")
 
         current = _lead_from_row(row)
         contact_name, email = current.contact_name, current.email
@@ -218,9 +218,13 @@ class LeadService:
                 (existing_partner_id, tenant_id),
             ).fetchone()
             if partner_row is None:
-                return Err("NOT_FOUND", f"partner {existing_partner_id} not found")
+                return Err("NOT_FOUND", f"partner {existing_partner_id} not found", f"partenaire {existing_partner_id} introuvable")
             if partner_row[3] not in ("customer", "both"):
-                return Err("INVALID_PARTNER_KIND", "can only link a lead to a customer partner")
+                return Err(
+                    "INVALID_PARTNER_KIND",
+                    "can only link a lead to a customer partner",
+                    "un prospect ne peut être lié qu'à un partenaire client",
+                )
             partner = Partner(
                 id=partner_row[0], tenant_id=partner_row[1], name=partner_row[2], kind=partner_row[3],
                 industry=partner_row[4], website=partner_row[5], phone=partner_row[6], email=partner_row[7], status=partner_row[8],

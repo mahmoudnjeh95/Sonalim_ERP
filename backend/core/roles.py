@@ -46,7 +46,11 @@ def _validate_known_permissions(permissions: list[str]) -> None:
     if unknown:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "UNKNOWN_PERMISSION", "message": f"not declared permissions: {', '.join(unknown)}"},
+            {
+                "code": "UNKNOWN_PERMISSION",
+                "message": f"not declared permissions: {', '.join(unknown)}",
+                "message_fr": f"permissions non déclarées : {', '.join(unknown)}",
+            },
         )
 
 
@@ -56,7 +60,10 @@ def _assert_same_tenant_user(connection: psycopg.Connection, *, tenant_id: str, 
         (user_id, tenant_id),
     ).fetchone()
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"user {user_id} not found"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "NOT_FOUND", "message": f"user {user_id} not found", "message_fr": f"utilisateur {user_id} introuvable"},
+        )
 
 
 def _get_role(connection: psycopg.Connection, *, tenant_id: str, role_id: str) -> tuple[str, str]:
@@ -65,7 +72,10 @@ def _get_role(connection: psycopg.Connection, *, tenant_id: str, role_id: str) -
         (role_id, tenant_id),
     ).fetchone()
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"role {role_id} not found"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "NOT_FOUND", "message": f"role {role_id} not found", "message_fr": f"rôle {role_id} introuvable"},
+        )
     return row[0], row[1]
 
 
@@ -121,7 +131,11 @@ def create_role(
         if existing is not None:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
-                {"code": "ROLE_CODE_TAKEN", "message": f"role code {body.code} already exists"},
+                {
+                    "code": "ROLE_CODE_TAKEN",
+                    "message": f"role code {body.code} already exists",
+                    "message_fr": f"le code de rôle {body.code} existe déjà",
+                },
             )
 
         role_id = str(ULID())
@@ -213,7 +227,11 @@ def delete_role(
         if in_use is not None:
             raise HTTPException(
                 status.HTTP_409_CONFLICT,
-                {"code": "ROLE_IN_USE", "message": "unassign this role from every user before deleting it"},
+                {
+                    "code": "ROLE_IN_USE",
+                    "message": "unassign this role from every user before deleting it",
+                    "message_fr": "retirez ce rôle de tous les utilisateurs avant de le supprimer",
+                },
             )
 
         connection.execute("DELETE FROM core.role_permissions WHERE role_id = %s", (role_id,))
@@ -283,7 +301,11 @@ def unassign_role(
             if MANAGE_PERMISSIONS in role_permissions:
                 raise HTTPException(
                     status.HTTP_400_BAD_REQUEST,
-                    {"code": "SELF_LOCKOUT", "message": "cannot unassign your own only source of core.manage_permissions"},
+                    {
+                        "code": "SELF_LOCKOUT",
+                        "message": "cannot unassign your own only source of core.manage_permissions",
+                        "message_fr": "vous ne pouvez pas retirer votre seule source de core.manage_permissions",
+                    },
                 )
 
         connection.execute(

@@ -40,13 +40,17 @@ def validate_new_purchase_order(*, currency_code: str | None = None) -> Result[N
     (see PurchaseOrderService.create_receipt), once an explicitly-passed blank string is
     still rejected rather than silently treated as "not set"."""
     if currency_code is not None and not currency_code.strip():
-        return Err("INVALID_CURRENCY", "currency_code cannot be blank")
+        return Err("INVALID_CURRENCY", "currency_code cannot be blank", "currency_code ne peut pas être vide")
     return Ok(None)
 
 
 def transition_purchase_order(order: PurchaseOrder, new_status: str) -> Result[PurchaseOrder]:
     if new_status not in PURCHASE_ORDER_MANUAL_TRANSITIONS.get(order.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move purchase order from {order.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move purchase order from {order.status} to {new_status}",
+            f"impossible de faire passer la commande d'achat de {order.status} à {new_status}",
+        )
     return Ok(_with_status(order, new_status))
 
 
@@ -55,7 +59,11 @@ def receive_against_order(order: PurchaseOrder, line_statuses: list[str]) -> Res
     receipt is confirmed. Only legal once the order has actually been placed — this is the
     only path to 'partially_received' / 'fully_received'."""
     if order.status not in RECEIVING_ELIGIBLE_STATUSES:
-        return Err("INVALID_TRANSITION", f"cannot record a receipt against a purchase order in status {order.status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot record a receipt against a purchase order in status {order.status}",
+            f"impossible d'enregistrer une réception sur une commande d'achat au statut {order.status}",
+        )
     return Ok(_with_status(order, derive_order_status(line_statuses)))
 
 
@@ -103,9 +111,9 @@ class PurchaseOrderLine:
 
 def validate_new_purchase_order_line(*, quantity_ordered: float, unit_price: float = 0) -> Result[None]:
     if quantity_ordered <= 0:
-        return Err("INVALID_QUANTITY", "quantity_ordered must be positive")
+        return Err("INVALID_QUANTITY", "quantity_ordered must be positive", "quantity_ordered doit être positive")
     if unit_price < 0:
-        return Err("INVALID_PRICE", "unit_price cannot be negative")
+        return Err("INVALID_PRICE", "unit_price cannot be negative", "unit_price ne peut pas être négatif")
     return Ok(None)
 
 
@@ -115,12 +123,13 @@ def apply_receipt_to_line(line: PurchaseOrderLine, quantity: float) -> Result[Pu
     delivery -> quantity_received becomes 5, status becomes 'partially_received'; a later
     5t delivery brings it to 10/10 -> 'fully_received'."""
     if quantity <= 0:
-        return Err("INVALID_QUANTITY", "received quantity must be positive")
+        return Err("INVALID_QUANTITY", "received quantity must be positive", "la quantité reçue doit être positive")
     new_received = line.quantity_received + quantity
     if new_received > line.quantity_ordered:
         return Err(
             "OVER_RECEIPT",
             f"cannot receive {quantity}, only {line.quantity_ordered - line.quantity_received} still outstanding on this line",
+            f"impossible de recevoir {quantity}, il ne reste que {line.quantity_ordered - line.quantity_received} en attente sur cette ligne",
         )
     return Ok(
         PurchaseOrderLine(
@@ -173,7 +182,11 @@ class PurchaseOrderReceipt:
 
 def confirm_purchase_order_receipt(status: str) -> Result[str]:
     if status != "draft":
-        return Err("INVALID_TRANSITION", f"cannot confirm a goods receipt already in status {status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot confirm a goods receipt already in status {status}",
+            f"impossible de confirmer une réception déjà au statut {status}",
+        )
     return Ok("confirmed")
 
 
@@ -200,7 +213,7 @@ def compute_landed_cost(
     handling_fee: float = 0,
 ) -> Result[tuple[float, float]]:
     if quantity <= 0:
-        return Err("INVALID_QUANTITY", "quantity must be positive")
+        return Err("INVALID_QUANTITY", "quantity must be positive", "la quantité doit être positive")
     total_cost = base_cost + license_fee + insurance_fee + transit_fee + transport_fee + customs_duty + handling_fee
     return Ok((total_cost, total_cost / quantity))
 
@@ -245,6 +258,7 @@ def validate_receipt_fees(
         return Err(
             "IMPORT_FEE_ON_LOCAL_ORDER",
             f"cannot set {', '.join(offending)} on a receipt for a non-import purchase order",
+            f"impossible de définir {', '.join(offending)} sur une réception pour une commande d'achat non-import",
         )
     return Ok(None)
 

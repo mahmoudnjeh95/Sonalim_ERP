@@ -47,22 +47,30 @@ class WonLine:
 
 def validate_amount(amount: float) -> Result[None]:
     if amount < 0:
-        return Err("INVALID_AMOUNT", "amount cannot be negative")
+        return Err("INVALID_AMOUNT", "amount cannot be negative", "le montant ne peut pas être négatif")
     return Ok(None)
 
 
 def validate_lost_reason(reason: str | None) -> Result[None]:
     if reason is None or not reason.strip():
-        return Err("EMPTY_REASON", "a reason is required to mark an opportunity lost")
+        return Err(
+            "EMPTY_REASON",
+            "a reason is required to mark an opportunity lost",
+            "un motif est obligatoire pour marquer une opportunité comme perdue",
+        )
     return Ok(None)
 
 
 def validate_won_lines(lines: list[WonLine] | None) -> Result[None]:
     if not lines:
-        return Err("EMPTY_LINES", "at least one product line is required to mark an opportunity won")
+        return Err(
+            "EMPTY_LINES",
+            "at least one product line is required to mark an opportunity won",
+            "au moins une ligne de produit est obligatoire pour marquer une opportunité comme gagnée",
+        )
     for line in lines:
         if line.quantity <= 0:
-            return Err("INVALID_QUANTITY", "quantity must be greater than zero")
+            return Err("INVALID_QUANTITY", "quantity must be greater than zero", "la quantité doit être supérieure à zéro")
     return Ok(None)
 
 
@@ -70,7 +78,11 @@ def transition_opportunity(
     opportunity: Opportunity, new_stage: str, *, probability: int | None = None
 ) -> Result[Opportunity]:
     if new_stage not in OPPORTUNITY_VALID_TRANSITIONS.get(opportunity.stage, set()):
-        return Err("INVALID_TRANSITION", f"cannot move opportunity from {opportunity.stage} to {new_stage}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move opportunity from {opportunity.stage} to {new_stage}",
+            f"impossible de faire passer l'opportunité de {opportunity.stage} à {new_stage}",
+        )
     return Ok(
         Opportunity(
             id=opportunity.id,

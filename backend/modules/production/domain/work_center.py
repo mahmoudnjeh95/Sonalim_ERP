@@ -17,15 +17,19 @@ class WorkCenter:
 
 def validate_work_center_code(code: str) -> Result[None]:
     if not code.strip():
-        return Err("INVALID_CODE", "work center code is required")
+        return Err("INVALID_CODE", "work center code is required", "le code du poste de charge est obligatoire")
     return Ok(None)
 
 
 def block_work_center(work_center: WorkCenter, reason: str) -> Result[WorkCenter]:
     if work_center.is_blocked:
-        return Err("ALREADY_BLOCKED", f"work center {work_center.id} is already blocked")
+        return Err(
+            "ALREADY_BLOCKED",
+            f"work center {work_center.id} is already blocked",
+            f"le poste de charge {work_center.id} est déjà bloqué",
+        )
     if not reason.strip():
-        return Err("REASON_REQUIRED", "a reason is required to block a work center")
+        return Err("REASON_REQUIRED", "a reason is required to block a work center", "une raison est obligatoire pour bloquer un poste de charge")
     return Ok(
         WorkCenter(
             id=work_center.id,
@@ -40,7 +44,11 @@ def block_work_center(work_center: WorkCenter, reason: str) -> Result[WorkCenter
 
 def unblock_work_center(work_center: WorkCenter) -> Result[WorkCenter]:
     if not work_center.is_blocked:
-        return Err("NOT_BLOCKED", f"work center {work_center.id} is not blocked")
+        return Err(
+            "NOT_BLOCKED",
+            f"work center {work_center.id} is not blocked",
+            f"le poste de charge {work_center.id} n'est pas bloqué",
+        )
     return Ok(
         WorkCenter(
             id=work_center.id,

@@ -373,7 +373,7 @@ class DaySheetService:
     ) -> Result[dict]:
         line = self._line(tenant_id, work_center_id)
         if line is None:
-            return Err("NOT_FOUND", "work center not found")
+            return Err("NOT_FOUND", "work center not found", "poste de charge introuvable")
 
         sheet = self.read_sheet(
             tenant_id=tenant_id,
@@ -422,7 +422,7 @@ class DaySheetService:
         """
         line = self._line(tenant_id, work_center_id)
         if line is None:
-            return Err("NOT_FOUND", "work center not found")
+            return Err("NOT_FOUND", "work center not found", "poste de charge introuvable")
 
         first = month.replace(day=1)
         last = (first.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)

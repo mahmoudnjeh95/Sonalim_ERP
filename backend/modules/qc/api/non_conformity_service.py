@@ -271,7 +271,11 @@ class NonConformityService:
             (quality_report_id, tenant_id, of_id, product_id),
         ).fetchone()
         if int(row[1]) == 0:
-            return Err("QUALITY_REPORT_NOT_FOUND", f"no conformity line on report {quality_report_id} for OF {of_id} / product {product_id}")
+            return Err(
+                "QUALITY_REPORT_NOT_FOUND",
+                f"no conformity line on report {quality_report_id} for OF {of_id} / product {product_id}",
+                f"aucune ligne de conformité sur le rapport {quality_report_id} pour l'OF {of_id} / produit {product_id}",
+            )
         non_conforming_cartons = float(row[0])
 
         product = self._core.get_product(tenant_id, product_id)
@@ -303,9 +307,17 @@ class NonConformityService:
         description: str | None = None,
     ) -> Result[NonConformity]:
         if not of_id.strip():
-            return Err("MISSING_OF", "a non-conformity must name the work order the product came from")
+            return Err(
+                "MISSING_OF",
+                "a non-conformity must name the work order the product came from",
+                "une non-conformité doit nommer l'OF dont le produit provient",
+            )
         if not quarantine_location_id.strip():
-            return Err("MISSING_LOCATION", "a non-conformity must name the blocked location the product is held in")
+            return Err(
+                "MISSING_LOCATION",
+                "a non-conformity must name the blocked location the product is held in",
+                "une non-conformité doit nommer l'emplacement bloqué où le produit est détenu",
+            )
 
         # A quality-report-backed NC never trusts the caller's quantity -- see
         # `_quantity_from_quality_report`. A manually raised one (no report
@@ -422,7 +434,7 @@ class NonConformityService:
 
         current = self._load(tenant_id=tenant_id, non_conformity_id=non_conformity_id, for_update=True)
         if current is None:
-            return Err("NOT_FOUND", f"non-conformity {non_conformity_id} not found")
+            return Err("NOT_FOUND", f"non-conformity {non_conformity_id} not found", f"non-conformité {non_conformity_id} introuvable")
 
         moved = transition_non_conformity(current, "dispositioned")
         if isinstance(moved, Err):
@@ -513,11 +525,15 @@ class NonConformityService:
         self, *, tenant_id: str, actor_id: str, non_conformity_id: str, corrective_action: str
     ) -> Result[NonConformity]:
         if not corrective_action.strip():
-            return Err("MISSING_CORRECTIVE_ACTION", "closing a non-conformity requires its corrective action")
+            return Err(
+                "MISSING_CORRECTIVE_ACTION",
+                "closing a non-conformity requires its corrective action",
+                "clôturer une non-conformité nécessite son action corrective",
+            )
 
         current = self._load(tenant_id=tenant_id, non_conformity_id=non_conformity_id, for_update=True)
         if current is None:
-            return Err("NOT_FOUND", f"non-conformity {non_conformity_id} not found")
+            return Err("NOT_FOUND", f"non-conformity {non_conformity_id} not found", f"non-conformité {non_conformity_id} introuvable")
 
         moved = transition_non_conformity(current, "closed")
         if isinstance(moved, Err):
@@ -561,7 +577,7 @@ class NonConformityService:
         """
         current = self._load(tenant_id=tenant_id, non_conformity_id=non_conformity_id, for_update=True)
         if current is None:
-            return Err("NOT_FOUND", f"non-conformity {non_conformity_id} not found")
+            return Err("NOT_FOUND", f"non-conformity {non_conformity_id} not found", f"non-conformité {non_conformity_id} introuvable")
 
         updated_quantity = quantity if quantity is not None else current.quantity
         updated_defect = defect_type if defect_type is not None else current.defect_type

@@ -7,7 +7,7 @@ from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.entities import Product, ProductAttribute, ProductAttributeValue, ProductTag, UnitOfMeasure
 from core.domain.partner import SuggestedVendor
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 
 router = APIRouter(prefix="/core/products", tags=["core.products"])
@@ -197,7 +197,7 @@ def create_product(
         result = service.create_product(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _product_response(result.value)
 
@@ -214,7 +214,7 @@ def update_product(
         result = service.update_product(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, product_id=product_id, **changes)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _product_response(result.value)
 
@@ -229,7 +229,7 @@ def delete_product(
         result = service.delete_product(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, product_id=product_id)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
 
 
@@ -256,7 +256,7 @@ def set_product_tags(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return [_tag_response(tag) for tag in result.value]
 
@@ -299,7 +299,7 @@ def create_product_variant(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _product_response(result.value)
 
@@ -329,7 +329,7 @@ def create_product_attribute(
         result = service.create_product_attribute(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, name=body.name)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _attribute_response(result.value)
 
@@ -357,7 +357,7 @@ def create_product_attribute_value(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _attribute_value_response(result.value)
 
@@ -379,6 +379,6 @@ def create_product_tag(
         result = service.create_product_tag(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, name=body.name)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _tag_response(result.value)

@@ -100,7 +100,7 @@ class EquipmentService:
             (equipment_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"equipment {equipment_id} not found")
+            return Err("NOT_FOUND", f"equipment {equipment_id} not found", f"équipement {equipment_id} introuvable")
 
         current = _equipment(row)
         updated_work_center_id = work_center_id if work_center_id is not None else current.work_center_id
@@ -171,7 +171,7 @@ class EquipmentService:
             (equipment_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"equipment {equipment_id} not found")
+            return Err("NOT_FOUND", f"equipment {equipment_id} not found", f"équipement {equipment_id} introuvable")
 
         equipment = _equipment(row)
         result = transition_equipment(equipment, new_status)
@@ -208,13 +208,17 @@ class EquipmentService:
             (equipment_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"equipment {equipment_id} not found")
+            return Err("NOT_FOUND", f"equipment {equipment_id} not found", f"équipement {equipment_id} introuvable")
 
         current = _equipment(row)
         if archive and current.archived_at is not None:
-            return Err("ALREADY_ARCHIVED", f"equipment {equipment_id} is already archived")
+            return Err(
+                "ALREADY_ARCHIVED", f"equipment {equipment_id} is already archived", f"l'équipement {equipment_id} est déjà archivé"
+            )
         if not archive and current.archived_at is None:
-            return Err("NOT_ARCHIVED", f"equipment {equipment_id} is not archived")
+            return Err(
+                "NOT_ARCHIVED", f"equipment {equipment_id} is not archived", f"l'équipement {equipment_id} n'est pas archivé"
+            )
 
         if archive:
             archived_at = self._connection.execute(

@@ -184,9 +184,13 @@ class StockReleaseService:
         """
         line_id = self._line_store(tenant_id)
         if line_id is None:
-            return Err("NO_LINE_STORE", "no line store is set in the production settings, so there is nothing to release")
+            return Err(
+                "NO_LINE_STORE",
+                "no line store is set in the production settings, so there is nothing to release",
+                "aucun stock ligne n'est défini dans les paramètres de production, il n'y a donc rien à libérer",
+            )
         if not items:
-            return Err("NOTHING_TO_RELEASE", "choose at least one product to release")
+            return Err("NOTHING_TO_RELEASE", "choose at least one product to release", "choisissez au moins un produit à libérer")
 
         on_hand = {level.product_id: level.quantity_on_hand for level in self._stock.list_stock_items(tenant_id, location_id=line_id)}
         packed_cache: dict[datetime.date, dict[str, float]] = {}
@@ -207,18 +211,27 @@ class StockReleaseService:
                 packed_on = datetime.date.fromisoformat(packed_on)
             key = (product_id, packed_on)
             if key in seen:
-                return Err("DUPLICATE_ENTRY", f"product {product_id} is listed twice for {packed_on.isoformat()}")
+                return Err(
+                    "DUPLICATE_ENTRY",
+                    f"product {product_id} is listed twice for {packed_on.isoformat()}",
+                    f"le produit {product_id} est listé deux fois pour {packed_on.isoformat()}",
+                )
             seen.add(key)
             product = self._core.get_product(tenant_id, product_id)
             if product is None:
-                return Err("NOT_FOUND", f"product {product_id} not found")
+                return Err("NOT_FOUND", f"product {product_id} not found", f"produit {product_id} introuvable")
             quantity = float(item.get("quantity") or 0)
             if quantity <= 0:
-                return Err("INVALID_QUANTITY", f"{product.name}: the quantity to release must be more than zero")
+                return Err(
+                    "INVALID_QUANTITY",
+                    f"{product.name}: the quantity to release must be more than zero",
+                    f"{product.name} : la quantité à libérer doit être supérieure à zéro",
+                )
             if quantity > on_hand.get(product_id, 0.0) + _EPSILON:
                 return Err(
                     "INSUFFICIENT_STOCK",
                     f"{product.name}: only {on_hand.get(product_id, 0.0):g} is in the line store, {quantity:g} asked",
+                    f"{product.name} : seulement {on_hand.get(product_id, 0.0):g} est dans le stock ligne, {quantity:g} demandé",
                 )
             packed = _for_day(packed_cache, self._packed_on, packed_on)
             released = _for_day(released_cache, self._released_on, packed_on)
@@ -228,6 +241,7 @@ class StockReleaseService:
                 return Err(
                     "EXCEEDS_PACKED",
                     f"{product.name}: only {max(left, 0.0):g} of what was packed on {packed_on.isoformat()} is left to release, {quantity:g} asked",
+                    f"{product.name} : seulement {max(left, 0.0):g} de ce qui a été conditionné le {packed_on.isoformat()} reste à libérer, {quantity:g} demandé",
                 )
             # Checked here too, not only in the list: a stale or forged request must not move
             # goods QC has not validated as conforming, whatever the line store holds.
@@ -236,11 +250,20 @@ class StockReleaseService:
                 return Err(
                     "EXCEEDS_QC_VALIDATED",
                     f"{product.name}: only {max(qc_left, 0.0):g} has been validated as conforming by quality control, {quantity:g} asked",
+                    f"{product.name} : seulement {max(qc_left, 0.0):g} a été validé conforme par le contrôle qualité, {quantity:g} demandé",
                 )
             if not product.default_location_id:
-                return Err("NO_DEFAULT_LOCATION", f"{product.name} has no default storage location to be released into")
+                return Err(
+                    "NO_DEFAULT_LOCATION",
+                    f"{product.name} has no default storage location to be released into",
+                    f"{product.name} n'a pas d'emplacement de stockage par défaut vers lequel être libéré",
+                )
             if product.default_location_id == line_id:
-                return Err("INVALID_TRANSFER", f"{product.name}: its default storage location is the line store itself")
+                return Err(
+                    "INVALID_TRANSFER",
+                    f"{product.name}: its default storage location is the line store itself",
+                    f"{product.name} : son emplacement de stockage par défaut est le stock ligne lui-même",
+                )
             # Two lines for the same product on different days would draw from the same on-hand
             # pool twice; keep it honest by charging the second line against what the first left.
             on_hand[product_id] = on_hand.get(product_id, 0.0) - quantity
@@ -262,7 +285,7 @@ class StockReleaseService:
                         actor_id=actor_id,
                     )
                     if isinstance(moved, Err):
-                        raise _Abort(Err(moved.code, f"{name}: {moved.message}"))
+                        raise _Abort(Err(moved.code, f"{name}: {moved.message}", f"{name} : {moved.message_fr or moved.message}"))
                     self._connection.execute(
                         "INSERT INTO production.stock_release_lines "
                         "(id, tenant_id, release_id, packed_on, product_id, quantity, from_location_id, to_location_id, released_by) "

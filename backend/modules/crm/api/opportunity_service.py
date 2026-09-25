@@ -116,7 +116,7 @@ class OpportunityService:
             (opportunity_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"opportunity {opportunity_id} not found")
+            return Err("NOT_FOUND", f"opportunity {opportunity_id} not found", f"opportunité {opportunity_id} introuvable")
 
         current = _opportunity_from_row(row)
         updated = Opportunity(
@@ -193,7 +193,7 @@ class OpportunityService:
             (opportunity_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"opportunity {opportunity_id} not found")
+            return Err("NOT_FOUND", f"opportunity {opportunity_id} not found", f"opportunité {opportunity_id} introuvable")
 
         opportunity = _opportunity_from_row(row)
         if new_stage == "lost":
@@ -205,7 +205,11 @@ class OpportunityService:
             if isinstance(lines_validation, Err):
                 return lines_validation
             if not won_location_id:
-                return Err("MISSING_LOCATION", "a location is required to mark an opportunity won")
+                return Err(
+                    "MISSING_LOCATION",
+                    "a location is required to mark an opportunity won",
+                    "un emplacement est obligatoire pour marquer une opportunité comme gagnée",
+                )
 
         result = transition_opportunity(opportunity, new_stage)
         if isinstance(result, Err):

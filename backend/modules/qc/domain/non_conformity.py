@@ -61,7 +61,11 @@ class DispositionLine:
 
 def transition_non_conformity(non_conformity: NonConformity, new_status: str) -> Result[NonConformity]:
     if new_status not in NC_TRANSITIONS.get(non_conformity.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move non-conformity from {non_conformity.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move non-conformity from {non_conformity.status} to {new_status}",
+            f"impossible de faire passer la non-conformité de {non_conformity.status} à {new_status}",
+        )
     return Ok(replace(non_conformity, status=new_status))
 
 
@@ -69,35 +73,61 @@ def validate_non_conformity(
     *, product_id: str, quantity: float, source_location_id: str, defect_type: str, severity: str
 ) -> Result[None]:
     if not product_id.strip():
-        return Err("MISSING_PRODUCT", "a non-conformity must name the product pulled")
+        return Err("MISSING_PRODUCT", "a non-conformity must name the product pulled", "une non-conformité doit nommer le produit retiré")
     if quantity <= 0:
-        return Err("INVALID_QUANTITY", "the quantity pulled must be positive")
+        return Err("INVALID_QUANTITY", "the quantity pulled must be positive", "la quantité retirée doit être positive")
     if not source_location_id.strip():
-        return Err("MISSING_LOCATION", "a non-conformity must say where the product was pulled from")
+        return Err(
+            "MISSING_LOCATION",
+            "a non-conformity must say where the product was pulled from",
+            "une non-conformité doit indiquer d'où le produit a été retiré",
+        )
     if not defect_type.strip():
-        return Err("MISSING_DEFECT_TYPE", "a non-conformity must name the defect")
+        return Err("MISSING_DEFECT_TYPE", "a non-conformity must name the defect", "une non-conformité doit nommer le défaut")
     if severity not in VALID_SEVERITIES:
-        return Err("INVALID_SEVERITY", f"severity must be one of {sorted(VALID_SEVERITIES)}")
+        return Err(
+            "INVALID_SEVERITY", f"severity must be one of {sorted(VALID_SEVERITIES)}", f"la gravité doit être l'une de {sorted(VALID_SEVERITIES)}"
+        )
     return Ok(None)
 
 
 def validate_disposition_lines(lines: tuple[DispositionLine, ...]) -> Result[None]:
     """Check that the breakdown of a rejected packet makes physical sense."""
     if not lines:
-        return Err("NO_DISPOSITION_LINES", "a disposition must say where each component went")
+        return Err(
+            "NO_DISPOSITION_LINES",
+            "a disposition must say where each component went",
+            "une décision doit indiquer où est parti chaque composant",
+        )
 
     seen: set[tuple[str, str]] = set()
     for line in lines:
         if line.component not in VALID_COMPONENTS:
-            return Err("INVALID_COMPONENT", f"component must be one of {sorted(VALID_COMPONENTS)}")
+            return Err(
+                "INVALID_COMPONENT", f"component must be one of {sorted(VALID_COMPONENTS)}", f"le composant doit être l'un de {sorted(VALID_COMPONENTS)}"
+            )
         if line.disposition not in VALID_DISPOSITIONS:
-            return Err("INVALID_DISPOSITION", f"disposition must be one of {sorted(VALID_DISPOSITIONS)}")
+            return Err(
+                "INVALID_DISPOSITION",
+                f"disposition must be one of {sorted(VALID_DISPOSITIONS)}",
+                f"la décision doit être l'une de {sorted(VALID_DISPOSITIONS)}",
+            )
         if line.quantity <= 0:
-            return Err("INVALID_QUANTITY", "every disposition line needs a positive quantity")
+            return Err(
+                "INVALID_QUANTITY", "every disposition line needs a positive quantity", "chaque ligne de décision a besoin d'une quantité positive"
+            )
         if line.disposition == "regrind" and line.component not in REGRINDABLE_COMPONENTS:
-            return Err("NOT_REGRINDABLE", f"{line.component} cannot be reground — only the product can")
+            return Err(
+                "NOT_REGRINDABLE",
+                f"{line.component} cannot be reground — only the product can",
+                f"{line.component} ne peut pas être rebroyé — seul le produit le peut",
+            )
         key = (line.component, line.disposition)
         if key in seen:
-            return Err("DUPLICATE_LINE", f"{line.component} already has a {line.disposition} line")
+            return Err(
+                "DUPLICATE_LINE",
+                f"{line.component} already has a {line.disposition} line",
+                f"{line.component} a déjà une ligne {line.disposition}",
+            )
         seen.add(key)
     return Ok(None)

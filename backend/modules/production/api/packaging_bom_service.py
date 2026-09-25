@@ -74,7 +74,7 @@ class PackagingBomService:
             (bom_id, tenant_id),
         ).fetchone()
         if target_row is None:
-            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found")
+            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found", f"nomenclature d'emballage {bom_id} introuvable")
         target_product_id = target_row[0]
 
         # Lock every BOM for this target product, not just the one being activated: the
@@ -92,7 +92,7 @@ class PackagingBomService:
         ).fetchall()
         status_by_id = dict(family_rows)
         if bom_id not in status_by_id:
-            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found")
+            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found", f"nomenclature d'emballage {bom_id} introuvable")
 
         bom = PackagingBom(
             id=bom_id, target_product_id=target_product_id, version=0, status=status_by_id[bom_id], lines=()
@@ -124,7 +124,7 @@ class PackagingBomService:
     def archive_bom(self, *, tenant_id: str, actor_id: str, bom_id: str) -> Result[PackagingBom]:
         bom = self._get_bom(tenant_id, bom_id, for_update=True)
         if bom is None:
-            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found")
+            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found", f"nomenclature d'emballage {bom_id} introuvable")
 
         result = transition_bom(bom, "archived")
         if isinstance(result, Err):
@@ -153,7 +153,7 @@ class PackagingBomService:
     ) -> Result[PackagingBom]:
         current = self._get_bom(tenant_id, bom_id, for_update=True)
         if current is None:
-            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found")
+            return Err("NOT_FOUND", f"packaging BOM {bom_id} not found", f"nomenclature d'emballage {bom_id} introuvable")
 
         updated_target_product_id = target_product_id if target_product_id is not None else current.target_product_id
         updated_lines = lines if lines is not None else current.lines

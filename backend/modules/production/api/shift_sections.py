@@ -286,8 +286,8 @@ _SILO_SIDES = ("production", "packing")
 _SILO_PHASES = ("start", "end")
 
 
-def _bad(message: str) -> Err:
-    return Err("INVALID_VALUE", message)
+def _bad(message: str, message_fr: str) -> Err:
+    return Err("INVALID_VALUE", message, message_fr)
 
 
 def _jsonable(value: Any) -> Any:
@@ -298,17 +298,18 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _coerce(col: Col, value: Any, where: str) -> Result[Any]:
+def _coerce(col: Col, value: Any, where: str, where_fr: str | None = None) -> Result[Any]:
     """One cell: blank becomes the column's default, anything else is parsed and range-checked."""
+    where_fr = where_fr if where_fr is not None else where
     if value is None or (isinstance(value, str) and not value.strip()):
         if col.required:
-            return _bad(f"{where}: {col.name} is required")
+            return _bad(f"{where}: {col.name} is required", f"{where_fr} : {col.name} est obligatoire")
         return Ok(col.default)
     try:
         if col.kind in ("num", "int"):
             number = float(value) if col.kind == "num" else int(value)
             if number < 0:
-                return _bad(f"{where}: {col.name} cannot be negative")
+                return _bad(f"{where}: {col.name} cannot be negative", f"{where_fr} : {col.name} ne peut pas être négatif")
             return Ok(number)
         if col.kind == "date":
             return Ok(value if isinstance(value, datetime.date) else datetime.date.fromisoformat(str(value)))
@@ -319,21 +320,21 @@ def _coerce(col: Col, value: Any, where: str) -> Result[Any]:
                 return Ok(value)
             return Ok(datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")))
     except (TypeError, ValueError):
-        return _bad(f"{where}: {col.name} is not a valid {col.kind}")
+        return _bad(f"{where}: {col.name} is not a valid {col.kind}", f"{where_fr} : {col.name} n'est pas un {col.kind} valide")
     text = str(value).strip()
     return Ok(text)
 
 
 def _clean_rows(part: RowSet | ChildSet, rows: Any, label: str) -> Result[list[dict]]:
     if not isinstance(rows, list):
-        return _bad(f"{label} must be a list")
+        return _bad(f"{label} must be a list", f"{label} doit être une liste")
     cleaned: list[dict] = []
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
-            return _bad(f"{label} row {index} must be an object")
+            return _bad(f"{label} row {index} must be an object", f"{label} ligne {index} doit être un objet")
         out: dict[str, Any] = {"_id": str(row["id"]) if row.get("id") else None}
         for col in part.columns:
-            result = _coerce(col, row.get(col.name), f"{label} row {index}")
+            result = _coerce(col, row.get(col.name), f"{label} row {index}", f"{label} ligne {index}")
             if isinstance(result, Err):
                 return result
             out[col.name] = result.value
@@ -353,7 +354,7 @@ def _clean_single(part: Single, value: Any, label: str) -> Result[dict | None]:
     if value is None:
         return Ok(None)
     if not isinstance(value, dict):
-        return _bad(f"{label} must be an object")
+        return _bad(f"{label} must be an object", f"{label} doit être un objet")
     out: dict[str, Any] = {}
     for col in part.columns:
         result = _coerce(col, value.get(col.name), label)
@@ -450,7 +451,7 @@ def _validate_shift_references(
             ).fetchall()
         }
         if wanted - found:
-            return _bad(f"{part.payload_key}: {col.name} does not belong to this shift")
+            return _bad(f"{part.payload_key}: {col.name} does not belong to this shift", f"{part.payload_key} : {col.name} n'appartient pas à ce shift")
     return Ok(None)
 
 
@@ -476,9 +477,13 @@ def _validate_orders(
     )
     for of_id in sorted(wanted):
         if of_id not in statuses:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         if statuses[of_id] not in _OF_STATUSES_ACCEPTING_REPORTS:
-            return Err("OF_NOT_OPEN", f"work order {of_id} is {statuses[of_id]} and accepts no new rows")
+            return Err(
+                "OF_NOT_OPEN",
+                f"work order {of_id} is {statuses[of_id]} and accepts no new rows",
+                f"l'OF {of_id} est {statuses[of_id]} et n'accepte plus de nouvelles lignes",
+            )
     return Ok(None)
 
 
@@ -509,23 +514,30 @@ def _validate_part(
     if part.table == "machine_stops":
         for index, row in enumerate(rows, start=1):
             if row["ended_at"] is not None and row["ended_at"] < row["started_at"]:
-                return _bad(f"stop {index}: it ends before it starts")
+                return _bad(f"stop {index}: it ends before it starts", f"arrêt {index} : il se termine avant de commencer")
         return validate_downtime_lines(tuple(DowntimeLine(motif=r["motif"], minutes=0) for r in rows))
     if part.table == "shift_silo_states":
         seen: set[tuple[str, str]] = set()
         for index, row in enumerate(rows, start=1):
             if row["side"] not in _SILO_SIDES or row["phase"] not in _SILO_PHASES:
-                return _bad(f"silo row {index}: side must be one of {_SILO_SIDES} and phase one of {_SILO_PHASES}")
+                return _bad(
+                    f"silo row {index}: side must be one of {_SILO_SIDES} and phase one of {_SILO_PHASES}",
+                    f"ligne silo {index} : side doit être l'un de {_SILO_SIDES} et phase l'une de {_SILO_PHASES}",
+                )
             if row["level_percent"] is not None and row["level_percent"] > 100:
-                return _bad(f"silo row {index}: level_percent cannot exceed 100")
+                return _bad(f"silo row {index}: level_percent cannot exceed 100", f"ligne silo {index} : level_percent ne peut pas dépasser 100")
             key = (row["side"], row["phase"])
             if key in seen:
-                return Err("DUPLICATE_ROW", f"silo state for {key[0]} / {key[1]} is listed twice")
+                return Err("DUPLICATE_ROW", f"silo state for {key[0]} / {key[1]} is listed twice", f"l'état du silo pour {key[0]} / {key[1]} est listé deux fois")
             seen.add(key)
     if part.table == "shift_packing_rows":
         for index, row in enumerate(rows, start=1):
             if row["dlc_date"] is not None and not row["lot_number"]:
-                return Err("INCOMPLETE_DLC", f"packing row {index}: a DLC needs the lot it belongs to")
+                return Err(
+                    "INCOMPLETE_DLC",
+                    f"packing row {index}: a DLC needs the lot it belongs to",
+                    f"ligne de conditionnement {index} : une DLC a besoin du lot auquel elle appartient",
+                )
     return Ok(None)
 
 
@@ -688,6 +700,16 @@ def clear_section_rows(connection: psycopg.Connection, *, tenant_id: str, shift_
     save_section_rows(connection, tenant_id=tenant_id, shift_report_id=shift_report_id, section_key=section_key, payload=empty)
 
 
+def _wrap_run_check(index: int, checked: Err) -> Err:
+    return Err(checked.code, f"run {index}: {checked.message}",
+               f"passage {index} : {checked.message_fr or checked.message}")
+
+
+def _wrap_packing_check(index: int, checked: Err) -> Err:
+    return Err(checked.code, f"packing row {index}: {checked.message}",
+               f"ligne de conditionnement {index} : {checked.message_fr or checked.message}")
+
+
 def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
     """The completeness the old flow demanded when a report left the team.
 
@@ -714,7 +736,7 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
             )
             checked = validate_daily_stock_targets(detail)
             if isinstance(checked, Err):
-                return Err(checked.code, f"run {index}: {checked.message}")
+                return _wrap_run_check(index, checked)
     elif section_key in _WASTE_REPORT_TYPE:
         if section_key == "waste_packing":
             return Ok(None)
@@ -726,11 +748,17 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
     elif section_key == "packing":
         for index, row in enumerate(payload.get("rows") or [], start=1):
             if not row.get("product_id"):
-                return Err("PRODUCT_REQUIRED", f"packing row {index}: pick the product this lot is made of")
+                return Err(
+                    "PRODUCT_REQUIRED",
+                    f"packing row {index}: pick the product this lot is made of",
+                    f"ligne de conditionnement {index} : choisissez le produit dont ce lot est fait",
+                )
             if float(row.get("packets_counted") or 0) > 0 and not row.get("finished_goods_location_id"):
                 return Err(
                     "NO_DEFAULT_LOCATION",
                     f"packing row {index}: the product has no default storage location; set one on the product, then save the section again",
+                    f"ligne de conditionnement {index} : le produit n'a pas d'emplacement de stockage par défaut ; "
+                    "définissez-en un sur le produit, puis enregistrez à nouveau la section",
                 )
             uses_packaging = any(
                 float(row.get(quantity) or 0) > 0
@@ -740,6 +768,8 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
                 return Err(
                     "NO_DEFAULT_LOCATION",
                     f"packing row {index}: a packaging item has no default storage location; set one on the item, then save the section again",
+                    f"ligne de conditionnement {index} : un article d'emballage n'a pas d'emplacement de stockage par défaut ; "
+                    "définissez-en un sur l'article, puis enregistrez à nouveau la section",
                 )
             detail = ConditionnementReportDetail(
                 packets_counted=float(row.get("packets_counted") or 0),
@@ -756,5 +786,5 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
             )
             checked = validate_conditionnement_stock_targets(detail)
             if isinstance(checked, Err):
-                return Err(checked.code, f"packing row {index}: {checked.message}")
+                return _wrap_packing_check(index, checked)
     return Ok(None)
