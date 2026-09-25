@@ -41,7 +41,8 @@ import {
   Zap,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
-import { useI18n, type Language, type TranslationKey } from "../lib/i18n";
+import { useI18n, type TranslationKey } from "../lib/i18n";
+import { LanguageToggle } from "../components/patterns/LanguageToggle";
 import { cn } from "../lib/utils";
 import { outlineIcon } from "../components/patterns/outlineIcon";
 import ProductionIcon from "../assets/icons/production/line.svg?react";
@@ -390,31 +391,5 @@ export function Sidebar() {
         </button>
       </div>
     </aside>
-  );
-}
-
-function LanguageToggle({ language, onChange }: { language: Language; onChange: (language: Language) => void }) {
-  return (
-    <div className="relative flex shrink-0 rounded-md bg-muted p-0.5 text-[10px] font-semibold uppercase">
-      {(["en", "fr"] as const).map((code) => (
-        <button
-          key={code}
-          onClick={() => onChange(code)}
-          className={cn(
-            "relative z-10 rounded px-1.5 py-1 transition-colors",
-            language === code ? "text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {language === code && (
-            <motion.span
-              layoutId="lang-toggle"
-              className="absolute inset-0 -z-10 rounded bg-primary"
-              transition={{ type: "spring", stiffness: 500, damping: 40 }}
-            />
-          )}
-          {code}
-        </button>
-      ))}
-    </div>
   );
 }

@@ -312,6 +312,19 @@ const en = {
   "login.submit": "Sign in",
   "login.submitting": "Signing in…",
   "login.failed": "Unable to sign in",
+  "login.secureAccess": "Secure access",
+  "login.tagline": "Production • Quality • Performance",
+  "login.heroTitle": "Manage your factory with confidence.",
+  "login.heroSubtitle": "Centralize production, quality, workforce and stock visibility in one secure operational workspace.",
+  "login.feature.production": "Production planning",
+  "login.feature.quality": "Quality and traceability",
+  "login.feature.warehouse": "Warehouse and performance tracking",
+  "login.subtitle": "Use your work e-mail and password to open your workspace.",
+  "login.emailPlaceholder": "you@sonalim.com",
+  "login.showPassword": "Show password",
+  "login.hidePassword": "Hide password",
+  "login.language": "Language",
+  "login.footer": "Reserved for authorised Sonalim staff.",
 
   "app.loading": "Loading…",
   "app.startingUp": "Starting up…",
@@ -3814,6 +3827,19 @@ const fr: Record<TranslationKey, string> = {
   "login.submit": "Se connecter",
   "login.submitting": "Connexion…",
   "login.failed": "Connexion impossible",
+  "login.secureAccess": "Accès sécurisé",
+  "login.tagline": "Production • Qualité • Performance",
+  "login.heroTitle": "Pilotez votre usine en toute confiance.",
+  "login.heroSubtitle": "Centralisez la production, la qualité, les équipes et la visibilité des stocks dans un espace de travail sécurisé.",
+  "login.feature.production": "Planification de la production",
+  "login.feature.quality": "Qualité et traçabilité",
+  "login.feature.warehouse": "Entrepôt et suivi de la performance",
+  "login.subtitle": "Utilisez votre e-mail professionnel et votre mot de passe pour ouvrir votre espace.",
+  "login.emailPlaceholder": "vous@sonalim.com",
+  "login.showPassword": "Afficher le mot de passe",
+  "login.hidePassword": "Masquer le mot de passe",
+  "login.language": "Langue",
+  "login.footer": "Réservé au personnel autorisé de Sonalim.",
 
   "app.loading": "Chargement…",
   "app.startingUp": "Démarrage en cours…",
@@ -7019,9 +7045,11 @@ const I18nContext = createContext<I18nContextValue | null>(null);
 /** The language the user picked, readable outside React (the API client uses it for error text). */
 export function readStoredLanguage(): Language {
   try {
-    return localStorage.getItem(STORAGE_KEY) === "fr" ? "fr" : "en";
+    // French is the plant's working language, so it is the default until the
+    // user picks otherwise; a saved choice always wins.
+    return localStorage.getItem(STORAGE_KEY) === "en" ? "en" : "fr";
   } catch {
-    return "en";
+    return "fr";
   }
 }
 
