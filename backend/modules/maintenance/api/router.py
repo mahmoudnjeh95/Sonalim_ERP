@@ -152,3 +152,17 @@ def unarchive_equipment(
             raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_equipment(result.value)
+
+
+@router.delete("/equipment/{equipment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_equipment(
+    equipment_id: str,
+    tenant: TenantContext = Depends(require_permission("maintenance.delete_equipment")),
+) -> None:
+    with get_connection() as connection:
+        service = EquipmentService(connection)
+        result = service.delete_equipment(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, equipment_id=equipment_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
+        connection.commit()

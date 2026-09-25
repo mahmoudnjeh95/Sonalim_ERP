@@ -10,6 +10,7 @@
   "permissions": [
     "maintenance.view_equipment",
     "maintenance.manage_equipment",
-    "maintenance.admin_equipment"
+    "maintenance.admin_equipment",
+    "maintenance.delete_equipment"
   ]
 }
