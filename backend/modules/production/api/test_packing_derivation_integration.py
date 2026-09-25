@@ -7,6 +7,7 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
+from modules.production.api.legacy_report_ledger import materialize_shift
 from modules.production.api.product_classification_service import ProductClassificationService
 from modules.production.api.service import WorkOrderService
 from modules.production.api.shift_report_service import ShiftReportService
@@ -64,10 +65,15 @@ def _saved_row(service, shift_id):
 def test_the_row_takes_its_of_type_packets_and_stores_from_the_run(db, env):
     service, shift_id, of_id, run_id = _shift_with_run(db, env)
     _ok(_save_packing(service, env, shift_id, [{
-        "run_id": run_id, "carton_quantity": 10, "waste_carton_quantity": 1, "carton_product_id": env["carton"],
+        "run_id": run_id, "carton_quantity": 10, "carton_product_id": env["carton"],
         "film_product_id": env["film"], "film_quantity": 5,
     }]))
+    _ok(service.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="waste_packing",
+        payload={"waste_lines": [{"category": "packaging", "product_id": env["carton"], "quantity": 1}]},
+    ))
     row = _saved_row(service, shift_id)
+    assert row["waste_carton_quantity"] == 1
     assert row["of_id"] == of_id
     assert row["packing_type"] == "Sachet 500 g"
     assert row["packets_counted"] == 108  # (10 - 1) cartons x 12 packets
@@ -147,3 +153,33 @@ def test_derived_figures_follow_the_row_when_the_screen_does_not_send_them_back(
     saved = _saved_row(service, shift_id)
     _ok(_save_packing(service, env, shift_id, [{"id": saved["id"], "run_id": run_id, "carton_quantity": 20}]))
     assert _saved_row(service, shift_id)["packets_counted"] == 240
+
+
+def test_a_lost_carton_is_the_rows_empty_carton_and_is_not_a_second_waste_line(db, env):
+    service, shift_id, _, run_id = _shift_with_run(db, env)
+    _ok(_save_packing(service, env, shift_id, [{
+        "run_id": run_id, "carton_quantity": 10, "carton_product_id": env["carton"], "film_product_id": env["film"],
+        "waste_carton_quantity": 7,  # typed by an old screen: the packing-waste lines decide
+    }]))
+    assert _saved_row(service, shift_id)["waste_carton_quantity"] == 0
+    _ok(service.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="waste_packing",
+        payload={"waste_lines": [
+            {"category": "packaging", "product_id": env["carton"], "quantity": 2},
+            {"category": "packaging", "product_id": env["film"], "quantity": 0.5},
+        ]},
+    ))
+    row = _saved_row(service, shift_id)
+    assert row["waste_carton_quantity"] == 2
+    assert row["packets_counted"] == 96  # (10 - 2) cartons x 12 packets
+
+    _ok(materialize_shift(db, tenant_id=TENANT, shift_report_id=shift_id, actor_id=env["actor"], provisional=True))
+    lines = db.execute(
+        "SELECT product_id, quantity FROM production.report_waste_lines WHERE tenant_id = %s AND report_id = %s",
+        (TENANT, row["id"]),
+    ).fetchall()
+    assert [(product, float(quantity)) for product, quantity in lines] == [(env["film"], 0.5)]
+    reported = db.execute(
+        "SELECT waste_carton_quantity FROM production.conditionnement_reports WHERE report_id = %s", (row["id"],)
+    ).fetchone()
+    assert float(reported[0]) == 2

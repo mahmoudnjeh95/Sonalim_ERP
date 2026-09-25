@@ -238,3 +238,24 @@ class EquipmentService:
             payload={"archived_at": archived_at.isoformat() if archived_at is not None else None},
         )
         return Ok(replace(current, archived_at=archived_at))
+
+    def delete_equipment(self, *, tenant_id: str, actor_id: str, equipment_id: str) -> Result[Equipment]:
+        row = self._connection.execute(
+            f"SELECT {_COLUMNS} FROM maintenance.equipment WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (equipment_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"equipment {equipment_id} not found", f"équipement {equipment_id} introuvable")
+
+        current = _equipment(row)
+        self._connection.execute("DELETE FROM maintenance.equipment WHERE id = %s", (equipment_id,))
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="equipment.deleted",
+            entity_type="equipment",
+            entity_id=equipment_id,
+            payload={},
+        )
+        return Ok(current)

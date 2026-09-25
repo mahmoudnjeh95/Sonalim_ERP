@@ -141,14 +141,22 @@ export function useShiftReferenceData(enabled: boolean) {
       // Products already packed this shift -- what a "Produit" packing-waste line may name.
       const packedProductIds = new Set(rowsOf("packing", "rows").map((r) => String(r.product_id)).filter(Boolean));
       const packedProducts = [...packedProductIds].map((id) => ({ value: id, label: productName.get(id) ?? "—" }));
-      // Packaging waste is weighed in kg, so only items stocked by weight (film) can be named;
-      // a wasted carton goes in the packing row's "Cartons déchet". An item a saved line
-      // already names stays, so its name still shows (the server refuses it on the next save).
-      const byWeight = new Set((uoms.data ?? []).filter((u) => u.category === "weight").map((u) => u.id));
+      // Packaging lost is film, carton, bobine, scotch or ruban used on this shift's packing rows, so the
+      // list stays short; every packaging item until a packing row names one. A saved line's item stays.
+      const usedPackaging = new Set(
+        rowsOf("packing", "rows")
+          .flatMap((r) => [r.film_product_id, r.carton_product_id, r.tape_product_id, r.scotch_product_id, r.ruban_product_id])
+          .filter((id): id is string => typeof id === "string" && id !== ""),
+      );
       const savedWasteItems = new Set(rowsOf("waste_packing", "waste_lines").map((r) => String(r.product_id)));
       const packagingWasteItems = productList
-        .filter((p) => classOf.get(p.id)?.packaging_kind && (!uoms.data || byWeight.has(p.uom_id) || savedWasteItems.has(p.id)))
+        .filter((p) =>
+          usedPackaging.size > 0
+            ? usedPackaging.has(p.id) || savedWasteItems.has(p.id)
+            : classOf.get(p.id)?.packaging_kind || savedWasteItems.has(p.id),
+        )
         .map(asOption);
+      const uomCode = new Map((uoms.data ?? []).map((u) => [u.id, u.code]));
       // Finished product lost while packing is filed once, under packing waste as "Produit";
       // the old Daily kind for it is only kept on a line that already uses it.
       const savedProductionKinds = new Set(rowsOf("waste_production", "waste_lines").map((r) => String(r.category)));
@@ -192,6 +200,7 @@ export function useShiftReferenceData(enabled: boolean) {
         itemsScotch: itemsOfKind("scotch"),
         itemsRuban: itemsOfKind("ruban"),
         itemsPackaging: packagingWasteItems,
+        itemUnits: productList.map((p) => ({ value: p.id, label: uomCode.get(p.uom_id) ?? "" })),
         fuelSuppliers: suppliersOf(fuelVendors.data, energy?.fuel_supplier_id),
         gasoilSuppliers: suppliersOf(gasoilVendors.data, energy?.gasoil_supplier_id),
         packedProducts,

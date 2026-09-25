@@ -56,3 +56,17 @@ def test_several_orders_of_the_same_product_are_ambiguous():
 
 def test_a_shift_with_no_production_cannot_place_the_row():
     assert resolve_packing_order(given_of_id=None, run_of_id=None, shift_orders={}, product_id="p") == (None, "PRODUCTION_FIRST")
+
+
+def test_a_lost_carton_belongs_to_the_row_it_names_else_to_the_first_row_packing_with_that_carton():
+    from modules.production.domain.packing_derivation import carton_waste_owners
+
+    rows = [("r1", "c-a"), ("r2", "c-b"), ("r3", "c-a")]
+    lines = [
+        ("named", "c-a", "r3"),
+        ("unnamed", "c-a", None),
+        ("wrong-row", "c-b", "r1"),
+        ("film", "film-x", None),
+        ("no-item", None, "r1"),
+    ]
+    assert carton_waste_owners(rows, lines) == {"named": "r3", "unnamed": "r1", "wrong-row": "r2"}

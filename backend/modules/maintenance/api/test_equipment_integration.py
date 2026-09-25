@@ -172,3 +172,34 @@ def test_archive_and_unarchive_are_in_the_audit_trail(db, actor):
         ).fetchall()
     ]
     assert actions[-2:] == ["equipment.archived", "equipment.unarchived"]
+
+
+def test_deleting_a_machine_removes_it_completely(db, actor):
+    service = EquipmentService(db)
+    machine = _create(db, actor).value
+
+    result = service.delete_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+    assert isinstance(result, Ok)
+
+    listed = service.list_equipment(tenant_id=TENANT, work_center_id=LINE, include_archived=True)
+    assert [e.id for e in listed] == []
+
+
+def test_deleting_an_unknown_machine_is_not_found(db, actor):
+    result = EquipmentService(db).delete_equipment(tenant_id=TENANT, actor_id=actor, equipment_id="missing")
+    assert isinstance(result, Err) and result.code == "NOT_FOUND"
+
+
+def test_deletion_is_in_the_audit_trail(db, actor):
+    service = EquipmentService(db)
+    machine = _create(db, actor).value
+    service.delete_equipment(tenant_id=TENANT, actor_id=actor, equipment_id=machine.id)
+
+    actions = [
+        row[0]
+        for row in db.execute(
+            "SELECT action FROM core.audit_log WHERE tenant_id = %s AND entity_id = %s",
+            (TENANT, machine.id),
+        ).fetchall()
+    ]
+    assert "equipment.deleted" in actions
