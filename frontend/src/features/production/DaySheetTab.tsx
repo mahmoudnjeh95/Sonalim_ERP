@@ -97,30 +97,41 @@ function StepButton({
   );
 }
 
+const emptyRow = (section: DaySheetSection, key: string, ref: string | null): DaySheetRow => ({
+  section,
+  key,
+  ref,
+  name: null,
+  unit: "kg",
+  by_column: {},
+  total: null,
+});
+
 /**
  * The rows the sheet prints for one section, in print order.
  *
  * The déchet kinds are printed whether or not anyone lost anything to them, as the
  * Excel prints all of its rows: a kind that is missing from the sheet would read as
- * "not part of this plant's process" instead of "nothing recorded".
+ * "not part of this plant's process" instead of "nothing recorded". The same goes for
+ * what is lost while packing -- the product (with the déchets, in their total) and
+ * the packaging (under Conditionnement, in a total of its own: film is not pasta).
  */
 function sectionRows(section: DaySheetSection, rows: DaySheetRow[], wasteCategories: string[]): DaySheetRow[] {
   const own = rows.filter((row) => row.section === section);
+  if (section === "packing") {
+    if (own.some((row) => row.key === "packing_waste")) return own;
+    const total = own.findIndex((row) => row.key === "total_packing_waste");
+    return total < 0 ? own : [...own.slice(0, total), emptyRow(section, "packing_waste", null), ...own.slice(total)];
+  }
   if (section !== "waste") return own;
   const byKind = new Map(own.filter((row) => row.key === "waste").map((row) => [row.ref, row]));
-  const kinds: DaySheetRow[] = wasteCategories.map(
-    (category) =>
-      byKind.get(category) ?? {
-        section,
-        key: "waste",
-        ref: category,
-        name: null,
-        unit: "kg",
-        by_column: {},
-        total: null,
-      },
-  );
-  return [...kinds, ...own.filter((row) => row.key !== "waste")];
+  const kinds: DaySheetRow[] = wasteCategories.map((category) => byKind.get(category) ?? emptyRow(section, "waste", category));
+  const packed = own.filter((row) => row.key === "packed_product_waste");
+  return [
+    ...kinds,
+    ...(packed.length > 0 ? packed : [emptyRow(section, "packed_product_waste", null)]),
+    ...own.filter((row) => row.key !== "waste" && row.key !== "packed_product_waste"),
+  ];
 }
 
 /** The rows that add up the ones above them, so they read as totals and not as one more line. */
@@ -206,20 +217,28 @@ function SheetGrid({
   const { t } = useI18n();
   const { label: wasteLabel, categoriesFor } = useWasteTypes();
   const [expandedLots, setExpandedLots] = useState<Set<string>>(() => new Set());
-  const wasteCategories = useMemo(
-    () =>
-      categoriesFor(
-        "daily",
-        rows.filter((row) => row.key === "waste" && row.ref).map((row) => row.ref!),
-      ),
-    [categoriesFor, rows],
-  );
+  // Finished product lost while packing now comes from the packing side (its own rows);
+  // the old Daily kind for it is only printed on a sheet where someone still used it.
+  const wasteCategories = useMemo(() => {
+    const reported = rows.filter((row) => row.key === "waste" && row.ref).map((row) => row.ref!);
+    return categoriesFor("daily", reported).filter(
+      (category) => category !== "finished_product_conditioning" || reported.includes(category),
+    );
+  }, [categoriesFor, rows]);
   const allLots = useMemo(() => new Set(columns.flatMap((column) => column.lots)), [columns]);
 
   function rowLabel(row: DaySheetRow): string {
     if (row.key === "semolina" || row.key === "finished") return row.name ?? "—";
     if (row.key === "waste") return wasteLabel(row.ref ?? "");
-    if (row.key === "packing_waste") return `${wasteLabel(row.ref ?? "")} · ${row.name ?? "—"}`;
+    if (row.key === "packed_product_waste") {
+      const kind = wasteLabel("finished_product_conditioning");
+      return row.name ? `${kind} · ${row.name}` : kind;
+    }
+    if (row.key === "packing_waste") {
+      // Built-in packaging reads "Déchet emballage"; a plant's own kind keeps its name.
+      const kind = !row.ref || row.ref === "packaging" ? t("production.daySheet.row.packing_waste") : wasteLabel(row.ref);
+      return row.name ? `${kind} · ${row.name}` : kind;
+    }
     return t(`production.daySheet.row.${row.key}` as TranslationKey);
   }
 

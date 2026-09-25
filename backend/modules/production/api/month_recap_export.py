@@ -49,7 +49,7 @@ from modules.production.api.day_sheet_service import (
     shift_columns,
 )
 from modules.production.api.waste_type_service import WasteTypeService
-from modules.production.domain.day_sheet import KG_PER_TONNE, SECTIONS, DailyFact, PackingFact
+from modules.production.domain.day_sheet import KG_PER_TONNE, PRODUCT_WASTE, SECTIONS, DailyFact, PackingFact
 
 # -- French labels ------------------------------------------------------------------
 
@@ -76,6 +76,7 @@ ROW_LABELS_FR = {
     "downtime_hours": "Heures d'arrêt",
     "hourly_output": "Production horaire",
     "total_waste": "Total déchets",
+    "total_packing_waste": "Total déchets emballage",
     "total_finished": "Total conditionné",
     "yield": "Rendement (conditionné ÷ fabrication)",
     "packets": "Paquets comptés",
@@ -376,12 +377,27 @@ class Agg:
         return ratio(self.downtime_minutes, self.minutes + self.downtime_minutes, 100)
 
     @property
-    def waste_total_kg(self) -> float:
+    def production_waste_kg(self) -> float:
         return sum(self.waste_kg.values())
 
     @property
-    def packing_waste_kg(self) -> float:
-        return sum(q for (_c, _n, unit), q in self.packing_waste.items() if unit == "kg")
+    def packed_product_waste_kg(self) -> float:
+        """Finished product lost while packing -- pasta, recorded in kilos (the Excel's "PF Cdt")."""
+        return sum(q for (category, _n, _u), q in self.packing_waste.items() if category == PRODUCT_WASTE)
+
+    @property
+    def waste_total_kg(self) -> float:
+        """Every kilo of pasta lost: the production stages and the product lost while packing,
+        the same "Total déchets" as the sheet's. Packaging (film) is not pasta and stays apart."""
+        return self.production_waste_kg + self.packed_product_waste_kg
+
+    @property
+    def packaging_waste_kg(self) -> float:
+        """Packaging lost while packing (film), in kilos. A line against an item counted in
+        pieces is left out: it is not a weight."""
+        return sum(
+            q for (category, _n, unit), q in self.packing_waste.items() if category != PRODUCT_WASTE and unit == "kg"
+        )
 
     @property
     def good_carton(self) -> float:
@@ -597,8 +613,11 @@ def _row_label(row: dict, waste_labels: dict[str, str]) -> str:
         return row["name"] or DASH
     if key == "waste":
         return waste_labels.get(row["ref"] or "", row["ref"] or DASH)
+    if key == "packed_product_waste":
+        label = waste_labels.get("finished_product_conditioning") or WASTE_LABELS_FR["finished_product_conditioning"]
+        return f"{label} · {row['name'] or DASH}"
     if key == "packing_waste":
-        return f"{waste_labels.get(row['ref'] or '', row['ref'] or DASH)} · {row['name'] or DASH}"
+        return f"Déchet {waste_labels.get(row['ref'] or '', row['ref'] or DASH).lower()} · {row['name'] or DASH}"
     return ROW_LABELS_FR.get(key, key)
 
 
@@ -721,8 +740,9 @@ def _kpi_rows(totals: list[tuple[str, Agg, int]]) -> tuple[list[str], list[list]
         ("Gasoil groupe électrogène", "l", lambda a, p: a.gasoil_l),
         ("Eau", "l", lambda a, p: a.water_l),
         ("Eau par tonne fabriquée", "l/T", lambda a, p: a.per_tonne(a.water_l)),
-        ("Déchets de production", "kg", lambda a, p: a.waste_total_kg),
+        ("Total déchets (production + produit perdu au conditionnement)", "kg", lambda a, p: a.waste_total_kg),
         ("Déchets par tonne fabriquée", "kg/T", lambda a, p: a.per_tonne(a.waste_total_kg)),
+        ("Déchets d'emballage (film)", "kg", lambda a, p: a.packaging_waste_kg),
         ("Jours avec production", "n", lambda a, p: len(a.dates)),
         ("Rapports validés", "n", lambda a, p: a.reports),
         ("Rapports non validés (non comptés)", "n", lambda a, p: p),
@@ -954,14 +974,14 @@ def build_packing_consumption_sheet(wb: Workbook, data: MonthRecapData) -> None:
         headers = [
             "Date", "Jour", "Conditionné (T)", "Paquets", f"Cartons ({carton_u})".replace(" ()", ""), "Cartons déchet",
             f"Film ({film_u})".replace(" ()", ""), f"Scotch ({scotch_u})".replace(" ()", ""), f"Ruban ({ruban_u})".replace(" ()", ""),
-            "Déchets cond. (kg)", "Film / T", "Cartons / T", "Paquets / carton", "Lots",
+            "Déchets emballage (kg)", "Film / T", "Cartons / T", "Paquets / carton", "Lots",
         ]
         units: list[str | None] = [None, None, "T", "ea", carton_u or None, carton_u or None, film_u or None, scotch_u or None, ruban_u or None, "kg", "kg/T", "ea/T", "ea/carton", None]
 
         def _line(label_a, label_b, agg: Agg, lots: str) -> list:
             return [
                 label_a, label_b, agg.finished_t, agg.packets, agg.carton, agg.waste_carton, agg.film, agg.scotch, agg.ruban,
-                agg.packing_waste_kg, ratio(agg.film, agg.finished_t), ratio(agg.good_carton, agg.finished_t),
+                agg.packaging_waste_kg, ratio(agg.film, agg.finished_t), ratio(agg.good_carton, agg.finished_t),
                 ratio(agg.packets, agg.good_carton), lots,
             ]
 
@@ -1090,47 +1110,66 @@ def build_waste_sheet(wb: Workbook, data: MonthRecapData) -> None:
     ws = wb.create_sheet("Déchets")
     row = _title(
         ws, 1, 7, f"Déchets — {month_phrase(data.month)}",
-        "Déchets de production en kilos par étape, déchets de conditionnement dans l'unité de l'article perdu, et le poids par tonne fabriquée.",
+        "Pâtes perdues en kilos -- par étape de production et produit perdu au conditionnement -- et le poids par tonne "
+        "fabriquée ; les déchets d'emballage (film) à part, car ce ne sont pas des pâtes.",
     )
     for line in data.lines:
         total = line_total(line.loaded)
         row = _heading(ws, row, 7, f"{line.tag} · {line.line['name']} — par étape")
+        product_label = data.waste_labels.get("finished_product_conditioning") or WASTE_LABELS_FR["finished_product_conditioning"]
         body = [
             ["Production", data.waste_labels.get(category, category), kilos, "kg", total.per_tonne(kilos)]
             for category, kilos in sorted(total.waste_kg.items(), key=lambda item: -item[1])
         ]
         body += [
-            ["Conditionnement", f"{data.waste_labels.get(category, category)} · {name or DASH}", quantity, unit or "", total.per_tonne(quantity) if unit == "kg" else None]
-            for (category, name, unit), quantity in sorted(total.packing_waste.items(), key=lambda item: -item[1])
+            ["Conditionnement", f"{product_label} · {name or DASH}", quantity, "kg", total.per_tonne(quantity)]
+            for (category, name, _unit), quantity in sorted(total.packing_waste.items(), key=lambda item: -item[1])
+            if category == PRODUCT_WASTE
         ]
         if not body:
             row = _empty_note(ws, row, "Aucun déchet enregistré sur les rapports validés.")
         else:
-            kilos = total.waste_total_kg + total.packing_waste_kg
             row = _table(
                 ws, row, ["Étape", "Type de déchet", "Quantité", "Unité", "kg par tonne fabriquée"],
                 [None, None, "kg", None, "kg/T"], body,
-                total=[None, "Total en kilos", kilos, "kg", total.per_tonne(kilos)],
+                total=[None, "Total déchets", total.waste_total_kg, "kg", total.per_tonne(total.waste_total_kg)],
+            )
+        packaging = [
+            [f"Déchet {data.waste_labels.get(category, category).lower()} · {name or DASH}", quantity, unit or ""]
+            for (category, name, unit), quantity in sorted(total.packing_waste.items(), key=lambda item: -item[1])
+            if category != PRODUCT_WASTE
+        ]
+        if packaging:
+            row = _heading(ws, row, 7, f"{line.tag} · {line.line['name']} — déchets d'emballage (hors total déchets)")
+            row = _table(
+                ws, row, ["Article perdu", "Quantité", "Unité"], [None, "kg", None], packaging,
+                total=["Total déchets emballage", total.packaging_waste_kg, "kg"],
             )
         row = _heading(ws, row, 7, f"{line.tag} · {line.line['name']} — par jour")
-        by_day = {d: a for d, a in aggregate(line.loaded, lambda r: r["date"]).items() if a.waste_total_kg or a.packing_waste_kg}
+        by_day = {
+            d: a for d, a in aggregate(line.loaded, lambda r: r["date"]).items() if a.waste_total_kg or a.packaging_waste_kg
+        }
         if not by_day:
             row = _empty_note(ws, row, "Aucun déchet enregistré ce mois-ci.")
             continue
         body = [
-            [day, DAYS_FR[day.weekday()], agg.waste_total_kg, agg.packing_waste_kg, agg.fab_t, agg.per_tonne(agg.waste_total_kg + agg.packing_waste_kg)]
+            [day, DAYS_FR[day.weekday()], agg.production_waste_kg, agg.packed_product_waste_kg, agg.waste_total_kg,
+             agg.fab_t, agg.per_tonne(agg.waste_total_kg), agg.packaging_waste_kg]
             for day, agg in sorted(by_day.items())
         ]
         day_total = Agg()
         for agg in by_day.values():
             day_total.merge(agg)
         row = _table(
-            ws, row, ["Date", "Jour", "Déchets production (kg)", "Déchets conditionnement (kg)", "Fabrication (T)", "kg par tonne"],
-            [None, None, "kg", "kg", "T", "kg/T"], body,
-            total=[None, f"{len(by_day)} jour(s)", day_total.waste_total_kg, day_total.packing_waste_kg, day_total.fab_t,
-                   day_total.per_tonne(day_total.waste_total_kg + day_total.packing_waste_kg)],
+            ws, row,
+            ["Date", "Jour", "Déchets production (kg)", "Produit perdu au cond. (kg)", "Total déchets (kg)",
+             "Fabrication (T)", "kg par tonne", "Déchets emballage (kg)"],
+            [None, None, "kg", "kg", "kg", "T", "kg/T", "kg"], body,
+            total=[None, f"{len(by_day)} jour(s)", day_total.production_waste_kg, day_total.packed_product_waste_kg,
+                   day_total.waste_total_kg, day_total.fab_t, day_total.per_tonne(day_total.waste_total_kg),
+                   day_total.packaging_waste_kg],
         )
-    _widths(ws, [18, 40, 22, 24, 16, 16, 12])
+    _widths(ws, [18, 40, 22, 24, 18, 16, 12, 20])
     ws.freeze_panes = "A4"
 
 

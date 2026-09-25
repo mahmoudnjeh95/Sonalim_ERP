@@ -249,8 +249,10 @@ def test_product_lost_while_packing_stays_in_raw_kilos_even_when_an_item_is_name
     of_id = _open_of(db, env)
     _packing(db, env, of_id, waste_lines=(WasteLine(category="product", product_id=env["semolina"], quantity=2),))
     sheet = _sheet(db, env)
-    row = next(r for r in sheet["rows"] if r["key"] == "packing_waste" and r["ref"] == "product")
-    assert (row["unit"], row["total"]) == ("kg", 2)
+    row = next(r for r in sheet["rows"] if r["key"] == "packed_product_waste" and r["ref"] == env["semolina"])
+    assert (row["section"], row["unit"], row["total"]) == ("waste", "kg", 2)
+    # Pasta lost while packing counts in the déchets' total, like the Excel's "PF Cdt".
+    assert _row(sheet, "total_waste")["total"] == 2
 
 
 def test_packaging_rows_are_in_the_items_own_base_unit(db, env):

@@ -71,7 +71,7 @@ def _loaded() -> LoadedSheet:
     packing = {
         "p1": PackingFact(column="", product_id="coq", product_name="Coquillette 500 g", finished_t=9.0, packets=18000, film=100, carton=900),
         "p2": PackingFact(column="", product_id="coq", product_name="Coquillette 500 g", finished_t=5.0, packets=10000, film=50, carton=500,
-                          waste=(("packaging", "film", "Film", 2.0, "kg"),)),
+                          waste=(("packaging", "film", "Film", 2.0, "kg"), ("product", "coq", "Coquillette 500 g", 3.0, "kg"))),
     }
     return LoadedSheet(
         reports=reports,
@@ -201,7 +201,13 @@ def test_the_analysis_sheets_add_the_same_facts_up_by_day_lot_motif_and_team(wor
 
     waste = workbook["Déchets"]
     kinds = {waste.cell(row=r, column=2).value: waste.cell(row=r, column=3).value for r in range(1, 30)}
-    assert kinds["Presse"] == 40 and kinds["Emballage · Film"] == 2
+    assert kinds["Presse"] == 40
+    # Pasta lost while packing counts in the déchets' total; film is not pasta, so it is
+    # listed apart and left out of it.
+    assert kinds["Produit fini (conditionnement) · Coquillette 500 g"] == 3
+    assert kinds["Total déchets"] == 43
+    packaging = {waste.cell(row=r, column=1).value: waste.cell(row=r, column=2).value for r in range(1, 30)}
+    assert packaging["Déchet emballage · Film"] == 2 and packaging["Total déchets emballage"] == 2
 
     trend = workbook["Tendance"]
     assert trend._charts, "the trend sheet carries its charts"

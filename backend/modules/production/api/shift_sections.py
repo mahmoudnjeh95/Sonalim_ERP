@@ -487,6 +487,49 @@ def _validate_orders(
     return Ok(None)
 
 
+def _validate_shift_waste(
+    connection: psycopg.Connection, tenant_id: str, section_key: str, rows: list[dict]
+) -> Result[None]:
+    """One place per loss, and every packaging loss in kilos.
+
+    Finished product lost while packing is filed on the packing side as `product`; the
+    old Daily form's `finished_product_conditioning` would be a second place for the same
+    kilos, counted twice in the sheet's total. A packaging line is typed in kilos, so it
+    may only name an item stocked by weight (film): a wasted carton is a count, and it
+    already has its own field on the packing row (`waste_carton_quantity`).
+    """
+    if section_key == "waste_production":
+        for index, row in enumerate(rows, start=1):
+            if row["category"] == "finished_product_conditioning":
+                return _bad(
+                    f"waste {index}: finished product lost while packing is recorded under packing waste, as Product",
+                    f"déchet {index} : le produit perdu au conditionnement se saisit dans les déchets de conditionnement, en Produit",
+                )
+        return Ok(None)
+    items = sorted({row["product_id"] for row in rows if row["category"] == "packaging" and row["product_id"]})
+    if not items:
+        return Ok(None)
+    by_weight = dict(
+        connection.execute(
+            """
+            SELECT p.id, COALESCE(u.category = 'weight', FALSE)
+            FROM core.products p LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
+            WHERE p.tenant_id = %s AND p.id = ANY(%s)
+            """,
+            (tenant_id, items),
+        ).fetchall()
+    )
+    for index, row in enumerate(rows, start=1):
+        if row["category"] == "packaging" and row["product_id"] and not by_weight.get(row["product_id"], False):
+            return _bad(
+                f"waste {index}: packaging waste is weighed in kg, so the item must be stocked by weight "
+                "(wasted cartons go in the packing row's waste cartons)",
+                f"déchet {index} : le déchet d'emballage se pèse en kg, l'article doit donc être géré au poids "
+                "(les cartons perdus se saisissent dans « cartons déchet » de la ligne de conditionnement)",
+            )
+    return Ok(None)
+
+
 def _validate_part(
     connection: psycopg.Connection,
     tenant_id: str,
@@ -506,11 +549,14 @@ def _validate_part(
 
     if part.table == "shift_waste_lines":
         report_type = _WASTE_REPORT_TYPE[section_key]
-        return validate_waste_lines(
+        checked = validate_waste_lines(
             tuple(WasteLine(category=r["category"], quantity=r["quantity"]) for r in rows),
             report_type=report_type,
             custom_categories=custom_waste_categories.get(report_type, frozenset()),
         )
+        if isinstance(checked, Err):
+            return checked
+        return _validate_shift_waste(connection, tenant_id, section_key, rows)
     if part.table == "machine_stops":
         for index, row in enumerate(rows, start=1):
             if row["ended_at"] is not None and row["ended_at"] < row["started_at"]:

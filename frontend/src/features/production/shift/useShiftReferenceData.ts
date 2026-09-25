@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { listEquipment } from "../../maintenance/api";
-import { listLocations, listProducts, listSuggestedVendors, type SuggestedVendor } from "../../warehouse/api";
+import { listLocations, listProducts, listSuggestedVendors, listUoms, type SuggestedVendor } from "../../warehouse/api";
 import { listPartners } from "../../partners/api";
 import { isProductionLine, listClassifications, listMolds, listWorkCenters, listWorkOrders, type PackagingKind } from "../api";
 import { DASHBOARD_SETTINGS_QUERY_KEY, getDashboardSettings } from "../board/api";
@@ -31,6 +31,7 @@ export function useShiftReferenceData(enabled: boolean) {
   const settings = useQuery({ queryKey: DASHBOARD_SETTINGS_QUERY_KEY, queryFn: () => getDashboardSettings(token), enabled });
   const orders = useQuery({ queryKey: ["production", "shift", "orders"], queryFn: () => listWorkOrders(token), enabled });
   const products = useQuery({ queryKey: ["production", "shift", "products"], queryFn: () => listProducts(token), enabled });
+  const uoms = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token), enabled });
   const classifications = useQuery({ queryKey: ["production", "shift", "classifications"], queryFn: () => listClassifications(token), enabled, retry: false });
   const locations = useQuery({ queryKey: ["production", "shift", "locations"], queryFn: () => listLocations(token), enabled });
   const molds = useQuery({ queryKey: ["production", "shift", "molds"], queryFn: () => listMolds(token), enabled });
@@ -140,6 +141,17 @@ export function useShiftReferenceData(enabled: boolean) {
       // Products already packed this shift -- what a "Produit" packing-waste line may name.
       const packedProductIds = new Set(rowsOf("packing", "rows").map((r) => String(r.product_id)).filter(Boolean));
       const packedProducts = [...packedProductIds].map((id) => ({ value: id, label: productName.get(id) ?? "—" }));
+      // Packaging waste is weighed in kg, so only items stocked by weight (film) can be named;
+      // a wasted carton goes in the packing row's "Cartons déchet". An item a saved line
+      // already names stays, so its name still shows (the server refuses it on the next save).
+      const byWeight = new Set((uoms.data ?? []).filter((u) => u.category === "weight").map((u) => u.id));
+      const savedWasteItems = new Set(rowsOf("waste_packing", "waste_lines").map((r) => String(r.product_id)));
+      const packagingWasteItems = productList
+        .filter((p) => classOf.get(p.id)?.packaging_kind && (!uoms.data || byWeight.has(p.uom_id) || savedWasteItems.has(p.id)))
+        .map(asOption);
+      // Finished product lost while packing is filed once, under packing waste as "Produit";
+      // the old Daily kind for it is only kept on a line that already uses it.
+      const savedProductionKinds = new Set(rowsOf("waste_production", "waste_lines").map((r) => String(r.category)));
 
       // Molds follow the type (PL or PC) of the work orders: a run's own row, or the shift's runs for a wash.
       const typeOfOrder = new Map(all.map((o) => [o.id, o.product_type ?? productType.get(o.product_id ?? "") ?? ""]));
@@ -179,7 +191,7 @@ export function useShiftReferenceData(enabled: boolean) {
         itemsBobine: itemsOfKind("bobine"),
         itemsScotch: itemsOfKind("scotch"),
         itemsRuban: itemsOfKind("ruban"),
-        itemsPackaging: productList.filter((p) => classOf.get(p.id)?.packaging_kind).map(asOption),
+        itemsPackaging: packagingWasteItems,
         fuelSuppliers: suppliersOf(fuelVendors.data, energy?.fuel_supplier_id),
         gasoilSuppliers: suppliersOf(gasoilVendors.data, energy?.gasoil_supplier_id),
         packedProducts,
@@ -195,7 +207,10 @@ export function useShiftReferenceData(enabled: boolean) {
         motifs: list(DOWNTIME_MOTIFS, "motif"),
         stopTypes: list(DOWNTIME_TYPES, "type"),
         classifications: list(DOWNTIME_CLASSIFICATIONS, "classification"),
-        wasteProduction: waste.categoriesFor("daily").map((c) => ({ value: c, label: waste.label(c) })),
+        wasteProduction: waste
+          .categoriesFor("daily")
+          .filter((c) => c !== "finished_product_conditioning" || savedProductionKinds.has(c))
+          .map((c) => ({ value: c, label: waste.label(c) })),
         wastePacking: waste.categoriesFor("conditionnement").map((c) => ({ value: c, label: waste.label(c) })),
         runs: rowsOf("runs", "runs").map((r) => ({ value: r.id as string, label: runLabel(r) })),
         packingRows: rowsOf("packing", "rows").map((r) => ({
@@ -222,7 +237,7 @@ export function useShiftReferenceData(enabled: boolean) {
     },
     // `waste` and `label` are rebuilt every render; what they read is captured by their own deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orders.data, products.data, classifications.data, locations.data, molds.data, equipment.data, partners.data, fuelVendors.data, gasoilVendors.data, waste.types, t],
+    [orders.data, products.data, uoms.data, classifications.data, locations.data, molds.data, equipment.data, partners.data, fuelVendors.data, gasoilVendors.data, waste.types, t],
   );
 
   return {
