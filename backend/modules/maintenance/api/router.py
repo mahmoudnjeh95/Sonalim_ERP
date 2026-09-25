@@ -154,7 +154,7 @@ def unarchive_equipment(
     return _serialize_equipment(result.value)
 
 
-@router.delete("/equipment/{equipment_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/equipment/{equipment_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_equipment(
     equipment_id: str,
     tenant: TenantContext = Depends(require_permission("maintenance.delete_equipment")),
