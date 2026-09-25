@@ -58,6 +58,16 @@ def test_validate_classification_accepts_water_flag_on_raw_material():
     assert isinstance(result, Ok)
 
 
+def test_energy_flag_is_only_for_plain_raw_materials():
+    assert isinstance(validate_classification("raw_material", False, is_energy=True), Ok)
+    wrong_category = validate_classification("finished_good", False, is_energy=True)
+    assert isinstance(wrong_category, Err) and wrong_category.code == "ENERGY_FLAG_INVALID"
+    with_water = validate_classification("raw_material", False, is_water=True, is_energy=True)
+    assert isinstance(with_water, Err) and with_water.code == "ENERGY_FLAG_CONFLICT"
+    with_regrind = validate_classification("raw_material", True, is_energy=True)
+    assert isinstance(with_regrind, Err) and with_regrind.code == "ENERGY_FLAG_CONFLICT"
+
+
 def test_packaging_kind_is_only_for_packaging_components():
     ok = validate_classification("packaging_component", False, packaging_kind="film")
     assert isinstance(ok, Ok)

@@ -70,6 +70,8 @@ export interface ProductClassification {
   packaging_format: PackagingFormat | null;
   is_water: boolean;
   packaging_kind: PackagingKind | null;
+  /** Fuel / gasoil: a raw material that is burnt, never poured into the line. */
+  is_energy: boolean;
 }
 
 export interface SetClassificationInput {
@@ -79,6 +81,7 @@ export interface SetClassificationInput {
   packaging_format?: PackagingFormat;
   is_water?: boolean;
   packaging_kind?: PackagingKind;
+  is_energy?: boolean;
 }
 
 export function listClassifications(token: string) {
@@ -334,18 +337,27 @@ export interface WorkCenter {
   hourly_rate: number;
   is_blocked: boolean;
   blocked_reason: string | null;
+  line_type: WorkCenterLineType;
 }
+
+// A production line runs OFs and shift reports; a grinder line runs rebroyat (OFRs).
+export type WorkCenterLineType = "production" | "grinder";
+
+export const isProductionLine = (wc: WorkCenter) => wc.line_type === "production";
+export const isGrinderLine = (wc: WorkCenter) => wc.line_type === "grinder";
 
 export interface CreateWorkCenterInput {
   code: string;
   name: string;
   hourly_rate?: number;
+  line_type?: WorkCenterLineType;
 }
 
 export interface UpdateWorkCenterInput {
   code?: string;
   name?: string;
   hourly_rate?: number;
+  line_type?: WorkCenterLineType;
 }
 
 export function listWorkCenters(token: string) {
@@ -1342,6 +1354,51 @@ export function updateWasteType(
   input: { name?: string; sort_order?: number; is_active?: boolean },
 ) {
   return apiFetch<WasteType>(`/production/waste-types/${wasteTypeId}`, { method: "PATCH", token, body: input });
+}
+
+/** Removes a plant kind, or retires it when a report already used it — `outcome` says which. */
+export function deleteWasteType(token: string, wasteTypeId: string) {
+  return apiFetch<{ outcome: "deleted" | "retired" }>(`/production/waste-types/${wasteTypeId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+/**
+ * What a plant changed about one built-in kind. `name` null is the translated
+ * default; `sort_order` null is code order, ahead of the plant's own kinds.
+ */
+export interface BuiltInWasteTypeSetting {
+  category: WasteCategory;
+  report_type: ReportType;
+  name: string | null;
+  sort_order: number | null;
+  is_active: boolean;
+}
+
+export function listBuiltInWasteTypes(token: string) {
+  return apiFetch<BuiltInWasteTypeSetting[]>("/production/waste-types/built-ins", { token });
+}
+
+export function updateBuiltInWasteType(
+  token: string,
+  category: WasteCategory,
+  input: { name?: string; reset_name?: boolean; is_active?: boolean },
+) {
+  return apiFetch<BuiltInWasteTypeSetting>(`/production/waste-types/built-ins/${category}`, {
+    method: "PATCH",
+    token,
+    body: input,
+  });
+}
+
+/** One report's kinds, built-in keys and plant ids together, in their new order. */
+export function reorderWasteTypes(token: string, reportType: ReportType, order: WasteCategory[]) {
+  return apiFetch<unknown>("/production/waste-types/order", {
+    method: "PUT",
+    token,
+    body: { report_type: reportType, order },
+  });
 }
 
 export type DaySheetSection = "material" | "production" | "waste" | "packing" | "energy";

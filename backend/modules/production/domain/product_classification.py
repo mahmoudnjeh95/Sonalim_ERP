@@ -17,6 +17,7 @@ class ProductClassification:
     packaging_format: str | None = None
     is_water: bool = False
     packaging_kind: str | None = None
+    is_energy: bool = False
 
 
 def validate_classification(
@@ -25,6 +26,7 @@ def validate_classification(
     packaging_format: str | None = None,
     is_water: bool = False,
     packaging_kind: str | None = None,
+    is_energy: bool = False,
 ) -> Result[None]:
     if category not in VALID_CATEGORIES:
         return Err(
@@ -49,6 +51,18 @@ def validate_classification(
             "REGRIND_WATER_CONFLICT",
             "a product cannot be both regrind and water/humidity",
             "un produit ne peut pas être à la fois rebroyat et eau/humidité",
+        )
+    if is_energy and category != "raw_material":
+        return Err(
+            "ENERGY_FLAG_INVALID",
+            "is_energy only applies to raw_material products",
+            "is_energy ne s'applique qu'aux produits raw_material",
+        )
+    if is_energy and (is_regrind or is_water):
+        return Err(
+            "ENERGY_FLAG_CONFLICT",
+            "an energy product (fuel, gasoil) cannot also be regrind or water/humidity",
+            "un produit énergie (fuel, gasoil) ne peut pas être aussi rebroyat ou eau/humidité",
         )
     if packaging_format is not None:
         if category != "finished_good":

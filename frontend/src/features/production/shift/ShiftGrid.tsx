@@ -222,6 +222,7 @@ export function Cell({
           onChange={(event) => onChange(event.target.value || null)}
         >
           <option value="">{label(T.choose)}</option>
+          {list.length === 0 && column.emptyHint ? <option disabled>{label(column.emptyHint)}</option> : null}
           {fallbackLabel !== null ? <option value={current}>{fallbackLabel}</option> : null}
           {list.map((option) => (
             <option key={option.value} value={option.value}>
@@ -360,10 +361,15 @@ export function ShiftGrid({
 
   const setCell = (index: number, key: string, value: unknown) => {
     // A cell can invalidate what the server derived from it (a new product means a new OF to resolve).
-    const cleared = Object.fromEntries((columns.find((column) => column.key === key)?.resets ?? []).map((field) => [field, null]));
+    const column = columns.find((c) => c.key === key);
+    const cleared = Object.fromEntries((column?.resets ?? []).map((field) => [field, null]));
     const typedOver = (row: GridRow) => row._auto?.filter((auto) => auto !== key);
     onChange(
-      rows.map((row, i) => (i === index ? { ...row, ...cleared, _fresh: false, _auto: typedOver(row), [key]: value } : row)),
+      rows.map((row, i) =>
+        i === index
+          ? { ...row, ...cleared, ...column?.fills?.(value, row, options), _fresh: false, _auto: typedOver(row), [key]: value }
+          : row,
+      ),
     );
   };
   const remove = (index: number) =>

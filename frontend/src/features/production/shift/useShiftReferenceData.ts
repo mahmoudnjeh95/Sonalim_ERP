@@ -3,9 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { listEquipment } from "../../maintenance/api";
-import { listLocations, listProducts } from "../../warehouse/api";
+import { listLocations, listProducts, listSuggestedVendors, type SuggestedVendor } from "../../warehouse/api";
 import { listPartners } from "../../partners/api";
-import { listClassifications, listMolds, listWorkCenters, listWorkOrders, type PackagingKind } from "../api";
+import { isProductionLine, listClassifications, listMolds, listWorkCenters, listWorkOrders, type PackagingKind } from "../api";
 import { DASHBOARD_SETTINGS_QUERY_KEY, getDashboardSettings } from "../board/api";
 import { DOWNTIME_CLASSIFICATIONS, DOWNTIME_MOTIFS, DOWNTIME_TYPES } from "../DowntimeMotifSelect";
 import { useWasteTypes } from "../wasteTypes";
@@ -38,16 +38,35 @@ export function useShiftReferenceData(enabled: boolean) {
   const shiftReports = useQuery({ queryKey: ["production", "shift", "all-reports"], queryFn: () => listShiftReports(token), enabled });
   const partners = useQuery({ queryKey: ["production", "shift", "partners"], queryFn: () => listPartners(token), enabled });
 
+  // Fuel and gasoil: the energy products, told apart by their code. Their suppliers are the
+  // vendors tagged with what the product is tagged with -- the link purchasing already uses.
+  const energyProductId = (code: string) => {
+    const energy = new Set((classifications.data ?? []).filter((c) => c.is_energy).map((c) => c.product_id));
+    return (products.data ?? []).find((p) => energy.has(p.id) && p.sku.toLowerCase() === code)?.id;
+  };
+  const fuelId = energyProductId("fuel");
+  const gasoilId = energyProductId("gasoil");
+  const fuelVendors = useQuery({
+    queryKey: ["core", "products", fuelId, "suggested-vendors"],
+    queryFn: () => listSuggestedVendors(token, fuelId!),
+    enabled: enabled && !!fuelId,
+  });
+  const gasoilVendors = useQuery({
+    queryKey: ["core", "products", gasoilId, "suggested-vendors"],
+    queryFn: () => listSuggestedVendors(token, gasoilId!),
+    enabled: enabled && !!gasoilId,
+  });
+
   // Filter archived equipment and build report count map
   const activeEquipment = useMemo(
     () => (equipment.data ?? []).filter((e) => !e.archived_at).sort((a, b) => a.name.localeCompare(b.name)),
     [equipment.data],
   );
 
-  // Only work centers that are production lines (name starts with "line"); e.g. excludes rebroyat_01, whose
-  // output is already tracked under its own OF. A blocked line has nothing to report on, so it's hidden too.
+  // Only work centers tagged as production lines; a grinder (e.g. rebroyat_01) reports through its OFR.
+  // A blocked line has nothing to report on, so it's hidden too.
   const productionLines = useMemo(
-    () => (workCenters.data ?? []).filter((w) => /^line/i.test(w.name) && !w.is_blocked),
+    () => (workCenters.data ?? []).filter((w) => isProductionLine(w) && !w.is_blocked),
     [workCenters.data],
   );
 
@@ -91,9 +110,24 @@ export function useShiftReferenceData(enabled: boolean) {
       const productsOrMp = classifications.data
         ? productList.filter((p) => ["finished_good", "raw_material"].includes(classOf.get(p.id)?.category ?? "")).map(asOption)
         : productList.map(asOption);
-      // The versement's "MP versé": semoule inputs only -- raw materials minus water (its own line elsewhere).
+      // The versement's "MP versé": semoule inputs only -- raw materials minus water (its own line elsewhere)
+      // and minus fuel/gasoil (burnt, never poured; the energy section records them).
       const mpVerse = classifications.data
-        ? productList.filter((p) => classOf.get(p.id)?.category === "raw_material" && !classOf.get(p.id)?.is_water).map(asOption)
+        ? productList
+            .filter((p) => {
+              const c = classOf.get(p.id);
+              return c?.category === "raw_material" && !c.is_water && !c.is_energy;
+            })
+            .map(asOption)
+        : productList.map(asOption);
+      // The rebroyat selects: only what an OFR makes (every OFR output is classified is_regrind). One a saved
+      // row already holds stays, so its name shows.
+      const savedRegrind = new Set([
+        ...rowsOf("runs", "rebroyat_versements").map((r) => String(r.product_id)),
+        ...rowsOf("runs", "runs").map((r) => String(r.regrind_input_product_id)),
+      ]);
+      const regrindItems = classifications.data
+        ? productList.filter((p) => classOf.get(p.id)?.is_regrind || savedRegrind.has(p.id)).map(asOption)
         : productList.map(asOption);
       const itemsOfKind = (kind: PackagingKind): Option[] =>
         productList.filter((p) => classOf.get(p.id)?.packaging_kind === kind).map(asOption);
@@ -119,11 +153,22 @@ export function useShiftReferenceData(enabled: boolean) {
         return [name, time(r.start_time)].filter(Boolean).join(" · ") || String(r.id).slice(-6);
       };
 
+      // A supplier the energy record already names stays offered, so its name still shows.
+      const energy = shift?.sections.find((s) => s.key === "energy")?.payload?.energy as Row | null | undefined;
+      const partnerName = new Map((partners.data ?? []).map((p) => [p.id, p.name]));
+      const suppliersOf = (vendors: SuggestedVendor[] | undefined, saved: unknown): Option[] => {
+        const list = (vendors ?? []).map((v) => ({ value: v.partner_id, label: v.name }));
+        return typeof saved === "string" && saved && !list.some((o) => o.value === saved)
+          ? [...list, { value: saved, label: partnerName.get(saved) ?? "—" }]
+          : list;
+      };
+
       return {
         orders: pickable.map(orderOption),
         products: productList.map(asOption),
         productsOrMp,
         mpVerse,
+        regrindItems,
         finishedProducts,
         shiftOrders: all.filter((o) => runOrderIds.has(o.id)).map(orderOption),
         packingTypes: productList
@@ -134,6 +179,9 @@ export function useShiftReferenceData(enabled: boolean) {
         itemsBobine: itemsOfKind("bobine"),
         itemsScotch: itemsOfKind("scotch"),
         itemsRuban: itemsOfKind("ruban"),
+        itemsPackaging: productList.filter((p) => classOf.get(p.id)?.packaging_kind).map(asOption),
+        fuelSuppliers: suppliersOf(fuelVendors.data, energy?.fuel_supplier_id),
+        gasoilSuppliers: suppliersOf(gasoilVendors.data, energy?.gasoil_supplier_id),
         packedProducts,
         locations: (locations.data ?? []).map((l) => ({ value: l.id, label: l.name })),
         molds: moldList.map(moldOption),
@@ -174,7 +222,7 @@ export function useShiftReferenceData(enabled: boolean) {
     },
     // `waste` and `label` are rebuilt every render; what they read is captured by their own deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orders.data, products.data, classifications.data, locations.data, molds.data, equipment.data, partners.data, waste.types, t],
+    [orders.data, products.data, classifications.data, locations.data, molds.data, equipment.data, partners.data, fuelVendors.data, gasoilVendors.data, waste.types, t],
   );
 
   return {

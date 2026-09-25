@@ -56,12 +56,17 @@ const formSchema = z
     category: z.enum(["raw_material", "semi_finished", "packaging_component", "finished_good"]),
     is_regrind: z.boolean(),
     is_water: z.boolean(),
+    is_energy: z.boolean(),
     packaging_format: z.enum(["packet", "carton", "sac"]).optional(),
     packaging_kind: z.preprocess((v) => (v === "" ? undefined : v), z.enum(["film", "carton", "bobine", "scotch", "ruban"]).optional()),
   })
   .refine((data) => !(data.is_regrind && data.is_water), {
     message: "A product cannot be both regrind and water/humidity",
     path: ["is_water"],
+  })
+  .refine((data) => !(data.is_energy && (data.is_regrind || data.is_water)), {
+    message: "An energy product cannot also be regrind or water/humidity",
+    path: ["is_energy"],
   });
 type FormValues = z.infer<typeof formSchema>;
 
@@ -113,7 +118,7 @@ export function ProductClassificationsTab() {
     formState: { errors },
   } = useForm<FormValues>({
     resolver: zodResolver(formSchema),
-    defaultValues: { product_id: "", category: "raw_material", is_regrind: false, is_water: false },
+    defaultValues: { product_id: "", category: "raw_material", is_regrind: false, is_water: false, is_energy: false },
   });
   const category = watch("category");
 
@@ -123,11 +128,12 @@ export function ProductClassificationsTab() {
         ...input,
         packaging_format: input.category === "finished_good" ? input.packaging_format : undefined,
         packaging_kind: input.category === "packaging_component" ? input.packaging_kind : undefined,
+        is_energy: input.category === "raw_material" && input.is_energy,
       }),
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      reset({ product_id: "", category: "raw_material", is_regrind: false, is_water: false });
+      reset({ product_id: "", category: "raw_material", is_regrind: false, is_water: false, is_energy: false });
       toast.success(t("production.classifications.saved"), { description: result.product_id });
     },
     onError: (error) => {
@@ -210,6 +216,20 @@ export function ProductClassificationsTab() {
           <span className="text-muted-foreground">—</span>
         ),
       sortValue: (c) => c.is_water,
+    },
+    {
+      key: "energy",
+      header: t("production.classifications.column.energy"),
+      defaultWidth: 140,
+      cell: (c) =>
+        c.is_energy ? (
+          <Badge variant="accent" dot>
+            {t("production.classifications.energyBadge")}
+          </Badge>
+        ) : (
+          <span className="text-muted-foreground">—</span>
+        ),
+      sortValue: (c) => c.is_energy,
     },
   ];
   const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
@@ -324,6 +344,19 @@ export function ProductClassificationsTab() {
                         </Label>
                       </div>
                       {errors.is_water && <p className="text-sm text-destructive">{errors.is_water.message}</p>}
+                      <div className="flex items-center gap-2">
+                        <Controller
+                          control={control}
+                          name="is_energy"
+                          render={({ field }) => (
+                            <Checkbox id="is_energy" checked={field.value} onCheckedChange={field.onChange} />
+                          )}
+                        />
+                        <Label htmlFor="is_energy" className="cursor-pointer font-normal text-muted-foreground">
+                          {t("production.classifications.isEnergyLabel")}
+                        </Label>
+                      </div>
+                      {errors.is_energy && <p className="text-sm text-destructive">{errors.is_energy.message}</p>}
                     </motion.div>
                   )}
                   {category === "finished_good" && (

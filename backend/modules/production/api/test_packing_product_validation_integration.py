@@ -65,9 +65,7 @@ def _two_product_shift(db, env):
     _ok(orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=of_id))
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [{
         "of_id": of_id, "start_time": "07:00", "end_time": "14:00", "production_minutes": 420, "finished_product_quantity": 900,
-        "raw_material_location_id": env["silo"],
-        "semolina_lines": [{"product_id": env["semolina"], "quantity": 1000, "location_id": env["silo"]}],
-    }]}))
+    }], "versements": [{"product_id": env["semolina"], "quantity": 1000, "location_id": env["silo"]}]}))
     filled = {"packing": {"rows": [
         {"product_id": env["big"], "packets_counted": 120, "lot_number": "PV-L1"},
         {"product_id": env["small"], "packets_counted": 240, "lot_number": "PV-L2"},

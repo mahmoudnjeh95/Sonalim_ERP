@@ -128,7 +128,7 @@ export function ProductListTab() {
     const unchanged =
       existing && existing.category === input.category && (existing.packaging_kind ?? undefined) === (input.category === "packaging_component" ? input.packaging_kind : undefined);
     if (unchanged) return;
-    // Flags production owns (regrind, water, packet/carton format) are kept as
+    // Flags production owns (regrind, water, energy, packet/carton format) are kept as
     // they are: this form only sets the category, it must not silently reset them.
     const keepsCategory = existing?.category === input.category;
     await setClassification(token, {
@@ -136,6 +136,7 @@ export function ProductListTab() {
       category: input.category,
       is_regrind: keepsCategory ? (existing?.is_regrind ?? false) : false,
       is_water: keepsCategory ? (existing?.is_water ?? false) : false,
+      is_energy: keepsCategory ? (existing?.is_energy ?? false) : false,
       packaging_format: keepsCategory && input.category === "finished_good" ? (existing?.packaging_format ?? undefined) : undefined,
       packaging_kind: input.category === "packaging_component" ? input.packaging_kind : undefined,
     });

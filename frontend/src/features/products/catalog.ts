@@ -34,6 +34,7 @@ export interface CatalogProduct extends Product {
   packaging_format: PackagingFormat | null;
   is_regrind: boolean;
   is_water: boolean;
+  is_energy: boolean;
 }
 
 /** Display order of the groups in a picker: what the plant consumes first, what it makes last. */
@@ -62,6 +63,7 @@ export function joinCatalog(products: Product[], classifications: ProductClassif
       packaging_format: classification?.packaging_format ?? null,
       is_regrind: classification?.is_regrind ?? false,
       is_water: classification?.is_water ?? false,
+      is_energy: classification?.is_energy ?? false,
     };
   });
 }

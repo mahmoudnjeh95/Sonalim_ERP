@@ -128,12 +128,14 @@ class CreateWorkCenterRequest(BaseModel):
     code: str
     name: str
     hourly_rate: float = 0
+    line_type: str = "production"
 
 
 class UpdateWorkCenterRequest(BaseModel):
     code: str | None = None
     name: str | None = None
     hourly_rate: float | None = None
+    line_type: str | None = None
 
 
 class BlockWorkCenterRequest(BaseModel):
@@ -178,6 +180,7 @@ class SetProductClassificationRequest(BaseModel):
     packaging_format: str | None = None
     is_water: bool = False
     packaging_kind: str | None = None
+    is_energy: bool = False
 
 
 class PackagingBomLineRequest(BaseModel):
@@ -1085,6 +1088,7 @@ def set_product_classification(
             packaging_format=body.packaging_format,
             is_water=body.is_water,
             packaging_kind=body.packaging_kind,
+            is_energy=body.is_energy,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -1261,6 +1265,7 @@ def _serialize_classification(classification: ProductClassification) -> dict:
         "packaging_format": classification.packaging_format,
         "is_water": classification.is_water,
         "packaging_kind": classification.packaging_kind,
+        "is_energy": classification.is_energy,
     }
 
 
@@ -1285,6 +1290,7 @@ def _serialize_work_center(work_center: WorkCenter) -> dict:
         "hourly_rate": work_center.hourly_rate,
         "is_blocked": work_center.is_blocked,
         "blocked_reason": work_center.blocked_reason,
+        "line_type": work_center.line_type,
     }
 
 
@@ -1354,7 +1360,8 @@ def create_work_center(
     with get_connection() as connection:
         service = WorkCenterService(connection)
         result = service.create_work_center(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, code=body.code, name=body.name, hourly_rate=body.hourly_rate
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, code=body.code, name=body.name, hourly_rate=body.hourly_rate,
+            line_type=body.line_type,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -1408,6 +1415,7 @@ def update_work_center(
             code=body.code,
             name=body.name,
             hourly_rate=body.hourly_rate,
+            line_type=body.line_type,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -2455,6 +2463,70 @@ def update_waste_type(
             name=body.name,
             sort_order=body.sort_order,
             is_active=body.is_active,
+        )
+        return _waste_type_result(connection, result)
+
+
+@router.delete("/waste-types/{waste_type_id}")
+def delete_waste_type(
+    waste_type_id: str,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    """Removes the kind, or retires it when a report already used it; `outcome` says which."""
+    with get_connection() as connection:
+        result = WasteTypeService(connection).delete_type(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, waste_type_id=waste_type_id
+        )
+        return _waste_type_result(connection, result)
+
+
+class UpdateBuiltinWasteTypeRequest(BaseModel):
+    name: str | None = None
+    # Back to the translated default name.
+    reset_name: bool = False
+    is_active: bool | None = None
+
+
+class ReorderWasteTypesRequest(BaseModel):
+    report_type: str
+    # Built-in keys and plant ids together, every kind of the report once.
+    order: list[str]
+
+
+@router.get("/waste-types/built-ins")
+def list_builtin_waste_types(
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    with get_connection() as connection:
+        return WasteTypeService(connection).list_builtin_settings(tenant_id=tenant.tenant_id)
+
+
+@router.patch("/waste-types/built-ins/{category}")
+def update_builtin_waste_type(
+    category: str,
+    body: UpdateBuiltinWasteTypeRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).update_builtin(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            category=category,
+            name=body.name,
+            reset_name=body.reset_name,
+            is_active=body.is_active,
+        )
+        return _waste_type_result(connection, result)
+
+
+@router.put("/waste-types/order")
+def reorder_waste_types(
+    body: ReorderWasteTypesRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).reorder(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_type=body.report_type, order=body.order
         )
         return _waste_type_result(connection, result)
 

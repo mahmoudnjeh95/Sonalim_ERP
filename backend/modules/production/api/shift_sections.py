@@ -25,6 +25,7 @@ from ulid import ULID
 from core.api.service import CoreService
 from core.domain.result import Err, Ok, Result
 from modules.production.api.packing_derivation_service import derive_packing_rows
+from modules.production.domain.shift_report import split_proportionally
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     DailyReportDetail,
@@ -652,6 +653,76 @@ def _derive_versement_locations(connection: psycopg.Connection, *, tenant_id: st
                 row["location_id"] = product.default_location_id
 
 
+def _derive_run_inputs(connection: psycopg.Connection, *, tenant_id: str, shift_id: str) -> None:
+    """What each run took in, worked out from the shift's versements; the team no longer types it.
+
+    The versements are recorded once for the shift, so their totals are shared across
+    the runs by production minutes, as the energy is, each product on its own. A run's
+    semoule lines are its share of each MP versé, drawn from that MP's store; its
+    rebroyat used is its share of the rebroyat; its dough is the two together. These
+    are the figures stock posting and every run-level analysis already read.
+    """
+    runs = connection.execute(
+        "SELECT id, production_minutes FROM production.shift_runs WHERE tenant_id = %s AND shift_report_id = %s "
+        "ORDER BY line_order, id",
+        (tenant_id, shift_id),
+    ).fetchall()
+    if not runs:
+        return
+    # One entry per MP, in the order the team first listed it.
+    mp = [
+        (product_id, location_id, float(quantity))
+        for product_id, location_id, quantity in connection.execute(
+            "SELECT product_id, MIN(location_id), SUM(quantity) FROM production.shift_versements "
+            "WHERE tenant_id = %s AND shift_report_id = %s AND quantity > 0 AND product_id IS NOT NULL "
+            "GROUP BY product_id ORDER BY MIN(line_order), product_id",
+            (tenant_id, shift_id),
+        ).fetchall()
+    ]
+    mp_total = sum(quantity for _, _, quantity in mp)
+    rebroyat = connection.execute(
+        "SELECT product_id, MIN(location_id), SUM(quantity) FROM production.shift_rebroyat_versements "
+        "WHERE tenant_id = %s AND shift_report_id = %s AND quantity > 0 GROUP BY product_id ORDER BY product_id",
+        (tenant_id, shift_id),
+    ).fetchone()
+    rebroyat_product, rebroyat_location, rebroyat_total = (
+        (rebroyat[0], rebroyat[1], float(rebroyat[2])) if rebroyat else (None, None, 0.0)
+    )
+    weights = [float(minutes or 0) for _, minutes in runs]
+    doughs = split_proportionally(mp_total + rebroyat_total, weights)
+    regrinds = split_proportionally(rebroyat_total, weights)
+    mp_shares = [split_proportionally(quantity, weights) for _, _, quantity in mp]
+    for index, ((run_id, _), dough, regrind) in enumerate(zip(runs, doughs, regrinds)):
+        connection.execute(
+            "DELETE FROM production.shift_run_semolina_lines WHERE tenant_id = %s AND run_id = %s", (tenant_id, run_id)
+        )
+        lines = [(product_id, location_id, shares[index]) for (product_id, location_id, _), shares in zip(mp, mp_shares)]
+        for order, (product_id, location_id, quantity) in enumerate(line for line in lines if line[2] > 0):
+            connection.execute(
+                "INSERT INTO production.shift_run_semolina_lines (id, tenant_id, run_id, product_id, quantity, location_id, line_order) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (str(ULID()), tenant_id, run_id, product_id, quantity, location_id, order),
+            )
+        used = regrind > 0
+        connection.execute(
+            "UPDATE production.shift_runs SET dough_quantity = %s, regrind_input_quantity = %s, "
+            "regrind_input_product_id = %s, raw_material_location_id = %s WHERE id = %s AND tenant_id = %s",
+            (dough, regrind, rebroyat_product if used else None, rebroyat_location if used else None, run_id, tenant_id),
+        )
+
+
+def _validate_single_rebroyat(rows: list[dict]) -> Result[None]:
+    """A run records one rebroyat item, so a shift's rebroyat versements must all name the same one."""
+    products = {r["product_id"] for r in rows if r["product_id"] and (r["quantity"] or 0) > 0}
+    if len(products) > 1:
+        return Err(
+            "MIXED_REBROYAT",
+            "rebroyat versements: every row must name the same rebroyat item",
+            "rebroyat versé : toutes les lignes doivent nommer le même article rebroyat",
+        )
+    return Ok(None)
+
+
 def save_section_rows(
     connection: psycopg.Connection,
     *,
@@ -682,6 +753,10 @@ def save_section_rows(
                     return derived
             if part.table in ("shift_versements", "shift_rebroyat_versements"):
                 _derive_versement_locations(connection, tenant_id=tenant_id, rows=rows.value)
+            if part.table == "shift_rebroyat_versements":
+                single = _validate_single_rebroyat(rows.value)
+                if isinstance(single, Err):
+                    return single
             checked = _validate_part(connection, tenant_id, shift_report_id, section_key, part, rows.value, custom)
             if isinstance(checked, Err):
                 return checked
@@ -691,6 +766,8 @@ def save_section_rows(
             _sync_single(connection, tenant_id, shift_report_id, part, value)
         else:
             _sync_rowset(connection, tenant_id, shift_report_id, part, value)
+    if section_key == "runs":
+        _derive_run_inputs(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     return Ok(None)
 
 
@@ -720,6 +797,15 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
     screen, than as a refusal at the validation desk.
     """
     if section_key == "runs":
+        for key, name, name_fr in (("versements", "versement", "versement"), ("rebroyat_versements", "rebroyat", "rebroyat")):
+            for index, row in enumerate(payload.get(key) or [], start=1):
+                if float(row.get("quantity") or 0) > 0 and row.get("product_id") and not row.get("location_id"):
+                    return Err(
+                        "MISSING_STOCK_TARGET",
+                        f"{name} row {index}: the item has no default store; set one on the item, then save the section again",
+                        f"ligne {name_fr} {index} : l'article n'a pas de magasin par défaut ; "
+                        "définissez-en un sur l'article, puis enregistrez à nouveau la section",
+                    )
         for index, run in enumerate(payload.get("runs") or [], start=1):
             detail = DailyReportDetail(
                 semolina_lines=tuple(

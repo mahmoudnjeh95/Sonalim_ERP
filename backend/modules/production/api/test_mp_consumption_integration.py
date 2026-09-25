@@ -50,7 +50,7 @@ def _validated_run_shift(db, env, day, *, quantity=1000) -> str:
         "production_minutes": 420, "finished_product_quantity": 900, "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["semolina"], "quantity": quantity, "location_id": env["location"]}],
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
     for key in SECTION_KEYS:
         if key == "runs":
             _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
@@ -84,7 +84,7 @@ def test_an_unvalidated_shift_is_not_counted(db, env):
         "production_minutes": 420, "finished_product_quantity": 900, "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["semolina"], "quantity": 500, "location_id": env["location"]}],
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
 
     rows = MaterialConsumptionService(db).list_consumption(tenant_id=TENANT, date_from="2030-06-01", date_to="2030-06-30", receipt_lines=[])
 

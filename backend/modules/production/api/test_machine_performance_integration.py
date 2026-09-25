@@ -99,7 +99,7 @@ def _validated_shift(db, env, *, equipment_id, report_date, semolina_quantity, p
         "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["product"], "quantity": semolina_quantity, "location_id": env["location"]}],
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
     for key in SECTION_KEYS:
         if key == "runs":
             _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
@@ -139,7 +139,7 @@ def test_draft_reports_are_excluded(db, env):
         "production_minutes": 100, "finished_product_quantity": 900, "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["product"], "quantity": 999, "location_id": env["location"]}],
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
 
     rows = MachinePerformanceService(db).list_machine_performance(tenant_id=TENANT, grain="week")
     assert not any(r["equipment_id"] == env["machine_a"] for r in rows)

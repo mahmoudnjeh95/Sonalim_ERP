@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from core.domain.result import Err, Ok, Result
 
@@ -13,11 +13,26 @@ class WorkCenter:
     hourly_rate: float
     is_blocked: bool
     blocked_reason: str | None
+    # 'production' (OFs, shift reports) or 'grinder' (rebroyat runs / OFRs).
+    line_type: str = "production"
+
+
+LINE_TYPES = ("production", "grinder")
 
 
 def validate_work_center_code(code: str) -> Result[None]:
     if not code.strip():
         return Err("INVALID_CODE", "work center code is required", "le code du poste de charge est obligatoire")
+    return Ok(None)
+
+
+def validate_line_type(line_type: str) -> Result[None]:
+    if line_type not in LINE_TYPES:
+        return Err(
+            "INVALID_LINE_TYPE",
+            f"line type must be one of {', '.join(LINE_TYPES)}",
+            f"le type de ligne doit être l'un de : {', '.join(LINE_TYPES)}",
+        )
     return Ok(None)
 
 
@@ -30,16 +45,7 @@ def block_work_center(work_center: WorkCenter, reason: str) -> Result[WorkCenter
         )
     if not reason.strip():
         return Err("REASON_REQUIRED", "a reason is required to block a work center", "une raison est obligatoire pour bloquer un poste de charge")
-    return Ok(
-        WorkCenter(
-            id=work_center.id,
-            code=work_center.code,
-            name=work_center.name,
-            hourly_rate=work_center.hourly_rate,
-            is_blocked=True,
-            blocked_reason=reason,
-        )
-    )
+    return Ok(replace(work_center, is_blocked=True, blocked_reason=reason))
 
 
 def unblock_work_center(work_center: WorkCenter) -> Result[WorkCenter]:
@@ -49,13 +55,4 @@ def unblock_work_center(work_center: WorkCenter) -> Result[WorkCenter]:
             f"work center {work_center.id} is not blocked",
             f"le poste de charge {work_center.id} n'est pas bloqué",
         )
-    return Ok(
-        WorkCenter(
-            id=work_center.id,
-            code=work_center.code,
-            name=work_center.name,
-            hourly_rate=work_center.hourly_rate,
-            is_blocked=False,
-            blocked_reason=None,
-        )
-    )
+    return Ok(replace(work_center, is_blocked=False, blocked_reason=None))

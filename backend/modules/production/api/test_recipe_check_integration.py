@@ -129,11 +129,17 @@ def _run_shift(db, env, of, *, date, shift="morning", validate=True, semolina_qu
     run = {
         "of_id": of.id, "equipment_id": env["equipment"], "start_time": "07:00", "end_time": "14:00",
         "production_minutes": 420, "finished_product_quantity": 900,
-        "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["semoule"], "quantity": semolina_quantity, "location_id": env["location"]}],
-        "regrind_input_quantity": regrind_input_quantity, "regrind_input_product_id": regrind_input_product_id,
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    # The rebroyat a run used is worked out from the shift's rebroyat versement.
+    rebroyat = (
+        [{"product_id": regrind_input_product_id, "location_id": env["location"], "quantity": regrind_input_quantity}]
+        if regrind_input_product_id else []
+    )
+    _ok(service.save_section(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
+        payload={"runs": [run], "versements": run.pop("semolina_lines"), "rebroyat_versements": rebroyat},
+    ))
     if not validate:
         return shift_id
     for key in SECTION_KEYS:

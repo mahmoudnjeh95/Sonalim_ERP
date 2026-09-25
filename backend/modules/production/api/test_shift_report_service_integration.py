@@ -179,26 +179,27 @@ def _run(of_id, **fields):
         "finished_product_quantity": 9.45,
         "water_percentage": 30.9,
         "humidity_percentage": 11.56,
-        "raw_material_location_id": "silo-1",
-        "semolina_lines": [
-            {"product_id": "semoule-extra", "location_id": "silo-1", "quantity": 4.65, "bag_count": 93, "lot_number": "BSTK1"}
-        ],
         **fields,
     }
+
+
+_VERSEMENT = {"product_id": "semoule-extra", "location_id": "silo-1", "quantity": 4.65}
 
 
 def test_saved_runs_come_back_with_server_ids_and_their_semolina(db, env):
     shift_id = _open(db, env)
     of_id = _of(db, env)
-    saved = _ok(_save(db, env, shift_id, "runs", {"runs": [_run(of_id)]}))
+    saved = _ok(_save(db, env, shift_id, "runs", {"runs": [_run(of_id)], "versements": [_VERSEMENT]}))
     assert saved["status"] == "draft"
     payload = _section(_get(db, shift_id), "runs")["payload"]
     (run,) = payload["runs"]
     assert run["id"] and run["of_id"] == of_id
     assert run["humidity_percentage"] == 11.56
     assert run["start_time"] == "07:00:00"
+    # The run's semoule is its share of the MP versé, from the MP's store.
     (semolina,) = run["semolina_lines"]
-    assert semolina["bag_count"] == 93 and semolina["quantity"] == 4.65
+    assert semolina["product_id"] == "semoule-extra" and semolina["location_id"] == "silo-1"
+    assert semolina["quantity"] == 4.65
 
 
 def test_saving_again_keeps_ids_and_the_waste_that_points_at_them(db, env):
@@ -434,14 +435,16 @@ def test_state_changes_are_audited(db, env):
 # ---- what must be filled in before a section can be submitted ---------------
 
 
-def test_submitting_runs_needs_the_item_and_store_of_every_semolina_line(db, env):
+def test_submitting_runs_needs_the_store_of_every_mp_poured(db, env):
     shift_id = _open(db, env)
     of_id = _of(db, env)
-    unlabelled = _run(of_id, semolina_lines=[{"quantity": 4.65, "location_id": "silo-1"}])
-    _ok(_save(db, env, shift_id, "runs", {"runs": [unlabelled]}))  # a half-typed draft may be saved
+    # An MP with no default store of its own: a half-typed draft may be saved...
+    storeless = {"product_id": "semoule-extra", "quantity": 4.65}
+    _ok(_save(db, env, shift_id, "runs", {"runs": [_run(of_id)], "versements": [storeless]}))
+    # ...but not handed in, since its semoule could not leave any store.
     refused = _submit(db, env, shift_id, "runs")
     assert isinstance(refused, Err) and refused.code == "MISSING_STOCK_TARGET"
-    assert "run 1" in refused.message
+    assert "versement row 1" in refused.message
 
 
 def test_submitting_a_waste_section_needs_to_say_what_was_lost(db, env):

@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertOctagon,
+  Boxes,
   Building2,
   CalendarClock,
   CalendarDays,
@@ -30,6 +31,7 @@ import {
   ShieldCheck,
   ShoppingCart,
   Sparkles,
+  Tag,
   Target,
   TrendingUp,
   Truck,
@@ -41,10 +43,16 @@ import {
 import { useAuth } from "../lib/auth";
 import { useI18n, type Language, type TranslationKey } from "../lib/i18n";
 import { cn } from "../lib/utils";
+import { outlineIcon } from "../components/patterns/outlineIcon";
 import ProductionIcon from "../assets/icons/production/line.svg?react";
 import QualityIcon from "../assets/icons/quality/check.svg?react";
 import MaintenanceIcon from "../assets/icons/maintenance/wrench.svg?react";
 import WarehouseIcon from "../assets/icons/warehouse/warehouse.svg?react";
+import ApprovalIcon from "../assets/icons/quality/approval.svg?react";
+import ExtrusionIcon from "../assets/icons/production/extrusion.svg?react";
+import LabIcon from "../assets/icons/quality/lab.svg?react";
+import PlanningIcon from "../assets/icons/production/planning.svg?react";
+import WorkOrderIcon from "../assets/icons/production/work-order.svg?react";
 
 const COLLAPSED_STORAGE_KEY = "sonalim-erp.sidebar-collapsed";
 
@@ -98,6 +106,22 @@ const ANALYTICS_TABS: NavChild[] = [
   { tab: "price-history", labelKey: "analytics.tabs.priceHistory", icon: TrendingUp },
 ];
 
+// The production page's tabs, in the order its in-page TabsList shows them.
+const PRODUCTION_TABS: NavChild[] = [
+  { tab: "work-orders", labelKey: "production.tabs.workOrders", icon: outlineIcon(WorkOrderIcon) },
+  { tab: "planning", labelKey: "production.tabs.planning", icon: outlineIcon(PlanningIcon) },
+  { tab: "shift-report", labelKey: "production.tabs.shiftReport", icon: ClipboardList },
+  { tab: "day-sheet", labelKey: "production.tabs.daySheet", icon: FileSpreadsheet },
+  { tab: "validation", labelKey: "production.tabs.validation", icon: outlineIcon(ApprovalIcon) },
+  { tab: "recipes", labelKey: "production.tabs.recipes", icon: outlineIcon(LabIcon) },
+  { tab: "regrind", labelKey: "production.tabs.regrind", icon: Recycle },
+  { tab: "work-centers", labelKey: "production.tabs.workCenters", icon: Factory },
+  { tab: "molds", labelKey: "production.tabs.molds", icon: outlineIcon(ExtrusionIcon) },
+  { tab: "packaging-boms", labelKey: "production.tabs.packagingBoms", icon: Boxes },
+  { tab: "classifications", labelKey: "production.tabs.classifications", icon: Tag },
+  { tab: "settings", labelKey: "production.tabs.settings", icon: SettingsIcon },
+];
+
 const QUALITY_TABS: NavChild[] = [
   { tab: "dashboard", labelKey: "qc.tabs.dashboard", icon: LayoutDashboard },
   { tab: "reports", labelKey: "qc.tabs.qualityReports", icon: FlaskConical },
@@ -125,7 +149,7 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.operations",
     items: [
       { to: "/production/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
-      { to: "/production", labelKey: "nav.production", icon: ProductionIcon },
+      { to: "/production", labelKey: "nav.production", icon: ProductionIcon, children: PRODUCTION_TABS, defaultTab: "work-orders" },
       { to: "/production/ia-assistant", labelKey: "nav.iaAssistant", icon: Sparkles, permission: "production.use_ia_assistant" },
     ],
   },

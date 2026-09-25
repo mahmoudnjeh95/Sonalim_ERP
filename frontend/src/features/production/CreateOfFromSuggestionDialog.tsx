@@ -15,7 +15,7 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { listUoms } from "../warehouse/api";
-import { createWorkOrder, listProducts, listWorkCenters } from "./api";
+import { createWorkOrder, isProductionLine, listProducts, listWorkCenters } from "./api";
 import type { ProductionSuggestion } from "./planning";
 import SuggestionToOfIcon from "../../assets/icons/production/suggestion-to-of.svg?react";
 
@@ -57,7 +57,7 @@ export function CreateOfFromSuggestionDialog({
   const { data: workCenters = [] } = useQuery({ queryKey: WORK_CENTERS_QUERY_KEY, queryFn: () => listWorkCenters(token) });
   const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
   const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
-  const availableWorkCenters = workCenters.filter((wc) => !wc.is_blocked);
+  const availableWorkCenters = workCenters.filter((wc) => isProductionLine(wc) && !wc.is_blocked);
   const product = suggestion ? products.find((p) => p.id === suggestion.product_id) : undefined;
   const unit = product ? uoms.find((u) => u.id === product.uom_id) : undefined;
   const unitLabel = unit ? unit.symbol || unit.code : undefined;

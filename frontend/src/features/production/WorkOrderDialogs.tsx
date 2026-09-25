@@ -9,6 +9,7 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import {
+  isProductionLine,
   supervisorLabel,
   type PackagingBom,
   type Product,
@@ -106,11 +107,14 @@ export function EditWorkOrderDialog({
             <Label htmlFor="edit_work_center">{t("production.workOrders.field.workCenter")}</Label>
             <Select id="edit_work_center" {...form.register("work_center_id")}>
               <option value="">—</option>
-              {workCenters.map((wc) => (
-                <option key={wc.id} value={wc.id}>
-                  {wc.code} — {wc.name}
-                </option>
-              ))}
+              {/* Production lines only, plus the OF's current line so an older OF keeps showing it. */}
+              {workCenters
+                .filter((wc) => isProductionLine(wc) || wc.id === order?.work_center_id)
+                .map((wc) => (
+                  <option key={wc.id} value={wc.id}>
+                    {wc.code} — {wc.name}
+                  </option>
+                ))}
             </Select>
           </div>
           <div className="space-y-1.5">
