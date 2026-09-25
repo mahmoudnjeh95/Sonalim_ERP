@@ -230,7 +230,7 @@ def collect_month_recap(
             loaded = service.load(
                 tenant_id=tenant_id, date_from=first, date_to=last, work_center_id=line["id"], include_pending=False
             )
-        by_product = assemble(loaded, column_of=lambda r: r["of_product_id"] or NO_PRODUCT, yield_by_column=True)
+        by_product = assemble(loaded, column_of=lambda r: r["product_id"] or NO_PRODUCT, yield_by_column=True)
         by_product["columns"] = product_columns(by_product["columns"], loaded.products)
         by_lot = assemble(loaded, column_of=lambda r: r["lot"] or NO_LOT, yield_by_column=True)
         by_lot["columns"] = lot_columns(by_lot["columns"])
@@ -383,6 +383,11 @@ class Agg:
     def packing_waste_kg(self) -> float:
         return sum(q for (_c, _n, unit), q in self.packing_waste.items() if unit == "kg")
 
+    @property
+    def good_carton(self) -> float:
+        """Cartons that hold product: the counted cartons include the waste ones, the tonnage does not."""
+        return self.carton - self.waste_carton
+
     def per_tonne(self, value: float) -> float | None:
         return ratio(value, self.fab_t)
 
@@ -462,6 +467,8 @@ NUMBER_FORMATS = {
     "l/T": "#,##0.0",
     "kWh/T": "#,##0.0",
     "kg/T": "#,##0.0",
+    "ea/T": "#,##0.0",
+    "ea/carton": "#,##0.0",
     "n": "#,##0",
     "min": "#,##0",
     "date": "DD/MM/YYYY",
@@ -949,16 +956,23 @@ def build_packing_consumption_sheet(wb: Workbook, data: MonthRecapData) -> None:
             f"Film ({film_u})".replace(" ()", ""), f"Scotch ({scotch_u})".replace(" ()", ""), f"Ruban ({ruban_u})".replace(" ()", ""),
             "Déchets cond. (kg)", "Film / T", "Cartons / T", "Paquets / carton", "Lots",
         ]
-        units: list[str | None] = [None, None, "T", "ea", carton_u or None, carton_u or None, film_u or None, scotch_u or None, ruban_u or None, "kg", "kg/T", "kg/T", "ea", None]
+        units: list[str | None] = [None, None, "T", "ea", carton_u or None, carton_u or None, film_u or None, scotch_u or None, ruban_u or None, "kg", "kg/T", "ea/T", "ea/carton", None]
 
         def _line(label_a, label_b, agg: Agg, lots: str) -> list:
             return [
                 label_a, label_b, agg.finished_t, agg.packets, agg.carton, agg.waste_carton, agg.film, agg.scotch, agg.ruban,
-                agg.packing_waste_kg, ratio(agg.film, agg.finished_t), ratio(agg.carton, agg.finished_t), ratio(agg.packets, agg.carton), lots,
+                agg.packing_waste_kg, ratio(agg.film, agg.finished_t), ratio(agg.good_carton, agg.finished_t),
+                ratio(agg.packets, agg.good_carton), lots,
             ]
 
+        # A day with a mould change packs several formats; a row per product keeps each
+        # row's cartons/T and packets/carton to one format instead of a blend.
         for title, key_of, label_of in (
-            ("par jour", lambda r: r["date"], lambda k, a: (k, DAYS_FR[k.weekday()])),
+            (
+                "par jour et par produit",
+                lambda r: (r["date"], r.get("product_name") or ""),
+                lambda k, a: (k[0], f"{DAYS_FR[k[0].weekday()]} · {k[1] or 'Sans produit'}"),
+            ),
             ("par produit", lambda r: r.get("product_name") or "", lambda k, a: (k or "Sans produit", f"{len(a.dates)} jour(s)")),
             ("par lot", lambda r: r["lot"] or "", lambda k, a: (k or "Sans lot", ", ".join(sorted(a.products)) or DASH)),
         ):
@@ -974,7 +988,7 @@ def build_packing_consumption_sheet(wb: Workbook, data: MonthRecapData) -> None:
                 total.merge(agg)
             totals = _line(None, f"{len(buckets)} ligne(s)", total, f"{len(total.lots)} lot(s)")
             row = _table(ws, row, headers, units, body, total=totals)
-    _widths(ws, [14, 22, 14, 12, 12, 12, 12, 12, 12, 14, 10, 10, 12, 30])
+    _widths(ws, [14, 32, 14, 12, 12, 12, 12, 12, 12, 14, 10, 10, 12, 30])
     ws.freeze_panes = "A4"
 
 

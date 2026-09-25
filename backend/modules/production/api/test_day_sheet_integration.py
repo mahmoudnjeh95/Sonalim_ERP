@@ -393,9 +393,20 @@ def test_the_recap_lists_the_lots_a_product_was_packed_under(db, env):
     assert _recap(db, env)["columns"][0]["lots"] == ["4187SNL", "4188SNL"]
 
 
+def test_the_recap_files_a_run_under_the_product_it_packed_not_the_orders_product(db, env):
+    # One order can run several products; each packing row names its own.
+    of_id = _open_of(db, env)
+    _shift_run(db, env, of_id, lot="4187SNL", semolina=10, packed_t=9, product="finished_b")
+
+    recap = _recap(db, env)
+    assert [(c["name"], c["key"]) for c in recap["columns"]] == [("Prima 500 g", env["finished_b"])]
+    assert _row(recap, "total_mp")["by_column"] == {env["finished_b"]: pytest.approx(10)}
+    assert _row(recap, "total_finished")["by_column"] == {env["finished_b"]: pytest.approx(9)}
+
+
 # -- by lot ---------------------------------------------------------------------
 
-def _shift_run(db, env, of_id, *, day=DAY, shift="morning", team="Équipe A", lot, semolina=10.0, packed_t=None, minutes=420):
+def _shift_run(db, env, of_id, *, day=DAY, shift="morning", team="Équipe A", lot, semolina=10.0, packed_t=None, minutes=420, product=None):
     """A shift filed on the shift screen: a production run under `lot`, and a packing
     row drawing from it when `packed_t` is given. Validated, so the sheet counts it."""
     from modules.production.api.shift_report_service import ShiftReportService
@@ -424,7 +435,7 @@ def _shift_run(db, env, of_id, *, day=DAY, shift="morning", team="Équipe A", lo
     if packed_t is not None:
         filled["packing"] = {"rows": [{
             "of_id": of_id, "run_id": run_id, "equipment_id": env["machine"], "lot_number": lot,
-            "packets_counted": packed_t * 2000, "film_quantity": 10, "carton_quantity": packed_t * 100,
+            "product_id": env[product] if product else None, "packets_counted": packed_t * 2000, "film_quantity": 10, "carton_quantity": packed_t * 100,
             "film_product_id": env["film"], "carton_product_id": env["carton"], "scotch_product_id": env["scotch"],
             "ruban_product_id": env["ruban"], "packaging_location_id": env["packaging_store"],
             "finished_goods_location_id": env["goods_store"], "dlc_date": (day + datetime.timedelta(days=700)).isoformat(),

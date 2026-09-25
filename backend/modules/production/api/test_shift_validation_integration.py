@@ -462,6 +462,16 @@ def test_the_shift_shows_the_packaging_frozen_and_tonnage_settled_at_validation(
     assert float(tonnage) == pytest.approx(1.0)
 
 
+def test_reversing_a_carton_product_takes_back_exactly_what_validation_packed(db, env):
+    db.execute("UPDATE core.products SET net_weight_grams = 500, packets_per_carton = 20 WHERE id = %s", (env["product"],))
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+    assert _on_hand(db, env, location_key="fg_location") == pytest.approx(2000)  # 100 cartons of 20
+    # The reversal reads the frozen snapshot back from the database, not from the product.
+    _ok(ShiftValidationService(db).reverse_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="test"))
+    assert _on_hand(db, env, location_key="fg_location") == pytest.approx(0)
+
+
 # test_rerunning_the_legacy_conversion... removed: Task 3 rewrite eliminates the materialize_shift bridge
 # so this test's premise (old-shaped rows written by validation) no longer applies. The convert_legacy_reports()
 # SQL function still exists for the one-time migration, but validation no longer feeds it. Task 8 will handle cleanup.

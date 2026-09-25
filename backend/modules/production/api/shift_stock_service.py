@@ -224,8 +224,9 @@ class ShiftStockService:
         direction_out = "out" if not reverse else "in"
         movements: list[dict] = []
 
+        per_carton = packing_row.get("snapshot_packets_per_carton")
         finished_quantity = finished_quantity_from_count(
-            packets_per_carton=packing_row.get("snapshot_packets_per_carton"),
+            packets_per_carton=float(per_carton) if per_carton is not None else None,
             carton_quantity=float(packing_row.get("carton_quantity") or 0),
             packets_counted=float(packing_row.get("packets_counted") or 0),
             waste_carton_quantity=float(packing_row.get("waste_carton_quantity") or 0),

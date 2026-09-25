@@ -46,7 +46,7 @@ WINDOWS = {
 def _report(i, kind, day, *, shift="morning", team="Équipe A", lot="B7101SNL", product="Coquillette 500 g", status="validated"):
     return {
         "id": i, "type": kind, "shift": shift, "team": team, "status": status, "of_id": "of-1",
-        "of_product_id": "coq", "product_name": product, "date": MONTH.replace(day=day), "lot": lot,
+        "product_id": "coq", "product_name": product, "date": MONTH.replace(day=day), "lot": lot,
     }
 
 
@@ -86,7 +86,7 @@ def _loaded() -> LoadedSheet:
 
 def _line_month(name: str, code: str, loaded: LoadedSheet | None = None) -> LineMonth:
     loaded = loaded or LoadedSheet(reports=[])
-    by_product = assemble(loaded, column_of=lambda r: r["of_product_id"] or NO_PRODUCT, yield_by_column=True)
+    by_product = assemble(loaded, column_of=lambda r: r["product_id"] or NO_PRODUCT, yield_by_column=True)
     by_product["columns"] = product_columns(by_product["columns"], loaded.products)
     by_lot = assemble(loaded, column_of=lambda r: r["lot"] or NO_LOT, yield_by_column=True)
     by_lot["columns"] = lot_columns(by_lot["columns"])
@@ -215,3 +215,25 @@ def test_aggregates_read_ratios_as_none_when_there_is_nothing_to_divide():
     total = line_total(loaded)
     assert total.fab_t == pytest.approx(16.5) and total.finished_t == pytest.approx(14.0)
     assert Agg().kg_per_hour is None and Agg().yield_pct is None and Agg().per_tonne(10) is None
+
+
+def test_packing_ratios_leave_out_waste_cartons_and_a_mould_change_day_gets_a_row_per_product():
+    reports = [
+        _report("p1", "conditionnement", 1, product="Coquillette 500 g"),
+        _report("p2", "conditionnement", 1, shift="night", lot="B7102SNL", product="Coquillette 200 g"),
+    ]
+    packing = {
+        # 1 000 cartons of 20 x 500 g = 10 T; the 10 waste cartons hold nothing.
+        "p1": PackingFact(column="", product_name="Coquillette 500 g", finished_t=10.0, packets=20000, carton=1010, waste_carton=10),
+        # The mould is changed the same day: 500 cartons of 40 x 200 g = 4 T.
+        "p2": PackingFact(column="", product_name="Coquillette 200 g", finished_t=4.0, packets=20000, carton=505, waste_carton=5),
+    }
+    loaded = LoadedSheet(reports=reports, packing_facts=packing, packaging_units={"carton": "ea"})
+    data = MonthRecapData(month=MONTH, generated_on=TODAY, lines=[_line_month("Line_2_PC", "L2", loaded)])
+    ws = load_workbook(io.BytesIO(build_month_recap_workbook(data)))["Conso conditionnement"]
+
+    day_rows = {r[1]: (r[11], r[12]) for r in ws.iter_rows(values_only=True) if isinstance(r[1], str) and " · " in r[1]}
+    assert day_rows == {
+        "mardi · Coquillette 500 g": (pytest.approx(100), pytest.approx(20)),
+        "mardi · Coquillette 200 g": (pytest.approx(125), pytest.approx(40)),
+    }

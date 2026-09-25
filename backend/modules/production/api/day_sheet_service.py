@@ -80,10 +80,15 @@ class DaySheetService:
         shift's run row (the run and its report share an id); a run converted from
         the old Daily form has none, so it borrows the lot of the packing that drew
         from it, which is the lot its pasta ended up in.
+
+        The product is the one packed, not the order's: one order can run several
+        products. A run takes the product of the packing that drew from it, like its
+        lot; either falls back to the order's product when nothing names one.
         """
         rows = self._connection.execute(
             """
-            SELECT r.id, r.report_type, r.shift, r.team, r.status, r.of_id, o.product_id, r.report_date,
+            SELECT r.id, r.report_type, r.shift, r.team, r.status, r.of_id,
+                   COALESCE(c.product_id, o.product_id), r.report_date,
                    c.lot_number, c.daily_report_id, sr.lot_number
             FROM production.production_reports r
             LEFT JOIN production.work_orders o ON o.id = r.of_id AND o.tenant_id = r.tenant_id
@@ -98,19 +103,18 @@ class DaySheetService:
         reports = [
             {
                 "id": i, "type": kind, "shift": shift, "team": team, "status": state, "of_id": of_id,
-                "of_product_id": product_id, "date": date, "lot": (packing_lot if kind == "conditionnement" else run_lot) or None,
+                "product_id": product_id, "date": date, "lot": (packing_lot if kind == "conditionnement" else run_lot) or None,
                 "_daily_report_id": daily_report_id,
             }
             for i, kind, shift, team, state, of_id, product_id, date, packing_lot, daily_report_id, run_lot in rows
         ]
-        borrowed = {
-            r["_daily_report_id"]: r["lot"]
-            for r in reports
-            if r["type"] == "conditionnement" and r["lot"] and r["_daily_report_id"]
-        }
+        packings = [r for r in reports if r["type"] == "conditionnement" and r["_daily_report_id"]]
+        borrowed_lot = {r["_daily_report_id"]: r["lot"] for r in packings if r["lot"]}
+        borrowed_product = {r["_daily_report_id"]: r["product_id"] for r in packings if r["product_id"]}
         for r in reports:
-            if r["type"] == "daily" and not r["lot"]:
-                r["lot"] = borrowed.get(r["id"])
+            if r["type"] == "daily":
+                r["lot"] = r["lot"] or borrowed_lot.get(r["id"])
+                r["product_id"] = borrowed_product.get(r["id"]) or r["product_id"]
             del r["_daily_report_id"]
         return reports
 
@@ -248,7 +252,7 @@ class DaySheetService:
             tenant_id, packing_ids,
         )
 
-        wanted: set[str] = {r["of_product_id"] for r in reports if r["of_product_id"]}
+        wanted: set[str] = {r["product_id"] for r in reports if r["product_id"]}
         wanted |= {row[1] for row in semolina_rows if row[1]} | {row[2] for row in waste_rows if row[2]}
         wanted |= {row[8] for row in daily_rows if row[8]}
         for row in packing_rows:
@@ -343,14 +347,14 @@ class DaySheetService:
                 amounts[key], unit = in_base_unit(float(quantity or 0), product_id)
                 if unit and not packaging_units.get(unit_row):
                     packaging_units[unit_row] = unit
-            of_product = by_id[report_id]["of_product_id"]
+            packed = by_id[report_id]["product_id"]
             finished_t = float(finished or 0)
             if by_id[report_id]["status"] != "validated":
                 # The tonnage is settled from the count when a report is validated, so
                 # a report still being filled in carries whatever was last saved. Read
                 # its count the way validation will, or the sheet would show 0 t next
                 # to 24 000 packets.
-                product = products.get(of_product or "", {})
+                product = products.get(packed or "", {})
                 finished_t = tonnage_from_count(
                     net_weight_grams=product.get("net_weight_grams"),
                     packets_per_carton=product.get("packets_per_carton"),
@@ -360,8 +364,8 @@ class DaySheetService:
                 )
             packing_facts[report_id] = PackingFact(
                 column="",
-                product_id=of_product,
-                product_name=products.get(of_product or "", {}).get("name"),
+                product_id=packed,
+                product_name=products.get(packed or "", {}).get("name"),
                 finished_t=finished_t,
                 packets=float(packets or 0),
                 film=amounts["film"],
@@ -372,17 +376,22 @@ class DaySheetService:
                 waste=tuple(packing_waste.get(report_id, ())),
             )
 
-        of_product = {r["of_id"]: r["of_product_id"] for r in figures}
+        of_products: dict[str, list[str]] = {}
+        for r in figures:
+            names = of_products.setdefault(r["of_id"], [])
+            name = products.get(r["product_id"] or "", {}).get("name")
+            if name and name not in names:
+                names.append(name)
         ofs = (
             self._connection.execute(
                 "SELECT id, reference FROM production.work_orders WHERE tenant_id = %s AND id = ANY(%s)",
-                (tenant_id, sorted(of_product)),
+                (tenant_id, sorted(of_products)),
             ).fetchall()
-            if of_product
+            if of_products
             else []
         )
         for r in reports:
-            r["product_name"] = products.get(r["of_product_id"] or "", {}).get("name")
+            r["product_name"] = products.get(r["product_id"] or "", {}).get("name")
 
         return LoadedSheet(
             reports=reports,
@@ -392,7 +401,7 @@ class DaySheetService:
             products=products,
             stops=stops,
             ofs={
-                i: {"id": i, "reference": ref, "product_name": products.get(of_product.get(i) or "", {}).get("name")}
+                i: {"id": i, "reference": ref, "product_name": " / ".join(of_products.get(i, [])) or None}
                 for i, ref in ofs
             },
         )
@@ -470,7 +479,7 @@ class DaySheetService:
             date_to=last,
             work_center_id=work_center_id,
             include_pending=False,
-            column_of=(lambda report: report["lot"] or NO_LOT) if by_lot else (lambda report: report["of_product_id"] or NO_PRODUCT),
+            column_of=(lambda report: report["lot"] or NO_LOT) if by_lot else (lambda report: report["product_id"] or NO_PRODUCT),
             yield_by_column=True,
         )
         if by_lot:
