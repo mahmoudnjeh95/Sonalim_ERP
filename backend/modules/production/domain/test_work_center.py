@@ -49,3 +49,22 @@ def test_blank_code_is_invalid():
     result = validate_work_center_code("  ")
     assert isinstance(result, Err)
     assert result.code == "INVALID_CODE"
+
+
+def test_line_type_must_be_production_or_grinder():
+    from modules.production.domain.work_center import validate_line_type
+
+    assert isinstance(validate_line_type("production"), Ok)
+    assert isinstance(validate_line_type("grinder"), Ok)
+    result = validate_line_type("packing")
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_LINE_TYPE"
+
+
+def test_blocking_keeps_the_line_type():
+    work_center = WorkCenter(
+        id="1", code="R-1", name="rebroyat_01", hourly_rate=0, is_blocked=False, blocked_reason=None, line_type="grinder"
+    )
+    result = block_work_center(work_center, "Jam")
+    assert isinstance(result, Ok)
+    assert result.value.line_type == "grinder"

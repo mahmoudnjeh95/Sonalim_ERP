@@ -104,7 +104,8 @@ def _open_shift_with_run(db, env, of_id, **run_overrides):
 
     saved = shifts.save_section(
         tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
-        payload={"runs": [run_payload]},
+        # The semoule a run takes in is poured through the shift's versement.
+        payload={"runs": [run_payload], "versements": run_payload.pop("semolina_lines")},
     )
     assert isinstance(saved, Ok), getattr(saved, "message", "")
 

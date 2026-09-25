@@ -25,6 +25,7 @@ from ulid import ULID
 from core.api.service import CoreService
 from core.domain.result import Err, Ok, Result
 from modules.production.api.packing_derivation_service import derive_packing_rows
+from modules.production.domain.shift_report import split_proportionally
 from modules.production.domain.production_report import (
     ConditionnementReportDetail,
     DailyReportDetail,
@@ -35,7 +36,6 @@ from modules.production.domain.production_report import (
     validate_daily_stock_targets,
     validate_downtime_lines,
     validate_waste_lines,
-    validate_waste_products,
 )
 
 # Work orders that still take reports; the same rule the old report flow uses.
@@ -286,8 +286,8 @@ _SILO_SIDES = ("production", "packing")
 _SILO_PHASES = ("start", "end")
 
 
-def _bad(message: str) -> Err:
-    return Err("INVALID_VALUE", message)
+def _bad(message: str, message_fr: str) -> Err:
+    return Err("INVALID_VALUE", message, message_fr)
 
 
 def _jsonable(value: Any) -> Any:
@@ -298,17 +298,18 @@ def _jsonable(value: Any) -> Any:
     return value
 
 
-def _coerce(col: Col, value: Any, where: str) -> Result[Any]:
+def _coerce(col: Col, value: Any, where: str, where_fr: str | None = None) -> Result[Any]:
     """One cell: blank becomes the column's default, anything else is parsed and range-checked."""
+    where_fr = where_fr if where_fr is not None else where
     if value is None or (isinstance(value, str) and not value.strip()):
         if col.required:
-            return _bad(f"{where}: {col.name} is required")
+            return _bad(f"{where}: {col.name} is required", f"{where_fr} : {col.name} est obligatoire")
         return Ok(col.default)
     try:
         if col.kind in ("num", "int"):
             number = float(value) if col.kind == "num" else int(value)
             if number < 0:
-                return _bad(f"{where}: {col.name} cannot be negative")
+                return _bad(f"{where}: {col.name} cannot be negative", f"{where_fr} : {col.name} ne peut pas être négatif")
             return Ok(number)
         if col.kind == "date":
             return Ok(value if isinstance(value, datetime.date) else datetime.date.fromisoformat(str(value)))
@@ -319,21 +320,21 @@ def _coerce(col: Col, value: Any, where: str) -> Result[Any]:
                 return Ok(value)
             return Ok(datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")))
     except (TypeError, ValueError):
-        return _bad(f"{where}: {col.name} is not a valid {col.kind}")
+        return _bad(f"{where}: {col.name} is not a valid {col.kind}", f"{where_fr} : {col.name} n'est pas un {col.kind} valide")
     text = str(value).strip()
     return Ok(text)
 
 
 def _clean_rows(part: RowSet | ChildSet, rows: Any, label: str) -> Result[list[dict]]:
     if not isinstance(rows, list):
-        return _bad(f"{label} must be a list")
+        return _bad(f"{label} must be a list", f"{label} doit être une liste")
     cleaned: list[dict] = []
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
-            return _bad(f"{label} row {index} must be an object")
+            return _bad(f"{label} row {index} must be an object", f"{label} ligne {index} doit être un objet")
         out: dict[str, Any] = {"_id": str(row["id"]) if row.get("id") else None}
         for col in part.columns:
-            result = _coerce(col, row.get(col.name), f"{label} row {index}")
+            result = _coerce(col, row.get(col.name), f"{label} row {index}", f"{label} ligne {index}")
             if isinstance(result, Err):
                 return result
             out[col.name] = result.value
@@ -353,7 +354,7 @@ def _clean_single(part: Single, value: Any, label: str) -> Result[dict | None]:
     if value is None:
         return Ok(None)
     if not isinstance(value, dict):
-        return _bad(f"{label} must be an object")
+        return _bad(f"{label} must be an object", f"{label} doit être un objet")
     out: dict[str, Any] = {}
     for col in part.columns:
         result = _coerce(col, value.get(col.name), label)
@@ -450,7 +451,7 @@ def _validate_shift_references(
             ).fetchall()
         }
         if wanted - found:
-            return _bad(f"{part.payload_key}: {col.name} does not belong to this shift")
+            return _bad(f"{part.payload_key}: {col.name} does not belong to this shift", f"{part.payload_key} : {col.name} n'appartient pas à ce shift")
     return Ok(None)
 
 
@@ -476,9 +477,56 @@ def _validate_orders(
     )
     for of_id in sorted(wanted):
         if of_id not in statuses:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         if statuses[of_id] not in _OF_STATUSES_ACCEPTING_REPORTS:
-            return Err("OF_NOT_OPEN", f"work order {of_id} is {statuses[of_id]} and accepts no new rows")
+            return Err(
+                "OF_NOT_OPEN",
+                f"work order {of_id} is {statuses[of_id]} and accepts no new rows",
+                f"l'OF {of_id} est {statuses[of_id]} et n'accepte plus de nouvelles lignes",
+            )
+    return Ok(None)
+
+
+def _validate_shift_waste(
+    connection: psycopg.Connection, tenant_id: str, section_key: str, rows: list[dict]
+) -> Result[None]:
+    """One place per loss, and every packaging loss in kilos.
+
+    Finished product lost while packing is filed on the packing side as `product`; the
+    old Daily form's `finished_product_conditioning` would be a second place for the same
+    kilos, counted twice in the sheet's total. A packaging line is typed in kilos, so it
+    may only name an item stocked by weight (film): a wasted carton is a count, and it
+    already has its own field on the packing row (`waste_carton_quantity`).
+    """
+    if section_key == "waste_production":
+        for index, row in enumerate(rows, start=1):
+            if row["category"] == "finished_product_conditioning":
+                return _bad(
+                    f"waste {index}: finished product lost while packing is recorded under packing waste, as Product",
+                    f"déchet {index} : le produit perdu au conditionnement se saisit dans les déchets de conditionnement, en Produit",
+                )
+        return Ok(None)
+    items = sorted({row["product_id"] for row in rows if row["category"] == "packaging" and row["product_id"]})
+    if not items:
+        return Ok(None)
+    by_weight = dict(
+        connection.execute(
+            """
+            SELECT p.id, COALESCE(u.category = 'weight', FALSE)
+            FROM core.products p LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
+            WHERE p.tenant_id = %s AND p.id = ANY(%s)
+            """,
+            (tenant_id, items),
+        ).fetchall()
+    )
+    for index, row in enumerate(rows, start=1):
+        if row["category"] == "packaging" and row["product_id"] and not by_weight.get(row["product_id"], False):
+            return _bad(
+                f"waste {index}: packaging waste is weighed in kg, so the item must be stocked by weight "
+                "(wasted cartons go in the packing row's waste cartons)",
+                f"déchet {index} : le déchet d'emballage se pèse en kg, l'article doit donc être géré au poids "
+                "(les cartons perdus se saisissent dans « cartons déchet » de la ligne de conditionnement)",
+            )
     return Ok(None)
 
 
@@ -501,31 +549,41 @@ def _validate_part(
 
     if part.table == "shift_waste_lines":
         report_type = _WASTE_REPORT_TYPE[section_key]
-        return validate_waste_lines(
+        checked = validate_waste_lines(
             tuple(WasteLine(category=r["category"], quantity=r["quantity"]) for r in rows),
             report_type=report_type,
             custom_categories=custom_waste_categories.get(report_type, frozenset()),
         )
+        if isinstance(checked, Err):
+            return checked
+        return _validate_shift_waste(connection, tenant_id, section_key, rows)
     if part.table == "machine_stops":
         for index, row in enumerate(rows, start=1):
             if row["ended_at"] is not None and row["ended_at"] < row["started_at"]:
-                return _bad(f"stop {index}: it ends before it starts")
+                return _bad(f"stop {index}: it ends before it starts", f"arrêt {index} : il se termine avant de commencer")
         return validate_downtime_lines(tuple(DowntimeLine(motif=r["motif"], minutes=0) for r in rows))
     if part.table == "shift_silo_states":
         seen: set[tuple[str, str]] = set()
         for index, row in enumerate(rows, start=1):
             if row["side"] not in _SILO_SIDES or row["phase"] not in _SILO_PHASES:
-                return _bad(f"silo row {index}: side must be one of {_SILO_SIDES} and phase one of {_SILO_PHASES}")
+                return _bad(
+                    f"silo row {index}: side must be one of {_SILO_SIDES} and phase one of {_SILO_PHASES}",
+                    f"ligne silo {index} : side doit être l'un de {_SILO_SIDES} et phase l'une de {_SILO_PHASES}",
+                )
             if row["level_percent"] is not None and row["level_percent"] > 100:
-                return _bad(f"silo row {index}: level_percent cannot exceed 100")
+                return _bad(f"silo row {index}: level_percent cannot exceed 100", f"ligne silo {index} : level_percent ne peut pas dépasser 100")
             key = (row["side"], row["phase"])
             if key in seen:
-                return Err("DUPLICATE_ROW", f"silo state for {key[0]} / {key[1]} is listed twice")
+                return Err("DUPLICATE_ROW", f"silo state for {key[0]} / {key[1]} is listed twice", f"l'état du silo pour {key[0]} / {key[1]} est listé deux fois")
             seen.add(key)
     if part.table == "shift_packing_rows":
         for index, row in enumerate(rows, start=1):
             if row["dlc_date"] is not None and not row["lot_number"]:
-                return Err("INCOMPLETE_DLC", f"packing row {index}: a DLC needs the lot it belongs to")
+                return Err(
+                    "INCOMPLETE_DLC",
+                    f"packing row {index}: a DLC needs the lot it belongs to",
+                    f"ligne de conditionnement {index} : une DLC a besoin du lot auquel elle appartient",
+                )
     return Ok(None)
 
 
@@ -640,6 +698,76 @@ def _derive_versement_locations(connection: psycopg.Connection, *, tenant_id: st
                 row["location_id"] = product.default_location_id
 
 
+def _derive_run_inputs(connection: psycopg.Connection, *, tenant_id: str, shift_id: str) -> None:
+    """What each run took in, worked out from the shift's versements; the team no longer types it.
+
+    The versements are recorded once for the shift, so their totals are shared across
+    the runs by production minutes, as the energy is, each product on its own. A run's
+    semoule lines are its share of each MP versé, drawn from that MP's store; its
+    rebroyat used is its share of the rebroyat; its dough is the two together. These
+    are the figures stock posting and every run-level analysis already read.
+    """
+    runs = connection.execute(
+        "SELECT id, production_minutes FROM production.shift_runs WHERE tenant_id = %s AND shift_report_id = %s "
+        "ORDER BY line_order, id",
+        (tenant_id, shift_id),
+    ).fetchall()
+    if not runs:
+        return
+    # One entry per MP, in the order the team first listed it.
+    mp = [
+        (product_id, location_id, float(quantity))
+        for product_id, location_id, quantity in connection.execute(
+            "SELECT product_id, MIN(location_id), SUM(quantity) FROM production.shift_versements "
+            "WHERE tenant_id = %s AND shift_report_id = %s AND quantity > 0 AND product_id IS NOT NULL "
+            "GROUP BY product_id ORDER BY MIN(line_order), product_id",
+            (tenant_id, shift_id),
+        ).fetchall()
+    ]
+    mp_total = sum(quantity for _, _, quantity in mp)
+    rebroyat = connection.execute(
+        "SELECT product_id, MIN(location_id), SUM(quantity) FROM production.shift_rebroyat_versements "
+        "WHERE tenant_id = %s AND shift_report_id = %s AND quantity > 0 GROUP BY product_id ORDER BY product_id",
+        (tenant_id, shift_id),
+    ).fetchone()
+    rebroyat_product, rebroyat_location, rebroyat_total = (
+        (rebroyat[0], rebroyat[1], float(rebroyat[2])) if rebroyat else (None, None, 0.0)
+    )
+    weights = [float(minutes or 0) for _, minutes in runs]
+    doughs = split_proportionally(mp_total + rebroyat_total, weights)
+    regrinds = split_proportionally(rebroyat_total, weights)
+    mp_shares = [split_proportionally(quantity, weights) for _, _, quantity in mp]
+    for index, ((run_id, _), dough, regrind) in enumerate(zip(runs, doughs, regrinds)):
+        connection.execute(
+            "DELETE FROM production.shift_run_semolina_lines WHERE tenant_id = %s AND run_id = %s", (tenant_id, run_id)
+        )
+        lines = [(product_id, location_id, shares[index]) for (product_id, location_id, _), shares in zip(mp, mp_shares)]
+        for order, (product_id, location_id, quantity) in enumerate(line for line in lines if line[2] > 0):
+            connection.execute(
+                "INSERT INTO production.shift_run_semolina_lines (id, tenant_id, run_id, product_id, quantity, location_id, line_order) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (str(ULID()), tenant_id, run_id, product_id, quantity, location_id, order),
+            )
+        used = regrind > 0
+        connection.execute(
+            "UPDATE production.shift_runs SET dough_quantity = %s, regrind_input_quantity = %s, "
+            "regrind_input_product_id = %s, raw_material_location_id = %s WHERE id = %s AND tenant_id = %s",
+            (dough, regrind, rebroyat_product if used else None, rebroyat_location if used else None, run_id, tenant_id),
+        )
+
+
+def _validate_single_rebroyat(rows: list[dict]) -> Result[None]:
+    """A run records one rebroyat item, so a shift's rebroyat versements must all name the same one."""
+    products = {r["product_id"] for r in rows if r["product_id"] and (r["quantity"] or 0) > 0}
+    if len(products) > 1:
+        return Err(
+            "MIXED_REBROYAT",
+            "rebroyat versements: every row must name the same rebroyat item",
+            "rebroyat versé : toutes les lignes doivent nommer le même article rebroyat",
+        )
+    return Ok(None)
+
+
 def save_section_rows(
     connection: psycopg.Connection,
     *,
@@ -670,6 +798,10 @@ def save_section_rows(
                     return derived
             if part.table in ("shift_versements", "shift_rebroyat_versements"):
                 _derive_versement_locations(connection, tenant_id=tenant_id, rows=rows.value)
+            if part.table == "shift_rebroyat_versements":
+                single = _validate_single_rebroyat(rows.value)
+                if isinstance(single, Err):
+                    return single
             checked = _validate_part(connection, tenant_id, shift_report_id, section_key, part, rows.value, custom)
             if isinstance(checked, Err):
                 return checked
@@ -679,6 +811,8 @@ def save_section_rows(
             _sync_single(connection, tenant_id, shift_report_id, part, value)
         else:
             _sync_rowset(connection, tenant_id, shift_report_id, part, value)
+    if section_key == "runs":
+        _derive_run_inputs(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     return Ok(None)
 
 
@@ -686,6 +820,16 @@ def clear_section_rows(connection: psycopg.Connection, *, tenant_id: str, shift_
     """Empty every part of a section ("nothing to report")."""
     empty = {p.payload_key: (None if isinstance(p, Single) else []) for p in SECTIONS[section_key]}
     save_section_rows(connection, tenant_id=tenant_id, shift_report_id=shift_report_id, section_key=section_key, payload=empty)
+
+
+def _wrap_run_check(index: int, checked: Err) -> Err:
+    return Err(checked.code, f"run {index}: {checked.message}",
+               f"passage {index} : {checked.message_fr or checked.message}")
+
+
+def _wrap_packing_check(index: int, checked: Err) -> Err:
+    return Err(checked.code, f"packing row {index}: {checked.message}",
+               f"ligne de conditionnement {index} : {checked.message_fr or checked.message}")
 
 
 def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
@@ -698,6 +842,15 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
     screen, than as a refusal at the validation desk.
     """
     if section_key == "runs":
+        for key, name, name_fr in (("versements", "versement", "versement"), ("rebroyat_versements", "rebroyat", "rebroyat")):
+            for index, row in enumerate(payload.get(key) or [], start=1):
+                if float(row.get("quantity") or 0) > 0 and row.get("product_id") and not row.get("location_id"):
+                    return Err(
+                        "MISSING_STOCK_TARGET",
+                        f"{name} row {index}: the item has no default store; set one on the item, then save the section again",
+                        f"ligne {name_fr} {index} : l'article n'a pas de magasin par défaut ; "
+                        "définissez-en un sur l'article, puis enregistrez à nouveau la section",
+                    )
         for index, run in enumerate(payload.get("runs") or [], start=1):
             detail = DailyReportDetail(
                 semolina_lines=tuple(
@@ -714,23 +867,25 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
             )
             checked = validate_daily_stock_targets(detail)
             if isinstance(checked, Err):
-                return Err(checked.code, f"run {index}: {checked.message}")
+                return _wrap_run_check(index, checked)
     elif section_key in _WASTE_REPORT_TYPE:
-        if section_key == "waste_packing":
-            return Ok(None)
-        lines = tuple(
-            WasteLine(category=line["category"], product_id=line.get("product_id"), quantity=float(line.get("quantity") or 0))
-            for line in payload.get("waste_lines") or []
-        )
-        return validate_waste_products(lines)
+        # The shift's waste lines track a quantity per kind; the form has no product column and
+        # nothing is posted to stock from them, so a line need not name what was lost.
+        return Ok(None)
     elif section_key == "packing":
         for index, row in enumerate(payload.get("rows") or [], start=1):
             if not row.get("product_id"):
-                return Err("PRODUCT_REQUIRED", f"packing row {index}: pick the product this lot is made of")
+                return Err(
+                    "PRODUCT_REQUIRED",
+                    f"packing row {index}: pick the product this lot is made of",
+                    f"ligne de conditionnement {index} : choisissez le produit dont ce lot est fait",
+                )
             if float(row.get("packets_counted") or 0) > 0 and not row.get("finished_goods_location_id"):
                 return Err(
                     "NO_DEFAULT_LOCATION",
                     f"packing row {index}: the product has no default storage location; set one on the product, then save the section again",
+                    f"ligne de conditionnement {index} : le produit n'a pas d'emplacement de stockage par défaut ; "
+                    "définissez-en un sur le produit, puis enregistrez à nouveau la section",
                 )
             uses_packaging = any(
                 float(row.get(quantity) or 0) > 0
@@ -740,6 +895,8 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
                 return Err(
                     "NO_DEFAULT_LOCATION",
                     f"packing row {index}: a packaging item has no default storage location; set one on the item, then save the section again",
+                    f"ligne de conditionnement {index} : un article d'emballage n'a pas d'emplacement de stockage par défaut ; "
+                    "définissez-en un sur l'article, puis enregistrez à nouveau la section",
                 )
             detail = ConditionnementReportDetail(
                 packets_counted=float(row.get("packets_counted") or 0),
@@ -756,5 +913,5 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
             )
             checked = validate_conditionnement_stock_targets(detail)
             if isinstance(checked, Err):
-                return Err(checked.code, f"packing row {index}: {checked.message}")
+                return _wrap_packing_check(index, checked)
     return Ok(None)

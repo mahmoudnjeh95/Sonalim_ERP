@@ -80,7 +80,7 @@ class PackagingTolerancePolicyService:
         self, *, tenant_id: str, actor_id: str, tolerance_percent: float, product_id: str | None = None
     ) -> Result[dict]:
         if tolerance_percent < 0:
-            return Err("INVALID_TOLERANCE", "tolerance_percent cannot be negative")
+            return Err("INVALID_TOLERANCE", "tolerance_percent cannot be negative", "tolerance_percent ne peut pas être négatif")
 
         self._connection.execute(
             """
@@ -216,7 +216,7 @@ class PackagingVarianceService:
             (report_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"conditionnement report {report_id} not found")
+            return Err("NOT_FOUND", f"conditionnement report {report_id} not found", f"rapport de conditionnement {report_id} introuvable")
 
         (
             of_id,
@@ -286,7 +286,7 @@ class PackagingVarianceService:
             (of_id, tenant_id),
         ).fetchone()
         if work_order is None:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         product_id, reference = work_order
 
         # An order that packed several products has no single net weight and one declared tonnage

@@ -5,21 +5,31 @@ import { motion } from "framer-motion";
 import {
   AlertTriangle,
   ArrowLeft,
+  CalendarRange,
   CheckCircle2,
   ClipboardList,
   Droplets,
   Factory,
   FlaskConical,
   FileText,
+  Info,
+  Package,
   PauseCircle,
   PlayCircle,
   Recycle,
   Rocket,
   ShieldCheck,
+  Timer,
+  TrendingUp,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
-import { useI18n } from "../../lib/i18n";
+import { useI18n, type TranslationKey } from "../../lib/i18n";
+import YieldIcon from "../../assets/icons/yield.svg?react";
+import ShiftIcon from "../../assets/icons/shift.svg?react";
+import { KpiTile, WorkOrderHero } from "./WorkOrderHero";
+import { ShiftCalendar } from "./ShiftCalendar";
+import { OfTrendChart } from "./OfTrendChart";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -69,6 +79,16 @@ import { listLocations, listUoms } from "../warehouse/api";
 import { listPartners } from "../partners/api";
 import { UTILITY_UNITS, formatDuration, formatQuantity, productUnit } from "../../lib/units";
 import { AppLoader } from "../../components/patterns/AppLoader";
+
+const CLOSURE_MESSAGE_KEYS: Record<string, TranslationKey> = {
+  DRAFT_REPORTS: "production.ofDetails.closure.code.DRAFT_REPORTS",
+  UNVALIDATED_REPORTS: "production.ofDetails.closure.code.UNVALIDATED_REPORTS",
+  REJECTED_REPORTS: "production.ofDetails.closure.code.REJECTED_REPORTS",
+  NO_VALIDATED_REPORTS: "production.ofDetails.closure.code.NO_VALIDATED_REPORTS",
+  MISSING_START_DATE: "production.ofDetails.closure.code.MISSING_START_DATE",
+  OPEN_QUALITY_FOLLOW_UPS: "production.ofDetails.closure.code.OPEN_QUALITY_FOLLOW_UPS",
+  OPEN_NON_CONFORMITIES: "production.ofDetails.closure.code.OPEN_NON_CONFORMITIES",
+};
 
 export function WorkOrderDetailsPage() {
   const { workOrderId = "" } = useParams();
@@ -169,14 +189,15 @@ export function WorkOrderDetailsPage() {
   });
   const regrindOutputProductId = regrindDefaults.find((d) => d.input_product_id === null)?.output_product_id ?? null;
 
+  // The stage whose popup is open. It lists the reports behind the stage's
+  // status; opening one of them swaps this popup for that report's dialog.
+  const [openStage, setOpenStage] = useState<ProductionStepId | null>(null);
   const {
     states: stageStates,
     details: stageDetails,
     isLoading: stagesLoading,
-  } = useOfStageStates(token, reports, order?.status ?? "planned");
-  // The stage whose popup is open. It lists the reports behind the stage's
-  // status; opening one of them swaps this popup for that report's dialog.
-  const [openStage, setOpenStage] = useState<ProductionStepId | null>(null);
+    detailsLoading: stageDetailsLoading,
+  } = useOfStageStates(token, reports, order?.status ?? "planned", openStage);
 
   const [openReport, setOpenReport] = useState<ProductionReport | null>(null);
   const [openQualityReport, setOpenQualityReport] = useState<QualityReport | null>(null);
@@ -260,9 +281,6 @@ export function WorkOrderDetailsPage() {
     );
   }
 
-  // Produced against what was actually poured in — semoule plus any rebroyat
-  // recycled back into the mix — rather than against the schedule.
-  const transformation = consolidation?.transformation_ratio ?? 0;
   // Everything the OF consumes and produces is counted in its product's own unit.
   // An order can pack several products: their common unit, and a bare number when they differ.
   const orderUnits = new Set(
@@ -273,7 +291,16 @@ export function WorkOrderDetailsPage() {
   const productUom = orderUnits.size === 1 && [...orderUnits][0] ? [...orderUnits][0] : null;
   // Each consolidated figure is in its own product's unit. Null where the
   // validated reports named different products, and the figure then shows bare.
-  const semolinaUom = productUnit(consolidation?.raw_material.semolina_product_id, products, uoms);
+  // Several qualities poured still share a unit when they are all bought in it.
+  const semolinaUom =
+    productUnit(consolidation?.raw_material.semolina_product_id, products, uoms) ??
+    (() => {
+      const units = new Set(
+        (consolidation?.raw_material.semolina_by_product ?? []).map((part) => productUnit(part.product_id, products, uoms)),
+      );
+      const [only] = [...units];
+      return units.size === 1 && only ? only : null;
+    })();
   const regrindUom = productUnit(consolidation?.raw_material.regrind_input_product_id, products, uoms);
   const filmUom = productUnit(consolidation?.packaging.film_product_id, products, uoms);
   const cartonUom = productUnit(consolidation?.packaging.carton_product_id, products, uoms);
@@ -282,6 +309,37 @@ export function WorkOrderDetailsPage() {
   const regrindWasteUom = productUnit(consolidation?.waste.regrind.product_id, products, uoms);
   const productName = (id: string | null) =>
     (id && products.find((p) => p.id === id)?.name) || t("production.waste.unknownItem");
+  const orderProductIds = consolidation?.product_ids?.length
+    ? consolidation.product_ids
+    : order.product_id
+      ? [order.product_id]
+      : [];
+
+  // Start → close (or today while it runs), and how many calendar days that is.
+  const periodEnd = order.closed_at?.slice(0, 10) ?? null;
+  const runningDays = order.start_date
+    ? Math.max(
+        1,
+        Math.round(
+          (new Date(`${periodEnd ?? new Date().toISOString().slice(0, 10)}T00:00:00Z`).getTime() -
+            new Date(`${order.start_date}T00:00:00Z`).getTime()) /
+            86_400_000,
+        ) + 1,
+      )
+    : null;
+  const period = [
+    `${order.start_date ?? "—"} → ${periodEnd ?? t("production.ofDetails.kpi.today")}`,
+    runningDays !== null ? `${runningDays} ${t("production.ofDetails.kpi.days")}` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+
+  const validatedShifts = shifts.filter((s) => s.status === "validated").length;
+  const waitingShifts = shifts.length - validatedShifts;
+  const lineMinutes = consolidation ? consolidation.time.production_minutes + consolidation.time.downtime_minutes : 0;
+  // Share of the line's recorded time that was stopped — both terms from the same shifts.
+  const downtimeShare = consolidation && lineMinutes > 0 ? consolidation.time.downtime_minutes / lineMinutes : null;
+  const semolinaParts = consolidation?.raw_material.semolina_by_product ?? [];
 
   // Déchets, one row per item, because that is the only grouping that can carry
   // a unit. The old card had a row per category and gave them all the semoule's
@@ -319,6 +377,12 @@ export function WorkOrderDetailsPage() {
       : []),
   ];
 
+  // The check's messages are English prose from the server; every known code has its own line in both languages.
+  const closureMessage = (finding: { code: string; message: string }) => {
+    const key = CLOSURE_MESSAGE_KEYS[finding.code];
+    return key ? t(key) : finding.message;
+  };
+
   const reportStatusIcon = (status: string) => {
     switch (status) {
       case "draft":
@@ -336,18 +400,34 @@ export function WorkOrderDetailsPage() {
 
   return (
     <div className="space-y-6">
-      <motion.div initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.25 }}>
+      <div>
         <Button asChild size="sm" variant="ghost" className="-ml-2 mb-2">
           <Link to="/production">
             <ArrowLeft className="h-3.5 w-3.5" />
             {t("production.ofDetails.back")}
           </Link>
         </Button>
-        <div className="flex flex-wrap items-center gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">{order.reference}</h1>
-          <StatusBadge status={order.status} />
-          {order.product_type && <Badge variant="outline">{order.product_type}</Badge>}
-          <div className="ml-auto flex flex-wrap gap-2">
+        <WorkOrderHero
+          reference={order.reference}
+          status={order.status}
+          lineName={workCenters.find((wc) => wc.id === order.work_center_id)?.name ?? null}
+          period={period}
+          badges={
+            <>
+              <StatusBadge status={order.status} />
+              {/* Only once the product list has them: a chip reading "unknown item" while it loads is a false signal. */}
+              {orderProductIds
+                .filter((id) => products.some((p) => p.id === id))
+                .map((id) => (
+                  <Badge key={id} variant="outline" className="max-w-[16rem] truncate bg-background">
+                    {productName(id)}
+                  </Badge>
+                ))}
+              {order.product_type && <Badge variant="outline">{order.product_type}</Badge>}
+            </>
+          }
+          actions={
+            <>
             {order.status === "planned" && (
               <Button size="sm" variant="outline" onClick={() => startMutation.mutate()} disabled={startMutation.isPending}>
                 <PlayCircle className="h-3.5 w-3.5" />
@@ -383,13 +463,81 @@ export function WorkOrderDetailsPage() {
                 {t("production.workOrders.resume")}
               </Button>
             )}
-          </div>
-        </div>
-        <p className="mt-1 text-sm text-muted-foreground">
-          {order.start_date ?? "—"}
-          {order.closed_at ? ` → ${order.closed_at.slice(0, 10)}` : ""}
-        </p>
-      </motion.div>
+            </>
+          }
+        >
+          <KpiTile
+            index={0}
+            icon={<Package />}
+            label={t("production.ofDetails.kpi.packed")}
+            value={formatQuantity(consolidation?.produced_quantity, "t")}
+            sub={
+              pendingQuantity > 0
+                ? `+ ${formatQuantity(pendingQuantity, "t")} ${t("production.ofDetails.pending")}`
+                : undefined
+            }
+          />
+          <KpiTile
+            index={1}
+            icon={<Factory />}
+            label={t("production.ofDetails.kpi.pressed")}
+            value={formatQuantity(consolidation?.pressed_quantity, "t")}
+            sub={`${t("production.ofDetails.kpi.poured")} ${formatQuantity(consolidation?.material_input_quantity, "t")}`}
+          />
+          <KpiTile
+            index={2}
+            icon={<YieldIcon />}
+            tone="accent"
+            label={t("production.workOrders.column.yield")}
+            value={consolidation?.yield_ratio == null ? "—" : `${(consolidation.yield_ratio * 100).toFixed(1)} %`}
+            sub={t("production.ofDetails.kpi.yieldBasis")}
+          />
+          <KpiTile
+            index={3}
+            icon={<ShiftIcon />}
+            tone="success"
+            label={t("production.ofDetails.kpi.shifts")}
+            value={`${validatedShifts} / ${shifts.length}`}
+            sub={
+              waitingShifts > 0
+                ? `${waitingShifts} ${t("production.workOrders.card.waiting")}`
+                : t("production.ofDetails.kpi.allValidated")
+            }
+          />
+          <KpiTile
+            index={4}
+            icon={<Timer />}
+            tone="warning"
+            label={t("production.ofDetails.kpi.lineTime")}
+            value={formatDuration(consolidation?.time.production_minutes)}
+            sub={
+              consolidation
+                ? `${t("production.ofDetails.time.downtime")} ${formatDuration(consolidation.time.downtime_minutes)}${
+                    downtimeShare !== null ? ` · ${(downtimeShare * 100).toFixed(1)} %` : ""
+                  }`
+                : undefined
+            }
+          />
+          <KpiTile
+            index={5}
+            icon={<ShieldCheck />}
+            tone={consolidation?.quality.conformity_rate == null ? "muted" : "success"}
+            label={t("production.dashboard.health.conformity")}
+            value={
+              consolidation?.quality.conformity_rate == null
+                ? "—"
+                : `${(consolidation.quality.conformity_rate * 100).toFixed(1)} %`
+            }
+            sub={
+              consolidation?.quality.conformity_rate == null
+                ? t("production.dashboard.health.noData")
+                : `${formatQuantity(consolidation.quality.non_conforming_cartons)} ${t(
+                    "production.ofDetails.quality.pendingNc.cartonsSuffix",
+                  )}`
+            }
+          />
+        </WorkOrderHero>
+      </div>
 
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24, ease: "easeOut" }}>
         <Card>
@@ -419,17 +567,20 @@ export function WorkOrderDetailsPage() {
                 <div>
                   <p className="text-sm font-medium text-destructive">{t("production.ofDetails.closure.blocker")}</p>
                   <p className="text-sm text-muted-foreground">
-                    {finding.count} · {finding.message}
+                    {finding.count} · {closureMessage(finding)}
                   </p>
                 </div>
               </div>
             ))}
             {preClose.warnings.map((finding) => (
-              <div key={finding.code} className="flex items-start gap-3 rounded-lg border border-border p-3">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+              <div key={finding.code} className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
+                <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                 <div>
                   <p className="text-sm font-medium">{t("production.ofDetails.closure.warning")}</p>
-                  <p className="text-sm text-muted-foreground">{finding.message}</p>
+                  <p className="text-sm text-muted-foreground">
+                    {finding.count > 0 && <span className="font-medium tabular-nums text-foreground">{finding.count} · </span>}
+                    {closureMessage(finding)}
+                  </p>
                 </div>
               </div>
             ))}
@@ -437,47 +588,48 @@ export function WorkOrderDetailsPage() {
         </Card>
       )}
 
-      <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.24, ease: "easeOut" }}>
-        <Card>
+      {/* Pressed against packed, day by day, beside every shift that worked on the order. */}
+      <div className="grid grid-cols-1 gap-4 xl:grid-cols-5">
+        <Card className="xl:col-span-3">
           <CardHeader>
-            <CardTitle>{t("production.ofDetails.progress.title")}</CardTitle>
-            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.progress.subtitle")}</p>
+            <CardTitle className="flex items-center gap-1.5 text-base">
+              <TrendingUp className="h-4 w-4 text-primary" />
+              {t("production.ofDetails.trend.title")}
+            </CardTitle>
+            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.trend.subtitle")}</p>
           </CardHeader>
-          <CardContent className="space-y-3">
-          <div className="flex items-baseline justify-between">
-            {/* Tonnes throughout: the OF is planned in them (decision 19) and the
-                packing reports report them (decision 17). The packet count is the
-                separate figure below, because it answers a different question. */}
-            <span className="text-2xl font-semibold tabular-nums">
-              {formatQuantity(consolidation?.produced_quantity, "t")}
-            </span>
-            <span className="text-sm text-muted-foreground">
-              / {formatQuantity(consolidation?.material_input_quantity, "t")} ·{" "}
-              {Math.round(transformation * 100)}%
-            </span>
-          </div>
-          <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
-            <motion.div
-              className="h-full rounded-full bg-success"
-              initial={{ width: 0 }}
-              animate={{ width: `${Math.min(100, transformation * 100)}%` }}
-              transition={{ duration: 0.4, ease: "easeOut" }}
-            />
-          </div>
-            <p className="text-xs text-muted-foreground">
-              {t("production.ofDetails.progress.planned")}: {formatQuantity(order.planned_quantity, "t")} ·{" "}
-              {t("production.conditionnement.field.packetsCounted")}:{" "}
-              {formatQuantity(consolidation?.packets_counted, productUom)}
-            </p>
-            {/* What is handed in or still being typed: shown beside the official figure, never inside it. */}
-            {pendingQuantity > 0 && (
-              <p className="text-xs text-muted-foreground">
-                + {formatQuantity(pendingQuantity, "t")} {t("production.ofDetails.pending")}
-              </p>
+          <CardContent>
+            {consolidation && consolidation.by_day.length > 0 ? (
+              <OfTrendChart days={consolidation.by_day} />
+            ) : (
+              <p className="py-10 text-center text-sm text-muted-foreground">{t("production.ofDetails.trend.empty")}</p>
             )}
           </CardContent>
         </Card>
-      </motion.div>
+        <Card className="xl:col-span-2">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-1.5 text-base">
+              <CalendarRange className="h-4 w-4 text-primary" />
+              {t("production.ofDetails.shifts.title")}
+            </CardTitle>
+            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.calendar.subtitle")}</p>
+          </CardHeader>
+          <CardContent className={shifts.length === 0 ? "p-0" : undefined}>
+            {shifts.length === 0 ? (
+              <EmptyState
+                icon={<ClipboardList className="h-5 w-5" />}
+                title={t("production.ofDetails.shifts.title")}
+                description={t("production.ofDetails.shifts.empty")}
+              />
+            ) : (
+              <ShiftCalendar
+                shifts={shifts}
+                lineName={(id) => workCenters.find((wc) => wc.id === id)?.name ?? "—"}
+              />
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
       {/* The écart net. Read-only by decision 22 — it never held anything up, and
           it sits here because this is where a supervisor decides whether a run
@@ -524,10 +676,20 @@ export function WorkOrderDetailsPage() {
               value: consolidation?.raw_material.semolina_quantity,
               unit: semolinaUom,
             },
+            // One line per quality poured, when there was more than one.
+            ...(semolinaParts.length > 1
+              ? semolinaParts.map((part) => ({
+                  label: productName(part.product_id),
+                  value: part.quantity,
+                  unit: productUnit(part.product_id, products, uoms),
+                  sub: true,
+                }))
+              : []),
             {
               label: t("production.dailyReports.field.regrindInput"),
               value: consolidation?.raw_material.regrind_input_quantity,
-              unit: regrindUom,
+              // Nothing poured names no product; the rebroyat's own unit still applies.
+              unit: regrindUom ?? regrindWasteUom,
             },
             {
               label: t("production.conditionnement.field.film"),
@@ -543,6 +705,7 @@ export function WorkOrderDetailsPage() {
               label: t("production.conditionnement.field.wasteCarton"),
               value: consolidation?.packaging.waste_carton_quantity,
               unit: cartonUom,
+              sub: true,
             },
             {
               label: t("production.conditionnement.field.scotch"),
@@ -564,6 +727,7 @@ export function WorkOrderDetailsPage() {
               label: t("production.dailyReports.field.water"),
               value: consolidation?.utilities.water_quantity,
               unit: UTILITY_UNITS.water,
+              hint: consolidation?.utilities.water_derived ? t("production.ofDetails.utilities.waterDerived") : undefined,
             },
             {
               label: t("production.dailyReports.field.fuel"),
@@ -576,7 +740,7 @@ export function WorkOrderDetailsPage() {
               unit: UTILITY_UNITS.electricity,
             },
             {
-              label: t("production.ofDetails.time.production"),
+              label: t("production.ofDetails.time.line"),
               value: consolidation?.time.production_minutes,
               duration: true,
             },
@@ -584,6 +748,19 @@ export function WorkOrderDetailsPage() {
               label: t("production.ofDetails.time.downtime"),
               value: consolidation?.time.downtime_minutes,
               duration: true,
+              sub: true,
+            },
+            {
+              label: t("production.ofDetails.time.packing"),
+              value: consolidation?.time.packing_minutes,
+              duration: true,
+              hint: t("production.ofDetails.time.packingHint"),
+            },
+            {
+              label: t("production.ofDetails.time.downtime"),
+              value: consolidation?.time.packing_downtime_minutes,
+              duration: true,
+              sub: true,
             },
           ]}
         />
@@ -596,51 +773,13 @@ export function WorkOrderDetailsPage() {
         />
       </div>
 
-      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Every shift that worked on this order, validated or not. A row opens that shift in the shift
-            screen, where it is read and, if it is still open, filled in. */}
+      <div>
         <Card>
           <CardHeader>
-            <CardTitle>{t("production.ofDetails.shifts.title")}</CardTitle>
-            <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.shifts.subtitle")}</p>
-          </CardHeader>
-          <CardContent className={shifts.length === 0 ? "p-0" : "space-y-2"}>
-            {shifts.length === 0 ? (
-              <EmptyState
-                icon={<ClipboardList className="h-5 w-5" />}
-                title={t("production.ofDetails.shifts.title")}
-                description={t("production.ofDetails.shifts.empty")}
-              />
-            ) : (
-              shifts.map((shift) => (
-                <Link
-                  key={shift.id}
-                  to={`/production?tab=shift-report&line=${encodeURIComponent(shift.work_center_id)}&date=${shift.report_date}&shift=${encodeURIComponent(shift.shift)}`}
-                  title={t("production.ofDetails.shifts.open")}
-                  className="flex w-full items-center gap-3 rounded-lg border border-border p-3 text-left transition-colors hover:border-primary/30 hover:bg-muted/40"
-                >
-                  <div className="flex h-9 w-9 items-center justify-center rounded-lg border border-primary/15 bg-primary/10 text-primary">
-                    {reportStatusIcon(shift.status === "open" ? "draft" : shift.status === "returned" ? "rejected" : shift.status)}
-                  </div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <span className="text-sm font-medium tabular-nums">{shift.report_date}</span>
-                      <Badge variant="outline">{shift.shift}</Badge>
-                      <span className="text-xs text-muted-foreground">
-                        {workCenters.find((wc) => wc.id === shift.work_center_id)?.name ?? "—"}
-                      </span>
-                    </div>
-                  </div>
-                  <StatusBadge status={shift.status} />
-                </Link>
-              ))
-            )}
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>{t("production.ofDetails.quality.title")}</CardTitle>
+            <CardTitle className="flex items-center gap-1.5 text-base">
+              <ShieldCheck className="h-4 w-4 text-primary" />
+              {t("production.ofDetails.quality.title")}
+            </CardTitle>
             <p className="mt-0.5 text-sm text-muted-foreground">{t("production.ofDetails.quality.subtitle")}</p>
           </CardHeader>
           <CardContent className="space-y-3">
@@ -698,7 +837,7 @@ export function WorkOrderDetailsPage() {
                 description={t("production.ofDetails.quality.empty.description")}
               />
             ) : (
-              <div className="space-y-2">
+              <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
                 {qualityReports.map((report) => (
                   <motion.button
                     key={report.id}
@@ -761,7 +900,7 @@ export function WorkOrderDetailsPage() {
         stepId={openStage}
         state={openStage ? stageStates[openStage] : null}
         details={stageDetails}
-        loading={stagesLoading}
+        loading={stageDetailsLoading}
         products={products}
         uoms={uoms}
         locations={locations}
@@ -842,6 +981,8 @@ function ConsolidationCard({
     duration?: boolean;
     /** Shown next to the label when the figure needs a word of explanation. */
     hint?: string;
+    /** A part of the line above it, indented under it. */
+    sub?: boolean;
   }[];
   /**
    * What to say when there are no rows. Only cards whose rows are built from
@@ -853,28 +994,39 @@ function ConsolidationCard({
 }) {
   const { t } = useI18n();
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-1.5 text-base">
-          {icon}
+    <Card className="overflow-hidden">
+      <CardHeader className="border-b border-border/60 bg-muted/20">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary/10 text-primary">{icon}</span>
           {title}
         </CardTitle>
       </CardHeader>
-      <CardContent>
+      <CardContent className="pt-4">
         {rows.length === 0 && empty ? (
           <div>
             <p className="text-sm text-muted-foreground">{empty}</p>
             {emptyHint && <p className="mt-0.5 text-xs text-muted-foreground">{emptyHint}</p>}
           </div>
         ) : null}
-        <dl className="space-y-1.5">
+        <dl className="divide-y divide-border/50">
           {rows.map((row, index) => (
-            <div key={`${row.label}-${index}`} className="flex items-baseline justify-between gap-3">
-              <dt className="flex items-center gap-1 text-sm text-muted-foreground">
-                {row.label}
+            <div
+              key={`${row.label}-${index}`}
+              className={cn(
+                "flex items-baseline justify-between gap-3 py-1.5",
+                row.sub && "border-t-0 py-1 pl-4",
+              )}
+            >
+              <dt
+                className={cn(
+                  "flex min-w-0 items-center gap-1 text-sm text-muted-foreground",
+                  row.sub && "text-xs before:mr-1 before:text-border before:content-['└']",
+                )}
+              >
+                <span className="truncate">{row.label}</span>
                 {row.hint && <HelpTooltip text={row.hint} />}
               </dt>
-              <dd className="text-sm font-medium tabular-nums">
+              <dd className={cn("shrink-0 text-sm font-semibold tabular-nums", row.sub && "text-xs font-medium text-muted-foreground")}>
                 {row.value === undefined
                   ? t("production.dashboard.health.noData")
                   : row.duration

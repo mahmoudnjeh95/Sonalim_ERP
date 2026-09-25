@@ -337,6 +337,70 @@ class QualityReportService:
             for team, period, count, c, nc in rows
         ]
 
+    def inspection_ledger(
+        self, *, tenant_id: str, date_from: str | None = None, date_to: str | None = None
+    ) -> list[dict]:
+        """Every conformity line of every quality report in the window, one row each.
+
+        The dashboards need conformity sliced by product, line, team, shift,
+        defect and day at once, and `team_conformity` only knows teams. Rather
+        than one endpoint per slice, this hands back the line grain (a report
+        has one line per product packed that shift) and lets the reader group
+        it -- a month of shifts is a few hundred rows, well under what a screen
+        can hold. Every status is included so the reader can also tell what is
+        still waiting on QC; a caller wanting the official figure keeps
+        `status == "validated"`, exactly the rule `team_conformity` applies.
+        A report whose shift packed nothing has no line and so no row here; it
+        still counts in `list_reports`.
+        """
+        clauses = ["r.tenant_id = %s"]
+        params: list[object] = [tenant_id]
+        if date_from is not None:
+            clauses.append("r.report_date >= %s")
+            params.append(date_from)
+        if date_to is not None:
+            clauses.append("r.report_date <= %s")
+            params.append(date_to)
+        rows = self._connection.execute(
+            f"""
+            SELECT
+                l.id, r.id, r.shift_report_id, r.report_date, r.shift, r.team, r.status, r.revision,
+                r.submitted_at, r.validated_at, l.of_id, l.product_id,
+                l.conforming_cartons, l.non_conforming_cartons, l.defect_details, d.corrective_action,
+                (SELECT count(*) FROM qc.non_conformities n
+                 WHERE n.tenant_id = r.tenant_id AND n.quality_report_id = r.id
+                   AND n.of_id = l.of_id AND n.product_id = l.product_id)
+            FROM qc.quality_reports r
+            JOIN qc.quality_conformity_lines l ON l.report_id = r.id AND l.tenant_id = r.tenant_id
+            LEFT JOIN qc.quality_report_details d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            WHERE {' AND '.join(clauses)}
+            ORDER BY r.report_date, r.shift, r.team, r.id, l.id
+            """,
+            params,
+        ).fetchall()
+        return [
+            {
+                "line_id": row[0],
+                "report_id": row[1],
+                "shift_report_id": row[2],
+                "report_date": row[3].isoformat(),
+                "shift": row[4],
+                "team": row[5],
+                "status": row[6],
+                "revision": int(row[7]),
+                "submitted_at": row[8].isoformat() if row[8] is not None else None,
+                "validated_at": row[9].isoformat() if row[9] is not None else None,
+                "of_id": row[10],
+                "product_id": row[11],
+                "conforming_cartons": float(row[12] or 0),
+                "non_conforming_cartons": float(row[13] or 0),
+                "defect_details": row[14],
+                "corrective_action": row[15],
+                "non_conformity_count": int(row[16]),
+            }
+            for row in rows
+        ]
+
     def list_reports(self, *, tenant_id: str, status: str | None = None) -> list[QualityReport]:
         clauses = ["tenant_id = %s"]
         params: list[object] = [tenant_id]
@@ -397,7 +461,11 @@ class QualityReportService:
         if isinstance(resolved, Err):
             return resolved
         if resolved.value["status"] != "validated":
-            return Err("SHIFT_NOT_VALIDATED", "a quality report can only inspect a validated shift")
+            return Err(
+                "SHIFT_NOT_VALIDATED",
+                "a quality report can only inspect a validated shift",
+                "un rapport qualité ne peut inspecter qu'un shift validé",
+            )
         return resolved
 
     def list_inspectable_shift_reports(self, *, tenant_id: str) -> list[dict]:
@@ -422,7 +490,9 @@ class QualityReportService:
 
     def create_report(self, *, tenant_id: str, actor_id: str, shift_report_id: str) -> Result[dict]:
         if not shift_report_id.strip():
-            return Err("MISSING_SHIFT_REPORT", "a quality report must inspect a shift report")
+            return Err(
+                "MISSING_SHIFT_REPORT", "a quality report must inspect a shift report", "un rapport qualité doit inspecter un shift"
+            )
 
         resolved = self._resolve_validated_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
         if isinstance(resolved, Err):
@@ -434,7 +504,11 @@ class QualityReportService:
             (tenant_id, shift_report_id),
         ).fetchone()
         if duplicate is not None:
-            return Err("DUPLICATE_REPORT", "a quality report already exists for this shift report")
+            return Err(
+                "DUPLICATE_REPORT",
+                "a quality report already exists for this shift report",
+                "un rapport qualité existe déjà pour ce shift",
+            )
 
         report_id = str(ULID())
         self._connection.execute(
@@ -483,9 +557,13 @@ class QualityReportService:
     ) -> Result[dict]:
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
         if report.status != "draft":
-            return Err("NOT_EDITABLE", f"a {report.status} quality report cannot be edited as a draft")
+            return Err(
+                "NOT_EDITABLE",
+                f"a {report.status} quality report cannot be edited as a draft",
+                f"un rapport qualité {report.status} ne peut pas être modifié comme un brouillon",
+            )
 
         applied = self._apply_line_edits(tenant_id=tenant_id, report_id=report_id, edits=lines)
         if isinstance(applied, Err):
@@ -513,7 +591,11 @@ class QualityReportService:
                 (tenant_id, report_id, row_id),
             ).fetchone()
             if existing is None:
-                return Err("LINE_NOT_FOUND", f"no conformity line for packing row {row_id} on this report")
+                return Err(
+                    "LINE_NOT_FOUND",
+                    f"no conformity line for packing row {row_id} on this report",
+                    f"aucune ligne de conformité pour la ligne de conditionnement {row_id} sur ce rapport",
+                )
             line = ConformityLine(
                 id=existing[0],
                 report_id=report_id,
@@ -564,11 +646,15 @@ class QualityReportService:
         """
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
 
         if shift_report_id is not None and shift_report_id != report.shift_report_id:
             if report.status != "draft":
-                return Err("NOT_EDITABLE", f"a {report.status} quality report cannot be moved to another shift")
+                return Err(
+                    "NOT_EDITABLE",
+                    f"a {report.status} quality report cannot be moved to another shift",
+                    f"un rapport qualité {report.status} ne peut pas être déplacé vers un autre shift",
+                )
             attached = self._connection.execute(
                 """
                 SELECT 1 FROM qc.quality_conformity_lines l
@@ -584,6 +670,7 @@ class QualityReportService:
                 return Err(
                     "NON_CONFORMITY_ATTACHED",
                     "a non-conformity was raised from this report; it cannot be moved to another shift",
+                    "une non-conformité a été ouverte depuis ce rapport ; il ne peut pas être déplacé vers un autre shift",
                 )
             resolved = self._resolve_validated_shift(tenant_id=tenant_id, shift_report_id=shift_report_id)
             if isinstance(resolved, Err):
@@ -593,7 +680,11 @@ class QualityReportService:
                 (tenant_id, shift_report_id, report_id),
             ).fetchone()
             if duplicate is not None:
-                return Err("DUPLICATE_REPORT", "a quality report already exists for this shift report")
+                return Err(
+                    "DUPLICATE_REPORT",
+                    "a quality report already exists for this shift report",
+                    "un rapport qualité existe déjà pour ce shift",
+                )
             link = resolved.value
             self._connection.execute(
                 "UPDATE qc.quality_reports SET shift_report_id = %s, team = %s, shift = %s, report_date = %s, "
@@ -636,7 +727,7 @@ class QualityReportService:
     def submit_report(self, *, tenant_id: str, actor_id: str, report_id: str) -> Result[QualityReport]:
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
 
         result = transition_quality_report(report, "submitted")
         if isinstance(result, Err):
@@ -671,7 +762,7 @@ class QualityReportService:
         """
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
 
         result = transition_quality_report(report, "validated")
         if isinstance(result, Err):
@@ -738,11 +829,13 @@ class QualityReportService:
         self, *, tenant_id: str, actor_id: str, report_id: str, reason: str
     ) -> Result[QualityReport]:
         if not reason.strip():
-            return Err("MISSING_REASON", "a rejection must say what is wrong with the report")
+            return Err(
+                "MISSING_REASON", "a rejection must say what is wrong with the report", "un rejet doit indiquer ce qui ne va pas avec le rapport"
+            )
 
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
 
         result = transition_quality_report(report, "rejected")
         if isinstance(result, Err):
@@ -818,7 +911,7 @@ class QualityReportService:
     def revise_report(self, *, tenant_id: str, actor_id: str, report_id: str) -> Result[QualityReport]:
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
 
         result = transition_quality_report(report, "draft")
         if isinstance(result, Err):
@@ -853,11 +946,11 @@ class QualityReportService:
         so the deletion is refused while one is still attached.
         """
         if not reason.strip():
-            return Err("MISSING_REASON", "deleting a report must say why")
+            return Err("MISSING_REASON", "deleting a report must say why", "supprimer un rapport doit indiquer pourquoi")
 
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
 
         attached = self._connection.execute(
             "SELECT COUNT(*) FROM qc.non_conformities WHERE tenant_id = %s AND quality_report_id = %s",
@@ -867,6 +960,7 @@ class QualityReportService:
             return Err(
                 "NON_CONFORMITY_ATTACHED",
                 "detach the non-conformities raised from this report before deleting it",
+                "détachez les non-conformités ouvertes depuis ce rapport avant de le supprimer",
             )
 
         self._connection.execute(
@@ -933,9 +1027,13 @@ class QualityReportService:
         correcting in place (the router passes allow_non_draft for qc.admin_quality_reports)."""
         report = self._load_report(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if report is None:
-            return Err("NOT_FOUND", f"quality report {report_id} not found")
+            return Err("NOT_FOUND", f"quality report {report_id} not found", f"rapport qualité {report_id} introuvable")
         if report.status != "draft" and not allow_non_draft:
-            return Err("NOT_EDITABLE", f"the parameters of a {report.status} quality report cannot be edited")
+            return Err(
+                "NOT_EDITABLE",
+                f"the parameters of a {report.status} quality report cannot be edited",
+                f"les paramètres d'un rapport qualité {report.status} ne peuvent pas être modifiés",
+            )
         return Ok(None)
 
     def save_parameter_entry(
@@ -974,7 +1072,11 @@ class QualityReportService:
             (tenant_id, report_id, entry_id),
         ).fetchone()
         if deleted is None:
-            return Err("NOT_FOUND", f"parameter entry {entry_id} not found on report {report_id}")
+            return Err(
+                "NOT_FOUND",
+                f"parameter entry {entry_id} not found on report {report_id}",
+                f"saisie de paramètre {entry_id} introuvable sur le rapport {report_id}",
+            )
         record_audit(
             self._connection, tenant_id=tenant_id, actor_id=actor_id, action="quality_parameter.deleted",
             entity_type="quality_report", entity_id=report_id, payload={"entry_id": entry_id},
@@ -1064,6 +1166,7 @@ class FollowUpService:
                 return Err(
                     "NOT_FOUND",
                     f"conformity line {conformity_line_id} has no follow-up window on report {quality_report_id}",
+                    f"la ligne de conformité {conformity_line_id} n'a pas de fenêtre de suivi sur le rapport {quality_report_id}",
                 )
         else:
             parent = self._connection.execute(
@@ -1075,11 +1178,19 @@ class FollowUpService:
                 (tenant_id, quality_report_id),
             ).fetchone()
             if parent is None:
-                return Err("NOT_FOUND", f"quality report {quality_report_id} has no open follow-up window")
+                return Err(
+                    "NOT_FOUND",
+                    f"quality report {quality_report_id} has no open follow-up window",
+                    f"le rapport qualité {quality_report_id} n'a pas de fenêtre de suivi ouverte",
+                )
         of_id, window_ends_on = parent
 
         if observed_on > window_ends_on:
-            return Err("OUTSIDE_WINDOW", f"the follow-up window for this report closed on {window_ends_on.isoformat()}")
+            return Err(
+                "OUTSIDE_WINDOW",
+                f"the follow-up window for this report closed on {window_ends_on.isoformat()}",
+                f"la fenêtre de suivi de ce rapport s'est terminée le {window_ends_on.isoformat()}",
+            )
 
         follow_up_id = str(ULID())
         self._connection.execute(
@@ -1121,7 +1232,7 @@ class FollowUpService:
     ) -> Result[FollowUp]:
         current = self._load(tenant_id=tenant_id, follow_up_id=follow_up_id, for_update=True)
         if current is None:
-            return Err("NOT_FOUND", f"follow-up {follow_up_id} not found")
+            return Err("NOT_FOUND", f"follow-up {follow_up_id} not found", f"suivi {follow_up_id} introuvable")
 
         moved = transition_follow_up(current, new_status)
         if isinstance(moved, Err):

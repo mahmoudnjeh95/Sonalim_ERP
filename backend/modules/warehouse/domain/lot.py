@@ -33,7 +33,7 @@ def validate_lot_number(*, lot_number: str) -> Result[None]:
     quantity that lands in it is a stock movement of its own.
     """
     if not lot_number.strip():
-        return Err("INVALID_LOT_NUMBER", "lot_number is required")
+        return Err("INVALID_LOT_NUMBER", "lot_number is required", "lot_number est obligatoire")
     return Ok(None)
 
 
@@ -42,7 +42,11 @@ def validate_expiry_date(*, expiry_date: datetime.date, produced_at: str | None)
     was made. Checked only when the lot says when it was made -- a lot received from a
     supplier has no production day to compare against."""
     if produced_at is not None and expiry_date < datetime.datetime.fromisoformat(produced_at).date():
-        return Err("INVALID_EXPIRY", "the expiry date cannot be before the day the lot was produced")
+        return Err(
+            "INVALID_EXPIRY",
+            "the expiry date cannot be before the day the lot was produced",
+            "la DLC ne peut pas être antérieure au jour de production du lot",
+        )
     return Ok(None)
 
 
@@ -51,13 +55,17 @@ def validate_new_lot(*, lot_number: str, quantity: float) -> Result[None]:
     if isinstance(number, Err):
         return number
     if quantity <= 0:
-        return Err("INVALID_QUANTITY", "initial lot quantity must be positive")
+        return Err("INVALID_QUANTITY", "initial lot quantity must be positive", "la quantité initiale du lot doit être positive")
     return Ok(None)
 
 
 def transition_lot(lot: Lot, new_status: str) -> Result[Lot]:
     if new_status not in LOT_VALID_TRANSITIONS.get(lot.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move lot from {lot.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move lot from {lot.status} to {new_status}",
+            f"impossible de faire passer le lot de {lot.status} à {new_status}",
+        )
     return Ok(
         Lot(
             id=lot.id,
@@ -82,15 +90,17 @@ class LotStock:
 
 def receive_into_lot(stock: LotStock, quantity: float) -> Result[LotStock]:
     if quantity <= 0:
-        return Err("INVALID_QUANTITY", "received quantity must be positive")
+        return Err("INVALID_QUANTITY", "received quantity must be positive", "la quantité reçue doit être positive")
     return Ok(LotStock(lot_id=stock.lot_id, location_id=stock.location_id, quantity_on_hand=stock.quantity_on_hand + quantity))
 
 
 def issue_from_lot(stock: LotStock, quantity: float) -> Result[LotStock]:
     if quantity <= 0:
-        return Err("INVALID_QUANTITY", "issued quantity must be positive")
+        return Err("INVALID_QUANTITY", "issued quantity must be positive", "la quantité sortie doit être positive")
     if quantity > stock.quantity_on_hand:
         return Err(
-            "INSUFFICIENT_STOCK", f"cannot issue {quantity}, only {stock.quantity_on_hand} on hand in lot {stock.lot_id}"
+            "INSUFFICIENT_STOCK",
+            f"cannot issue {quantity}, only {stock.quantity_on_hand} on hand in lot {stock.lot_id}",
+            f"impossible de sortir {quantity}, seulement {stock.quantity_on_hand} en stock dans le lot {stock.lot_id}",
         )
     return Ok(LotStock(lot_id=stock.lot_id, location_id=stock.location_id, quantity_on_hand=stock.quantity_on_hand - quantity))

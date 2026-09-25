@@ -37,7 +37,7 @@ class ContactService:
             "SELECT 1 FROM core.partners WHERE id = %s AND tenant_id = %s", (partner_id, tenant_id)
         ).fetchone()
         if partner is None:
-            return Err("NOT_FOUND", f"partner {partner_id} not found")
+            return Err("NOT_FOUND", f"partner {partner_id} not found", f"partenaire {partner_id} introuvable")
         contact_id = str(ULID())
         try:
             self._connection.execute(
@@ -48,7 +48,11 @@ class ContactService:
                 (contact_id, tenant_id, partner_id, first_name, last_name, job_title, email, phone, is_primary),
             )
         except psycopg.errors.UniqueViolation:
-            return Err("PRIMARY_CONTACT_EXISTS", "this account already has a primary contact")
+            return Err(
+                "PRIMARY_CONTACT_EXISTS",
+                "this account already has a primary contact",
+                "ce compte a déjà un contact principal",
+            )
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="contact.created",
                      entity_type="contact", entity_id=contact_id, payload={"partner_id": partner_id})
         row = (contact_id, partner_id, first_name, last_name, job_title, email, phone, is_primary)
@@ -67,7 +71,7 @@ class ContactService:
             (contact_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"contact {contact_id} not found")
+            return Err("NOT_FOUND", f"contact {contact_id} not found", f"contact {contact_id} introuvable")
 
         current = self._response(row)
         updated = {
@@ -88,7 +92,11 @@ class ContactService:
                  updated["phone"], updated["is_primary"], contact_id, tenant_id),
             )
         except psycopg.errors.UniqueViolation:
-            return Err("PRIMARY_CONTACT_EXISTS", "this account already has a primary contact")
+            return Err(
+                "PRIMARY_CONTACT_EXISTS",
+                "this account already has a primary contact",
+                "ce compte a déjà un contact principal",
+            )
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="contact.updated",
                      entity_type="contact", entity_id=contact_id, payload=updated)
         return Ok(self._response((contact_id, current["partner_id"], updated["first_name"], updated["last_name"],

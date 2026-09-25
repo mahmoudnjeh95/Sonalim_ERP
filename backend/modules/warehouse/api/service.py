@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 import psycopg
 from ulid import ULID
 
@@ -239,9 +241,9 @@ class StockService:
         be traced back to the report and OF that produced it.
         """
         if quantity <= 0:
-            return Err("INVALID_QUANTITY", "movement quantity must be positive")
+            return Err("INVALID_QUANTITY", "movement quantity must be positive", "la quantité du mouvement doit être positive")
         if direction not in ("in", "out"):
-            return Err("INVALID_DIRECTION", "direction must be 'in' or 'out'")
+            return Err("INVALID_DIRECTION", "direction must be 'in' or 'out'", "la direction doit être 'in' ou 'out'")
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
@@ -343,9 +345,13 @@ class StockService:
             (quarantine_location_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"location {quarantine_location_id} not found")
+            return Err("NOT_FOUND", f"location {quarantine_location_id} not found", f"emplacement {quarantine_location_id} introuvable")
         if not row[0]:
-            return Err("LOCATION_NOT_BLOCKED", "quarantine must be a blocked location, or the product stays sellable")
+            return Err(
+                "LOCATION_NOT_BLOCKED",
+                "quarantine must be a blocked location, or the product stays sellable",
+                "la quarantaine doit être un emplacement bloqué, sinon le produit reste vendable",
+            )
 
         out = self.post_production_movement(
             tenant_id=tenant_id,
@@ -789,6 +795,8 @@ class StockService:
         product_id: str | None = None,
         move_type: str | None = None,
         reference: str | None = None,
+        date_from: datetime.date | None = None,
+        date_to: datetime.date | None = None,
         limit: int = 200,
     ) -> list[dict]:
         clauses = ["tenant_id = %s"]
@@ -805,6 +813,14 @@ class StockService:
         if reference is not None:
             clauses.append("reference = %s")
             params.append(reference)
+        # Calendar-day bounds, inclusive on both ends: a screen asks for
+        # "September" and expects the 30th's evening movements in it.
+        if date_from is not None:
+            clauses.append("created_at >= %s")
+            params.append(datetime.datetime.combine(date_from, datetime.time.min))
+        if date_to is not None:
+            clauses.append("created_at < %s")
+            params.append(datetime.datetime.combine(date_to + datetime.timedelta(days=1), datetime.time.min))
         params.append(limit)
 
         rows = self._connection.execute(
@@ -848,7 +864,11 @@ class StockService:
         """Moves on-hand stock from one location to another as one atomic pair of
         moves (transfer_out at the source, transfer_in at the destination)."""
         if from_location_id == to_location_id:
-            return Err("INVALID_TRANSFER", "source and destination locations must differ")
+            return Err(
+                "INVALID_TRANSFER",
+                "source and destination locations must differ",
+                "l'emplacement source et l'emplacement de destination doivent être différents",
+            )
 
         issued = self.issue_stock(
             tenant_id=tenant_id,
@@ -903,7 +923,11 @@ class StockService:
         is just wrong.
         """
         if quantity_reserved < 0 or quantity_in_production < 0:
-            return Err("INVALID_QUANTITY", "reserved and in-production quantities cannot be negative")
+            return Err(
+                "INVALID_QUANTITY",
+                "reserved and in-production quantities cannot be negative",
+                "les quantités réservée et en production ne peuvent pas être négatives",
+            )
         for value in (quantity_on_hand, quantity_reserved, quantity_in_production):
             validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=value)
             if isinstance(validation, Err):
@@ -1004,7 +1028,11 @@ class StockService:
             (tenant_id, product_id, location_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"no stock row for product {product_id} at location {location_id}")
+            return Err(
+                "NOT_FOUND",
+                f"no stock row for product {product_id} at location {location_id}",
+                f"aucune ligne de stock pour le produit {product_id} à l'emplacement {location_id}",
+            )
 
         quantity_on_hand, quantity_reserved, quantity_in_production = (float(value) for value in row)
         record_audit(

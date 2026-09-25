@@ -41,6 +41,7 @@ import {
   WORK_ORDER_OVERVIEW_QUERY_KEY,
   createWorkOrder,
   getWorkOrdersOverview,
+  isProductionLine,
   listPackagingBoms,
   listProducts,
   listRecipes,
@@ -466,7 +467,7 @@ function CreateWorkOrderDialog({
             <Label htmlFor="work_center_id">{t("production.workOrders.field.workCenter")}</Label>
             <Select id="work_center_id" {...register("work_center_id")}>
               <option value="">—</option>
-              {workCenters.map((wc) => (
+              {workCenters.filter(isProductionLine).map((wc) => (
                 <option key={wc.id} value={wc.id}>
                   {wc.code} — {wc.name}
                 </option>

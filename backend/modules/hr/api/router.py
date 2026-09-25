@@ -4,7 +4,7 @@ import datetime
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from core.db import get_connection
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.hr.api.service import DepartmentService, EmployeeService, LeaveService
 from modules.hr.api.contract_service import ContractService
@@ -66,7 +66,7 @@ class PayslipUpdateBody(BaseModel):
 
 def fail(result: Err) -> None:
     code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT if result.code.startswith("DUPLICATE") else status.HTTP_422_UNPROCESSABLE_ENTITY
-    raise HTTPException(code, {"code": result.code, "message": result.message})
+    raise HTTPException(code, err_detail(result))
 
 @router.get("/employees")
 def employees(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):

@@ -1,6 +1,7 @@
 import { memo } from "react";
 import { useReducedMotion } from "framer-motion";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis, type TooltipContentProps } from "recharts";
+import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis, type TooltipContentProps } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { formatNumber } from "./manufacturing/format";
 import type { TrendPoint } from "./manufacturing/metrics";
@@ -69,7 +70,7 @@ function ProductionTrendChartImpl({ trend }: { trend: TrendPoint[] }) {
         </span>
       </div>
       <div className="h-64 w-full">
-        <ResponsiveContainer width="100%" height="100%">
+        <InteractiveChart height="100%">
           <LineChart data={trend} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
             <CartesianGrid stroke={GRID} vertical={false} />
             <XAxis
@@ -106,7 +107,7 @@ function ProductionTrendChartImpl({ trend }: { trend: TrendPoint[] }) {
               animationDuration={300}
             />
           </LineChart>
-        </ResponsiveContainer>
+        </InteractiveChart>
       </div>
     </div>
   );

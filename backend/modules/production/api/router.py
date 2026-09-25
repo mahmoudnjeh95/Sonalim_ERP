@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from core.api.service import CoreService
 from core.db import get_connection
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, require_session, user_has_permission
 from modules.production.api.packaging_bom_service import PackagingBomService
 from modules.production.api.resource_type_service import ResourceTypeService
@@ -38,7 +38,8 @@ from modules.production.api.recipe_service import RecipeService
 from modules.production.api.regrind_service import RegrindDefaultsService, RegrindService, ScrapService
 from modules.production.api.of_consolidation_service import OfConsolidationService
 from modules.production.api.dashboard_day_service import GRANULARITIES, DashboardDayService
-from modules.production.api.day_sheet_service import DaySheetService
+from modules.production.api.day_sheet_service import DAY_GROUPINGS, MONTH_GROUPINGS, DaySheetService
+from modules.production.api.month_recap_export import build_month_recap_workbook, collect_month_recap, workbook_filename
 from modules.production.api.lot_suggestion_service import LotSuggestionService
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.shift_validation_service import ShiftValidationService
@@ -128,12 +129,14 @@ class CreateWorkCenterRequest(BaseModel):
     code: str
     name: str
     hourly_rate: float = 0
+    line_type: str = "production"
 
 
 class UpdateWorkCenterRequest(BaseModel):
     code: str | None = None
     name: str | None = None
     hourly_rate: float | None = None
+    line_type: str | None = None
 
 
 class BlockWorkCenterRequest(BaseModel):
@@ -162,10 +165,12 @@ class CompleteRegrindBatchRequest(BaseModel):
 class ReleaseStockItem(BaseModel):
     product_id: str
     quantity: float
+    # A backlog row clearing an earlier day than the one open in the dialog; None means `day`.
+    packed_on: datetime.date | None = None
 
 
 class ReleaseStockRequest(BaseModel):
-    day: datetime.date  # the day the goods were packed
+    day: datetime.date  # the day open in the dialog; also the default packed_on for its items
     items: list[ReleaseStockItem]
 
 
@@ -176,6 +181,7 @@ class SetProductClassificationRequest(BaseModel):
     packaging_format: str | None = None
     is_water: bool = False
     packaging_kind: str | None = None
+    is_energy: bool = False
 
 
 class PackagingBomLineRequest(BaseModel):
@@ -575,7 +581,7 @@ def create_work_order(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return _serialize_work_order(result.value)
 
@@ -686,7 +692,10 @@ def delete_ia_assistant_conversation(
             )
         except ia_assistant_service.IaAssistantNotFound:
             connection.rollback()
-            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found"})
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found", "message_fr": f"conversation {conversation_id} introuvable"},
+            )
         connection.commit()
 
 
@@ -701,7 +710,10 @@ def list_ia_assistant_messages(
                 connection, tenant_id=tenant.tenant_id, user_id=tenant.user_id, conversation_id=conversation_id
             )
         except ia_assistant_service.IaAssistantNotFound:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found"})
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found", "message_fr": f"conversation {conversation_id} introuvable"},
+            )
 
 
 @router.post("/ia-assistant/conversations/{conversation_id}/messages", status_code=status.HTTP_201_CREATED)
@@ -726,13 +738,30 @@ def send_ia_assistant_message(
             )
         except ia_assistant_service.IaAssistantNotFound:
             connection.rollback()
-            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found"})
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                {"code": "NOT_FOUND", "message": f"conversation {conversation_id} not found", "message_fr": f"conversation {conversation_id} introuvable"},
+            )
         except ia_assistant_service.IaAssistantRateLimited as exc:
             connection.rollback()
-            raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, {"code": "RATE_LIMITED", "message": str(exc)})
+            raise HTTPException(
+                status.HTTP_429_TOO_MANY_REQUESTS,
+                {
+                    "code": "RATE_LIMITED",
+                    "message": str(exc),
+                    "message_fr": "l'assistant reçoit trop de demandes ; réessayez dans un instant",
+                },
+            )
         except ia_assistant_service.IaAssistantUnavailable as exc:
             connection.rollback()
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, {"code": "UNAVAILABLE", "message": str(exc)})
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                {
+                    "code": "UNAVAILABLE",
+                    "message": str(exc),
+                    "message_fr": "l'assistant est indisponible pour le moment ; réessayez plus tard",
+                },
+            )
         connection.commit()
     return reply
 
@@ -769,7 +798,7 @@ def get_work_order_consolidation(
         )
     if isinstance(result, Err):
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message}
+            status.HTTP_404_NOT_FOUND, err_detail(result)
         )
     return result.value
 
@@ -789,7 +818,7 @@ def get_work_order_packaging_variance(
             tenant_id=tenant.tenant_id, of_id=work_order_id
         )
     if isinstance(result, Err):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+        raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     return result.value
 
 
@@ -808,7 +837,7 @@ def get_report_packaging_variance(
             tenant_id=tenant.tenant_id, report_id=report_id
         )
     if isinstance(result, Err):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+        raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     return result.value
 
 
@@ -853,7 +882,7 @@ def set_packaging_tolerance(
         )
         if isinstance(result, Err):
             raise HTTPException(
-                status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message}
+                status.HTTP_400_BAD_REQUEST, err_detail(result)
             )
         connection.commit()
     return result.value
@@ -875,7 +904,7 @@ def get_work_order_recipe_check(
         )
     if isinstance(result, Err):
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message}
+            status.HTTP_404_NOT_FOUND, err_detail(result)
         )
     return result.value
 
@@ -887,7 +916,14 @@ def get_work_order_yield(
     with get_connection() as connection:
         result = WorkOrderYieldService(connection).get_work_order_yield(tenant_id=tenant.tenant_id, work_order_id=work_order_id)
     if result is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"no computable yield for work order {work_order_id}"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {
+                "code": "NOT_FOUND",
+                "message": f"no computable yield for work order {work_order_id}",
+                "message_fr": f"aucun rendement calculable pour l'OF {work_order_id}",
+            },
+        )
     return result
 
 
@@ -916,7 +952,7 @@ def update_work_order(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_order(result.value)
 
@@ -932,7 +968,7 @@ def start_work_order(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_order(result.value)
 
@@ -951,7 +987,7 @@ def suspend_work_order(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_order(result.value)
 
@@ -969,7 +1005,7 @@ def resume_work_order(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_order(result.value)
 
@@ -988,7 +1024,7 @@ def cancel_work_order(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_order(result.value)
 
@@ -1013,7 +1049,7 @@ def close_work_order(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_order(result.value)
 
@@ -1033,7 +1069,7 @@ def pre_close_check(
             tenant_id=tenant.tenant_id, work_order_id=work_order_id
         )
     if isinstance(result, Err):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+        raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     return result.value
 
 
@@ -1053,10 +1089,11 @@ def set_product_classification(
             packaging_format=body.packaging_format,
             is_water=body.is_water,
             packaging_kind=body.packaging_kind,
+            is_energy=body.is_energy,
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return _serialize_classification(result.value)
 
@@ -1081,7 +1118,10 @@ def get_product_classification(
         service = ProductClassificationService(connection)
         classification = service.get_classification(tenant.tenant_id, product_id)
     if classification is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"no classification for {product_id}"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "NOT_FOUND", "message": f"no classification for {product_id}", "message_fr": f"aucune classification pour {product_id}"},
+        )
     return _serialize_classification(classification)
 
 
@@ -1101,7 +1141,7 @@ def create_packaging_bom(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return _serialize_bom(result.value)
 
@@ -1127,7 +1167,14 @@ def get_packaging_bom(
         service = PackagingBomService(connection)
         bom = service.get_bom(tenant.tenant_id, bom_id)
     if bom is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"packaging BOM {bom_id} not found"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {
+                "code": "NOT_FOUND",
+                "message": f"packaging BOM {bom_id} not found",
+                "message_fr": f"nomenclature d'emballage {bom_id} introuvable",
+            },
+        )
     return _serialize_bom(bom)
 
 
@@ -1153,7 +1200,7 @@ def update_packaging_bom(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_bom(result.value)
 
@@ -1169,7 +1216,7 @@ def activate_packaging_bom(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_bom(result.value)
 
@@ -1185,7 +1232,7 @@ def archive_packaging_bom(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_bom(result.value)
 
@@ -1219,6 +1266,7 @@ def _serialize_classification(classification: ProductClassification) -> dict:
         "packaging_format": classification.packaging_format,
         "is_water": classification.is_water,
         "packaging_kind": classification.packaging_kind,
+        "is_energy": classification.is_energy,
     }
 
 
@@ -1243,6 +1291,7 @@ def _serialize_work_center(work_center: WorkCenter) -> dict:
         "hourly_rate": work_center.hourly_rate,
         "is_blocked": work_center.is_blocked,
         "blocked_reason": work_center.blocked_reason,
+        "line_type": work_center.line_type,
     }
 
 
@@ -1266,7 +1315,7 @@ def create_mold(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, err_detail(result))
         connection.commit()
     return _serialize_mold(result.value)
 
@@ -1299,7 +1348,7 @@ def update_mold(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_mold(result.value)
 
@@ -1312,11 +1361,12 @@ def create_work_center(
     with get_connection() as connection:
         service = WorkCenterService(connection)
         result = service.create_work_center(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, code=body.code, name=body.name, hourly_rate=body.hourly_rate
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, code=body.code, name=body.name, hourly_rate=body.hourly_rate,
+            line_type=body.line_type,
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, err_detail(result))
         connection.commit()
     return _serialize_work_center(result.value)
 
@@ -1366,11 +1416,12 @@ def update_work_center(
             code=body.code,
             name=body.name,
             hourly_rate=body.hourly_rate,
+            line_type=body.line_type,
         )
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_center(result.value)
 
@@ -1389,7 +1440,7 @@ def block_work_center(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_center(result.value)
 
@@ -1405,7 +1456,7 @@ def unblock_work_center(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_work_center(result.value)
 
@@ -1468,7 +1519,7 @@ def create_recipe(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_recipe_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_recipe_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_recipe(result.value)
 
@@ -1500,7 +1551,7 @@ def create_recipe_version(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_recipe_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_recipe_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_recipe(result.value)
 
@@ -1542,7 +1593,10 @@ def get_recipe(
         service = RecipeService(connection)
         recipe = service.get_recipe(tenant.tenant_id, recipe_id)
     if recipe is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"recipe {recipe_id} not found"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "NOT_FOUND", "message": f"recipe {recipe_id} not found", "message_fr": f"recette {recipe_id} introuvable"},
+        )
     return _serialize_recipe(recipe)
 
 
@@ -1555,7 +1609,7 @@ def promote_recipe_to_trial(
         result = service.promote_to_trial(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, recipe_id=recipe_id)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_recipe_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_recipe_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_recipe(result.value)
 
@@ -1569,7 +1623,7 @@ def reject_recipe(
         result = service.reject_to_draft(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, recipe_id=recipe_id)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_recipe_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_recipe_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_recipe(result.value)
 
@@ -1583,7 +1637,7 @@ def activate_recipe(
         result = service.activate_recipe(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, recipe_id=recipe_id)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_recipe_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_recipe_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_recipe(result.value)
 
@@ -1597,7 +1651,7 @@ def archive_recipe(
         result = service.archive_recipe(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, recipe_id=recipe_id)
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_recipe_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_recipe_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_recipe(result.value)
 
@@ -1667,7 +1721,7 @@ def record_scrap(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return _serialize_scrap(result.value)
 
@@ -1699,7 +1753,7 @@ def create_regrind_batch(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_regrind_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_regrind_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_regrind_batch(result.value)
 
@@ -1720,7 +1774,7 @@ def assign_regrind_batch(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_regrind_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_regrind_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_regrind_batch(result.value)
 
@@ -1743,7 +1797,7 @@ def complete_regrind_batch(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_regrind_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_regrind_err_status(result.code), err_detail(result))
         connection.commit()
     value = result.value
     return {
@@ -1773,7 +1827,12 @@ def get_regrind_batch(
         batch = service.get_regrind_batch(tenant_id=tenant.tenant_id, work_order_id=work_order_id)
     if batch is None:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"regrind batch {work_order_id} not found"}
+            status.HTTP_404_NOT_FOUND,
+            {
+                "code": "NOT_FOUND",
+                "message": f"regrind batch {work_order_id} not found",
+                "message_fr": f"lot de rebroyat {work_order_id} introuvable",
+            },
         )
     return _serialize_regrind_batch(batch)
 
@@ -1794,7 +1853,7 @@ def create_resource_type(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return _serialize_resource_type(result.value)
 
@@ -1828,7 +1887,7 @@ def update_resource_type(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _serialize_resource_type(result.value)
 
@@ -1882,6 +1941,19 @@ def list_reports(
     return [_serialize_report(report) for report in reports]
 
 
+@router.get("/work-orders/{work_order_id}/stage-signals")
+def get_stage_signals(
+    work_order_id: str, tenant: TenantContext = Depends(require_permission("production.view_reports"))
+) -> dict[str, dict[str, bool]]:
+    """One query's worth of yes/no signals per report, for the OF page's Flux de
+    production card -- replaces fetching every report's full detail to answer
+    the same three booleans (see ProductionReportService.list_stage_signals)."""
+    with get_connection() as connection:
+        return ProductionReportService(connection).list_stage_signals(
+            tenant_id=tenant.tenant_id, of_id=work_order_id
+        )
+
+
 @router.get("/reports/team-performance")
 def list_team_performance(
     grain: str = Query(default="week"),
@@ -1898,7 +1970,11 @@ def list_team_performance(
     if grain not in GRAINS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "INVALID_GRAIN", "message": f"grain must be one of {GRAINS}"},
+            {
+                "code": "INVALID_GRAIN",
+                "message": f"grain must be one of {GRAINS}",
+                "message_fr": f"le regroupement doit être l'un de {GRAINS}",
+            },
         )
     with get_connection() as connection:
         return TeamPerformanceService(connection).list_team_performance(
@@ -1922,7 +1998,11 @@ def list_machine_performance(
     if grain not in GRAINS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "INVALID_GRAIN", "message": f"grain must be one of {GRAINS}"},
+            {
+                "code": "INVALID_GRAIN",
+                "message": f"grain must be one of {GRAINS}",
+                "message_fr": f"le regroupement doit être l'un de {GRAINS}",
+            },
         )
     with get_connection() as connection:
         return MachinePerformanceService(connection).list_machine_performance(
@@ -2007,7 +2087,11 @@ def _validate_consumption_category(category: str | None) -> None:
     if category is not None and category not in CATEGORIES:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "INVALID_CATEGORY", "message": f"category must be one of {CATEGORIES}"},
+            {
+                "code": "INVALID_CATEGORY",
+                "message": f"category must be one of {CATEGORIES}",
+                "message_fr": f"la catégorie doit être l'une de {CATEGORIES}",
+            },
         )
 
 
@@ -2069,7 +2153,14 @@ def export_daily_recap(
     "CP <date>" sheet, and the period-total "Coût de production" sheet's
     charges term sums to what those days' sheets show together."""
     if period not in ("day", "week", "month"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": "INVALID_PERIOD", "message": "period must be one of 'day', 'week', 'month'"})
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {
+                "code": "INVALID_PERIOD",
+                "message": "period must be one of 'day', 'week', 'month'",
+                "message_fr": "la période doit être 'day', 'week' ou 'month'",
+            },
+        )
 
     date_from, date_to, period_phrase, period_days = resolve_period(period, date)
 
@@ -2126,7 +2217,14 @@ def get_daily_recap_analytics(
     Unlike /reports/daily-recap/export, this never includes fixed charges
     (those stay hand-entered in the exported workbook only)."""
     if period not in ("day", "week", "month"):
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, {"code": "INVALID_PERIOD", "message": "period must be one of 'day', 'week', 'month'"})
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            {
+                "code": "INVALID_PERIOD",
+                "message": "period must be one of 'day', 'week', 'month'",
+                "message_fr": "la période doit être 'day', 'week' ou 'month'",
+            },
+        )
 
     with get_connection() as connection:
         return build_analytics_payload(connection, tenant_id=tenant.tenant_id, period=period, date=date)
@@ -2139,7 +2237,10 @@ def get_report(
     with get_connection() as connection:
         report = ProductionReportService(connection).get_report(tenant_id=tenant.tenant_id, report_id=report_id)
     if report is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"report {report_id} not found"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "NOT_FOUND", "message": f"report {report_id} not found", "message_fr": f"rapport {report_id} introuvable"},
+        )
     return _serialize_report_with_detail(report)
 
 
@@ -2282,7 +2383,7 @@ def set_regrind_default(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return result.value
 
@@ -2315,7 +2416,7 @@ def _waste_type_result(connection, result) -> dict:
             if result.code == "DUPLICATE_WASTE_TYPE"
             else status.HTTP_400_BAD_REQUEST
         )
-        raise HTTPException(code, {"code": result.code, "message": result.message})
+        raise HTTPException(code, err_detail(result))
     connection.commit()
     return result.value
 
@@ -2367,6 +2468,70 @@ def update_waste_type(
         return _waste_type_result(connection, result)
 
 
+@router.delete("/waste-types/{waste_type_id}")
+def delete_waste_type(
+    waste_type_id: str,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    """Removes the kind, or retires it when a report already used it; `outcome` says which."""
+    with get_connection() as connection:
+        result = WasteTypeService(connection).delete_type(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, waste_type_id=waste_type_id
+        )
+        return _waste_type_result(connection, result)
+
+
+class UpdateBuiltinWasteTypeRequest(BaseModel):
+    name: str | None = None
+    # Back to the translated default name.
+    reset_name: bool = False
+    is_active: bool | None = None
+
+
+class ReorderWasteTypesRequest(BaseModel):
+    report_type: str
+    # Built-in keys and plant ids together, every kind of the report once.
+    order: list[str]
+
+
+@router.get("/waste-types/built-ins")
+def list_builtin_waste_types(
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> list[dict]:
+    with get_connection() as connection:
+        return WasteTypeService(connection).list_builtin_settings(tenant_id=tenant.tenant_id)
+
+
+@router.patch("/waste-types/built-ins/{category}")
+def update_builtin_waste_type(
+    category: str,
+    body: UpdateBuiltinWasteTypeRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).update_builtin(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            category=category,
+            name=body.name,
+            reset_name=body.reset_name,
+            is_active=body.is_active,
+        )
+        return _waste_type_result(connection, result)
+
+
+@router.put("/waste-types/order")
+def reorder_waste_types(
+    body: ReorderWasteTypesRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_waste_types")),
+) -> dict:
+    with get_connection() as connection:
+        result = WasteTypeService(connection).reorder(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, report_type=body.report_type, order=body.order
+        )
+        return _waste_type_result(connection, result)
+
+
 # --- dashboard settings -----------------------------------------------------
 #
 # What the production dashboard is configured with: the clock times of each
@@ -2407,7 +2572,7 @@ class ReplaceStoreRolesRequest(BaseModel):
 def _settings_result(connection, result) -> list[dict]:
     if isinstance(result, Err):
         connection.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
     connection.commit()
     return result.value
 
@@ -2527,7 +2692,7 @@ def release_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return result.value
 
@@ -2537,35 +2702,73 @@ def get_day_sheet(
     date: datetime.date = Query(...),
     work_center_id: str = Query(...),
     include_pending: bool = Query(default=False),
+    group_by: str = Query(default="shift", description="'shift' (the plant's sheet) or 'lot'"),
     tenant: TenantContext = Depends(require_permission("production.view_reports")),
 ) -> dict:
     """One line's Daily and Conditionnement reports for a day on one grid, the way the
-    plant's Excel day sheet lays them out: a column per shift and a total. Validated
-    reports only unless `include_pending`, which adds the ones still being filled in."""
+    plant's Excel day sheet lays them out: a column per shift (or per lot) and a total.
+    Validated reports only unless `include_pending`, which adds the ones still being
+    filled in."""
+    if group_by not in DAY_GROUPINGS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _grouping_error(DAY_GROUPINGS))
     with get_connection() as connection:
         result = DaySheetService(connection).get_day_sheet(
-            tenant_id=tenant.tenant_id, date=date, work_center_id=work_center_id, include_pending=include_pending
+            tenant_id=tenant.tenant_id, date=date, work_center_id=work_center_id, include_pending=include_pending,
+            group_by=group_by,
         )
     if isinstance(result, Err):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+        raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     return result.value
+
+
+def _grouping_error(allowed: tuple[str, ...]) -> dict:
+    choices = " ou ".join(f"'{g}'" for g in allowed)
+    return {
+        "code": "INVALID_GROUPING",
+        "message": f"group_by must be one of {', '.join(allowed)}",
+        "message_fr": f"group_by doit être {choices}",
+    }
 
 
 @router.get("/month-recap")
 def get_month_recap(
     month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM"),
     work_center_id: str = Query(...),
+    group_by: str = Query(default="product", description="'product' (the plant's recap) or 'lot'"),
     tenant: TenantContext = Depends(require_permission("production.view_reports")),
 ) -> dict:
     """A line's month on the same rows as the day sheet, every validated Daily and
-    Conditionnement report added up, with a column per product produced."""
+    Conditionnement report added up, with a column per product produced (or per lot)."""
+    if group_by not in MONTH_GROUPINGS:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, _grouping_error(MONTH_GROUPINGS))
     with get_connection() as connection:
         result = DaySheetService(connection).get_month_recap(
-            tenant_id=tenant.tenant_id, month=datetime.date.fromisoformat(f"{month}-01"), work_center_id=work_center_id
+            tenant_id=tenant.tenant_id, month=datetime.date.fromisoformat(f"{month}-01"), work_center_id=work_center_id,
+            group_by=group_by,
         )
     if isinstance(result, Err):
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+        raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     return result.value
+
+
+@router.get("/month-recap/export")
+def export_month_recap(
+    month: str = Query(..., pattern=r"^\d{4}-(0[1-9]|1[0-2])$", description="YYYY-MM"),
+    tenant: TenantContext = Depends(require_permission("production.view_reports")),
+) -> Response:
+    """The month's production workbook for every production line: the recap (per
+    product, then per lot), one day sheet per line and per day (PC days first, then
+    PL), consumption during production and during conditionnement, energy, and the
+    analyses behind them (stops, waste, teams, day-by-day trend with charts) -- see
+    month_recap_export.py. Validated reports only, like the recap on screen."""
+    first = datetime.date.fromisoformat(f"{month}-01")
+    with get_connection() as connection:
+        data = collect_month_recap(connection, tenant_id=tenant.tenant_id, month=first)
+    return Response(
+        content=build_month_recap_workbook(data),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{workbook_filename(first)}"'},
+    )
 
 
 @router.get("/lot-suggestion")
@@ -2596,12 +2799,20 @@ def get_dashboard_trend(
     if granularity not in GRANULARITIES:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "INVALID_GRANULARITY", "message": f"granularity must be one of {GRANULARITIES}"},
+            {
+                "code": "INVALID_GRANULARITY",
+                "message": f"granularity must be one of {GRANULARITIES}",
+                "message_fr": f"la granularité doit être l'une de {GRANULARITIES}",
+            },
         )
     if date_from > date_to:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "INVALID_PERIOD", "message": "date_from cannot be after date_to"},
+            {
+                "code": "INVALID_PERIOD",
+                "message": "date_from cannot be after date_to",
+                "message_fr": "la date de début ne peut pas être après la date de fin",
+            },
         )
     with get_connection() as connection:
         return DashboardDayService(connection).get_trend(
@@ -2639,7 +2850,12 @@ class SaveShiftSectionRequest(BaseModel):
 
 def _forbidden(permission: str) -> HTTPException:
     return HTTPException(
-        status.HTTP_403_FORBIDDEN, {"code": "FORBIDDEN", "message": f"missing permission: {permission}"}
+        status.HTTP_403_FORBIDDEN,
+        {
+            "code": "FORBIDDEN",
+            "message": f"missing permission: {permission}",
+            "message_fr": f"permission manquante : {permission}",
+        },
     )
 
 
@@ -2647,7 +2863,12 @@ def _require_section_edit(section_key: str, tenant: TenantContext = Depends(requ
     """The caller must be allowed to edit this section, which is named in the URL."""
     if section_key not in SECTION_KEYS:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, {"code": "INVALID_SECTION", "message": f"unknown section {section_key!r}"}
+            status.HTTP_404_NOT_FOUND,
+            {
+                "code": "INVALID_SECTION",
+                "message": f"unknown section {section_key!r}",
+                "message_fr": f"section inconnue {section_key!r}",
+            },
         )
     permission = permission_for_section(section_key)
     with get_connection() as connection:
@@ -2670,7 +2891,7 @@ def _require_any_shift_edit(tenant: TenantContext = Depends(require_session)) ->
 def _shift_result(connection, result):
     if isinstance(result, Err):
         connection.rollback()
-        raise HTTPException(_report_err_status(result.code), {"code": result.code, "message": result.message})
+        raise HTTPException(_report_err_status(result.code), err_detail(result))
     connection.commit()
     return result.value
 

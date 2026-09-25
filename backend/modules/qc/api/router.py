@@ -7,7 +7,7 @@ from pydantic import BaseModel
 
 from core.api.service import CoreService
 from core.db import get_connection
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.qc.api.non_conformity_service import NonConformityService
 from modules.qc.api.quality_service import FollowUpPolicyService, FollowUpService, QualityReportService
@@ -159,7 +159,7 @@ def create_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_report_with_detail(result.value)
 
@@ -201,11 +201,30 @@ def list_quality_team_performance(
     if grain not in QualityReportService.GRAINS:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "INVALID_GRAIN", "message": f"grain must be one of {QualityReportService.GRAINS}"},
+            {
+                "code": "INVALID_GRAIN",
+                "message": f"grain must be one of {QualityReportService.GRAINS}",
+                "message_fr": f"le regroupement doit être l'un de {QualityReportService.GRAINS}",
+            },
         )
     with get_connection() as connection:
         return QualityReportService(connection).team_conformity(
             tenant_id=tenant.tenant_id, grain=grain, date_from=date_from, date_to=date_to
+        )
+
+
+@router.get("/quality-reports/inspection-ledger")
+def list_quality_inspection_ledger(
+    date_from: str | None = Query(default=None),
+    date_to: str | None = Query(default=None),
+    tenant: TenantContext = Depends(require_permission("qc.view_quality_reports")),
+) -> list[dict]:
+    """One row per conformity line of every quality report in the window,
+    every status -- the grain the quality dashboards slice by product, line,
+    team, shift, defect and day."""
+    with get_connection() as connection:
+        return QualityReportService(connection).inspection_ledger(
+            tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to
         )
 
 
@@ -217,7 +236,12 @@ def get_quality_report(
         report = QualityReportService(connection).get_report(tenant_id=tenant.tenant_id, report_id=report_id)
     if report is None:
         raise HTTPException(
-            status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"quality report {report_id} not found"}
+            status.HTTP_404_NOT_FOUND,
+            {
+                "code": "NOT_FOUND",
+                "message": f"quality report {report_id} not found",
+                "message_fr": f"rapport qualité {report_id} introuvable",
+            },
         )
     return _serialize_report_with_detail(report)
 
@@ -236,7 +260,7 @@ def update_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_report_with_detail(result.value)
 
@@ -260,7 +284,7 @@ def admin_update_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_report_with_detail(result.value)
 
@@ -278,7 +302,7 @@ def delete_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return {"deleted": result.value}
 
@@ -293,7 +317,7 @@ def submit_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_report(result.value)
 
@@ -313,7 +337,7 @@ def validate_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     value = result.value
     return {
@@ -342,7 +366,7 @@ def reject_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_report(result.value)
 
@@ -357,7 +381,7 @@ def revise_quality_report(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_report(result.value)
 
@@ -387,7 +411,7 @@ def save_parameter_entry(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return result.value
 
@@ -405,7 +429,7 @@ def delete_parameter_entry(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return {"deleted": entry_id}
 
@@ -436,7 +460,7 @@ def set_follow_up_policy(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return result.value
 
@@ -472,7 +496,7 @@ def record_observation(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_follow_up(result.value)
 
@@ -493,7 +517,7 @@ def transition_follow_up_status(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_follow_up(result.value)
 
@@ -523,7 +547,7 @@ def raise_non_conformity(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_nc(result.value)
 
@@ -566,7 +590,11 @@ def get_non_conformity(
     if value is None:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND,
-            {"code": "NOT_FOUND", "message": f"non-conformity {non_conformity_id} not found"},
+            {
+                "code": "NOT_FOUND",
+                "message": f"non-conformity {non_conformity_id} not found",
+                "message_fr": f"non-conformité {non_conformity_id} introuvable",
+            },
         )
     with get_connection() as connection:
         product_uom_label = _product_uom_label(connection, tenant.tenant_id, value["non_conformity"].product_id)
@@ -600,7 +628,7 @@ def disposition_non_conformity(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
         value = result.value
         product_uom_label = _product_uom_label(connection, tenant.tenant_id, value["non_conformity"].product_id)
@@ -625,7 +653,7 @@ def close_non_conformity(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_nc(result.value)
 
@@ -649,7 +677,7 @@ def admin_update_non_conformity(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _serialize_nc(result.value)
 

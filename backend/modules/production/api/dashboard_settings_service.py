@@ -93,7 +93,7 @@ class DashboardSettingsService:
                 return check
             key = window.shift.strip().lower()
             if key in seen:
-                return Err("DUPLICATE_ENTRY", f"shift {window.shift!r} appears twice")
+                return Err("DUPLICATE_ENTRY", f"shift {window.shift!r} appears twice", f"le shift {window.shift!r} apparaît deux fois")
             seen.add(key)
 
         self._connection.execute("DELETE FROM production.shift_windows WHERE tenant_id = %s", (tenant_id,))
@@ -109,7 +109,11 @@ class DashboardSettingsService:
     def replace_team_rotation(self, *, tenant_id: str, actor_id: str, entries: list[dict]) -> Result[list[dict]]:
         num_shifts = len(self.list_shift_windows(tenant_id=tenant_id))
         if num_shifts == 0:
-            return Err("NO_SHIFTS_CONFIGURED", "configure the plant's shifts before the team rotation")
+            return Err(
+                "NO_SHIFTS_CONFIGURED",
+                "configure the plant's shifts before the team rotation",
+                "configurez les shifts de l'usine avant le roulement des équipes",
+            )
 
         cleaned = []
         for entry in entries:
@@ -118,10 +122,18 @@ class DashboardSettingsService:
             try:
                 anchor_date = raw_date if isinstance(raw_date, datetime.date) else datetime.date.fromisoformat(str(raw_date))
             except (TypeError, ValueError):
-                return Err("INVALID_ENTRY", "a rotation entry needs a valid anchor date")
+                return Err(
+                    "INVALID_ENTRY",
+                    "a rotation entry needs a valid anchor date",
+                    "une entrée de roulement nécessite une date de référence valide",
+                )
             anchor_stop = entry.get("anchor_stop")
             if not team or not isinstance(anchor_stop, int):
-                return Err("INVALID_ENTRY", "a rotation entry needs a team and its stop in the cycle")
+                return Err(
+                    "INVALID_ENTRY",
+                    "a rotation entry needs a team and its stop in the cycle",
+                    "une entrée de roulement nécessite une équipe et son poste dans le cycle",
+                )
             cleaned.append({"team": team, "anchor_date": anchor_date, "anchor_stop": anchor_stop})
 
         active_teams = {
@@ -133,7 +145,11 @@ class DashboardSettingsService:
         }
         for row in cleaned:
             if row["team"] not in active_teams:
-                return Err("UNKNOWN_TEAM", f"{row['team']!r} is not an active team (Report Options)")
+                return Err(
+                    "UNKNOWN_TEAM",
+                    f"{row['team']!r} is not an active team (Report Options)",
+                    f"{row['team']!r} n'est pas une équipe active (Options de rapport)",
+                )
 
         check = validate_team_rotation(cleaned, num_shifts=num_shifts)
         if isinstance(check, Err):
@@ -166,11 +182,15 @@ class DashboardSettingsService:
             ref = (entry.get(key) or "").strip()
             chosen = entry.get(value)
             if not ref:
-                return Err("INVALID_ENTRY", f"every entry needs its {key}")
+                return Err("INVALID_ENTRY", f"every entry needs its {key}", f"chaque entrée nécessite son {key}")
             if chosen not in allowed:
-                return Err("INVALID_ENTRY", f"{value} must be one of {list(allowed)}")
+                return Err(
+                    "INVALID_ENTRY",
+                    f"{value} must be one of {list(allowed)}",
+                    f"{value} doit être l'un de {list(allowed)}",
+                )
             if ref in seen:
-                return Err("DUPLICATE_ENTRY", f"{key} {ref} appears twice")
+                return Err("DUPLICATE_ENTRY", f"{key} {ref} appears twice", f"{key} {ref} apparaît deux fois")
             seen.add(ref)
             cleaned.append({key: ref, value: chosen})
 

@@ -19,7 +19,8 @@ import {
   TrendingUp,
   Users,
 } from "lucide-react";
-import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContainer, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
+import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, Scatter, ScatterChart, Tooltip, XAxis, YAxis, ZAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
@@ -76,6 +77,7 @@ import {
   type WorkOrder,
 } from "./api";
 import { downtimeLabel } from "./downtimeOptions";
+import { OrderStatusLine } from "./OrderStatusLine";
 import { useWasteTypes } from "./wasteTypes";
 import { listNonConformities } from "../qc/api";
 import { listLots, type Lot } from "../products/api";
@@ -97,8 +99,10 @@ const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 const PRODUCED_UNIT = "t";
 
 /** "produced / poured in", both in tonnes, to the precision the plant records them. */
-function progressLabel(c: { produced_quantity: number; material_input_quantity: number }): string {
-  return `${formatQuantity(c.produced_quantity)} / ${formatQuantity(c.material_input_quantity, PRODUCED_UNIT)}`;
+// Packed tonnage and the yield (pressed over poured), the same pair the OF list shows.
+function progressLabel(c: { produced_quantity: number; yield_ratio: number | null }): string {
+  const tonnage = formatQuantity(c.produced_quantity, PRODUCED_UNIT);
+  return c.yield_ratio === null ? tonnage : `${tonnage} · ${(c.yield_ratio * 100).toFixed(1)} %`;
 }
 // How many lots the expiry card lists; a display cap, not a judgement.
 const LOTS_SHOWN = 8;
@@ -752,7 +756,6 @@ export function ProductionDashboardTab() {
           ) : (
             activeOrders.map((order) => {
               const consolidation = loadedConsolidations.find((c) => c.of_id === order.id);
-              const ratio = consolidation?.transformation_ratio ?? 0;
               return (
                 <div key={order.id} className="rounded-lg border border-border p-3">
                   <div className="flex flex-wrap items-center gap-2">
@@ -764,14 +767,7 @@ export function ProductionDashboardTab() {
                       {consolidation ? progressLabel(consolidation) : "—"}
                     </span>
                   </div>
-                  <div className="mt-2 h-1.5 w-full overflow-hidden rounded-full bg-muted">
-                    <motion.div
-                      className="h-full rounded-full bg-success"
-                      initial={{ width: 0 }}
-                      animate={{ width: `${Math.min(100, Math.round(ratio * 100))}%` }}
-                      transition={{ duration: 0.4, ease: "easeOut" }}
-                    />
-                  </div>
+                  <OrderStatusLine status={order.status} className="mt-2 h-1.5" />
                 </div>
               );
             })
@@ -798,7 +794,7 @@ export function ProductionDashboardTab() {
             />
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={260}>
+            <InteractiveChart height={260}>
               <LineChart data={performanceTrend}>
                 <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                 <XAxis dataKey="period" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -817,7 +813,7 @@ export function ProductionDashboardTab() {
                 <Line type="monotone" dataKey="wastePercent" name={t("production.dashboard.trend.waste")} stroke="hsl(0 72% 51%)" strokeWidth={2} dot={{ r: 3 }} connectNulls />
                 <Line type="monotone" dataKey="downtimePercent" name={t("production.dashboard.trend.downtime")} stroke="hsl(38 92% 42%)" strokeWidth={2} dot={{ r: 3 }} connectNulls />
               </LineChart>
-            </ResponsiveContainer>
+            </InteractiveChart>
           </CardContent>
         </Card>
       )}
@@ -888,29 +884,31 @@ export function ProductionDashboardTab() {
               description={t("production.dashboard.chart.semouleWaste.empty.description")}
             />
           ) : (
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-              <ResponsiveContainer width="100%" height={Math.max(200, Math.min(8, teamSemouleWaste.length) * 48)}>
-                <BarChart data={wasteChart.data} layout="vertical" margin={{ left: 24 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
-                  <YAxis
-                    type="category"
-                    dataKey="team"
-                    width={110}
-                    tick={{ fontSize: 11, fill: "hsl(215 16% 47%)" }}
-                    axisLine={false}
-                    tickLine={false}
-                  />
-                  <Tooltip
-                    formatter={(value) => formatWasteStageQuantity(Number(value))}
-                    contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
-                  />
-                  <Legend wrapperStyle={{ fontSize: 11 }} />
-                  {wasteChart.series.map((series) => (
-                    <Bar key={series.key} dataKey={series.key} stackId="semoule-waste" name={series.name} fill={series.color} />
-                  ))}
-                </BarChart>
-              </ResponsiveContainer>
+            <div className="grid w-full grid-cols-1 gap-4 lg:grid-cols-2">
+              <div className="w-full min-w-0 overflow-hidden" style={{ minHeight: Math.max(200, Math.min(8, teamSemouleWaste.length) * 48) }}>
+                <InteractiveChart height="100%">
+                  <BarChart data={wasteChart.data} layout="vertical" margin={{ left: 24 }}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" horizontal={false} />
+                    <XAxis type="number" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
+                    <YAxis
+                      type="category"
+                      dataKey="team"
+                      width={110}
+                      tick={{ fontSize: 11, fill: "hsl(215 16% 47%)" }}
+                      axisLine={false}
+                      tickLine={false}
+                    />
+                    <Tooltip
+                      formatter={(value) => formatWasteStageQuantity(Number(value))}
+                      contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
+                    />
+                    <Legend wrapperStyle={{ fontSize: 11 }} />
+                    {wasteChart.series.map((series) => (
+                      <Bar key={series.key} dataKey={series.key} stackId="semoule-waste" name={series.name} fill={series.color} />
+                    ))}
+                  </BarChart>
+                </InteractiveChart>
+              </div>
               <div className="space-y-1.5">
                 <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   {t("production.dashboard.chart.semouleWaste.netLabel")}
@@ -945,7 +943,7 @@ export function ProductionDashboardTab() {
               description={t("production.dashboard.chart.downtimeReasons.empty.description")}
             />
           ) : (
-            <ResponsiveContainer width="100%" height={Math.max(160, Math.min(8, downtimeReasons.length) * 36)}>
+            <InteractiveChart height={Math.max(160, Math.min(8, downtimeReasons.length) * 36)}>
               <BarChart
                 data={downtimeReasons.slice(0, 8).map((row) => ({ ...row, reason: downtimeLabel(t, "motif", row.reason) }))}
                 layout="vertical"
@@ -960,7 +958,7 @@ export function ProductionDashboardTab() {
                 />
                 <Bar dataKey="minutes" name={t("production.dashboard.chart.downtimeReasons.minutes")} fill="hsl(38 92% 42%)" radius={[0, 4, 4, 0]} />
               </BarChart>
-            </ResponsiveContainer>
+            </InteractiveChart>
           )}
         </CardContent>
       </Card>
@@ -1488,7 +1486,7 @@ function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string;
   return (
     <div>
       <p className="mb-2 text-sm font-medium text-foreground">{title}</p>
-      <ResponsiveContainer width="100%" height={220}>
+      <InteractiveChart height={220}>
         <ScatterChart margin={{ left: 8, right: 8, bottom: 4 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" />
           <XAxis
@@ -1519,7 +1517,7 @@ function RecipeScatter({ title, xLabel, data }: { title: string; xLabel: string;
           />
           <Scatter data={data} fill="hsl(217 91% 45%)" />
         </ScatterChart>
-      </ResponsiveContainer>
+      </InteractiveChart>
     </div>
   );
 }
@@ -1675,13 +1673,11 @@ function buildTeamSemouleWaste(rows: TeamPerformanceRow[], noTeamLabel: string):
     for (const [category, kg] of Object.entries(row.daily_waste_by_category)) {
       entry.byCategory[category] = (entry.byCategory[category] ?? 0) + (kg ?? 0);
     }
-    entry.regrindQuantity += row.regrind_quantity;
-    // Not derived from the categories above minus regrindQuantity: those
-    // categories are each converted into their own product's unit (e.g. tons
-    // for semoule stocked by the ton), while regrind_quantity is always raw
-    // kilograms off the report form — subtracting one from the other would
-    // net tons against kilos. net_semoule_waste is the backend's own figure,
-    // computed on a consistent raw-kg basis on both sides (see
+    // Kilos, like the categories above: regrind_quantity itself is in the
+    // rebroyat product's own unit (tonnes from the shift form).
+    entry.regrindQuantity += row.regrind_quantity_kg;
+    // net_semoule_waste is the backend's own figure, computed on a
+    // consistent raw-kg basis on both sides (see
     // TeamPerformanceService.list_team_performance), and is additive across
     // periods since kilograms don't need converting to be summed.
     entry.netSemouleWaste += row.net_semoule_waste;

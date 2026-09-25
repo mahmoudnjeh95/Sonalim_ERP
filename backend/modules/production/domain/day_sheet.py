@@ -18,6 +18,9 @@ from dataclasses import dataclass, field
 
 KG_PER_TONNE = 1000.0
 
+# The packing waste kind for finished product lost while packing (recorded in kilos).
+PRODUCT_WASTE = "product"
+
 # The order the sheet prints its sections in.
 SECTIONS = ("material", "production", "waste", "packing", "energy")
 
@@ -185,6 +188,11 @@ def build_rows(
     scotch = SheetRow("packing", "scotch", unit=units.get("scotch"))
     ruban = SheetRow("packing", "ruban", unit=units.get("ruban"))
     packing_waste: dict[tuple[str, str | None], SheetRow] = {}
+    total_packing_waste = SheetRow("packing", "total_packing_waste", unit="kg")
+    # Finished product lost while packing is pasta lost, like the Excel's "PF Cdt":
+    # it sits with the other déchets and counts in their total. What is left of the
+    # packing losses (film, a plant's own kinds) is not pasta and is added up apart.
+    packed_product_waste: dict[str | None, SheetRow] = {}
 
     for fact in packing:
         column = fact.column
@@ -202,10 +210,23 @@ def build_rows(
             (ruban, fact.ruban),
         ):
             target.add(column, value)
+        # Every packing report says what it lost, even nothing: the cells then read
+        # "reported 0" rather than "no report", as on the production side.
+        total_packing_waste.add(column, 0.0)
         for category, product_id, name, quantity, unit in fact.waste:
+            if category == PRODUCT_WASTE:
+                packed_product_waste.setdefault(
+                    product_id, SheetRow("waste", "packed_product_waste", ref=product_id, name=name, unit="kg")
+                ).add(column, quantity)
+                total_waste.add(column, quantity)
+                continue
             packing_waste.setdefault(
                 (category, product_id), SheetRow("packing", "packing_waste", ref=category, name=name, unit=unit)
             ).add(column, quantity)
+            # A line named against an item counted in pieces (a carton, before only
+            # weighed items were allowed) is shown on its row but not added to kilos.
+            if unit == "kg":
+                total_packing_waste.add(column, quantity)
 
     yield_row.fixed_total = _percent(total_finished.total, total_fab.total)
     if yield_by_column:
@@ -230,6 +251,7 @@ def build_rows(
         downtime_hours,
         hourly_output,
         *sorted(waste.values(), key=lambda r: r.ref or ""),
+        *ranked(packed_product_waste.values()),
         total_waste,
         *ranked(finished.values()),
         total_finished,
@@ -241,6 +263,7 @@ def build_rows(
         scotch,
         ruban,
         *ranked(packing_waste.values()),
+        total_packing_waste,
         electricity,
         fuel,
         gasoil,
@@ -259,6 +282,7 @@ _ALWAYS = frozenset(
         "water", "production_hours", "downtime_hours", "hourly_output",
         "total_waste",
         "total_finished", "yield", "packets", "film", "carton", "waste_carton", "scotch", "ruban",
+        "total_packing_waste",
         "electricity", "fuel", "gasoil", "generator_hours",
     }
 )

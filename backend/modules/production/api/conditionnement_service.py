@@ -160,7 +160,11 @@ def register_dlc_lot(
 
     product_id = finished_product_of_report(connection, tenant_id=tenant_id, report_id=header.id)
     if product_id is None:
-        return Err("NOT_FOUND", f"work order {header.of_id} not found or has no product")
+        return Err(
+            "NOT_FOUND",
+            f"work order {header.of_id} not found or has no product",
+            f"OF {header.of_id} introuvable ou sans produit",
+        )
 
     lot = LotService(connection).register_lot(
         tenant_id=tenant_id,
@@ -310,16 +314,21 @@ class ConditionnementReportService:
             (of_id, tenant_id),
         ).fetchone()
         if work_order is None:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         of_status, of_work_center_id, of_product_id = work_order
         if of_status not in _OF_STATUSES_ACCEPTING_REPORTS:
-            return Err("OF_NOT_OPEN", f"work order {of_id} is {of_status} and accepts no new reports")
+            return Err(
+                "OF_NOT_OPEN",
+                f"work order {of_id} is {of_status} and accepts no new reports",
+                f"l'OF {of_id} est {of_status} et n'accepte plus de nouveaux rapports",
+            )
 
         if of_product_id is None:
             if not (product_id or "").strip():
                 return Err(
                     "MISSING_PRODUCT",
                     "this work order has no product yet — name one to file its first packaging report",
+                    "cet OF n'a pas encore de produit — nommez-en un pour déposer son premier rapport de conditionnement",
                 )
             self._connection.execute(
                 "UPDATE production.work_orders SET product_id = %s WHERE id = %s AND tenant_id = %s AND product_id IS NULL",
@@ -330,7 +339,9 @@ class ConditionnementReportService:
             tenant_id=tenant_id, of_id=of_id, report_type="conditionnement", report_date=report_date, shift=shift
         ):
             return Err(
-                "DUPLICATE_REPORT", "a conditionnement report already exists for this work order, date and shift"
+                "DUPLICATE_REPORT",
+                "a conditionnement report already exists for this work order, date and shift",
+                "un rapport de conditionnement existe déjà pour cet OF, cette date et ce shift",
             )
 
         if detail.daily_report_id is not None:
@@ -339,12 +350,24 @@ class ConditionnementReportService:
                 (detail.daily_report_id, tenant_id),
             ).fetchone()
             if daily is None:
-                return Err("NOT_FOUND", f"daily report {detail.daily_report_id} not found")
+                return Err(
+                    "NOT_FOUND",
+                    f"daily report {detail.daily_report_id} not found",
+                    f"rapport journalier {detail.daily_report_id} introuvable",
+                )
             daily_of_id, daily_report_type = daily
             if daily_report_type != "daily":
-                return Err("WRONG_REPORT_TYPE", f"report {detail.daily_report_id} is not a daily report")
+                return Err(
+                    "WRONG_REPORT_TYPE",
+                    f"report {detail.daily_report_id} is not a daily report",
+                    f"le rapport {detail.daily_report_id} n'est pas un rapport journalier",
+                )
             if daily_of_id != of_id:
-                return Err("MISMATCHED_OF", "the daily report must belong to the same work order")
+                return Err(
+                    "MISMATCHED_OF",
+                    "the daily report must belong to the same work order",
+                    "le rapport journalier doit appartenir au même OF",
+                )
 
         report_id = str(ULID())
         self._connection.execute(
@@ -396,11 +419,19 @@ class ConditionnementReportService:
     ) -> Result[dict]:
         header = self._reports._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
         if header.report_type != "conditionnement":
-            return Err("WRONG_REPORT_TYPE", f"report {report_id} is not a conditionnement report")
+            return Err(
+                "WRONG_REPORT_TYPE",
+                f"report {report_id} is not a conditionnement report",
+                f"le rapport {report_id} n'est pas un rapport de conditionnement",
+            )
         if header.status != "draft":
-            return Err("NOT_EDITABLE", f"a {header.status} report cannot be edited as a draft")
+            return Err(
+                "NOT_EDITABLE",
+                f"a {header.status} report cannot be edited as a draft",
+                f"un rapport {header.status} ne peut pas être modifié comme brouillon",
+            )
 
         validation = validate_conditionnement_detail(
             detail,
@@ -436,15 +467,27 @@ class ConditionnementReportService:
         touches the snapshot the team submitted.
         """
         if not reason.strip():
-            return Err("MISSING_REASON", "a correction must record why the figures were changed")
+            return Err(
+                "MISSING_REASON",
+                "a correction must record why the figures were changed",
+                "une correction doit enregistrer pourquoi les chiffres ont changé",
+            )
 
         header = self._reports._load_header(tenant_id=tenant_id, report_id=report_id, for_update=True)
         if header is None:
-            return Err("NOT_FOUND", f"report {report_id} not found")
+            return Err("NOT_FOUND", f"report {report_id} not found", f"rapport {report_id} introuvable")
         if header.report_type != "conditionnement":
-            return Err("WRONG_REPORT_TYPE", f"report {report_id} is not a conditionnement report")
+            return Err(
+                "WRONG_REPORT_TYPE",
+                f"report {report_id} is not a conditionnement report",
+                f"le rapport {report_id} n'est pas un rapport de conditionnement",
+            )
         if header.status != "submitted":
-            return Err("NOT_CORRECTABLE", f"only a submitted report can be corrected, not a {header.status} one")
+            return Err(
+                "NOT_CORRECTABLE",
+                f"only a submitted report can be corrected, not a {header.status} one",
+                f"seul un rapport rendu peut être corrigé, pas un rapport {header.status}",
+            )
 
         validation = validate_conditionnement_detail(
             detail,

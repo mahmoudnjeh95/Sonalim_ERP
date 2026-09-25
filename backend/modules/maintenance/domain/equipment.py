@@ -34,17 +34,25 @@ class Equipment:
 
 def validate_equipment_code(code: str) -> Result[None]:
     if not code.strip():
-        return Err("INVALID_CODE", "equipment code is required")
+        return Err("INVALID_CODE", "equipment code is required", "le code de l'équipement est obligatoire")
     return Ok(None)
 
 
 def validate_production_stage(stage: str | None) -> Result[None]:
     if stage is not None and stage not in PRODUCTION_STAGES:
-        return Err("INVALID_STAGE", f"production stage must be one of {list(PRODUCTION_STAGES)}")
+        return Err(
+            "INVALID_STAGE",
+            f"production stage must be one of {list(PRODUCTION_STAGES)}",
+            f"l'étape de production doit être l'une de {list(PRODUCTION_STAGES)}",
+        )
     return Ok(None)
 
 
 def transition_equipment(equipment: Equipment, new_status: str) -> Result[Equipment]:
     if new_status not in EQUIPMENT_VALID_TRANSITIONS.get(equipment.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move equipment from {equipment.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move equipment from {equipment.status} to {new_status}",
+            f"impossible de faire passer l'équipement de {equipment.status} à {new_status}",
+        )
     return Ok(replace(equipment, status=new_status))

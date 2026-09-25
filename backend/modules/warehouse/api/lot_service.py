@@ -265,7 +265,7 @@ class LotService:
             (lot_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"lot {lot_id} not found")
+            return Err("NOT_FOUND", f"lot {lot_id} not found", f"lot {lot_id} introuvable")
         lot = _row_to_lot(row)
         validation = validate_expiry_date(expiry_date=expiry_date, produced_at=lot.produced_at)
         if isinstance(validation, Err):
@@ -291,7 +291,7 @@ class LotService:
             f"SELECT {_LOT_COLUMNS} FROM warehouse.lots WHERE id = %s AND tenant_id = %s FOR UPDATE", (lot_id, tenant_id)
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"lot {lot_id} not found")
+            return Err("NOT_FOUND", f"lot {lot_id} not found", f"lot {lot_id} introuvable")
         lot = _row_to_lot(row)
         result = transition_lot(lot, new_status)
         if isinstance(result, Err):

@@ -136,7 +136,11 @@ def login(body: LoginRequest) -> LoginResponse:
     if _too_many_recent_failures(body.email):
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS,
-            "too many failed login attempts; try again later",
+            {
+                "code": "TOO_MANY_ATTEMPTS",
+                "message": "too many failed login attempts; try again later",
+                "message_fr": "trop de tentatives de connexion échouées ; réessayez plus tard",
+            },
         )
 
     with get_connection() as connection:
@@ -147,7 +151,10 @@ def login(body: LoginRequest) -> LoginResponse:
 
         if row is None or not verify_password(body.password, row[2]):
             _record_login_failure(body.email)
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                {"code": "INVALID_CREDENTIALS", "message": "invalid credentials", "message_fr": "e-mail ou mot de passe incorrect"},
+            )
 
         user_id, tenant_id, _ = row
         _clear_login_failures(body.email)
@@ -183,7 +190,14 @@ def refresh(body: RefreshRequest) -> LoginResponse:
         ).fetchone()
 
         if row is None:
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid refresh token")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                {
+                    "code": "INVALID_REFRESH_TOKEN",
+                    "message": "invalid refresh token",
+                    "message_fr": "session invalide ; reconnectez-vous",
+                },
+            )
 
         user_id, tenant_id, expires_at, revoked_at, email = row
 
@@ -199,10 +213,24 @@ def refresh(body: RefreshRequest) -> LoginResponse:
                 (user_id,),
             )
             connection.commit()
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "refresh token already used")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                {
+                    "code": "REFRESH_TOKEN_USED",
+                    "message": "refresh token already used",
+                    "message_fr": "session déjà renouvelée ; reconnectez-vous",
+                },
+            )
 
         if expires_at <= datetime.now(timezone.utc):
-            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "refresh token expired")
+            raise HTTPException(
+                status.HTTP_401_UNAUTHORIZED,
+                {
+                    "code": "REFRESH_TOKEN_EXPIRED",
+                    "message": "refresh token expired",
+                    "message_fr": "session expirée ; reconnectez-vous",
+                },
+            )
 
         connection.execute(
             "UPDATE core.refresh_tokens SET revoked_at = NOW() WHERE token = %s",

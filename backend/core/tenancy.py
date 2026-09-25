@@ -17,7 +17,10 @@ class TenantContext:
 def require_session(authorization: str | None = Header(default=None)) -> TenantContext:
     """Resolves tenant identity from the server-side session, never from a client-supplied tenant_id."""
     if not authorization or not authorization.startswith("Bearer "):
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "missing bearer token")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            {"code": "MISSING_TOKEN", "message": "missing bearer token", "message_fr": "vous n'êtes pas connecté"},
+        )
     token = authorization.removeprefix("Bearer ").strip()
 
     with get_connection() as connection:
@@ -31,7 +34,14 @@ def require_session(authorization: str | None = Header(default=None)) -> TenantC
         ).fetchone()
 
     if row is None:
-        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid or expired session")
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED,
+            {
+                "code": "INVALID_SESSION",
+                "message": "invalid or expired session",
+                "message_fr": "session invalide ou expirée ; reconnectez-vous",
+            },
+        )
 
     tenant_id, user_id = row
     return TenantContext(tenant_id=tenant_id, user_id=user_id, session_token=token)
@@ -71,7 +81,11 @@ def require_permission(permission: str):
         if not allowed:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN,
-                {"code": "FORBIDDEN", "message": f"missing permission: {permission}"},
+                {
+                    "code": "FORBIDDEN",
+                    "message": f"missing permission: {permission}",
+                    "message_fr": f"permission manquante : {permission}",
+                },
             )
         return tenant
 

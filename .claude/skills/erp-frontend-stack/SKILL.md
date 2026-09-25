@@ -1,6 +1,6 @@
 ---
 name: erp-frontend-stack
-description: Recommended frontend technology stack and architecture guidance for building a full ERP (Enterprise Resource Planning) web application with a React-strong team. Use this skill whenever the user is starting, architecting, or making technology-choice decisions for an ERP, back-office, or large-scale internal business application — covers framework, state management, UI/component libraries, data tables, forms, and monorepo/module-federation architecture for scalability and performance. Trigger on mentions of "ERP", "enterprise app", "dashboard at scale", "back-office system", or requests to choose a frontend stack for a large, multi-module business application.
+description: Recommended frontend technology stack and architecture guidance for building a full ERP (Enterprise Resource Planning) web application with a React-strong team. Use this skill whenever the user is starting, architecting, or making technology-choice decisions for an ERP, back-office, or large-scale internal business application — covers framework, state management, UI/component libraries, data tables, forms, and monorepo/module-federation architecture for scalability and performance. Trigger on mentions of "ERP", "enterprise app", "dashboard at scale", "back-office system", or requests to choose a frontend stack for a large, multi-module business application. Also holds Sonalim UI conventions — use it when adding or changing a module page's tab bar / page header layout (sticky tab bars).
 ---
 
 # ERP Frontend Stack
@@ -24,6 +24,31 @@ Guidance for choosing and structuring a frontend stack for a full ERP applicatio
 - **shadcn/ui + Tailwind CSS** — full control over components, since ERP UIs require heavy customization of tables, forms, and modals for business workflows. Avoids fighting a black-box component library.
 - **TanStack Table** — critical for ERP: handles massive datasets, virtualization, sorting/filtering/grouping without performance degradation.
 - **React Hook Form** — ERP means large, complex forms; this is the performance-friendly standard for form state management.
+
+## Sonalim UI Conventions
+
+### Sticky page tab bars
+
+The top-level tab bar of a module page stays pinned to the top of the viewport while the user scrolls, so they can switch tabs without scrolling back up.
+
+- Wrap the bar in `StickyTabBar` (`frontend/src/components/patterns/StickyTabBar.tsx`). It adds `sticky top-0 z-20` and a translucent `bg-background/85 backdrop-blur-sm`, so content slides underneath without clashing.
+- Put `StickyTabBar` as a **direct child of the page's root container** (the `space-y-6` div), between the title block and the tab content. Sticky only works inside its parent, so wrapping only `<Tabs>` inside a small wrapper would pin nothing.
+- `<main>` in `routes/AppLayout.tsx` is the scroll container. Don't add `overflow-*` to any ancestor between `<main>` and the bar, because that breaks sticky.
+- Grouped bars (for example Analytics' "Production" / "Coûts et prix") put all groups inside one `StickyTabBar className="flex flex-wrap gap-x-6 gap-y-3"`.
+- Applied on: Production, Analytics, Warehouse, Quality, Maintenance, Products. New module pages with a tab bar must use it too.
+- In-page tables with a sticky header of their own sit under the bar (`z-20`). Keep their z-index below 20.
+
+```tsx
+<div className="space-y-6">
+  <motion.div>{/* title + subtitle */}</motion.div>
+  <StickyTabBar>
+    <Tabs value={tab} onValueChange={...}>
+      <TabsList>{/* TabsTrigger… */}</TabsList>
+    </Tabs>
+  </StickyTabBar>
+  <AnimatePresence mode="wait">{/* active tab */}</AnimatePresence>
+</div>
+```
 
 ## Architecture for Scale
 

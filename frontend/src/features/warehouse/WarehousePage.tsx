@@ -1,15 +1,18 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChart3, Boxes, History as HistoryIcon, ListTree, Package } from "lucide-react";
+import { BarChart3, Boxes, History as HistoryIcon, LayoutDashboard, ListTree, Package } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
+import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n } from "../../lib/i18n";
 import { StockTab } from "./StockTab";
+import { WarehouseOverviewTab } from "./WarehouseOverviewTab";
 import { AnalysisTab } from "./AnalysisTab";
 import { FinishedGoodsAnalysisTab } from "./FinishedGoodsAnalysisTab";
 import { HistoryTab } from "./HistoryTab";
 import { StockHistoryTab } from "./StockHistoryTab";
 
 const TABS = [
+  { value: "overview", labelKey: "warehouse.tabs.overview", icon: LayoutDashboard, Component: WarehouseOverviewTab },
   { value: "stock", labelKey: "warehouse.tabs.stock", icon: Boxes, Component: StockTab },
   { value: "analysis", labelKey: "warehouse.tabs.analysis", icon: BarChart3, Component: AnalysisTab },
   { value: "finished-goods-analysis", labelKey: "warehouse.tabs.finishedGoodsAnalysis", icon: Package, Component: FinishedGoodsAnalysisTab },
@@ -21,7 +24,7 @@ type TabValue = (typeof TABS)[number]["value"];
 
 export function WarehousePage() {
   const { t } = useI18n();
-  const [tab, setTab] = useState<TabValue>("stock");
+  const [tab, setTab] = useState<TabValue>("overview");
   const ActiveTab = TABS.find((t) => t.value === tab)!.Component;
 
   return (
@@ -31,18 +34,20 @@ export function WarehousePage() {
         <p className="text-sm text-muted-foreground">{t("warehouse.subtitle")}</p>
       </motion.div>
 
-      <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
-        <TabsList>
-          {TABS.map((tabDef) => (
-            <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="warehouse-tab-indicator">
-              <span className="flex items-center gap-1.5">
-                <tabDef.icon className="h-4 w-4" />
-                {t(tabDef.labelKey)}
-              </span>
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      <StickyTabBar>
+        <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>
+          <TabsList>
+            {TABS.map((tabDef) => (
+              <TabsTrigger key={tabDef.value} value={tabDef.value} active={tab === tabDef.value} layoutId="warehouse-tab-indicator">
+                <span className="flex items-center gap-1.5">
+                  <tabDef.icon className="h-4 w-4" />
+                  {t(tabDef.labelKey)}
+                </span>
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      </StickyTabBar>
 
       <AnimatePresence mode="wait">
         <motion.div

@@ -14,7 +14,6 @@ import { listUoms } from "../warehouse/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
-import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import {
@@ -30,12 +29,13 @@ import {
   archivePackagingBom,
   createPackagingBom,
   listPackagingBoms,
-  listProducts,
   updatePackagingBom,
   type PackagingBom,
   type PackagingBomStatus,
 } from "./api";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
+import { ProductSelect } from "../../components/patterns/ProductSelect";
+import { useProductCatalog } from "../products/catalog";
 import { StatCard } from "../../components/patterns/StatCard";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
@@ -56,7 +56,6 @@ const newBomSchema = z.object({
 type NewBomForm = z.infer<typeof newBomSchema>;
 
 const BOMS_QUERY_KEY = ["production", "packaging-boms"] as const;
-const PRODUCTS_QUERY_KEY = ["core", "products"] as const;
 type StatusFilter = "all" | PackagingBomStatus;
 
 const rowVariants = {
@@ -78,7 +77,7 @@ export function PackagingBomsTab() {
     queryKey: BOMS_QUERY_KEY,
     queryFn: () => listPackagingBoms(token),
   });
-  const { data: products = [] } = useQuery({ queryKey: PRODUCTS_QUERY_KEY, queryFn: () => listProducts(token) });
+  const { catalog, products } = useProductCatalog();
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
 
   const {
@@ -336,14 +335,12 @@ export function PackagingBomsTab() {
               >
                 <div className="space-y-1.5">
                   <Label htmlFor="target_product_id">{t("production.packagingBoms.field.targetProduct")}</Label>
-                  <Select id="target_product_id" {...register("target_product_id")}>
-                    <option value="">—</option>
-                    {products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name}
-                      </option>
-                    ))}
-                  </Select>
+                  <ProductSelect
+                    id="target_product_id"
+                    products={catalog}
+                    filter={{ categories: ["finished_good", "semi_finished"] }}
+                    {...register("target_product_id")}
+                  />
                   {errors.target_product_id && (
                     <p className="text-sm text-destructive">{errors.target_product_id.message}</p>
                   )}
@@ -373,14 +370,12 @@ export function PackagingBomsTab() {
                           transition={{ duration: 0.18 }}
                           className="flex items-start gap-2"
                         >
-                          <Select className="flex-1" {...register(`lines.${index}.component_product_id` as const)}>
-                            <option value="">—</option>
-                            {products.map((product) => (
-                              <option key={product.id} value={product.id}>
-                                {product.name}
-                              </option>
-                            ))}
-                          </Select>
+                          <ProductSelect
+                            className="flex-1"
+                            products={catalog}
+                            filter={{ categories: ["packaging_component"] }}
+                            {...register(`lines.${index}.component_product_id` as const)}
+                          />
                           <Input
                             type="number"
                             step="any"

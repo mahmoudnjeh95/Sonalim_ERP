@@ -151,6 +151,7 @@ KEPT_TABLES = [
     "production.store_roles",
     "production.team_rotation",
     "production.waste_types",
+    "production.waste_type_builtin_settings",
     "production.work_centers",
     "warehouse.locations",
 ]

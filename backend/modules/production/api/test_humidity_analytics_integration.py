@@ -70,7 +70,7 @@ def _validated_shift_with_humidity(db, env, *, humidity) -> str:
         "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["semolina"], "quantity": 1000, "location_id": env["location"]}],
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
     run_ids = [r["id"] for r in _shift(db, shift_id)["sections"][0]["payload"]["runs"]]
     packing = {"of_id": of_id, "run_id": run_ids[0], "equipment_id": env["equipment"], "finished_product_quantity": 800,
                "packets_counted": 1600, "film_quantity": 40, "carton_quantity": 100, "scotch_quantity": 2, "ruban_quantity": 1,
@@ -112,7 +112,7 @@ def test_runs_with_no_humidity_are_skipped_not_zeroed(db, env):
         "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["semolina"], "quantity": 1000, "location_id": env["location"]}],
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
 
     for key in SECTION_KEYS:
         if key != "runs":
@@ -134,7 +134,7 @@ def test_humidity_of_a_shift_not_yet_validated_is_excluded(db, env):
         "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["semolina"], "quantity": 1000, "location_id": env["location"]}],
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
     assert list_humidity(db, tenant_id=TENANT, date_from="2030-07-01", date_to="2030-07-01") == []
 
 

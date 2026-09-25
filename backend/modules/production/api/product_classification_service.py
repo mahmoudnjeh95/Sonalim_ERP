@@ -22,22 +22,23 @@ class ProductClassificationService:
         packaging_format: str | None = None,
         is_water: bool = False,
         packaging_kind: str | None = None,
+        is_energy: bool = False,
     ) -> Result[ProductClassification]:
-        validation = validate_classification(category, is_regrind, packaging_format, is_water, packaging_kind)
+        validation = validate_classification(category, is_regrind, packaging_format, is_water, packaging_kind, is_energy)
         if isinstance(validation, Err):
             return validation
 
         self._connection.execute(
             """
             INSERT INTO production.product_classifications
-                (tenant_id, product_id, category, is_regrind, packaging_format, is_water, packaging_kind)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                (tenant_id, product_id, category, is_regrind, packaging_format, is_water, packaging_kind, is_energy)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (tenant_id, product_id)
             DO UPDATE SET category = EXCLUDED.category, is_regrind = EXCLUDED.is_regrind,
                 packaging_format = EXCLUDED.packaging_format, is_water = EXCLUDED.is_water,
-                packaging_kind = EXCLUDED.packaging_kind
+                packaging_kind = EXCLUDED.packaging_kind, is_energy = EXCLUDED.is_energy
             """,
-            (tenant_id, product_id, category, is_regrind, packaging_format, is_water, packaging_kind),
+            (tenant_id, product_id, category, is_regrind, packaging_format, is_water, packaging_kind, is_energy),
         )
         record_audit(
             self._connection,
@@ -52,6 +53,7 @@ class ProductClassificationService:
                 "packaging_format": packaging_format,
                 "is_water": is_water,
                 "packaging_kind": packaging_kind,
+                "is_energy": is_energy,
             },
         )
         return Ok(
@@ -62,13 +64,14 @@ class ProductClassificationService:
                 packaging_format=packaging_format,
                 is_water=is_water,
                 packaging_kind=packaging_kind,
+                is_energy=is_energy,
             )
         )
 
     def get_classification(self, tenant_id: str, product_id: str) -> ProductClassification | None:
         row = self._connection.execute(
             """
-            SELECT category, is_regrind, packaging_format, is_water, packaging_kind
+            SELECT category, is_regrind, packaging_format, is_water, packaging_kind, is_energy
             FROM production.product_classifications
             WHERE tenant_id = %s AND product_id = %s
             """,
@@ -76,7 +79,7 @@ class ProductClassificationService:
         ).fetchone()
         if row is None:
             return None
-        category, is_regrind, packaging_format, is_water, packaging_kind = row
+        category, is_regrind, packaging_format, is_water, packaging_kind, is_energy = row
         return ProductClassification(
             product_id=product_id,
             category=category,
@@ -84,6 +87,7 @@ class ProductClassificationService:
             packaging_format=packaging_format,
             is_water=is_water,
             packaging_kind=packaging_kind,
+            is_energy=is_energy,
         )
 
     def list_classifications(self, tenant_id: str, category: str | None = None) -> list[ProductClassification]:
@@ -94,7 +98,7 @@ class ProductClassificationService:
         )
         rows = self._connection.execute(
             f"""
-            SELECT product_id, category, is_regrind, packaging_format, is_water, packaging_kind
+            SELECT product_id, category, is_regrind, packaging_format, is_water, packaging_kind, is_energy
             FROM production.product_classifications
             WHERE {where}
             ORDER BY created_at DESC
@@ -109,6 +113,7 @@ class ProductClassificationService:
                 packaging_format=packaging_format,
                 is_water=is_water,
                 packaging_kind=packaging_kind,
+                is_energy=is_energy,
             )
-            for product_id, row_category, is_regrind, packaging_format, is_water, packaging_kind in rows
+            for product_id, row_category, is_regrind, packaging_format, is_water, packaging_kind, is_energy in rows
         ]

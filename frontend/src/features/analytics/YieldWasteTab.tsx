@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useReducedMotion } from "framer-motion";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
@@ -97,7 +98,7 @@ export function YieldWasteTab() {
             </CardHeader>
             <CardContent>
               <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
+                <InteractiveChart height="100%">
                   <LineChart data={yieldSeries} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
                     <CartesianGrid stroke={GRID} vertical={false} />
                     <XAxis dataKey="date" tick={TICK} tickLine={false} axisLine={false} minTickGap={32} tickFormatter={shortDate} />
@@ -124,7 +125,7 @@ export function YieldWasteTab() {
                       animationDuration={300}
                     />
                   </LineChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </div>
             </CardContent>
           </Card>
@@ -225,7 +226,7 @@ export function YieldWasteTab() {
             </CardHeader>
             <CardContent>
               <div className="h-64 w-full">
-                <ResponsiveContainer width="100%" height="100%">
+                <InteractiveChart height="100%">
                   <LineChart
                     data={humidity.map((point) => ({ date: point.date, humidity: point.averageHumidityPct }))}
                     margin={{ top: 8, right: 8, left: 0, bottom: 0 }}
@@ -246,7 +247,7 @@ export function YieldWasteTab() {
                     />
                     <Line type="linear" dataKey="humidity" stroke={LINE} strokeWidth={2} dot={{ r: 2.5 }} connectNulls />
                   </LineChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </div>
             </CardContent>
           </Card>

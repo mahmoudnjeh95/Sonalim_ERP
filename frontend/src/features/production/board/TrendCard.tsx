@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../../components/charts/InteractiveChart";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { cn } from "../../../lib/utils";
@@ -110,7 +111,6 @@ export function TrendCard({ date }: { date: string }) {
   const token = session!.token;
   const [range, setRange] = useState<Range>("day");
   const [custom, setCustom] = useState<{ from: string; to: string; granularity: Granularity }>({ from: addDays(date, -13), to: date, granularity: "day" });
-  const [hidden, setHidden] = useState<Record<string, boolean>>({});
 
   const params =
     range === "day"
@@ -181,17 +181,6 @@ export function TrendCard({ date }: { date: string }) {
         </div>
       ) : null}
 
-      <div className="mb-2 flex flex-wrap gap-x-4 gap-y-1">
-        {SERIES.map((s) => (
-          <button key={s.key} type="button" onClick={() => setHidden({ ...hidden, [s.key]: !hidden[s.key] })} className={cn("inline-flex items-center gap-1.5 text-xs", hidden[s.key] && "line-through opacity-40")}>
-            <svg width="26" height="8" aria-hidden="true">
-              <line x1="0" y1="4" x2="26" y2="4" stroke={s.color} strokeWidth="2.6" strokeDasharray={s.dashed ? "5 4" : undefined} />
-            </svg>
-            {t(s.label as TranslationKey)}
-          </button>
-        ))}
-      </div>
-
       {trend.isError ? (
         <BlockError onRetry={() => void trend.refetch()} />
       ) : trend.isLoading ? (
@@ -200,17 +189,17 @@ export function TrendCard({ date }: { date: string }) {
         <MissingState illustration={<DelayIllustration className="h-24 w-auto" />} title={t("production.board.trend.empty.title")} description={t("production.board.trend.empty.desc")} />
       ) : (
         <div className="h-56 w-full">
-          <ResponsiveContainer width="100%" height="100%">
+          <InteractiveChart height="100%">
             <LineChart data={rows} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
               <CartesianGrid stroke="#e8eef5" vertical={false} />
               <XAxis dataKey="label" tick={{ fontSize: 11, fill: "#5b6b80" }} tickLine={false} axisLine={false} />
               <YAxis tick={{ fontSize: 11, fill: "#8a99ab" }} tickLine={false} axisLine={false} width={44} domain={["auto", "auto"]} />
               <Tooltip content={<CustomTrendTooltip unit={trend.data?.unit ?? ""} />} />
-              {SERIES.filter((s) => !hidden[s.key]).map((s) => (
+              {SERIES.map((s) => (
                 <Line key={s.key} type="monotone" dataKey={s.key} name={t(s.label as TranslationKey)} stroke={s.color} strokeWidth={2.4} strokeDasharray={s.dashed ? "6 5" : undefined} strokeOpacity={s.dashed ? 0.7 : 1} dot={s.dashed ? false : { r: 3, fill: "#fff", stroke: s.color, strokeWidth: 2 }} connectNulls={false} isAnimationActive />
               ))}
             </LineChart>
-          </ResponsiveContainer>
+          </InteractiveChart>
         </div>
       )}
       <p className="mt-1 text-xs text-muted-foreground">{t("production.board.trend.hint")}</p>

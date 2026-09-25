@@ -90,6 +90,14 @@ def test_a_row_with_no_production_on_the_shift_is_refused_on_save(db, env):
     shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=DAY, shift="night"))["id"]
     refused = _save_packing(service, env, shift_id, [{"carton_quantity": 3}])
     assert isinstance(refused, Err) and refused.code == "PRODUCTION_FIRST"
+    # It names both ways out: pick the OF on the row, or save the production it can be taken from.
+    assert refused.message == (
+        "packing row 1: pick this lot's OF, or save this shift's production first so it can be taken from there"
+    )
+    assert refused.message_fr == (
+        "ligne de conditionnement 1 : choisissez l'OF de ce lot, "
+        "ou enregistrez d'abord la production de ce shift pour qu'il en soit repris"
+    )
 
 
 def test_packaging_kept_in_different_stores_is_refused(db, env):
@@ -99,6 +107,7 @@ def test_packaging_kept_in_different_stores_is_refused(db, env):
         "run_id": run_id, "film_product_id": env["film"], "carton_product_id": env["carton"], "film_quantity": 1, "carton_quantity": 1,
     }])
     assert isinstance(refused, Err) and refused.code == "PACKAGING_STORES_DIFFER"
+    assert refused.message_fr.startswith("ligne de conditionnement 1 : ")
 
 
 def test_submitting_needs_a_product(db, env):
@@ -107,6 +116,18 @@ def test_submitting_needs_a_product(db, env):
     _ok(_save_packing(service, env, shift_id, [{"of_id": of_id, "packets_counted": 10, "finished_goods_location_id": env["fg"]}]))
     refused = service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="packing")
     assert isinstance(refused, Err) and refused.code == "PRODUCT_REQUIRED"
+
+
+def test_a_wrapped_refusal_without_french_keeps_the_english_inside():
+    from modules.production.api.shift_sections import _wrap_packing_check, _wrap_run_check
+
+    inner = Err("NO_STORE", "no store set")  # not translated yet: message_fr is None
+    packing = _wrap_packing_check(3, inner)
+    assert (packing.code, packing.message, packing.message_fr) == (
+        "NO_STORE", "packing row 3: no store set", "ligne de conditionnement 3 : no store set",
+    )
+    run = _wrap_run_check(2, Err("NO_STORE", "no store set", "aucun magasin"))
+    assert (run.message, run.message_fr) == ("run 2: no store set", "passage 2 : aucun magasin")
 
 
 def test_submitting_names_a_product_without_a_default_store(db, env):

@@ -1,7 +1,8 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronDown, Trophy, TrendingUp } from "lucide-react";
-import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
@@ -738,7 +739,7 @@ function ProductPriceSection({
 function PriceLineChart({ data, minPrice, colorIdx, t }: { data: PriceHistoryPoint[]; minPrice: number; colorIdx: number; t: TFn }) {
   const color = SUPPLIER_COLORS[colorIdx % SUPPLIER_COLORS.length];
   return (
-    <ResponsiveContainer width="100%" height={240}>
+    <InteractiveChart height={240}>
       <LineChart data={data.map((point) => ({ order_date: point.order_date, price: point.unit_price_cfa, isBest: point.unit_price_cfa === minPrice }))}>
         <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
         <XAxis dataKey="order_date" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -780,6 +781,6 @@ function PriceLineChart({ data, minPrice, colorIdx, t }: { data: PriceHistoryPoi
           animationDuration={CHART_ANIMATION_DURATION}
         />
       </LineChart>
-    </ResponsiveContainer>
+    </InteractiveChart>
   );
 }

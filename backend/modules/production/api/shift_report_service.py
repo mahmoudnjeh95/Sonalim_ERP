@@ -96,7 +96,7 @@ class ShiftReportService:
     def get_shift(self, *, tenant_id: str, shift_report_id: str) -> Result[dict]:
         header = self._load_header(tenant_id, shift_report_id)
         if header is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         sections = self._load_sections(tenant_id, shift_report_id)
         for section in sections:
             section["payload"] = load_section(
@@ -140,7 +140,7 @@ class ShiftReportService:
 
     def list_revisions(self, *, tenant_id: str, shift_report_id: str, section_key: str) -> Result[list[dict]]:
         if self._load_header(tenant_id, shift_report_id) is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         rows = self._connection.execute(
             """
             SELECT revision, snapshot, reason, actor_id, created_at, edited_by_validator, edited_after_validation
@@ -175,12 +175,12 @@ class ShiftReportService:
         """Find or create the report for this line, date and shift, with all its sections empty."""
         shift = (shift or "").strip()
         if not shift:
-            return Err("INVALID_VALUE", "a shift is required")
+            return Err("INVALID_VALUE", "a shift is required", "un shift est obligatoire")
         line = self._connection.execute(
             "SELECT 1 FROM production.work_centers WHERE id = %s AND tenant_id = %s", (work_center_id, tenant_id)
         ).fetchone()
         if line is None:
-            return Err("NOT_FOUND", f"work center {work_center_id} not found")
+            return Err("NOT_FOUND", f"work center {work_center_id} not found", f"poste de charge {work_center_id} introuvable")
 
         existing = self._connection.execute(
             "SELECT id FROM production.shift_reports WHERE tenant_id = %s AND work_center_id = %s "
@@ -217,9 +217,9 @@ class ShiftReportService:
     def update_header(self, *, tenant_id: str, actor_id: str, shift_report_id: str, fields: dict) -> Result[dict]:
         header = self._load_header(tenant_id, shift_report_id)
         if header is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         if header["status"] == "validated":
-            return Err("NOT_EDITABLE", "a validated shift report can no longer be edited")
+            return Err("NOT_EDITABLE", "a validated shift report can no longer be edited", "un shift validé ne peut plus être modifié")
         changes = {k: (str(v).strip() or None) if v is not None else None for k, v in fields.items() if k in _EDITABLE_HEADER}
         if changes:
             self._connection.execute(
@@ -245,12 +245,12 @@ class ShiftReportService:
     ) -> Result[tuple[dict, dict]]:
         """(header, section) for a section that may be changed, or the reason it may not."""
         if section_key not in SECTIONS:
-            return Err("INVALID_SECTION", f"unknown section {section_key!r}")
+            return Err("INVALID_SECTION", f"unknown section {section_key!r}", f"section {section_key!r} inconnue")
         header = self._load_header(tenant_id, shift_report_id)
         if header is None:
-            return Err("NOT_FOUND", f"shift report {shift_report_id} not found")
+            return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
         if header["status"] == "validated":
-            return Err("NOT_EDITABLE", "a validated shift report can no longer be edited")
+            return Err("NOT_EDITABLE", "a validated shift report can no longer be edited", "un shift validé ne peut plus être modifié")
         row = self._connection.execute(
             f"SELECT {_SECTION_STATE} FROM production.shift_report_sections "
             f"WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s",
@@ -387,12 +387,18 @@ class ShiftReportService:
                 "INVALID_TRANSITION",
                 f"a section that is {section['status']} cannot be submitted"
                 + (" - save it, or say there is nothing to report" if section["status"] == "empty" else ""),
+                f"une section {section['status']} ne peut pas être rendue"
+                + (" - enregistrez-la, ou indiquez qu'il n'y a rien à signaler" if section["status"] == "empty" else ""),
             )
         payload = load_section(
             self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id, section_key=section_key
         )
         if section_is_empty(payload):
-            return Err("EMPTY_SECTION", "an empty section is submitted as 'nothing to report'")
+            return Err(
+                "EMPTY_SECTION",
+                "an empty section is submitted as 'nothing to report'",
+                "une section vide est rendue comme « rien à signaler »",
+            )
         ready = check_ready_to_submit(section_key, payload)
         if isinstance(ready, Err):
             return ready
@@ -428,7 +434,11 @@ class ShiftReportService:
             return found
         _, section = found.value
         if not can_declare_nothing(section["status"]):
-            return Err("INVALID_TRANSITION", f"a section that is {section['status']} cannot be emptied")
+            return Err(
+                "INVALID_TRANSITION",
+                f"a section that is {section['status']} cannot be emptied",
+                f"une section {section['status']} ne peut pas être vidée",
+            )
         if section["status"] == "nothing_to_report":
             return Ok(self._section_result(tenant_id, shift_report_id, section_key))
 

@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from core.db import get_connection
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.finance.api.service import InvoiceService
 
@@ -84,7 +84,7 @@ def update_invoice(
         if isinstance(result, Err):
             connection.rollback()
             code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, {"code": result.code, "message": result.message})
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return _invoice_response(result.value)
 
@@ -93,7 +93,7 @@ def _transition_response(connection, result) -> dict:
     if isinstance(result, Err):
         connection.rollback()
         code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT
-        raise HTTPException(code, {"code": result.code, "message": result.message})
+        raise HTTPException(code, err_detail(result))
     connection.commit()
     return _invoice_response(result.value)
 

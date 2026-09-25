@@ -19,7 +19,7 @@ def test_an_empty_day_still_prints_the_fixed_rows_with_nothing_in_them():
 
 def test_the_rows_that_exist_once_per_product_or_kind_only_appear_when_something_was_reported():
     rows = _rows()
-    assert not [key for key, _ in rows if key in {"semolina", "waste", "finished", "packing_waste"}]
+    assert not [key for key, _ in rows if key in {"semolina", "waste", "finished", "packing_waste", "packed_product_waste"}]
 
 
 def test_total_mp_adds_the_qualities_and_total_fab_adds_the_rebroyat_to_it():
@@ -176,6 +176,38 @@ def test_packing_waste_keeps_each_item_apart_because_each_is_in_its_own_unit():
     waste = {row.name: row for row in rows if row.key == "packing_waste"}
     assert (waste["Film"].unit, waste["Film"].total) == ("kg", 8.0)
     assert (waste["Carton"].unit, waste["Carton"].total) == ("ea", 3.0)
+    # Only kilos add up to kilos: the carton is shown but not added to the packaging total.
+    total = next(row for row in rows if row.key == "total_packing_waste")
+    assert (total.section, total.unit, total.total) == ("packing", "kg", 8.0)
+
+
+def test_product_lost_while_packing_is_pasta_and_counts_in_the_total_waste_but_film_does_not():
+    rows = build_rows(
+        [DailyFact(column="morning", waste_kg=(("press", 40.0),))],
+        [
+            PackingFact(
+                column="afternoon",
+                waste=(("product", "coq", "Coquiette", 6.0, "kg"), ("packaging", "film", "Film", 2.5, "kg")),
+            )
+        ],
+    )
+    product = next(row for row in rows if row.key == "packed_product_waste")
+    assert (product.section, product.ref, product.unit, product.by_column) == ("waste", "coq", "kg", {"afternoon": 6.0})
+    assert not [row for row in rows if row.key == "packing_waste" and row.ref == "product"]
+    total_waste = next(row for row in rows if row.key == "total_waste")
+    assert total_waste.by_column == {"morning": 40.0, "afternoon": 6.0}
+    film = next(row for row in rows if row.key == "packing_waste")
+    assert (film.section, film.total) == ("packing", 2.5)
+    assert next(row for row in rows if row.key == "total_packing_waste").total == 2.5
+    # The product lost sits with the other déchets, before their total.
+    keys = [row.key for row in rows]
+    assert keys.index("waste") < keys.index("packed_product_waste") < keys.index("total_waste")
+
+
+def test_a_packing_report_that_lost_nothing_reads_zero_packaging_waste_not_no_report():
+    rows = build_rows([], [PackingFact(column="night")])
+    total = next(row for row in rows if row.key == "total_packing_waste")
+    assert total.by_column == {"night": 0.0}
 
 
 def test_packaging_rows_carry_the_unit_the_caller_restated_them_into():

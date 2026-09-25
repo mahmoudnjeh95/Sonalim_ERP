@@ -31,22 +31,18 @@ export function OfConsolidationHint({ workOrderId }: { workOrderId: string | und
       </p>
       <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-3">
         <div>
-          <span className="text-muted-foreground">{t("production.hint.planned")}: </span>
-          {consolidation.planned_quantity !== null ? formatQuantity(consolidation.planned_quantity, "t") : "—"}
-        </div>
-        <div>
           <span className="text-muted-foreground">{t("production.hint.producedSoFar")}: </span>
           {formatQuantity(consolidation.produced_quantity, "t")}
         </div>
         <div>
-          <span className="text-muted-foreground">{t("production.hint.completion")}: </span>
-          {consolidation.completion_ratio !== null
-            ? `${Math.round(consolidation.completion_ratio * 100)}%`
-            : "—"}
+          {/* Not produced / planned: the plant runs an order past its plan, so that
+              share reads 600 % on a healthy order. Yield is the figure that means something. */}
+          <span className="text-muted-foreground">{t("production.workOrders.column.yield")}: </span>
+          {consolidation.yield_ratio !== null ? `${(consolidation.yield_ratio * 100).toFixed(1)}%` : "—"}
         </div>
         <div>
           <span className="text-muted-foreground">{t("production.hint.semolinaSoFar")}: </span>
-          {formatQuantity(consolidation.raw_material.semolina_quantity, "kg")}
+          {formatQuantity(consolidation.raw_material.semolina_quantity, "t")}
         </div>
         <div>
           <span className="text-muted-foreground">{t("production.hint.reportsFiled")}: </span>

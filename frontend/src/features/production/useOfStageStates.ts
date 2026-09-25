@@ -1,33 +1,57 @@
 import { useMemo } from "react";
-import { useQueries } from "@tanstack/react-query";
-import { getReport, type ProductionReport, type WorkOrderStatus } from "./api";
-import { deriveStageStates } from "./productionSteps";
+import { useQueries, useQuery } from "@tanstack/react-query";
+import { getReport, getStageSignals, type ProductionReport, type WorkOrderStatus } from "./api";
+import { deriveStageStates, type ProductionStepId } from "./productionSteps";
 
 /**
  * Where an OF stands in the plant, read from what its reports actually hold.
- * The list endpoint carries no figures, so each live report's detail is fetched
- * — under the same key the report dialogs use, so opening one costs nothing.
+ *
+ * `states` (which stage is empty/pending/done) needs only three booleans per
+ * report, so it comes from one call to the stage-signals endpoint rather than
+ * fetching every report's full detail — a long-running OF can carry hundreds
+ * of reports, and that used to mean hundreds of round trips just to draw the
+ * Flux de production card.
+ *
+ * `details` — the actual figures, for the popup a click on a stage opens —
+ * stays per-report, but only for the reports the open stage's `state.reports`
+ * names, and only once a stage is actually open. `openStepId` is `null` while
+ * nothing is open, which fetches nothing.
  */
-export function useOfStageStates(token: string, reports: ProductionReport[], orderStatus: WorkOrderStatus) {
-  const live = useMemo(() => reports.filter((report) => report.status !== "rejected"), [reports]);
+export function useOfStageStates(
+  token: string,
+  reports: ProductionReport[],
+  orderStatus: WorkOrderStatus,
+  openStepId: ProductionStepId | null,
+) {
+  const of_id = reports[0]?.of_id;
 
-  const results = useQueries({
-    queries: live.map((report) => ({
+  const signalsQuery = useQuery({
+    queryKey: ["production", "stage-signals", of_id],
+    queryFn: () => getStageSignals(token, of_id!),
+    enabled: Boolean(of_id),
+  });
+  const signals = useMemo(() => new Map(Object.entries(signalsQuery.data ?? {})), [signalsQuery.data]);
+
+  const states = useMemo(() => deriveStageStates(reports, signals, orderStatus), [reports, signals, orderStatus]);
+
+  const openReports = openStepId ? (states[openStepId]?.reports ?? []) : [];
+  const detailResults = useQueries({
+    queries: openReports.map((report) => ({
       queryKey: ["production", "reports", report.id],
       queryFn: () => getReport(token, report.id),
     })),
   });
-
-  const isLoading = results.some((result) => result.isLoading);
-  // useQueries returns a fresh array every render; depend on the data itself.
-  const signature = results.map((result) => result.dataUpdatedAt).join(",");
-
+  const detailSignature = detailResults.map((result) => result.dataUpdatedAt).join(",");
   const details = useMemo(
-    () => new Map(live.map((report, index) => [report.id, results[index]?.data?.detail ?? null] as const)),
+    () => new Map(openReports.map((report, index) => [report.id, detailResults[index]?.data?.detail ?? null] as const)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [live, signature],
+    [openReports, detailSignature],
   );
-  const states = useMemo(() => deriveStageStates(reports, details, orderStatus), [reports, details, orderStatus]);
 
-  return { states, details, isLoading };
+  return {
+    states,
+    details,
+    isLoading: signalsQuery.isLoading,
+    detailsLoading: openStepId !== null && detailResults.some((result) => result.isLoading),
+  };
 }

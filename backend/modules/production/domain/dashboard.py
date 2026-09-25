@@ -31,10 +31,14 @@ class ShiftWindow:
 
 def validate_shift_window(*, shift: str, start: datetime.time, end: datetime.time) -> Result[None]:
     if not shift.strip():
-        return Err("INVALID_SHIFT", "a shift window needs the shift's name")
+        return Err("INVALID_SHIFT", "a shift window needs the shift's name", "une plage horaire de shift a besoin du nom du shift")
     if start == end:
         # Equal times are either no time at all or a full day; a shift is neither.
-        return Err("INVALID_TIME_RANGE", "a shift must start and end at different times")
+        return Err(
+            "INVALID_TIME_RANGE",
+            "a shift must start and end at different times",
+            "un shift doit commencer et finir à des heures différentes",
+        )
     return Ok(None)
 
 
@@ -140,24 +144,32 @@ def validate_team_rotation(entries: list[dict], *, num_shifts: int) -> Result[No
     anchor date; nothing here guesses at a team name or a stop left out."""
     stops = num_shifts + 1
     if len(entries) != stops:
-        return Err("WRONG_TEAM_COUNT", f"the rotation needs exactly {stops} teams (one per shift, plus rest)")
+        return Err(
+            "WRONG_TEAM_COUNT",
+            f"the rotation needs exactly {stops} teams (one per shift, plus rest)",
+            f"le roulement a besoin d'exactement {stops} équipes (une par shift, plus repos)",
+        )
     anchor_dates = {entry["anchor_date"] for entry in entries}
     if len(anchor_dates) != 1:
-        return Err("INVALID_ENTRY", "every team must share the same anchor date")
+        return Err("INVALID_ENTRY", "every team must share the same anchor date", "toutes les équipes doivent partager la même date de référence")
     seen_teams: set[str] = set()
     seen_stops: set[int] = set()
     for entry in entries:
         team = entry["team"].strip()
         stop = entry["anchor_stop"]
         if not team:
-            return Err("INVALID_ENTRY", "a rotation entry needs a team")
+            return Err("INVALID_ENTRY", "a rotation entry needs a team", "une entrée de roulement a besoin d'une équipe")
         if not (0 <= stop < stops):
-            return Err("INVALID_ENTRY", f"anchor_stop must be between 0 and {stops - 1}")
+            return Err(
+                "INVALID_ENTRY",
+                f"anchor_stop must be between 0 and {stops - 1}",
+                f"anchor_stop doit être compris entre 0 et {stops - 1}",
+            )
         key = team.lower()
         if key in seen_teams:
-            return Err("DUPLICATE_ENTRY", f"team {team!r} appears twice")
+            return Err("DUPLICATE_ENTRY", f"team {team!r} appears twice", f"l'équipe {team!r} apparaît deux fois")
         seen_teams.add(key)
         if stop in seen_stops:
-            return Err("DUPLICATE_ENTRY", f"two teams share stop {stop}")
+            return Err("DUPLICATE_ENTRY", f"two teams share stop {stop}", f"deux équipes partagent le poste {stop}")
         seen_stops.add(stop)
     return Ok(None)

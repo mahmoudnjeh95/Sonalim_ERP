@@ -57,7 +57,7 @@ def _validated_shift(db, env, of_id, day, *, semolina_quantity=1000, finished_pr
         "semolina_lines": [{"product_id": env["semolina"], "quantity": semolina_quantity, "location_id": env["location"]}],
         "water_percentage": water_percentage, "semolina_flow_rate": semolina_flow_rate,
     }
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
     for key in SECTION_KEYS:
         if key == "runs":
             _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))

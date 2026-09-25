@@ -1,14 +1,24 @@
 import { useEffect, useState, type ComponentType } from "react";
 import { NavLink, useLocation } from "react-router-dom";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
+  AlertOctagon,
+  Boxes,
   Building2,
+  CalendarClock,
   CalendarDays,
+  ChevronDown,
   ChevronsLeft,
   ChevronsRight,
   ClipboardList,
+  Cog,
   Contact,
+  Factory,
+  FileSpreadsheet,
   FileText,
+  FlaskConical,
+  Gauge,
+  HeartPulse,
   History,
   KeyRound,
   LayoutDashboard,
@@ -16,21 +26,34 @@ import {
   BriefcaseBusiness,
   LogOut,
   PackageSearch,
+  Recycle,
   Settings as SettingsIcon,
   ShieldCheck,
   ShoppingCart,
   Sparkles,
+  Tag,
   Target,
+  TrendingUp,
   Truck,
   UserCircle,
-  Wallet } from "lucide-react";
+  Users,
+  Wallet,
+  Zap,
+} from "lucide-react";
 import { useAuth } from "../lib/auth";
-import { useI18n, type Language } from "../lib/i18n";
+import { useI18n, type TranslationKey } from "../lib/i18n";
+import { LanguageToggle } from "../components/patterns/LanguageToggle";
 import { cn } from "../lib/utils";
+import { outlineIcon } from "../components/patterns/outlineIcon";
 import ProductionIcon from "../assets/icons/production/line.svg?react";
 import QualityIcon from "../assets/icons/quality/check.svg?react";
 import MaintenanceIcon from "../assets/icons/maintenance/wrench.svg?react";
 import WarehouseIcon from "../assets/icons/warehouse/warehouse.svg?react";
+import ApprovalIcon from "../assets/icons/quality/approval.svg?react";
+import ExtrusionIcon from "../assets/icons/production/extrusion.svg?react";
+import LabIcon from "../assets/icons/quality/lab.svg?react";
+import PlanningIcon from "../assets/icons/production/planning.svg?react";
+import WorkOrderIcon from "../assets/icons/production/work-order.svg?react";
 
 const COLLAPSED_STORAGE_KEY = "sonalim-erp.sidebar-collapsed";
 
@@ -42,50 +65,70 @@ function readStoredCollapsed(): boolean {
   }
 }
 
+type NavIcon = ComponentType<{ className?: string }>;
+
+/** A screen inside a page that lives behind a `?tab=` parameter -- deep-linkable, so it can be a nav entry. */
+interface NavChild {
+  tab: string;
+  labelKey: TranslationKey;
+  icon: NavIcon;
+}
+
 interface NavItem {
   to: string;
-  labelKey:
-    | "nav.dashboard"
-    | "nav.leads"
-    | "nav.partners"
-    | "nav.opportunities"
-    | "nav.activities"
-      | "nav.pipeline"
-    | "nav.production"
-    | "nav.iaAssistant"
-    | "nav.quality"
-    | "nav.analytics"
-    | "nav.maintenance"
-    | "nav.warehouse"
-    | "nav.products"
-    | "nav.inventories"
-    | "nav.shipments"
-    | "nav.purchaseOrders"
-    | "nav.sales"
-    | "nav.finance"
-    | "nav.users"
-    | "nav.roles"
-    | "nav.activityLog"
-    | "nav.hr";
-  icon: ComponentType<{ className?: string }>;
+  labelKey: TranslationKey;
+  icon: NavIcon;
   exact?: boolean;
   /** Hide this item unless the signed-in user holds this permission. Omit to show it to everyone. */
   permission?: string;
+  /** Tabs of the page, shown as an expandable sub-list; the active one follows the URL's `?tab=`. */
+  children?: NavChild[];
+  /** The tab the page opens when the URL names none. */
+  defaultTab?: string;
 }
 
 interface NavGroup {
-  labelKey:
-    | "nav.crm"
-    | "nav.operations"
-    | "nav.quality"
-    | "nav.analytics"
-    | "nav.maintenance"
-    | "nav.productsServices"
-    | "nav.commerce"
-    | "nav.administration"
-    | "nav.hr";
+  labelKey: TranslationKey;
   items: NavItem[];
 }
+
+// The analytics tabs, in the order the page lists them (Production first, then Cost & pricing).
+const ANALYTICS_TABS: NavChild[] = [
+  { tab: "overview", labelKey: "analytics.tabs.overview", icon: Factory },
+  { tab: "yield-waste", labelKey: "analytics.tabs.yieldWaste", icon: Recycle },
+  { tab: "team-performance", labelKey: "analytics.tabs.teamPerformance", icon: Users },
+  { tab: "machine-performance", labelKey: "analytics.tabs.machinePerformance", icon: Cog },
+  { tab: "downtime", labelKey: "analytics.tabs.downtime", icon: Gauge },
+  { tab: "energy", labelKey: "analytics.tabs.energy", icon: Zap },
+  { tab: "quality", labelKey: "analytics.tabs.quality", icon: ShieldCheck },
+  { tab: "shift-health", labelKey: "analytics.tabs.shiftHealth", icon: HeartPulse },
+  { tab: "consumption-report", labelKey: "analytics.tabs.consumptionReport", icon: PackageSearch },
+  { tab: "production-recap", labelKey: "analytics.tabs.productionRecap", icon: FileSpreadsheet },
+  { tab: "price-history", labelKey: "analytics.tabs.priceHistory", icon: TrendingUp },
+];
+
+// The production page's tabs, in the order its in-page TabsList shows them.
+const PRODUCTION_TABS: NavChild[] = [
+  { tab: "work-orders", labelKey: "production.tabs.workOrders", icon: outlineIcon(WorkOrderIcon) },
+  { tab: "planning", labelKey: "production.tabs.planning", icon: outlineIcon(PlanningIcon) },
+  { tab: "shift-report", labelKey: "production.tabs.shiftReport", icon: ClipboardList },
+  { tab: "day-sheet", labelKey: "production.tabs.daySheet", icon: FileSpreadsheet },
+  { tab: "validation", labelKey: "production.tabs.validation", icon: outlineIcon(ApprovalIcon) },
+  { tab: "recipes", labelKey: "production.tabs.recipes", icon: outlineIcon(LabIcon) },
+  { tab: "regrind", labelKey: "production.tabs.regrind", icon: Recycle },
+  { tab: "work-centers", labelKey: "production.tabs.workCenters", icon: Factory },
+  { tab: "molds", labelKey: "production.tabs.molds", icon: outlineIcon(ExtrusionIcon) },
+  { tab: "packaging-boms", labelKey: "production.tabs.packagingBoms", icon: Boxes },
+  { tab: "classifications", labelKey: "production.tabs.classifications", icon: Tag },
+  { tab: "settings", labelKey: "production.tabs.settings", icon: SettingsIcon },
+];
+
+const QUALITY_TABS: NavChild[] = [
+  { tab: "dashboard", labelKey: "qc.tabs.dashboard", icon: LayoutDashboard },
+  { tab: "reports", labelKey: "qc.tabs.qualityReports", icon: FlaskConical },
+  { tab: "non-conformities", labelKey: "qc.tabs.nonConformities", icon: AlertOctagon },
+  { tab: "lot-dlc", labelKey: "qc.tabs.lotDlc", icon: CalendarClock },
+];
 
 const NAV_GROUPS: NavGroup[] = [
   {
@@ -107,17 +150,17 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.operations",
     items: [
       { to: "/production/dashboard", labelKey: "nav.dashboard", icon: LayoutDashboard },
-      { to: "/production", labelKey: "nav.production", icon: ProductionIcon },
+      { to: "/production", labelKey: "nav.production", icon: ProductionIcon, children: PRODUCTION_TABS, defaultTab: "work-orders" },
       { to: "/production/ia-assistant", labelKey: "nav.iaAssistant", icon: Sparkles, permission: "production.use_ia_assistant" },
     ],
   },
   {
     labelKey: "nav.quality",
-    items: [{ to: "/quality", labelKey: "nav.quality", icon: QualityIcon }],
+    items: [{ to: "/quality", labelKey: "nav.quality", icon: QualityIcon, children: QUALITY_TABS, defaultTab: "dashboard" }],
   },
   {
     labelKey: "nav.analytics",
-    items: [{ to: "/analytics", labelKey: "nav.analytics", icon: LineChart }],
+    items: [{ to: "/analytics", labelKey: "nav.analytics", icon: LineChart, children: ANALYTICS_TABS, defaultTab: "overview" }],
   },
   {
     labelKey: "nav.maintenance",
@@ -150,11 +193,20 @@ const NAV_GROUPS: NavGroup[] = [
   },
 ];
 
+function isItemActive(item: NavItem, pathname: string): boolean {
+  return item.exact ? pathname === item.to : pathname.startsWith(item.to);
+}
+
 export function Sidebar() {
   const { session, logout, hasPermission } = useAuth();
   const { t, language, setLanguage } = useI18n();
   const location = useLocation();
+  const reduceMotion = useReducedMotion();
   const [collapsed, setCollapsed] = useState(() => readStoredCollapsed());
+  // Which expandable items the person opened or closed by hand; an item on the
+  // current page is open unless they closed it, and closes again on leaving.
+  const [toggled, setToggled] = useState<Record<string, boolean>>({});
+  const currentTab = new URLSearchParams(location.search).get("tab");
 
   useEffect(() => {
     try {
@@ -163,6 +215,17 @@ export function Sidebar() {
       // private browsing / storage blocked — collapsed state just won't persist
     }
   }, [collapsed]);
+
+  useEffect(() => {
+    setToggled({});
+  }, [location.pathname]);
+
+  const linkClass = (active: boolean) =>
+    cn(
+      "relative flex items-center gap-2.5 rounded-md py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
+      collapsed ? "justify-center px-1.5" : "px-2.5",
+      active && "text-primary",
+    );
 
   return (
     <aside
@@ -192,56 +255,99 @@ export function Sidebar() {
           // two items sharing a base path (e.g. /production and
           // /production/ia-assistant) would otherwise both light up on the more
           // specific one's page, since it also starts with the shorter path.
-          const activeItem = [...visibleItems]
-            .sort((a, b) => b.to.length - a.to.length)
-            .find((it) => (it.exact ? location.pathname === it.to : location.pathname.startsWith(it.to)));
+          const activeItem = [...visibleItems].sort((a, b) => b.to.length - a.to.length).find((it) => isItemActive(it, location.pathname));
           return (
-          <div key={group.labelKey}>
-            {!collapsed && (
-              <p className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">
-                {t(group.labelKey)}
-              </p>
-            )}
-            <div className="space-y-0.5">
-              {visibleItems.map((item) => {
-                const active = item === activeItem;
-                return (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    title={collapsed ? t(item.labelKey) : undefined}
-                    className={cn(
-                      "relative flex items-center gap-2.5 rounded-md py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
-                      collapsed ? "justify-center px-1.5" : "px-2.5",
-                    )}
-                  >
-                    {active && (
-                      <motion.span
-                        layoutId="sidebar-active"
-                        className="absolute inset-0 rounded-md bg-primary/10"
-                        transition={{ type: "spring", stiffness: 500, damping: 40 }}
-                      />
-                    )}
-                    <item.icon className={cn("relative h-4 w-4 shrink-0", active && "text-primary")} />
-                    {!collapsed && <span className={cn("relative truncate", active && "text-primary")}>{t(item.labelKey)}</span>}
-                  </NavLink>
-                );
-              })}
+            <div key={group.labelKey}>
+              {!collapsed && (
+                <p className="px-2.5 pb-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">{t(group.labelKey)}</p>
+              )}
+              <div className="space-y-0.5">
+                {visibleItems.map((item) => {
+                  const active = item === activeItem;
+                  const expandable = !collapsed && !!item.children?.length;
+                  const expanded = expandable && (toggled[item.to] ?? active);
+                  const activeTab = active ? (currentTab ?? item.defaultTab ?? null) : null;
+                  return (
+                    <div key={item.to}>
+                      <div className="relative flex items-center">
+                        <NavLink to={item.to} title={collapsed ? t(item.labelKey) : undefined} className={cn(linkClass(active), "min-w-0 flex-1")}>
+                          {active && (
+                            <motion.span
+                              layoutId="sidebar-active"
+                              className="absolute inset-0 rounded-md bg-primary/10"
+                              transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                            />
+                          )}
+                          <item.icon className={cn("relative h-4 w-4 shrink-0", active && "text-primary")} />
+                          {!collapsed && <span className="relative truncate">{t(item.labelKey)}</span>}
+                        </NavLink>
+                        {expandable && (
+                          <button
+                            type="button"
+                            aria-expanded={expanded}
+                            aria-label={t(expanded ? "nav.collapseSection" : "nav.expandSection")}
+                            onClick={() => setToggled((prev) => ({ ...prev, [item.to]: !expanded }))}
+                            className="relative z-10 mr-1 shrink-0 rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                          >
+                            <motion.span
+                              className="block"
+                              animate={{ rotate: expanded ? 0 : -90 }}
+                              transition={{ duration: reduceMotion ? 0 : 0.18 }}
+                            >
+                              <ChevronDown className="h-3.5 w-3.5" />
+                            </motion.span>
+                          </button>
+                        )}
+                      </div>
+
+                      <AnimatePresence initial={false}>
+                        {expanded && item.children && (
+                          <motion.ul
+                            key="children"
+                            initial={reduceMotion ? false : { height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={reduceMotion ? undefined : { height: 0, opacity: 0 }}
+                            transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+                            className="relative ml-[1.15rem] overflow-hidden border-l border-border pl-2"
+                          >
+                            {item.children.map((child) => {
+                              const childActive = active && activeTab === child.tab;
+                              return (
+                                <li key={child.tab} className="py-px">
+                                  <NavLink
+                                    to={`${item.to}?tab=${child.tab}`}
+                                    className={cn(
+                                      "relative flex items-center gap-2 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground",
+                                      childActive && "font-medium text-primary",
+                                    )}
+                                  >
+                                    {childActive && (
+                                      <motion.span
+                                        layoutId={`sidebar-sub-${item.to}`}
+                                        className="absolute inset-0 rounded-md bg-primary/[0.07]"
+                                        transition={{ type: "spring", stiffness: 500, damping: 40 }}
+                                      />
+                                    )}
+                                    <child.icon className={cn("relative h-3.5 w-3.5 shrink-0", childActive ? "text-primary" : "text-muted-foreground/70")} />
+                                    <span className="relative truncate">{t(child.labelKey)}</span>
+                                  </NavLink>
+                                </li>
+                              );
+                            })}
+                          </motion.ul>
+                        )}
+                      </AnimatePresence>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
-          </div>
           );
         })}
       </nav>
 
       <div className="border-t border-border p-3">
-        <NavLink
-          to="/settings"
-          title={collapsed ? t("nav.settings") : undefined}
-          className={cn(
-            "relative mb-1 flex items-center gap-2.5 rounded-md py-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground",
-            collapsed ? "justify-center px-1.5" : "px-2.5",
-          )}
-        >
+        <NavLink to="/settings" title={collapsed ? t("nav.settings") : undefined} className={cn(linkClass(location.pathname.startsWith("/settings")), "mb-1")}>
           {location.pathname.startsWith("/settings") && (
             <motion.span
               layoutId="sidebar-active"
@@ -250,11 +356,7 @@ export function Sidebar() {
             />
           )}
           <SettingsIcon className={cn("relative h-4 w-4 shrink-0", location.pathname.startsWith("/settings") && "text-primary")} />
-          {!collapsed && (
-            <span className={cn("relative truncate", location.pathname.startsWith("/settings") && "text-primary")}>
-              {t("nav.settings")}
-            </span>
-          )}
+          {!collapsed && <span className="relative truncate">{t("nav.settings")}</span>}
         </NavLink>
 
         <div className={cn("flex items-center gap-2.5 rounded-md py-2", collapsed ? "justify-center px-1.5" : "px-2.5")}>
@@ -289,31 +391,5 @@ export function Sidebar() {
         </button>
       </div>
     </aside>
-  );
-}
-
-function LanguageToggle({ language, onChange }: { language: Language; onChange: (language: Language) => void }) {
-  return (
-    <div className="relative flex shrink-0 rounded-md bg-muted p-0.5 text-[10px] font-semibold uppercase">
-      {(["en", "fr"] as const).map((code) => (
-        <button
-          key={code}
-          onClick={() => onChange(code)}
-          className={cn(
-            "relative z-10 rounded px-1.5 py-1 transition-colors",
-            language === code ? "text-primary-foreground" : "text-muted-foreground hover:text-foreground",
-          )}
-        >
-          {language === code && (
-            <motion.span
-              layoutId="lang-toggle"
-              className="absolute inset-0 -z-10 rounded bg-primary"
-              transition={{ type: "spring", stiffness: 500, damping: 40 }}
-            />
-          )}
-          {code}
-        </button>
-      ))}
-    </div>
   );
 }

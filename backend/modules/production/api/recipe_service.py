@@ -45,7 +45,11 @@ class RecipeService:
         }
         missing_product_ids = wanted_product_ids - found_product_ids
         if missing_product_ids:
-            return Err("PRODUCT_NOT_FOUND", f"product(s) not found: {', '.join(sorted(missing_product_ids))}")
+            return Err(
+                "PRODUCT_NOT_FOUND",
+                f"product(s) not found: {', '.join(sorted(missing_product_ids))}",
+                f"produit(s) introuvable(s) : {', '.join(sorted(missing_product_ids))}",
+            )
 
         # Same FOR-UPDATE-without-aggregate pattern as PackagingBomService.create_bom:
         # lock every existing row for this target product, compute the next version in
@@ -132,7 +136,7 @@ class RecipeService:
     ) -> Result[Recipe]:
         previous = self._get_recipe(tenant_id, previous_recipe_id)
         if previous is None:
-            return Err("NOT_FOUND", f"recipe {previous_recipe_id} not found")
+            return Err("NOT_FOUND", f"recipe {previous_recipe_id} not found", f"recette {previous_recipe_id} introuvable")
         return self.create_recipe(
             tenant_id=tenant_id,
             actor_id=actor_id,
@@ -159,7 +163,7 @@ class RecipeService:
             (recipe_id, tenant_id),
         ).fetchone()
         if target_row is None:
-            return Err("NOT_FOUND", f"recipe {recipe_id} not found")
+            return Err("NOT_FOUND", f"recipe {recipe_id} not found", f"recette {recipe_id} introuvable")
         target_product_id = target_row[0]
 
         # Family-scoped lock, same reasoning as PackagingBomService.activate_bom: the
@@ -175,7 +179,7 @@ class RecipeService:
         ).fetchall()
         status_by_id = dict(family_rows)
         if recipe_id not in status_by_id:
-            return Err("NOT_FOUND", f"recipe {recipe_id} not found")
+            return Err("NOT_FOUND", f"recipe {recipe_id} not found", f"recette {recipe_id} introuvable")
 
         recipe = self._get_recipe(tenant_id, recipe_id)
         assert recipe is not None
@@ -205,7 +209,7 @@ class RecipeService:
     def _apply_transition(self, tenant_id: str, actor_id: str, recipe_id: str, new_status: str) -> Result[Recipe]:
         recipe = self._get_recipe(tenant_id, recipe_id, for_update=True)
         if recipe is None:
-            return Err("NOT_FOUND", f"recipe {recipe_id} not found")
+            return Err("NOT_FOUND", f"recipe {recipe_id} not found", f"recette {recipe_id} introuvable")
         result = transition_recipe(recipe, new_status)
         if isinstance(result, Err):
             return result

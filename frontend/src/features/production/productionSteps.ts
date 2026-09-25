@@ -3,14 +3,7 @@ import petrissage from "../../assets/illustrations/production/stage-petrissage.w
 import extrusion from "../../assets/illustrations/production/stage-extrusion.webp";
 import conditionnement from "../../assets/illustrations/production/stage-conditionnement.webp";
 import stockage from "../../assets/illustrations/production/stage-stockage.webp";
-import type {
-  ConditionnementReportDetail,
-  DailyReportDetail,
-  ProductionReport,
-  ProductionReportWithDetail,
-  ReportType,
-  WorkOrderStatus,
-} from "./api";
+import type { ProductionReport, ReportType, StageSignal, WorkOrderStatus } from "./api";
 import type { TranslationKey } from "../../lib/i18n";
 
 export type ProductionStepId = "melange" | "petrissage" | "extrusion" | "conditionnement" | "stockage";
@@ -58,20 +51,22 @@ export type StageStates = Record<ProductionStepId, StageState>;
 // one lights up on. Pétrissage reads the weight of finished product off the
 // daily report; extrusion and conditionnement both read the packets counted on
 // the packing report. Stockage is the exception: it only exists once validation
-// has posted the packed product into the finished-goods store.
-const SIGNALS: Record<ProductionStepId, (detail: DailyReportDetail | ConditionnementReportDetail) => boolean> = {
-  melange: (d) => (d as DailyReportDetail).semolina_lines?.some((line) => line.quantity > 0) ?? false,
-  petrissage: (d) => (d as DailyReportDetail).finished_product_quantity > 0,
-  extrusion: (d) => (d as ConditionnementReportDetail).packets_counted > 0,
-  conditionnement: (d) => (d as ConditionnementReportDetail).packets_counted > 0,
-  stockage: (d) => (d as ConditionnementReportDetail).packets_counted > 0,
+// has posted the packed product into the finished-goods store. Backed by
+// getStageSignals — one query's worth of these three booleans per report,
+// rather than every report's full detail (see ProductionReportService.list_stage_signals).
+const SIGNALS: Record<ProductionStepId, (signal: StageSignal) => boolean> = {
+  melange: (s) => s.poured_semoule,
+  petrissage: (s) => s.weighed_finished_product,
+  extrusion: (s) => s.counted_packets,
+  conditionnement: (s) => s.counted_packets,
+  stockage: (s) => s.counted_packets,
 };
 
 const EMPTY_STATE: StageState = { status: "empty", reports: [], reportCount: 0, lastReportDate: null };
 
 export function deriveStageStates(
   reports: ProductionReport[],
-  details: Map<string, ProductionReportWithDetail["detail"]>,
+  signals: Map<string, StageSignal>,
   orderStatus: WorkOrderStatus,
 ): StageStates {
   const states = {} as StageStates;
@@ -81,8 +76,8 @@ export function deriveStageStates(
       if (report.report_type !== step.reportType || report.status === "rejected") return false;
       // Stockage waits on validation — a draft packing report has posted nothing.
       if (step.id === "stockage" && report.status !== "validated") return false;
-      const detail = details.get(report.id);
-      return Boolean(detail) && SIGNALS[step.id](detail!);
+      const signal = signals.get(report.id);
+      return Boolean(signal) && SIGNALS[step.id](signal!);
     });
 
     if (carrying.length === 0) {

@@ -3,9 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { listEquipment } from "../../maintenance/api";
-import { listLocations, listProducts } from "../../warehouse/api";
+import { listLocations, listProducts, listSuggestedVendors, listUoms, type SuggestedVendor } from "../../warehouse/api";
 import { listPartners } from "../../partners/api";
-import { listClassifications, listMolds, listWorkCenters, listWorkOrders, type PackagingKind } from "../api";
+import { isProductionLine, listClassifications, listMolds, listWorkCenters, listWorkOrders, type PackagingKind } from "../api";
 import { DASHBOARD_SETTINGS_QUERY_KEY, getDashboardSettings } from "../board/api";
 import { DOWNTIME_CLASSIFICATIONS, DOWNTIME_MOTIFS, DOWNTIME_TYPES } from "../DowntimeMotifSelect";
 import { useWasteTypes } from "../wasteTypes";
@@ -31,6 +31,7 @@ export function useShiftReferenceData(enabled: boolean) {
   const settings = useQuery({ queryKey: DASHBOARD_SETTINGS_QUERY_KEY, queryFn: () => getDashboardSettings(token), enabled });
   const orders = useQuery({ queryKey: ["production", "shift", "orders"], queryFn: () => listWorkOrders(token), enabled });
   const products = useQuery({ queryKey: ["production", "shift", "products"], queryFn: () => listProducts(token), enabled });
+  const uoms = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token), enabled });
   const classifications = useQuery({ queryKey: ["production", "shift", "classifications"], queryFn: () => listClassifications(token), enabled, retry: false });
   const locations = useQuery({ queryKey: ["production", "shift", "locations"], queryFn: () => listLocations(token), enabled });
   const molds = useQuery({ queryKey: ["production", "shift", "molds"], queryFn: () => listMolds(token), enabled });
@@ -38,16 +39,35 @@ export function useShiftReferenceData(enabled: boolean) {
   const shiftReports = useQuery({ queryKey: ["production", "shift", "all-reports"], queryFn: () => listShiftReports(token), enabled });
   const partners = useQuery({ queryKey: ["production", "shift", "partners"], queryFn: () => listPartners(token), enabled });
 
+  // Fuel and gasoil: the energy products, told apart by their code. Their suppliers are the
+  // vendors tagged with what the product is tagged with -- the link purchasing already uses.
+  const energyProductId = (code: string) => {
+    const energy = new Set((classifications.data ?? []).filter((c) => c.is_energy).map((c) => c.product_id));
+    return (products.data ?? []).find((p) => energy.has(p.id) && p.sku.toLowerCase() === code)?.id;
+  };
+  const fuelId = energyProductId("fuel");
+  const gasoilId = energyProductId("gasoil");
+  const fuelVendors = useQuery({
+    queryKey: ["core", "products", fuelId, "suggested-vendors"],
+    queryFn: () => listSuggestedVendors(token, fuelId!),
+    enabled: enabled && !!fuelId,
+  });
+  const gasoilVendors = useQuery({
+    queryKey: ["core", "products", gasoilId, "suggested-vendors"],
+    queryFn: () => listSuggestedVendors(token, gasoilId!),
+    enabled: enabled && !!gasoilId,
+  });
+
   // Filter archived equipment and build report count map
   const activeEquipment = useMemo(
     () => (equipment.data ?? []).filter((e) => !e.archived_at).sort((a, b) => a.name.localeCompare(b.name)),
     [equipment.data],
   );
 
-  // Only work centers that are production lines (name starts with "line"); e.g. excludes rebroyat_01, whose
-  // output is already tracked under its own OF. A blocked line has nothing to report on, so it's hidden too.
+  // Only work centers tagged as production lines; a grinder (e.g. rebroyat_01) reports through its OFR.
+  // A blocked line has nothing to report on, so it's hidden too.
   const productionLines = useMemo(
-    () => (workCenters.data ?? []).filter((w) => /^line/i.test(w.name) && !w.is_blocked),
+    () => (workCenters.data ?? []).filter((w) => isProductionLine(w) && !w.is_blocked),
     [workCenters.data],
   );
 
@@ -91,9 +111,24 @@ export function useShiftReferenceData(enabled: boolean) {
       const productsOrMp = classifications.data
         ? productList.filter((p) => ["finished_good", "raw_material"].includes(classOf.get(p.id)?.category ?? "")).map(asOption)
         : productList.map(asOption);
-      // The versement's "MP versé": semoule inputs only -- raw materials minus water (its own line elsewhere).
+      // The versement's "MP versé": semoule inputs only -- raw materials minus water (its own line elsewhere)
+      // and minus fuel/gasoil (burnt, never poured; the energy section records them).
       const mpVerse = classifications.data
-        ? productList.filter((p) => classOf.get(p.id)?.category === "raw_material" && !classOf.get(p.id)?.is_water).map(asOption)
+        ? productList
+            .filter((p) => {
+              const c = classOf.get(p.id);
+              return c?.category === "raw_material" && !c.is_water && !c.is_energy;
+            })
+            .map(asOption)
+        : productList.map(asOption);
+      // The rebroyat selects: only what an OFR makes (every OFR output is classified is_regrind). One a saved
+      // row already holds stays, so its name shows.
+      const savedRegrind = new Set([
+        ...rowsOf("runs", "rebroyat_versements").map((r) => String(r.product_id)),
+        ...rowsOf("runs", "runs").map((r) => String(r.regrind_input_product_id)),
+      ]);
+      const regrindItems = classifications.data
+        ? productList.filter((p) => classOf.get(p.id)?.is_regrind || savedRegrind.has(p.id)).map(asOption)
         : productList.map(asOption);
       const itemsOfKind = (kind: PackagingKind): Option[] =>
         productList.filter((p) => classOf.get(p.id)?.packaging_kind === kind).map(asOption);
@@ -106,6 +141,17 @@ export function useShiftReferenceData(enabled: boolean) {
       // Products already packed this shift -- what a "Produit" packing-waste line may name.
       const packedProductIds = new Set(rowsOf("packing", "rows").map((r) => String(r.product_id)).filter(Boolean));
       const packedProducts = [...packedProductIds].map((id) => ({ value: id, label: productName.get(id) ?? "—" }));
+      // Packaging waste is weighed in kg, so only items stocked by weight (film) can be named;
+      // a wasted carton goes in the packing row's "Cartons déchet". An item a saved line
+      // already names stays, so its name still shows (the server refuses it on the next save).
+      const byWeight = new Set((uoms.data ?? []).filter((u) => u.category === "weight").map((u) => u.id));
+      const savedWasteItems = new Set(rowsOf("waste_packing", "waste_lines").map((r) => String(r.product_id)));
+      const packagingWasteItems = productList
+        .filter((p) => classOf.get(p.id)?.packaging_kind && (!uoms.data || byWeight.has(p.uom_id) || savedWasteItems.has(p.id)))
+        .map(asOption);
+      // Finished product lost while packing is filed once, under packing waste as "Produit";
+      // the old Daily kind for it is only kept on a line that already uses it.
+      const savedProductionKinds = new Set(rowsOf("waste_production", "waste_lines").map((r) => String(r.category)));
 
       // Molds follow the type (PL or PC) of the work orders: a run's own row, or the shift's runs for a wash.
       const typeOfOrder = new Map(all.map((o) => [o.id, o.product_type ?? productType.get(o.product_id ?? "") ?? ""]));
@@ -119,11 +165,22 @@ export function useShiftReferenceData(enabled: boolean) {
         return [name, time(r.start_time)].filter(Boolean).join(" · ") || String(r.id).slice(-6);
       };
 
+      // A supplier the energy record already names stays offered, so its name still shows.
+      const energy = shift?.sections.find((s) => s.key === "energy")?.payload?.energy as Row | null | undefined;
+      const partnerName = new Map((partners.data ?? []).map((p) => [p.id, p.name]));
+      const suppliersOf = (vendors: SuggestedVendor[] | undefined, saved: unknown): Option[] => {
+        const list = (vendors ?? []).map((v) => ({ value: v.partner_id, label: v.name }));
+        return typeof saved === "string" && saved && !list.some((o) => o.value === saved)
+          ? [...list, { value: saved, label: partnerName.get(saved) ?? "—" }]
+          : list;
+      };
+
       return {
         orders: pickable.map(orderOption),
         products: productList.map(asOption),
         productsOrMp,
         mpVerse,
+        regrindItems,
         finishedProducts,
         shiftOrders: all.filter((o) => runOrderIds.has(o.id)).map(orderOption),
         packingTypes: productList
@@ -134,6 +191,9 @@ export function useShiftReferenceData(enabled: boolean) {
         itemsBobine: itemsOfKind("bobine"),
         itemsScotch: itemsOfKind("scotch"),
         itemsRuban: itemsOfKind("ruban"),
+        itemsPackaging: packagingWasteItems,
+        fuelSuppliers: suppliersOf(fuelVendors.data, energy?.fuel_supplier_id),
+        gasoilSuppliers: suppliersOf(gasoilVendors.data, energy?.gasoil_supplier_id),
         packedProducts,
         locations: (locations.data ?? []).map((l) => ({ value: l.id, label: l.name })),
         molds: moldList.map(moldOption),
@@ -147,7 +207,10 @@ export function useShiftReferenceData(enabled: boolean) {
         motifs: list(DOWNTIME_MOTIFS, "motif"),
         stopTypes: list(DOWNTIME_TYPES, "type"),
         classifications: list(DOWNTIME_CLASSIFICATIONS, "classification"),
-        wasteProduction: waste.categoriesFor("daily").map((c) => ({ value: c, label: waste.label(c) })),
+        wasteProduction: waste
+          .categoriesFor("daily")
+          .filter((c) => c !== "finished_product_conditioning" || savedProductionKinds.has(c))
+          .map((c) => ({ value: c, label: waste.label(c) })),
         wastePacking: waste.categoriesFor("conditionnement").map((c) => ({ value: c, label: waste.label(c) })),
         runs: rowsOf("runs", "runs").map((r) => ({ value: r.id as string, label: runLabel(r) })),
         packingRows: rowsOf("packing", "rows").map((r) => ({
@@ -174,7 +237,7 @@ export function useShiftReferenceData(enabled: boolean) {
     },
     // `waste` and `label` are rebuilt every render; what they read is captured by their own deps.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [orders.data, products.data, classifications.data, locations.data, molds.data, equipment.data, partners.data, waste.types, t],
+    [orders.data, products.data, uoms.data, classifications.data, locations.data, molds.data, equipment.data, partners.data, fuelVendors.data, gasoilVendors.data, waste.types, t],
   );
 
   return {

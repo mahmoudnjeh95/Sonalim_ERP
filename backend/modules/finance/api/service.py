@@ -83,7 +83,7 @@ class InvoiceService:
             (invoice_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"invoice {invoice_id} not found")
+            return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
 
         current_partner_id, current_amount, current_currency, status = row
         updated = Invoice(
@@ -94,7 +94,7 @@ class InvoiceService:
             status=status,
         )
         if updated.amount < 0:
-            return Err("INVALID_AMOUNT", "amount cannot be negative")
+            return Err("INVALID_AMOUNT", "amount cannot be negative", "le montant ne peut pas être négatif")
 
         self._connection.execute(
             "UPDATE finance.invoices SET partner_id = %s, amount = %s, currency = %s WHERE id = %s AND tenant_id = %s",
@@ -144,7 +144,7 @@ class InvoiceService:
             (invoice_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"invoice {invoice_id} not found")
+            return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
 
         partner_id, amount, currency, status = row
         current = Invoice(id=invoice_id, partner_id=partner_id, amount=float(amount), currency=currency, status=status)

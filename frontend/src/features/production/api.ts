@@ -1,4 +1,4 @@
-import { apiFetch, ApiError } from "../../lib/api";
+import { apiFetch, apiErrorFromResponse, networkError } from "../../lib/api";
 
 // --- Products & units of measure -----------------------------------------
 
@@ -70,6 +70,8 @@ export interface ProductClassification {
   packaging_format: PackagingFormat | null;
   is_water: boolean;
   packaging_kind: PackagingKind | null;
+  /** Fuel / gasoil: a raw material that is burnt, never poured into the line. */
+  is_energy: boolean;
 }
 
 export interface SetClassificationInput {
@@ -79,6 +81,7 @@ export interface SetClassificationInput {
   packaging_format?: PackagingFormat;
   is_water?: boolean;
   packaging_kind?: PackagingKind;
+  is_energy?: boolean;
 }
 
 export function listClassifications(token: string) {
@@ -334,18 +337,27 @@ export interface WorkCenter {
   hourly_rate: number;
   is_blocked: boolean;
   blocked_reason: string | null;
+  line_type: WorkCenterLineType;
 }
+
+// A production line runs OFs and shift reports; a grinder line runs rebroyat (OFRs).
+export type WorkCenterLineType = "production" | "grinder";
+
+export const isProductionLine = (wc: WorkCenter) => wc.line_type === "production";
+export const isGrinderLine = (wc: WorkCenter) => wc.line_type === "grinder";
 
 export interface CreateWorkCenterInput {
   code: string;
   name: string;
   hourly_rate?: number;
+  line_type?: WorkCenterLineType;
 }
 
 export interface UpdateWorkCenterInput {
   code?: string;
   name?: string;
   hourly_rate?: number;
+  line_type?: WorkCenterLineType;
 }
 
 export function listWorkCenters(token: string) {
@@ -696,7 +708,9 @@ export interface TeamPerformanceRow {
   daily_waste_by_category: Partial<Record<WasteCategory, number>>;
   /** What the team declared as rebroyat over the same reports — recovered, not lost. */
   regrind_quantity: number;
-  /** daily_waste_by_category summed, minus regrind_quantity: semoule genuinely lost. */
+  /** The same rebroyat in kilos (regrind_quantity is in the rebroyat product's own unit, usually tonnes). */
+  regrind_quantity_kg: number;
+  /** daily_waste_by_category summed, minus regrind_quantity_kg: semoule genuinely lost. */
   net_semoule_waste: number;
 }
 
@@ -803,11 +817,16 @@ export async function exportConsumptionBySupplier(
 ): Promise<Blob> {
   const query = consumptionQuery(params);
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  const response = await fetch(`${API_BASE_URL}/production/reports/consumption-by-supplier/export${suffix}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/production/reports/consumption-by-supplier/export${suffix}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw networkError();
+  }
   if (!response.ok) {
-    throw new ApiError(response.status, "EXPORT_FAILED", response.statusText);
+    throw await apiErrorFromResponse(response);
   }
   return response.blob();
 }
@@ -822,11 +841,16 @@ export async function exportProductionRecap(
   params: { date: string; period: ProductionRecapPeriod },
 ): Promise<Blob> {
   const query = new URLSearchParams({ date: params.date, period: params.period });
-  const response = await fetch(`${API_BASE_URL}/production/reports/daily-recap/export?${query.toString()}`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/production/reports/daily-recap/export?${query.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw networkError();
+  }
   if (!response.ok) {
-    throw new ApiError(response.status, "EXPORT_FAILED", response.statusText);
+    throw await apiErrorFromResponse(response);
   }
   return response.blob();
 }
@@ -1096,6 +1120,12 @@ export interface OfConsolidation {
   // recycled back into the mix — rather than against the schedule.
   material_input_quantity: number;
   transformation_ratio: number | null;
+  /** Tonnes the press weighed off the line (the daily side's produit fini). */
+  pressed_quantity: number;
+  /** Pressed over poured — the same "Rendement" the OF list shows. */
+  yield_ratio: number | null;
+  /** Tonnage pressed and packed per report date, oldest first. */
+  by_day: { date: string; pressed_quantity: number; packed_quantity: number }[];
   // The product ids say which unit each total is in. Null when the validated
   // reports named different products, in which case no unit is true of the sum.
   raw_material: {
@@ -1119,7 +1149,13 @@ export interface OfConsolidation {
     ruban_quantity: number;
     ruban_product_id: string | null;
   };
-  utilities: { water_quantity: number; fuel_quantity: number; electricity_quantity: number };
+  utilities: {
+    water_quantity: number;
+    /** Some of the litres were worked out from the shift's dosage %, not typed in. */
+    water_derived: boolean;
+    fuel_quantity: number;
+    electricity_quantity: number;
+  };
   waste: {
     /** Per stage, the way the plant's own form is laid out. */
     by_category: Partial<Record<WasteCategory, number>>;
@@ -1140,7 +1176,13 @@ export interface OfConsolidation {
      */
     net_semoule_waste: number;
   };
-  time: { production_minutes: number; downtime_minutes: number };
+  /** The line and the packing machines apart: they run through the same hours. */
+  time: {
+    production_minutes: number;
+    downtime_minutes: number;
+    packing_minutes: number;
+    packing_downtime_minutes: number;
+  };
   quality: {
     validated_report_count: number;
     conforming_cartons: number;
@@ -1316,6 +1358,51 @@ export function updateWasteType(
   return apiFetch<WasteType>(`/production/waste-types/${wasteTypeId}`, { method: "PATCH", token, body: input });
 }
 
+/** Removes a plant kind, or retires it when a report already used it — `outcome` says which. */
+export function deleteWasteType(token: string, wasteTypeId: string) {
+  return apiFetch<{ outcome: "deleted" | "retired" }>(`/production/waste-types/${wasteTypeId}`, {
+    method: "DELETE",
+    token,
+  });
+}
+
+/**
+ * What a plant changed about one built-in kind. `name` null is the translated
+ * default; `sort_order` null is code order, ahead of the plant's own kinds.
+ */
+export interface BuiltInWasteTypeSetting {
+  category: WasteCategory;
+  report_type: ReportType;
+  name: string | null;
+  sort_order: number | null;
+  is_active: boolean;
+}
+
+export function listBuiltInWasteTypes(token: string) {
+  return apiFetch<BuiltInWasteTypeSetting[]>("/production/waste-types/built-ins", { token });
+}
+
+export function updateBuiltInWasteType(
+  token: string,
+  category: WasteCategory,
+  input: { name?: string; reset_name?: boolean; is_active?: boolean },
+) {
+  return apiFetch<BuiltInWasteTypeSetting>(`/production/waste-types/built-ins/${category}`, {
+    method: "PATCH",
+    token,
+    body: input,
+  });
+}
+
+/** One report's kinds, built-in keys and plant ids together, in their new order. */
+export function reorderWasteTypes(token: string, reportType: ReportType, order: WasteCategory[]) {
+  return apiFetch<unknown>("/production/waste-types/order", {
+    method: "PUT",
+    token,
+    body: { report_type: reportType, order },
+  });
+}
+
 export type DaySheetSection = "material" | "production" | "waste" | "packing" | "energy";
 
 /** One row of the day sheet. The fixed rows are named by `key`; the ones that exist once per product or déchet kind carry `ref`/`name`. */
@@ -1331,13 +1418,23 @@ export interface DaySheetRow {
   total: number | null;
 }
 
+/** What a day sheet's columns stand for: the plant's sheet has a column per shift; read by lot instead when a day ran several lots. */
+export type DaySheetGrouping = "shift" | "lot";
+/** What a month recap's columns stand for: a column per product (the plant's recap) or per lot. */
+export type MonthRecapGrouping = "product" | "lot";
+
 export interface DaySheetColumn {
-  /** The shift as filed (empty for reports filed with none) on a day sheet; the product's id on the month recap. */
+  /** The shift as filed (empty for reports filed with none), the product's id, or the lot number, depending on the grouping. */
   key: string;
-  /** The recap's column title, the product's name. */
+  /** The column's title: the shift, the product's name or the lot number. Null when the reports named none. */
   name?: string | null;
   teams: string[];
   lots: string[];
+  /** The names of the products made under this column (one per column on the recap by product). */
+  products: string[];
+  /** The first and last day a counted report was filed in this column. */
+  date_from: string | null;
+  date_to: string | null;
   reports: Record<ReportType, { validated: number; pending: number }>;
 }
 
@@ -1345,24 +1442,30 @@ export interface DaySheet {
   date: string;
   work_center: { id: string; code: string; name: string };
   include_pending: boolean;
+  group_by: DaySheetGrouping;
   columns: DaySheetColumn[];
   rows: DaySheetRow[];
   ofs: { id: string; reference: string | null; product_name: string | null }[];
 }
 
-/** The same rows as a day sheet, added up over a month, with a column per product. */
+/** The same rows as a day sheet, added up over a month, with a column per product (or per lot). */
 export interface MonthRecap {
   month: string;
   work_center: { id: string; code: string; name: string };
+  group_by: MonthRecapGrouping;
   columns: DaySheetColumn[];
   rows: DaySheetRow[];
 }
 
-export function getDaySheet(token: string, params: { date: string; workCenterId: string; includePending: boolean }) {
+export function getDaySheet(
+  token: string,
+  params: { date: string; workCenterId: string; includePending: boolean; groupBy?: DaySheetGrouping },
+) {
   const query = new URLSearchParams({
     date: params.date,
     work_center_id: params.workCenterId,
     include_pending: String(params.includePending),
+    group_by: params.groupBy ?? "shift",
   });
   return apiFetch<DaySheet>(`/production/day-sheet?${query}`, { token });
 }
@@ -1378,9 +1481,35 @@ export function getLotSuggestion(token: string, params: { workCenterId: string; 
   return apiFetch<LotSuggestion>(`/production/lot-suggestion?${query}`, { token });
 }
 
-export function getMonthRecap(token: string, params: { month: string; workCenterId: string }) {
-  const query = new URLSearchParams({ month: params.month, work_center_id: params.workCenterId });
+export function getMonthRecap(token: string, params: { month: string; workCenterId: string; groupBy?: MonthRecapGrouping }) {
+  const query = new URLSearchParams({
+    month: params.month,
+    work_center_id: params.workCenterId,
+    group_by: params.groupBy ?? "product",
+  });
   return apiFetch<MonthRecap>(`/production/month-recap?${query}`, { token });
+}
+
+/**
+ * The month's production workbook for every line — the recap (per product, then per
+ * lot), one day sheet per line and per day (PC days first, then PL), consumption during
+ * production and during conditionnement, energy, and the analyses behind them — see
+ * month_recap_export.py. Bypasses apiFetch since that always parses JSON.
+ */
+export async function exportMonthRecapWorkbook(token: string, params: { month: string }): Promise<Blob> {
+  const query = new URLSearchParams({ month: params.month });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/production/month-recap/export?${query.toString()}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+  } catch {
+    throw networkError();
+  }
+  if (!response.ok) {
+    throw await apiErrorFromResponse(response);
+  }
+  return response.blob();
 }
 
 export interface WasteLine {
@@ -1548,6 +1677,17 @@ export function listReports(
 
 export function getReport(token: string, reportId: string) {
   return apiFetch<ProductionReportWithDetail>(`/production/reports/${reportId}`, { token });
+}
+
+/** Per-report id: did it pour semoule, weigh finished product, or count packets. */
+export interface StageSignal {
+  poured_semoule: boolean;
+  weighed_finished_product: boolean;
+  counted_packets: boolean;
+}
+
+export function getStageSignals(token: string, workOrderId: string) {
+  return apiFetch<Record<string, StageSignal>>(`/production/work-orders/${workOrderId}/stage-signals`, { token });
 }
 
 export function createDailyReport(token: string, input: CreateDailyReportInput) {

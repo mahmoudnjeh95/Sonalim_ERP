@@ -89,6 +89,17 @@ def _run(env, of_id, *, minutes=420, semolina=1000, **fields):
     }
 
 
+def _poured(runs: list[dict]) -> dict:
+    """The runs, with the semoule they list poured through the shift's versement instead."""
+    totals: dict[tuple, float] = {}
+    for run in runs:
+        for line in run.pop("semolina_lines", []):
+            key = (line["product_id"], line["location_id"])
+            totals[key] = totals.get(key, 0) + line["quantity"]
+    versements = [{"product_id": p, "location_id": l, "quantity": q} for (p, l), q in totals.items()]
+    return {"runs": runs, "versements": versements}
+
+
 def _packing_row(env, of_id, *, run_id=None, **fields):
     return {
         "of_id": of_id, "run_id": run_id, "equipment_id": env["equipment"], "finished_product_quantity": 800,
@@ -110,7 +121,7 @@ def _submitted_shift(db, env, *, runs=None, packing=True, energy=None, extra=Non
                                       report_date=DAY, shift=shift))["id"]
     of_id = _of(db, env)
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
-                             payload={"runs": runs if runs is not None else [_run(env, of_id)]}))
+                             payload=_poured(runs if runs is not None else [_run(env, of_id)])))
     run_ids = [r["id"] for r in _shift(db, shift_id)["sections"][0]["payload"]["runs"]]
 
     filled: dict = {"runs": None} if run_ids else {}  # already saved above; only submitted below
@@ -256,7 +267,7 @@ def test_a_failing_row_leaves_the_whole_shift_untouched(db, env):
     service = ShiftReportService(db)
     shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=DAY, shift="night"))["id"]
     of_id = _of(db, env)
-    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [_run(env, of_id)]}))
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload=_poured([_run(env, of_id)])))
     run_id = _shift(db, shift_id)["sections"][0]["payload"]["runs"][0]["id"]
     # 20,000 of film against a store holding 10,000: complete on paper, short in stock.
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="packing",
@@ -296,7 +307,7 @@ def test_a_shift_with_two_runs_validates_and_posts_each_runs_own_stock(db, env):
     first, second = _of(db, env), _of(db, env)
     semolina_before = _on_hand(db, env, "semolina")
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
-                             payload={"runs": [_run(env, first, minutes=260, semolina=400), _run(env, second, minutes=160, semolina=300)]}))
+                             payload=_poured([_run(env, first, minutes=240, semolina=400), _run(env, second, minutes=180, semolina=300)])))
     for key in SECTION_KEYS:
         if key == "runs":
             _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
@@ -451,6 +462,16 @@ def test_the_shift_shows_the_packaging_frozen_and_tonnage_settled_at_validation(
     assert float(tonnage) == pytest.approx(1.0)
 
 
+def test_reversing_a_carton_product_takes_back_exactly_what_validation_packed(db, env):
+    db.execute("UPDATE core.products SET net_weight_grams = 500, packets_per_carton = 20 WHERE id = %s", (env["product"],))
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+    assert _on_hand(db, env, location_key="fg_location") == pytest.approx(2000)  # 100 cartons of 20
+    # The reversal reads the frozen snapshot back from the database, not from the product.
+    _ok(ShiftValidationService(db).reverse_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="test"))
+    assert _on_hand(db, env, location_key="fg_location") == pytest.approx(0)
+
+
 # test_rerunning_the_legacy_conversion... removed: Task 3 rewrite eliminates the materialize_shift bridge
 # so this test's premise (old-shaped rows written by validation) no longer applies. The convert_legacy_reports()
 # SQL function still exists for the one-time migration, but validation no longer feeds it. Task 8 will handle cleanup.
@@ -466,7 +487,7 @@ def test_reversing_a_two_run_shift_puts_back_each_runs_semoule(db, env):
     first, second = _of(db, env), _of(db, env)
     semolina_before = _on_hand(db, env, "semolina")
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
-                             payload={"runs": [_run(env, first, minutes=260, semolina=400), _run(env, second, minutes=160, semolina=300)]}))
+                             payload=_poured([_run(env, first, minutes=240, semolina=400), _run(env, second, minutes=180, semolina=300)])))
     for key in SECTION_KEYS:
         if key == "runs":
             _ok(service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
@@ -542,11 +563,11 @@ def test_force_reversing_hands_back_the_ground_rebroyat_and_removes_its_order(db
 
 
 def _runs_with_semolina(db, shift_id, quantity) -> dict:
-    """The shift's saved runs payload, with the first run's semoule changed -- ids kept,
+    """The shift's saved runs payload, with the semoule poured changed -- run ids kept,
     so the packing row that points at the run still points at it."""
-    runs = _shift(db, shift_id)["sections"][0]["payload"]["runs"]
-    runs[0]["semolina_lines"][0]["quantity"] = quantity
-    return {"runs": runs}
+    payload = _shift(db, shift_id)["sections"][0]["payload"]
+    payload["versements"][0]["quantity"] = quantity
+    return {"runs": payload["runs"], "versements": payload["versements"]}
 
 
 def _validator_edit(db, env, shift_id, *, section_key="runs", payload=None, reason="corrected the semoule quantity"):

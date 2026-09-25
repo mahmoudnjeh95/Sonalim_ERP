@@ -53,6 +53,7 @@ export const T = {
   lastUpdated: L("Updated at", "Mis à jour à"),
   kiosk: L("Fullscreen mode", "Mode plein écran"),
   exitKiosk: L("Exit fullscreen", "Quitter le plein écran"),
+  kioskWholeSheet: L("Whole sheet, fullscreen", "Toute la fiche en plein écran"),
   printSheet: L("Print shift sheet", "Imprimer la feuille de poste"),
   kpiSemolina: L("Semoule poured", "Semoule versée"),
   kpiFinished: L("Finished output", "Produit fini"),
@@ -147,6 +148,29 @@ export const T = {
     "The shift uses more than the stock holds. Explain why, then approve again.",
     "Le shift consomme plus que le stock. Expliquez pourquoi, puis approuvez à nouveau.",
   ),
+  regrindTitle: L("Rebroyat regrind order", "OF de rebroyat (OFR)"),
+  regrindHint: (kg: string) =>
+    L(
+      `This shift declares ${kg} of rebroyat. Approving opens an OFR for it: check what it makes and where it is ground.`,
+      `Ce shift déclare ${kg} de rebroyat. L'approbation ouvre un OFR pour cette quantité : vérifiez ce qu'il produit et où il est rebroyé.`,
+    ),
+  regrindProduct: L("Rebroyat product (tenant default)", "Produit rebroyat (par défaut)"),
+  regrindProductMissing: L(
+    "No default rebroyat product is set yet. The one you pick is saved in Production Settings for every OFR.",
+    "Aucun produit rebroyat par défaut n'est défini. Celui choisi sera enregistré dans les paramètres de production pour tous les OFR.",
+  ),
+  regrindProductNoRight: L(
+    "No default rebroyat product is set, and you are not allowed to set one. Ask a production manager to set it in Production Settings.",
+    "Aucun produit rebroyat par défaut n'est défini et vous n'avez pas le droit de le définir. Demandez à un responsable de production de le définir dans les paramètres de production.",
+  ),
+  regrindLine: L("Grinder line", "Ligne de rebroyage"),
+  regrindLineFallback: L("The production order's own line", "La ligne de l'OF de production"),
+  regrindLineRequired: L(
+    "The production order has no line: pick the line the OFR runs on.",
+    "L'OF de production n'a pas de ligne : choisissez la ligne de l'OFR.",
+  ),
+  regrindConfirm: L("Confirm and approve", "Confirmer et approuver"),
+  cancel: L("Cancel", "Annuler"),
   approved: L("Shift approved", "Shift approuvé"),
   bulkApprove: L("Bulk approve all complete", "Approuver en masse tous les complets"),
   bulkApproving: L("Approving…", "Approbation…"),

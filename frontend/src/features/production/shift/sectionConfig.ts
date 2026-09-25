@@ -41,6 +41,7 @@ export type OptionSource =
   | "siloPhases"
   | "productsOrMp"
   | "mpVerse"
+  | "regrindItems"
   | "moldsForShift"
   | "orderTypes"
   | "moldTypes"
@@ -49,6 +50,9 @@ export type OptionSource =
   | "itemsBobine"
   | "itemsScotch"
   | "itemsRuban"
+  | "itemsPackaging"
+  | "fuelSuppliers"
+  | "gasoilSuppliers"
   | "packedProducts"
   | "lineStates"
   | "checkStates"
@@ -69,6 +73,10 @@ export interface Column {
   valueFor?: (row: Row, options: OptionMap) => string | null;
   /** Fields cleared when this cell changes, so the server derives them again from the new value. */
   resets?: readonly string[];
+  /** Other fields of the row this cell's new value fills in (a kind that names its item). */
+  fills?: (value: unknown, row: Row, options: OptionMap) => Row;
+  /** For a select: why the list is empty, shown in its place (the choices come from another section). */
+  emptyHint?: Label;
   /** A number column stored in one unit but typed/shown in another: value shown = stored value * scale. */
   scale?: number;
 }
@@ -116,12 +124,33 @@ const pick = (key: string, label: Label, options: OptionSource, required = false
 
 const derived = (key: string, label: Label): Column => ({ key, label, kind: "readonly" });
 
+const SAVE_RUNS_FIRST = L(
+  "Save the Production section first",
+  "Enregistrez d'abord la section Production",
+);
+const NO_SUPPLIER = L(
+  "No supplier is linked to this item (tag it on the supplier)",
+  "Aucun fournisseur lié à cet article (étiquetez-le sur le fournisseur)",
+);
+
 /** The molds of the type (PL or PC) of the row's work order; every mold while the type is unknown. */
 export function moldsForOrder(row: Row, options: OptionMap): Option[] {
   const type = options.orderTypes.find((o) => o.value === row.of_id)?.label;
   if (!type) return options.molds;
   const ofThatType = new Set(options.moldTypes.filter((m) => m.label === type).map((m) => m.value));
   return options.molds.filter((m) => ofThatType.has(m.value));
+}
+
+/** What a packing-waste line may name: packaging items for packaging lost, the products packed this shift for product lost. */
+export function packingWasteItems(row: Row, options: OptionMap): Option[] {
+  if (row.category === "packaging") return options.itemsPackaging;
+  if (row.category === "product") return options.packedProducts;
+  return [...options.packedProducts, ...options.itemsPackaging];
+}
+
+/** Picking "product" names the product packed first this shift; any other kind starts with no item. */
+export function packingWasteItemFor(value: unknown, _row: Row, options: OptionMap): Row {
+  return { product_id: value === "product" ? options.packedProducts[0]?.value ?? null : null };
 }
 
 /** The packing type of the row's chosen product, read from the option list built from the products. */
@@ -158,7 +187,7 @@ export const SECTIONS: SectionDef[] = [
         addLabel: L("Add a rebroyat versement", "Ajouter un rebroyat"),
         serverDerived: ["location_id"],
         columns: [
-          pick("product_id", L("Rebroyat item", "Article rebroyat"), "productsOrMp", true),
+          pick("product_id", L("Rebroyat item", "Article rebroyat"), "regrindItems", true),
           num("quantity", L("Quantity (t)", "Quantité (t)")),
         ],
       },
@@ -166,6 +195,11 @@ export const SECTIONS: SectionDef[] = [
         payloadKey: "runs",
         shape: "rows",
         addLabel: L("Add a run", "Ajouter une production"),
+        // What a run took in (semoule lines, dough, rebroyat used) is its share of the versements above,
+        // worked out by the server.
+        serverDerived: [
+          "semolina_lines", "dough_quantity", "regrind_input_quantity", "regrind_input_product_id", "raw_material_location_id",
+        ],
         columns: [
           pick("of_id", L("Work order", "OF"), "orders", true),
           { ...pick("mold_id", L("Mold", "Moule"), "molds"), optionsFor: moldsForOrder },
@@ -173,28 +207,12 @@ export const SECTIONS: SectionDef[] = [
           time("start_time", L("Start", "HD prod")),
           time("end_time", L("End", "HF prod")),
           int("production_minutes", L("Minutes run", "Minutes de marche")),
-          num("dough_quantity", L("Dough (t)", "Pâte (t)")),
           num("finished_product_quantity", L("Finished (t)", "Produit fini (t)")),
           num("regrind_quantity", L("Regrind made (kg)", "Rebroyat produit (kg)"), 1000),
-          pick("regrind_input_product_id", L("Regrind item", "Article rebroyat"), "productsOrMp"),
-          pick("raw_material_location_id", L("Regrind store", "Magasin rebroyat"), "locations"),
-          num("regrind_input_quantity", L("Regrind used (t)", "Rebroyat utilisé (t)")),
           num("water_percentage", L("Water %", "% eau")),
           num("humidity_percentage", L("Humidity %", "Humidité %")),
           num("semolina_flow_rate", L("Semoule flow (t/h)", "Débit semoule (t/h)")),
         ],
-        child: {
-          payloadKey: "semolina_lines",
-          title: L("Semoule", "Semoule"),
-          addLabel: L("Add a semoule line", "Ajouter une ligne de semoule"),
-          columns: [
-            pick("product_id", L("Quality", "Qualité"), "products"),
-            pick("location_id", L("Silo / store", "Silo / magasin"), "locations"),
-            int("bag_count", L("Bags", "Sacs")),
-            num("quantity", L("Quantity (t)", "Quantité (t)")),
-            text("lot_number", L("Lot", "Lot")),
-          ],
-        },
       },
     ],
   },
@@ -216,7 +234,7 @@ export const SECTIONS: SectionDef[] = [
         columns: [
           pick("category", L("Kind", "Type"), "wasteProduction", true),
           num("quantity", L("Quantity (kg)", "Quantité (kg)")),
-          pick("run_id", L("Run", "Production"), "runs"),
+          { ...pick("run_id", L("Run", "Production"), "runs"), emptyHint: SAVE_RUNS_FIRST },
           when("occurred_at", L("Time", "Heure")),
           text("lot_number", L("Lot", "N° lot")),
           text("note", L("Cause", "Cause")),
@@ -256,7 +274,7 @@ export const SECTIONS: SectionDef[] = [
           pick("downtime_type", L("Type", "Type"), "stopTypes"),
           pick("classification", L("System", "Système"), "classifications"),
           pick("motif", L("Reason", "Motif"), "motifs"),
-          pick("run_id", L("Run", "Production"), "runs"),
+          { ...pick("run_id", L("Run", "Production"), "runs"), emptyHint: SAVE_RUNS_FIRST },
           text("note", L("Breakdown", "Panne")),
           text("corrective_action", L("Corrective action", "Action corrective")),
         ],
@@ -378,7 +396,8 @@ export const SECTIONS: SectionDef[] = [
         addLabel: L("Add waste", "Ajouter un déchet"),
         columns: [
           when("occurred_at", L("Time", "Heure")),
-          pick("category", L("Kind", "Type"), "wastePacking", true),
+          { ...pick("category", L("Kind", "Type"), "wastePacking", true), fills: packingWasteItemFor },
+          { ...pick("product_id", L("Item", "Article"), "products"), optionsFor: packingWasteItems },
           num("quantity", L("Quantity (kg)", "Quantité (kg)")),
           text("note", L("Cause", "Cause")),
         ],
@@ -400,9 +419,9 @@ export const SECTIONS: SectionDef[] = [
         shape: "single",
         columns: [
           num("fuel_quantity", L("Fuel (l)", "Fuel (l)")),
-          pick("fuel_supplier_id", L("Fuel supplier", "Fournisseur fuel"), "partners"),
+          { ...pick("fuel_supplier_id", L("Fuel supplier", "Fournisseur fuel"), "fuelSuppliers"), emptyHint: NO_SUPPLIER },
           num("gasoil_quantity", L("Gasoil (l)", "Gasoil (l)")),
-          pick("gasoil_supplier_id", L("Gasoil supplier", "Fournisseur gasoil"), "partners"),
+          { ...pick("gasoil_supplier_id", L("Gasoil supplier", "Fournisseur gasoil"), "gasoilSuppliers"), emptyHint: NO_SUPPLIER },
           num("gasoil_flow_rate", L("Gasoil rate (l/h)", "Débit gasoil (l/h)")),
           num("generator_hours", L("Generator hours", "Heures groupe")),
           num("electricity_quantity", L("Electricity (kWh)", "Électricité (kWh)")),

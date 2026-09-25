@@ -178,7 +178,7 @@ def test_the_list_opens_on_yesterday_then_on_today_once_yesterday_is_released(db
 def test_releasing_moves_the_goods_to_the_products_own_store(db, env, stores):
     _validated_and_cleared(db, env)
     released = _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 120}]))
-    assert released["released"] == [{"product_id": env["pasta"], "quantity": 120, "to_location_id": stores["final"]}]
+    assert released["released"] == [{"product_id": env["pasta"], "quantity": 120, "to_location_id": stores["final"], "packed_on": DAY.isoformat()}]
     assert _on_hand(db, env["pasta"], stores["line"]) == 0
     assert _on_hand(db, env["pasta"], stores["final"]) == 120
     moved = db.execute(
@@ -379,6 +379,80 @@ def test_a_packing_row_whose_product_was_corrected_no_longer_counts_as_cleared(d
     assert isinstance(refused, Err)
     refused = _release(db, env, [{"product_id": env["semolina"], "quantity": 1}])
     assert isinstance(refused, Err)
+
+
+# ---- the backlog of earlier unreleased days ----------------------------------
+
+
+def test_the_backlog_lists_an_earlier_day_that_still_has_something_unreleased(db, env, stores):
+    today = DAY + datetime.timedelta(days=2)
+    _validated_and_cleared(db, env)  # packed on DAY, two days before today
+    opened = StockReleaseService(db).get_release_list(tenant_id=TENANT, day=None, today=today)
+    assert opened["day"] == today.isoformat()  # nothing packed on yesterday, so today opens
+    [backlog_day] = opened["backlog"]
+    assert backlog_day["day"] == DAY.isoformat()
+    [item] = backlog_day["items"]
+    assert item["product_id"] == env["pasta"] and item["releasable"] == 120
+
+
+def test_a_fully_released_earlier_day_drops_out_of_the_backlog(db, env, stores):
+    today = DAY + datetime.timedelta(days=2)
+    _validated_and_cleared(db, env)
+    _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 120}]))
+    opened = StockReleaseService(db).get_release_list(tenant_id=TENANT, day=None, today=today)
+    assert opened["backlog"] == []
+
+
+def test_the_backlog_excludes_the_day_already_shown_as_the_open_day(db, env, stores):
+    _validated_and_cleared(db, env)
+    listed = _list(db)  # opens directly on DAY
+    assert listed["day"] == DAY.isoformat()
+    assert listed["backlog"] == []  # DAY is not repeated as its own backlog
+
+
+def test_the_backlog_only_looks_back_within_its_window(db, env, stores):
+    today = DAY + datetime.timedelta(days=10)
+    _validated_and_cleared(db, env)  # ten days before today: past the lookback window
+    opened = StockReleaseService(db).get_release_list(tenant_id=TENANT, day=today, today=today)
+    assert opened["backlog"] == []
+
+
+def test_the_backlog_is_ordered_oldest_first(db, env, stores):
+    today = DAY + datetime.timedelta(days=5)
+    later = DAY + datetime.timedelta(days=2)
+    _validated_and_cleared(db, env, day=DAY)
+    _validated_and_cleared(db, env, day=later)
+    opened = StockReleaseService(db).get_release_list(tenant_id=TENANT, day=today, today=today)
+    days = [entry["day"] for entry in opened["backlog"]]
+    assert days == sorted(days)
+
+
+def test_a_backlog_item_can_be_released_alongside_the_open_days_own(db, env, stores):
+    today = DAY + datetime.timedelta(days=2)
+    _validated_and_cleared(db, env)  # packed on DAY
+    _validated_and_cleared(db, env, day=today)
+
+    released = _ok(StockReleaseService(db).release(
+        tenant_id=TENANT, actor_id=env["actor"], day=today,
+        items=[
+            {"product_id": env["pasta"], "quantity": 120},  # today's own, no packed_on given
+            {"product_id": env["pasta"], "quantity": 120, "packed_on": DAY},  # the backlog row
+        ],
+    ))
+    assert {(r["packed_on"], r["quantity"]) for r in released["released"]} == {(today.isoformat(), 120), (DAY.isoformat(), 120)}
+    assert _on_hand(db, env["pasta"], stores["final"]) == 240
+
+
+def test_a_backlog_release_is_checked_against_its_own_days_packed_and_qc_caps(db, env, stores):
+    today = DAY + datetime.timedelta(days=2)
+    shift_id = _submitted_shift(db, env, day=DAY)
+    _validate(db, env, shift_id)
+    _qc_report(db, env, shift_id, conforming=5)  # only 60 of the 120 packed on DAY are cleared
+    refused = StockReleaseService(db).release(
+        tenant_id=TENANT, actor_id=env["actor"], day=today,
+        items=[{"product_id": env["pasta"], "quantity": 61, "packed_on": DAY}],
+    )
+    assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
 
 
 def test_a_reversed_shifts_qc_verdict_clears_no_other_shifts_goods(db, env, stores):

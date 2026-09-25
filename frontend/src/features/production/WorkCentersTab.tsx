@@ -13,6 +13,7 @@ import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
+import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import {
@@ -44,6 +45,7 @@ const newWorkCenterSchema = z.object({
   code: z.string().min(1, "Required"),
   name: z.string().min(1, "Required"),
   hourly_rate: z.coerce.number().min(0, "Must be >= 0"),
+  line_type: z.enum(["production", "grinder"]),
 });
 type NewWorkCenterForm = z.infer<typeof newWorkCenterSchema>;
 
@@ -75,14 +77,14 @@ export function WorkCentersTab() {
     handleSubmit,
     reset,
     formState: { errors },
-  } = useForm<NewWorkCenterForm>({ resolver: zodResolver(newWorkCenterSchema), defaultValues: { hourly_rate: 0 } });
+  } = useForm<NewWorkCenterForm>({ resolver: zodResolver(newWorkCenterSchema), defaultValues: { hourly_rate: 0, line_type: "production" } });
 
   const createMutation = useMutation({
     mutationFn: (input: NewWorkCenterForm) => createWorkCenter(token, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: WORK_CENTERS_QUERY_KEY });
       setDialogOpen(false);
-      reset({ hourly_rate: 0 });
+      reset({ hourly_rate: 0, line_type: "production" });
       toast.success(t("production.workCenters.created"));
     },
     onError: (error) => {
@@ -96,7 +98,7 @@ export function WorkCentersTab() {
       queryClient.invalidateQueries({ queryKey: WORK_CENTERS_QUERY_KEY });
       setDialogOpen(false);
       setEditingWorkCenter(null);
-      reset({ hourly_rate: 0 });
+      reset({ hourly_rate: 0, line_type: "production" });
       toast.success(t("production.workCenters.updated"));
     },
     onError: (error) => {
@@ -106,13 +108,13 @@ export function WorkCentersTab() {
 
   function openCreateDialog() {
     setEditingWorkCenter(null);
-    reset({ code: "", name: "", hourly_rate: 0 });
+    reset({ code: "", name: "", hourly_rate: 0, line_type: "production" });
     setDialogOpen(true);
   }
 
   function openEditDialog(workCenter: WorkCenter) {
     setEditingWorkCenter(workCenter);
-    reset({ code: workCenter.code, name: workCenter.name, hourly_rate: workCenter.hourly_rate });
+    reset({ code: workCenter.code, name: workCenter.name, hourly_rate: workCenter.hourly_rate, line_type: workCenter.line_type });
     setDialogOpen(true);
   }
 
@@ -152,6 +154,7 @@ export function WorkCentersTab() {
     { key: "code", kind: "text", getValue: (wc) => wc.code },
     { key: "name", kind: "text", getValue: (wc) => wc.name },
     { key: "hourly_rate", kind: "range", getValue: (wc) => wc.hourly_rate },
+    { key: "line_type", kind: "text", getValue: (wc) => t(`production.workCenters.lineType.${wc.line_type}`) },
   ];
   const columnFilters = useColumnFilters(columnFilterFields);
   const filteredWorkCenters = columnFilters.apply(statusFilteredWorkCenters);
@@ -182,6 +185,23 @@ export function WorkCentersTab() {
         placeholder: t("production.workCenters.column.name"),
       },
       sortValue: (wc) => wc.name,
+    },
+    {
+      key: "line_type",
+      header: t("production.workCenters.column.lineType"),
+      defaultWidth: 150,
+      cell: (wc) => (
+        <Badge variant={wc.line_type === "grinder" ? "accent" : "primary"}>
+          {t(`production.workCenters.lineType.${wc.line_type}`)}
+        </Badge>
+      ),
+      filterCell: {
+        type: "text",
+        value: columnFilters.text.line_type ?? "",
+        onChange: (v) => columnFilters.setTextValue("line_type", v),
+        placeholder: t("production.workCenters.column.lineType"),
+      },
+      sortValue: (wc) => wc.line_type,
     },
     {
       key: "hourly_rate",
@@ -356,6 +376,14 @@ export function WorkCentersTab() {
                   <Label htmlFor="name">{t("production.workCenters.field.name")}</Label>
                   <Input id="name" placeholder="e.g. Extruder Line 1" {...register("name")} />
                   {errors.name && <p className="text-sm text-destructive">{errors.name.message}</p>}
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="line_type">{t("production.workCenters.field.lineType")}</Label>
+                  <Select id="line_type" {...register("line_type")}>
+                    <option value="production">{t("production.workCenters.lineType.production")}</option>
+                    <option value="grinder">{t("production.workCenters.lineType.grinder")}</option>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">{t("production.workCenters.field.lineTypeHint")}</p>
                 </div>
                 {(editingWorkCenter ? updateMutation.isError : createMutation.isError) && (
                   <p className="text-sm text-destructive">

@@ -20,8 +20,8 @@ class AttendanceService:
 
     def record(self, *, tenant_id: str, actor_id: str, employee_id: str, attendance_date: datetime.date, status: str, hours_worked: float, note: str | None) -> Result[dict]:
         if status not in {"present", "absent", "late", "remote", "half_day", "leave"} or hours_worked < 0:
-            return Err("INVALID_ATTENDANCE", "invalid attendance status or hours")
-        if self.connection.execute("SELECT 1 FROM hr.employees WHERE id=%s AND tenant_id=%s", (employee_id, tenant_id)).fetchone() is None: return Err("NOT_FOUND", "employee not found")
+            return Err("INVALID_ATTENDANCE", "invalid attendance status or hours", "statut de présence ou heures invalides")
+        if self.connection.execute("SELECT 1 FROM hr.employees WHERE id=%s AND tenant_id=%s", (employee_id, tenant_id)).fetchone() is None: return Err("NOT_FOUND", "employee not found", "employé introuvable")
         record_id = str(ULID())
         self.connection.execute("INSERT INTO hr.attendance_records (id,tenant_id,employee_id,attendance_date,status,hours_worked,note) VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (tenant_id,employee_id,attendance_date) DO UPDATE SET status=EXCLUDED.status,hours_worked=EXCLUDED.hours_worked,note=EXCLUDED.note", (record_id,tenant_id,employee_id,attendance_date,status,hours_worked,note))
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="attendance.recorded", entity_type="attendance", entity_id=f"{employee_id}:{attendance_date.isoformat()}", payload={"employee_id":employee_id,"date":attendance_date.isoformat(),"status":status})
@@ -42,10 +42,14 @@ class PayrollService:
         return [{"id":r[0],"payroll_run_id":r[1],"period_month":r[2].isoformat(),"employee_id":r[3],"employee_name":f"{r[4]} {r[5]}","base_salary":float(r[6]),"bonuses":float(r[7]),"deductions":float(r[8]),"taxes":float(r[9]),"net_salary":float(r[10]),"currency":r[11],"status":r[12]} for r in rows]
 
     def create_run(self, *, tenant_id: str, actor_id: str, period_month: datetime.date, bonuses: float, deductions: float, taxes: float) -> Result[dict]:
-        if period_month.day != 1 or min(bonuses, deductions, taxes) < 0: return Err("INVALID_PAYROLL", "payroll period must be the first day of a month and amounts cannot be negative")
+        if period_month.day != 1 or min(bonuses, deductions, taxes) < 0: return Err(
+            "INVALID_PAYROLL",
+            "payroll period must be the first day of a month and amounts cannot be negative",
+            "la période de paie doit être le premier jour d'un mois et les montants ne peuvent pas être négatifs",
+        )
         run_id = str(ULID())
         try: self.connection.execute("INSERT INTO hr.payroll_runs (id,tenant_id,period_month,status) VALUES (%s,%s,%s,'calculated')", (run_id,tenant_id,period_month))
-        except psycopg.errors.UniqueViolation: return Err("DUPLICATE_PERIOD", "a payroll run already exists for this month")
+        except psycopg.errors.UniqueViolation: return Err("DUPLICATE_PERIOD", "a payroll run already exists for this month", "une paie existe déjà pour ce mois")
         employees = self.connection.execute("SELECT e.id,COALESCE(c.salary,0),COALESCE(c.currency,'USD') FROM hr.employees e LEFT JOIN LATERAL (SELECT salary,currency FROM hr.contracts WHERE employee_id=e.id AND tenant_id=e.tenant_id AND status='active' ORDER BY start_date DESC LIMIT 1) c ON TRUE WHERE e.tenant_id=%s AND e.status != 'inactive'", (tenant_id,)).fetchall()
         for employee_id, salary, currency in employees:
             net = float(salary) + bonuses - deductions - taxes
@@ -55,12 +59,12 @@ class PayrollService:
 
     def update_payslip(self, *, tenant_id: str, actor_id: str, payslip_id: str, bonuses: float | None = None, deductions: float | None = None, taxes: float | None = None) -> Result[dict]:
         row = self.connection.execute("SELECT base_salary,bonuses,deductions,taxes,currency FROM hr.payroll_items WHERE id=%s AND tenant_id=%s FOR UPDATE", (payslip_id, tenant_id)).fetchone()
-        if row is None: return Err("NOT_FOUND", "payslip not found")
+        if row is None: return Err("NOT_FOUND", "payslip not found", "bulletin de paie introuvable")
         base_salary, current_bonuses, current_deductions, current_taxes, currency = row
         merged_bonuses = bonuses if bonuses is not None else float(current_bonuses)
         merged_deductions = deductions if deductions is not None else float(current_deductions)
         merged_taxes = taxes if taxes is not None else float(current_taxes)
-        if min(merged_bonuses, merged_deductions, merged_taxes) < 0: return Err("INVALID_PAYROLL", "amounts cannot be negative")
+        if min(merged_bonuses, merged_deductions, merged_taxes) < 0: return Err("INVALID_PAYROLL", "amounts cannot be negative", "les montants ne peuvent pas être négatifs")
         net = float(base_salary) + merged_bonuses - merged_deductions - merged_taxes
         self.connection.execute("UPDATE hr.payroll_items SET bonuses=%s,deductions=%s,taxes=%s,net_salary=%s WHERE id=%s", (merged_bonuses, merged_deductions, merged_taxes, net, payslip_id))
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="payslip.updated", entity_type="payslip", entity_id=payslip_id, payload={"bonuses":merged_bonuses,"deductions":merged_deductions,"taxes":merged_taxes,"net_salary":net})

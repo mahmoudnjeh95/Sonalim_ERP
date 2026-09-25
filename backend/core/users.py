@@ -130,7 +130,10 @@ def _assert_same_tenant(connection: psycopg.Connection, *, tenant_id: str, user_
         (user_id, tenant_id),
     ).fetchone()
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"user {user_id} not found"})
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND,
+            {"code": "NOT_FOUND", "message": f"user {user_id} not found", "message_fr": f"utilisateur {user_id} introuvable"},
+        )
 
 
 @router.post("/users/{user_id}/permissions", status_code=status.HTTP_201_CREATED)
@@ -143,7 +146,11 @@ def grant_permission(
     if body.permission not in known:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
-            {"code": "UNKNOWN_PERMISSION", "message": f"{body.permission} is not a declared permission"},
+            {
+                "code": "UNKNOWN_PERMISSION",
+                "message": f"{body.permission} is not a declared permission",
+                "message_fr": f"{body.permission} n'est pas une permission déclarée",
+            },
         )
 
     with get_connection() as connection:
@@ -178,7 +185,11 @@ def revoke_permission(
     if user_id == tenant.user_id and permission == MANAGE_PERMISSIONS:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
-            {"code": "SELF_LOCKOUT", "message": "cannot revoke your own core.manage_permissions"},
+            {
+                "code": "SELF_LOCKOUT",
+                "message": "cannot revoke your own core.manage_permissions",
+                "message_fr": "vous ne pouvez pas retirer votre propre core.manage_permissions",
+            },
         )
 
     with get_connection() as connection:

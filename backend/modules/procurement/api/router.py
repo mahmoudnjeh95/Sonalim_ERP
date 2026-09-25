@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from core.db import get_connection
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.procurement.api.service import PurchaseOrderService
 from modules.procurement.domain.entities import (
@@ -184,7 +184,7 @@ def create_purchase_order(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _order_response(result.value)
 
@@ -231,7 +231,7 @@ def add_purchase_order_line(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _line_response(result.value)
 
@@ -241,7 +241,7 @@ def _do_order_transition(service: PurchaseOrderService, connection, *, tenant_id
     result = method(tenant_id=tenant_id, actor_id=actor_id, order_id=order_id)
     if isinstance(result, Err):
         connection.rollback()
-        raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+        raise HTTPException(_err_status(result.code), err_detail(result))
     connection.commit()
     return _order_response(result.value)
 
@@ -312,7 +312,7 @@ def update_purchase_order(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _order_response(result.value)
 
@@ -351,7 +351,7 @@ def create_purchase_order_receipt(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _receipt_response(result.value)
 
@@ -374,7 +374,14 @@ def get_purchase_order_receipt(
         service = PurchaseOrderService(connection)
         receipt = service.get_receipt(tenant_id=tenant.tenant_id, receipt_id=receipt_id)
         if receipt is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": f"purchase order receipt {receipt_id} not found"})
+            raise HTTPException(
+                status.HTTP_404_NOT_FOUND,
+                {
+                    "code": "NOT_FOUND",
+                    "message": f"purchase order receipt {receipt_id} not found",
+                    "message_fr": f"réception de commande d'achat {receipt_id} introuvable",
+                },
+            )
     return _receipt_response(receipt)
 
 
@@ -401,7 +408,7 @@ def confirm_purchase_order_receipt_endpoint(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(_err_status(result.code), {"code": result.code, "message": result.message})
+            raise HTTPException(_err_status(result.code), err_detail(result))
         connection.commit()
     return _order_response(result.value)
 

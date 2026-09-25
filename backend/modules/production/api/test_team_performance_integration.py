@@ -16,9 +16,12 @@ from modules.production.api.product_classification_service import ProductClassif
 from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.regrind_service import RegrindDefaultsService
 from modules.production.api.service import WorkOrderService
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
 from modules.production.api.team_performance_service import TeamPerformanceService
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
 from modules.production.domain.production_report import DailyReportDetail, DowntimeLine, SemolinaLine, WasteLine
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-team-performance"
@@ -67,7 +70,7 @@ def _validated_report(
     downtime_reason=None, water_percentage=0, semolina_flow_rate=0, downtime_lines=None,
     waste_lines=(), regrind_quantity=0, recipe_id=None,
     semolina_product_id=None, regrind_input_quantity=0, regrind_input_product_id=None,
-    equipment_id=None,
+    equipment_id=None, regrind_product_id=...,
 ):
     orders = WorkOrderService(db)
     created = orders.create_work_order(
@@ -104,7 +107,9 @@ def _validated_report(
         semolina_flow_rate=semolina_flow_rate,
         waste_lines=waste_lines,
         regrind_quantity=regrind_quantity,
-        regrind_product_id=env["product"] if regrind_quantity else None,
+        regrind_product_id=(
+            (env["product"] if regrind_quantity else None) if regrind_product_id is ... else regrind_product_id
+        ),
         regrind_input_quantity=regrind_input_quantity,
         regrind_input_product_id=regrind_input_product_id,
     )
@@ -172,6 +177,39 @@ def test_net_semoule_waste_is_daily_waste_net_of_declared_regrind(db, env):
     assert row["daily_waste_by_category"] == {"press": 30.0, "kneading": 10.0}
     assert row["regrind_quantity"] == 25.0
     assert row["net_semoule_waste"] == 15.0
+
+
+def test_net_semoule_waste_nets_rebroyat_in_tonnes_as_kilos(db, env):
+    """`regrind_quantity` is counted in the rebroyat product's own unit —
+    tonnes here, same as OfConsolidationService's fixture — while
+    `net_semoule_waste` nets against the daily déchet's raw kilos. Netting the
+    native tonnes figure straight against kilos would read 150 kg of rebroyat
+    as cancelling 150 t of déchet."""
+    tonne_uom, rebroyat = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (tonne_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'TP-REB-T', 'Rebroyat', %s)",
+        (rebroyat, TENANT, tonne_uom),
+    )
+    RegrindDefaultsService(db).set_default(tenant_id=TENANT, actor_id=env["actor"], output_product_id=rebroyat)
+
+    _validated_report(
+        db, env, team="A", report_date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, production_minutes=400, downtime_minutes=0,
+        waste_lines=(WasteLine(category="press", product_id=env["product"], quantity=200),),
+        regrind_quantity=0.15, regrind_product_id=None,
+    )
+
+    rows = TeamPerformanceService(db).list_team_performance(tenant_id=TENANT, grain="week")
+    row = next(r for r in rows if r["team"] == "A")
+
+    assert row["regrind_quantity"] == 0.15
+    assert row["regrind_quantity_kg"] == pytest.approx(150)
+    assert row["net_semoule_waste"] == pytest.approx(200 - 150)
 
 
 def test_daily_waste_by_category_is_not_restated_against_the_item_unit(db, env):
@@ -370,11 +408,43 @@ def test_downtime_breakdown_carries_team_and_machine_per_row(db, env):
     assert team_b_row["minutes"] == 10
 
 
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
+
+
+def _validated_shift(db, env, *, team, report_date, semolina_quantity, water_percentage=0, semolina_flow_rate=0, recipe_id=None) -> str:
+    """A new OF and one validated shift of `team` running it: the recipe correlation reads shift runs."""
+    orders = WorkOrderService(db)
+    of_id = _ok(orders.create_work_order(
+        tenant_id=TENANT, actor_id=env["actor"], product_id=env["product"], planned_quantity=1000,
+        work_center_id=env["work_center"], start_date=report_date, recipe_id=recipe_id,
+    )).id
+    _ok(orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=of_id))
+    shifts = ShiftReportService(db)
+    shift_id = _ok(shifts.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=report_date,
+        shift="morning", team=team,
+    ))["id"]
+    run = {
+        "of_id": of_id, "equipment_id": env["equipment"], "start_time": "07:00", "end_time": "14:00",
+        "production_minutes": 400, "finished_product_quantity": 900, "raw_material_location_id": env["location"],
+        "water_percentage": water_percentage, "semolina_flow_rate": semolina_flow_rate,
+    }
+    versements = [{"product_id": env["product"], "quantity": semolina_quantity, "location_id": env["location"]}]
+    _ok(shifts.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs",
+                            payload={"runs": [run], "versements": versements}))
+    for key in SECTION_KEYS:
+        hand_in = shifts.submit_section if key == "runs" else shifts.declare_nothing
+        _ok(hand_in(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+    return of_id
+
+
 def test_recipe_correlation_pairs_shift_inputs_with_the_ofs_yield(db, env):
-    of_id = _validated_report(
+    of_id = _validated_shift(
         db, env, team="A", report_date=datetime.date(2026, 9, 1),
-        semolina_quantity=1000, production_minutes=400, downtime_minutes=0,
-        water_percentage=32, semolina_flow_rate=4.5,
+        semolina_quantity=1000, water_percentage=32, semolina_flow_rate=4.5,
     )
 
     rows = WorkOrderYieldService(db).list_recipe_correlation(tenant_id=TENANT)
@@ -387,10 +457,7 @@ def test_recipe_correlation_pairs_shift_inputs_with_the_ofs_yield(db, env):
 
 
 def test_recipe_correlation_skips_shifts_with_no_dosage_recorded(db, env):
-    _validated_report(
-        db, env, team="A", report_date=datetime.date(2026, 9, 1),
-        semolina_quantity=1000, production_minutes=400, downtime_minutes=0,
-    )
+    _validated_shift(db, env, team="A", report_date=datetime.date(2026, 9, 1), semolina_quantity=1000)
     rows = WorkOrderYieldService(db).list_recipe_correlation(tenant_id=TENANT)
     assert rows == []
 
@@ -425,10 +492,9 @@ def test_recipe_correlation_carries_the_recipes_water_target_range(db, env):
         (str(ULID()), recipe_id, TENANT, water_product),
     )
 
-    _validated_report(
+    _validated_shift(
         db, env, team="A", report_date=datetime.date(2026, 9, 1),
-        semolina_quantity=1000, production_minutes=400, downtime_minutes=0,
-        water_percentage=35, semolina_flow_rate=4.5, recipe_id=recipe_id,
+        semolina_quantity=1000, water_percentage=35, semolina_flow_rate=4.5, recipe_id=recipe_id,
     )
 
     rows = WorkOrderYieldService(db).list_recipe_correlation(tenant_id=TENANT)

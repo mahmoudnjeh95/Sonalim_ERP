@@ -7,7 +7,9 @@ import { z } from "zod";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
+import { Select } from "../../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import type { TranslationKey } from "../../lib/i18n";
 import type { UnitOfMeasure, Location } from "../warehouse/api";
 
@@ -25,6 +27,12 @@ export const productWizardSchema = z.object({
   product_family: z.string().optional(),
   uom_id: z.string().min(1, "Required"),
   description: z.string().optional(),
+  // Where the product sits in the plant's flow. Stored by the production
+  // module (Production > Product classifications), not on the product row,
+  // but asked for here so a product is classified the day it is created
+  // instead of showing up in every dropdown until someone remembers to.
+  category: blankToUndefined(z.enum(["raw_material", "semi_finished", "packaging_component", "finished_good"]).optional()),
+  packaging_kind: blankToUndefined(z.enum(["film", "carton", "bobine", "scotch", "ruban"]).optional()),
 
   // Step 2: Pricing & Weight
   net_weight_grams: blankToUndefined(z.coerce.number().positive().optional()),
@@ -63,6 +71,8 @@ export const WIZARD_EMPTY_DEFAULTS: ProductWizardForm = {
   product_family: "",
   uom_id: "",
   description: "",
+  category: undefined,
+  packaging_kind: undefined,
   net_weight_grams: undefined,
   selling_price: undefined,
   min_selling_price: undefined,
@@ -93,12 +103,14 @@ interface ProductWizardProps {
   locations: Location[];
   onSubmit: (data: ProductWizardForm) => void;
   isLoading?: boolean;
+  /** Whether the current user may classify products (production's permission). Hides the category step otherwise. */
+  canClassify?: boolean;
   t: TFunc;
 }
 
 type Step = 1 | 2 | 3 | 4;
 
-export function ProductWizard({ open, onOpenChange, uoms, locations, onSubmit, isLoading = false, t }: ProductWizardProps) {
+export function ProductWizard({ open, onOpenChange, uoms, locations, onSubmit, isLoading = false, canClassify = true, t }: ProductWizardProps) {
   const [currentStep, setCurrentStep] = useState<Step>(1);
   const form = useForm<ProductWizardForm>({
     resolver: zodResolver(productWizardSchema),
@@ -162,7 +174,7 @@ export function ProductWizard({ open, onOpenChange, uoms, locations, onSubmit, i
               exit={{ opacity: 0, x: -12 }}
               transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
             >
-              {currentStep === 1 && <Step1Identity form={form} uoms={uoms} t={t} />}
+              {currentStep === 1 && <Step1Identity form={form} uoms={uoms} canClassify={canClassify} t={t} />}
               {currentStep === 2 && <Step2Pricing form={form} t={t} />}
               {currentStep === 3 && <Step3Packaging form={form} t={t} />}
               {currentStep === 4 && <Step4Settings form={form} locations={locations} t={t} />}
@@ -195,7 +207,7 @@ export function ProductWizard({ open, onOpenChange, uoms, locations, onSubmit, i
 function getFieldsForStep(step: Step): (keyof ProductWizardForm)[] {
   switch (step) {
     case 1:
-      return ["sku", "name", "product_type", "product_family", "uom_id", "description"];
+      return ["sku", "name", "product_type", "product_family", "uom_id", "description", "category", "packaging_kind"];
     case 2:
       return ["net_weight_grams", "selling_price", "min_selling_price", "purchase_price", "tax_rate"];
     case 3:
@@ -211,7 +223,17 @@ function getFieldsForStep(step: Step): (keyof ProductWizardForm)[] {
 // Step Components
 // ============================================================================
 
-function Step1Identity({ form, uoms, t }: { form: UseFormReturn<ProductWizardForm>; uoms: UnitOfMeasure[]; t: TFunc }) {
+function Step1Identity({
+  form,
+  uoms,
+  canClassify,
+  t,
+}: {
+  form: UseFormReturn<ProductWizardForm>;
+  uoms: UnitOfMeasure[];
+  canClassify: boolean;
+  t: TFunc;
+}) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-2 gap-4">
@@ -271,6 +293,8 @@ function Step1Identity({ form, uoms, t }: { form: UseFormReturn<ProductWizardFor
         </div>
       </div>
 
+      {canClassify && <ClassificationFields form={form} idPrefix="wizard" t={t} />}
+
       <div>
         <Label htmlFor="product_family">{t("products.field.family")} — {t("common.optional")}</Label>
         <Input
@@ -288,6 +312,57 @@ function Step1Identity({ form, uoms, t }: { form: UseFormReturn<ProductWizardFor
           {...form.register("description")}
         />
       </div>
+    </div>
+  );
+}
+
+export const PRODUCT_CATEGORY_VALUES = ["raw_material", "packaging_component", "semi_finished", "finished_good"] as const;
+export const PACKAGING_KIND_VALUES = ["film", "carton", "bobine", "scotch", "ruban"] as const;
+
+/**
+ * Category + packaging kind. Shared by the creation wizard and the edit
+ * dialog so both write the same classification. The packaging kind only
+ * makes sense for a packaging component and is hidden otherwise.
+ */
+export function ClassificationFields({
+  form,
+  idPrefix,
+  t,
+}: {
+  form: Pick<UseFormReturn<ProductWizardForm>, "register" | "watch" | "formState">;
+  idPrefix: string;
+  t: TFunc;
+}) {
+  const category = form.watch("category");
+  return (
+    <div className="grid grid-cols-2 gap-4">
+      <div>
+        <Label htmlFor={`${idPrefix}_category`} className="flex items-center gap-1.5">
+          {t("products.field.category")}
+          <HelpTooltip text={t("products.help.category")} />
+        </Label>
+        <Select id={`${idPrefix}_category`} {...form.register("category")}>
+          <option value="">{t("products.catalog.unclassified")}</option>
+          {PRODUCT_CATEGORY_VALUES.map((value) => (
+            <option key={value} value={value}>
+              {t(`production.classifications.category.${value}` as TranslationKey)}
+            </option>
+          ))}
+        </Select>
+      </div>
+      {category === "packaging_component" && (
+        <div>
+          <Label htmlFor={`${idPrefix}_packaging_kind`}>{t("products.field.packagingKind")}</Label>
+          <Select id={`${idPrefix}_packaging_kind`} {...form.register("packaging_kind")}>
+            <option value="">—</option>
+            {PACKAGING_KIND_VALUES.map((value) => (
+              <option key={value} value={value}>
+                {t(`production.classifications.packagingKind.${value}` as TranslationKey)}
+              </option>
+            ))}
+          </Select>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,7 +9,7 @@ from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.entities import Currency
 from core.domain.exchange_rate import BASE_CURRENCY, ExchangeRate
-from core.domain.result import Err
+from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 
 router = APIRouter(prefix="/core/exchange-rates", tags=["core.exchange-rates"])
@@ -62,7 +62,7 @@ def create_currency(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return _currency_response(result.value)
 
@@ -84,7 +84,7 @@ def record_exchange_rate(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
         connection.commit()
     return _rate_response(result.value)
 
@@ -111,7 +111,7 @@ def convert_amount(
         service = CoreService(connection)
         result = service.convert_amount(tenant_id=tenant.tenant_id, amount=amount, currency_code=currency_code, as_of_date=as_of)
         if isinstance(result, Err):
-            raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": result.code, "message": result.message})
+            raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
     base_amount, rate_used = result.value
     return {
         "amount": amount,

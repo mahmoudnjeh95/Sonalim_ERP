@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime
 from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 
 import psycopg
 
@@ -18,9 +19,37 @@ _VALIDATED = ("validated",)
 _WITH_PENDING = ("validated", "submitted", "draft")
 
 # A report with no shift filed falls in this column rather than vanishing; so does one
-# whose order has no product to name a recap column after.
+# whose order has no product to name a recap column after, or that names no lot.
 NO_SHIFT = ""
 NO_PRODUCT = ""
+NO_LOT = ""
+
+# How a sheet's columns can be chosen. A day is read per shift (the plant's own
+# sheet) or per lot; a month per product (the plant's recap) or per lot.
+DAY_GROUPINGS = ("shift", "lot")
+MONTH_GROUPINGS = ("product", "lot")
+
+
+@dataclass
+class LoadedSheet:
+    """Everything a line reported over a range, before any column is chosen.
+
+    The same load is laid out several ways -- a column per shift for a day, per
+    product or per lot for a month, and one day sheet per day in the month's
+    workbook -- so the SQL runs once and `assemble` does the grouping.
+    """
+
+    reports: list[dict]
+    daily_facts: dict[str, DailyFact] = field(default_factory=dict)
+    packing_facts: dict[str, PackingFact] = field(default_factory=dict)
+    packaging_units: dict[str, str | None] = field(default_factory=dict)
+    products: dict[str, dict] = field(default_factory=dict)
+    # report id -> (motif, downtime type, classification, minutes), one per arrêt line
+    stops: dict[str, list[tuple[str | None, str | None, str | None, float]]] = field(default_factory=dict)
+    ofs: dict[str, dict] = field(default_factory=dict)
+
+    def facts_of(self, report_id: str) -> DailyFact | PackingFact | None:
+        return self.daily_facts.get(report_id) or self.packing_facts.get(report_id)
 
 
 class DaySheetService:
@@ -45,21 +74,49 @@ class DaySheetService:
     def _reports(
         self, tenant_id: str, date_from: datetime.date, date_to: datetime.date, work_center_id: str
     ) -> list[dict]:
+        """Every report of the range, with the lot it was filed under.
+
+        A packing report names its lot itself. A production run's lot is on the
+        shift's run row (the run and its report share an id); a run converted from
+        the old Daily form has none, so it borrows the lot of the packing that drew
+        from it, which is the lot its pasta ended up in.
+
+        The product is the one packed, not the order's: one order can run several
+        products. A run takes the product of the packing that drew from it, like its
+        lot; either falls back to the order's product when nothing names one.
+        """
         rows = self._connection.execute(
             """
-            SELECT r.id, r.report_type, r.shift, r.team, r.status, r.of_id, o.product_id
+            SELECT r.id, r.report_type, r.shift, r.team, r.status, r.of_id,
+                   COALESCE(c.product_id, o.product_id), r.report_date,
+                   c.lot_number, c.daily_report_id, sr.lot_number
             FROM production.production_reports r
             LEFT JOIN production.work_orders o ON o.id = r.of_id AND o.tenant_id = r.tenant_id
+            LEFT JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+            LEFT JOIN production.shift_runs sr ON sr.id = r.id AND sr.tenant_id = r.tenant_id
             WHERE r.tenant_id = %s AND r.report_date BETWEEN %s AND %s
               AND r.work_center_id = %s AND r.status = ANY(%s)
-            ORDER BY r.created_at, r.id
+            ORDER BY r.report_date, r.created_at, r.id
             """,
             (tenant_id, date_from, date_to, work_center_id, list(_WITH_PENDING)),
         ).fetchall()
-        return [
-            {"id": i, "type": kind, "shift": shift, "team": team, "status": state, "of_id": of_id, "of_product_id": product_id}
-            for i, kind, shift, team, state, of_id, product_id in rows
+        reports = [
+            {
+                "id": i, "type": kind, "shift": shift, "team": team, "status": state, "of_id": of_id,
+                "product_id": product_id, "date": date, "lot": (packing_lot if kind == "conditionnement" else run_lot) or None,
+                "_daily_report_id": daily_report_id,
+            }
+            for i, kind, shift, team, state, of_id, product_id, date, packing_lot, daily_report_id, run_lot in rows
         ]
+        packings = [r for r in reports if r["type"] == "conditionnement" and r["_daily_report_id"]]
+        borrowed_lot = {r["_daily_report_id"]: r["lot"] for r in packings if r["lot"]}
+        borrowed_product = {r["_daily_report_id"]: r["product_id"] for r in packings if r["product_id"]}
+        for r in reports:
+            if r["type"] == "daily":
+                r["lot"] = r["lot"] or borrowed_lot.get(r["id"])
+                r["product_id"] = borrowed_product.get(r["id"]) or r["product_id"]
+            del r["_daily_report_id"]
+        return reports
 
     def _products(self, tenant_id: str, product_ids: set[str]) -> dict[str, dict]:
         """Name, the unit's category and ratio to its base unit (kg, m, ea...), and the packaging."""
@@ -100,7 +157,7 @@ class DaySheetService:
 
     # -- the sheet ----------------------------------------------------------
 
-    def _present_pending_shifts(
+    def present_pending_shifts(
         self, tenant_id: str, date_from: datetime.date, date_to: datetime.date, work_center_id: str
     ) -> None:
         """Lay every shift still being filled in, or waiting for its validator, out as old-style
@@ -134,13 +191,14 @@ class DaySheetService:
     ) -> dict:
         """The rows and per-column report counts for a range, columns chosen by `column_of`."""
         with self._connection.transaction(force_rollback=True):
-            self._present_pending_shifts(tenant_id, date_from, date_to, work_center_id)
-            return self._read_sheet(
+            self.present_pending_shifts(tenant_id, date_from, date_to, work_center_id)
+            loaded = self.load(
                 tenant_id=tenant_id, date_from=date_from, date_to=date_to, work_center_id=work_center_id,
-                include_pending=include_pending, column_of=column_of, yield_by_column=yield_by_column,
+                include_pending=include_pending,
             )
+        return assemble(loaded, column_of=column_of, yield_by_column=yield_by_column)
 
-    def _read_sheet(
+    def load(
         self,
         *,
         tenant_id: str,
@@ -148,13 +206,15 @@ class DaySheetService:
         date_to: datetime.date,
         work_center_id: str,
         include_pending: bool,
-        column_of: Callable[[dict], str],
-        yield_by_column: bool = False,
-    ) -> dict:
+    ) -> LoadedSheet:
+        """Read a range's reports and restate every figure into the sheet's units.
+
+        The caller decides whether shifts still being filled in are to be read first
+        (`present_pending_shifts`, inside a savepoint it rolls back).
+        """
         reports = self._reports(tenant_id, date_from, date_to, work_center_id)
         shown = _WITH_PENDING if include_pending else _VALIDATED
         figures = [r for r in reports if r["status"] in shown]
-        column = {r["id"]: column_of(r) for r in reports}
         by_id = {r["id"]: r for r in figures}
         daily_ids = [r["id"] for r in figures if r["type"] == "daily"]
         packing_ids = [r["id"] for r in figures if r["type"] == "conditionnement"]
@@ -173,9 +233,9 @@ class DaySheetService:
             tenant_id, daily_ids,
         )
         downtime_rows = self._rows_for(
-            "SELECT report_id, SUM(minutes) FROM production.report_downtime_lines "
-            "WHERE tenant_id = %s AND report_id = ANY(%s) GROUP BY report_id",
-            tenant_id, daily_ids,
+            "SELECT report_id, motif, downtime_type, classification, minutes FROM production.report_downtime_lines "
+            "WHERE tenant_id = %s AND report_id = ANY(%s) ORDER BY report_id, line_order",
+            tenant_id, daily_ids + packing_ids,
         )
         waste_rows = self._rows_for(
             "SELECT report_id, category, product_id, quantity FROM production.report_waste_lines "
@@ -192,7 +252,7 @@ class DaySheetService:
             tenant_id, packing_ids,
         )
 
-        wanted: set[str] = {r["of_product_id"] for r in figures if r["of_product_id"]}
+        wanted: set[str] = {r["product_id"] for r in reports if r["product_id"]}
         wanted |= {row[1] for row in semolina_rows if row[1]} | {row[2] for row in waste_rows if row[2]}
         wanted |= {row[8] for row in daily_rows if row[8]}
         for row in packing_rows:
@@ -223,7 +283,12 @@ class DaySheetService:
             ratio = products.get(product_id or "", {}).get("ratio")
             if ratio and report_id not in semolina_ratio:
                 semolina_ratio[report_id] = ratio
-        downtime = {report_id: float(minutes) for report_id, minutes in downtime_rows}
+        stops: dict[str, list[tuple[str | None, str | None, str | None, float]]] = {}
+        downtime: dict[str, float] = {}
+        for report_id, motif, downtime_type, classification, minutes in downtime_rows:
+            stops.setdefault(report_id, []).append((motif, downtime_type, classification, float(minutes or 0)))
+            if by_id[report_id]["type"] == "daily":
+                downtime[report_id] = downtime.get(report_id, 0.0) + float(minutes or 0)
         daily_waste: dict[str, list[tuple[str, float]]] = {}
         packing_waste: dict[str, list[tuple[str, str | None, str | None, float, str | None]]] = {}
         for report_id, category, product_id, quantity in waste_rows:
@@ -243,34 +308,31 @@ class DaySheetService:
                 name = products.get(product_id or "", {}).get("name")
                 packing_waste.setdefault(report_id, []).append((category, product_id, name, amount, unit))
 
-        daily_facts: list[DailyFact] = []
+        daily_facts: dict[str, DailyFact] = {}
         for report_id, water, minutes, fuel, gasoil, electricity, generator, regrind, regrind_product in daily_rows:
             regrind_ratio = products.get(regrind_product or "", {}).get("ratio")
             # Rebroyat with no product to say its unit is taken to be in the same unit as
             # the semoule poured with it -- the assumption every consolidation here makes.
             ratio = regrind_ratio or semolina_ratio.get(report_id) or KG_PER_TONNE
-            daily_facts.append(
-                DailyFact(
-                    column=column[report_id],
-                    water_l=float(water or 0),
-                    production_minutes=float(minutes or 0),
-                    downtime_minutes=downtime.get(report_id, 0.0),
-                    regrind_t=float(regrind or 0) * ratio / KG_PER_TONNE,
-                    fuel_l=float(fuel or 0),
-                    gasoil_l=float(gasoil or 0),
-                    electricity_kwh=float(electricity or 0),
-                    generator_hours=float(generator or 0),
-                    semolina=tuple(semolina.get(report_id, ())),
-                    waste_kg=tuple(daily_waste.get(report_id, ())),
-                )
+            daily_facts[report_id] = DailyFact(
+                column="",
+                water_l=float(water or 0),
+                production_minutes=float(minutes or 0),
+                downtime_minutes=downtime.get(report_id, 0.0),
+                regrind_t=float(regrind or 0) * ratio / KG_PER_TONNE,
+                fuel_l=float(fuel or 0),
+                gasoil_l=float(gasoil or 0),
+                electricity_kwh=float(electricity or 0),
+                generator_hours=float(generator or 0),
+                semolina=tuple(semolina.get(report_id, ())),
+                waste_kg=tuple(daily_waste.get(report_id, ())),
             )
 
         # -- Conditionnement facts
         packaging_units: dict[str, str | None] = {}
-        packing_facts: list[PackingFact] = []
-        lots: dict[str, set[str]] = {}
+        packing_facts: dict[str, PackingFact] = {}
         for (
-            report_id, finished, packets, film, carton, waste_carton, scotch, ruban, lot,
+            report_id, finished, packets, film, carton, waste_carton, scotch, ruban, _lot,
             film_product, carton_product, scotch_product, ruban_product,
         ) in packing_rows:
             amounts: dict[str, float] = {}
@@ -285,14 +347,14 @@ class DaySheetService:
                 amounts[key], unit = in_base_unit(float(quantity or 0), product_id)
                 if unit and not packaging_units.get(unit_row):
                     packaging_units[unit_row] = unit
-            of_product = by_id[report_id]["of_product_id"]
+            packed = by_id[report_id]["product_id"]
             finished_t = float(finished or 0)
             if by_id[report_id]["status"] != "validated":
                 # The tonnage is settled from the count when a report is validated, so
                 # a report still being filled in carries whatever was last saved. Read
                 # its count the way validation will, or the sheet would show 0 t next
                 # to 24 000 packets.
-                product = products.get(of_product or "", {})
+                product = products.get(packed or "", {})
                 finished_t = tonnage_from_count(
                     net_weight_grams=product.get("net_weight_grams"),
                     packets_per_carton=product.get("packets_per_carton"),
@@ -300,66 +362,49 @@ class DaySheetService:
                     packets_counted=float(packets or 0),
                     waste_carton_quantity=float(waste_carton or 0),
                 )
-            packing_facts.append(
-                PackingFact(
-                    column=column[report_id],
-                    product_id=of_product,
-                    product_name=products.get(of_product or "", {}).get("name"),
-                    finished_t=finished_t,
-                    packets=float(packets or 0),
-                    film=amounts["film"],
-                    carton=amounts["carton"],
-                    waste_carton=amounts["waste_carton"],
-                    scotch=amounts["scotch"],
-                    ruban=amounts["ruban"],
-                    waste=tuple(packing_waste.get(report_id, ())),
-                )
+            packing_facts[report_id] = PackingFact(
+                column="",
+                product_id=packed,
+                product_name=products.get(packed or "", {}).get("name"),
+                finished_t=finished_t,
+                packets=float(packets or 0),
+                film=amounts["film"],
+                carton=amounts["carton"],
+                waste_carton=amounts["waste_carton"],
+                scotch=amounts["scotch"],
+                ruban=amounts["ruban"],
+                waste=tuple(packing_waste.get(report_id, ())),
             )
-            if lot:
-                lots.setdefault(column[report_id], set()).add(lot)
 
-        rows = build_rows(
-            daily_facts, packing_facts, packaging_units=packaging_units, yield_by_column=yield_by_column
-        )
-
-        # -- what each column holds
-        columns: dict[str, dict] = {}
-        for r in reports:
-            entry = columns.setdefault(
-                column[r["id"]],
-                {
-                    "key": column[r["id"]],
-                    "teams": set(),
-                    "lots": set(),
-                    "reports": {
-                        kind: {"validated": 0, "pending": 0} for kind in ("daily", "conditionnement")
-                    },
-                },
-            )
-            if r["team"]:
-                entry["teams"].add(r["team"])
-            entry["reports"][r["type"]]["validated" if r["status"] == "validated" else "pending"] += 1
-        for key, found in lots.items():
-            columns[key]["lots"] = found
-
-        of_product = {r["of_id"]: r["of_product_id"] for r in figures}
+        of_products: dict[str, list[str]] = {}
+        for r in figures:
+            names = of_products.setdefault(r["of_id"], [])
+            name = products.get(r["product_id"] or "", {}).get("name")
+            if name and name not in names:
+                names.append(name)
         ofs = (
             self._connection.execute(
                 "SELECT id, reference FROM production.work_orders WHERE tenant_id = %s AND id = ANY(%s)",
-                (tenant_id, sorted(of_product)),
+                (tenant_id, sorted(of_products)),
             ).fetchall()
-            if of_product
+            if of_products
             else []
         )
+        for r in reports:
+            r["product_name"] = products.get(r["product_id"] or "", {}).get("name")
 
-        return {
-            "columns": columns,
-            "rows": [row.to_dict() for row in rows],
-            "ofs": [
-                {"id": i, "reference": ref, "product_name": products.get(of_product.get(i) or "", {}).get("name")}
-                for i, ref in sorted(ofs, key=lambda o: o[1] or "")
-            ],
-        }
+        return LoadedSheet(
+            reports=reports,
+            daily_facts=daily_facts,
+            packing_facts=packing_facts,
+            packaging_units=packaging_units,
+            products=products,
+            stops=stops,
+            ofs={
+                i: {"id": i, "reference": ref, "product_name": " / ".join(of_products.get(i, [])) or None}
+                for i, ref in ofs
+            },
+        )
 
     def _line(self, tenant_id: str, work_center_id: str) -> dict | None:
         row = self._connection.execute(
@@ -369,52 +414,52 @@ class DaySheetService:
         return {"id": row[0], "code": row[1], "name": row[2]} if row else None
 
     def get_day_sheet(
-        self, *, tenant_id: str, date: datetime.date, work_center_id: str, include_pending: bool = False
+        self,
+        *,
+        tenant_id: str,
+        date: datetime.date,
+        work_center_id: str,
+        include_pending: bool = False,
+        group_by: str = "shift",
     ) -> Result[dict]:
         line = self._line(tenant_id, work_center_id)
         if line is None:
-            return Err("NOT_FOUND", "work center not found")
+            return Err("NOT_FOUND", "work center not found", "poste de charge introuvable")
+        if group_by not in DAY_GROUPINGS:
+            return Err("INVALID_GROUPING", "group_by must be 'shift' or 'lot'", "group_by doit être 'shift' ou 'lot'")
 
+        by_lot = group_by == "lot"
         sheet = self.read_sheet(
             tenant_id=tenant_id,
             date_from=date,
             date_to=date,
             work_center_id=work_center_id,
             include_pending=include_pending,
-            column_of=lambda report: report["shift"] or NO_SHIFT,
+            column_of=(lambda report: report["lot"] or NO_LOT) if by_lot else (lambda report: report["shift"] or NO_SHIFT),
+            # A lot is a whole run: what was packed under it is what went in under it.
+            yield_by_column=by_lot,
         )
 
-        # Shifts in the order the plant's day runs, then any shift a report was filed
-        # under that is not a configured one. A configured shift nobody reported on is
-        # still a column: an empty one is how a missing report shows on the sheet.
         windows = {w.shift.lower(): w for w in DashboardSettingsService(self._connection).list_shift_windows(tenant_id=tenant_id)}
-        keys = {key.lower(): key for key in sheet["columns"]}
-        for lowered, window in windows.items():
-            keys.setdefault(lowered, window.shift)
-        columns = []
-        for lowered, key in sorted(
-            keys.items(),
-            key=lambda item: (windows[item[0]].start if item[0] in windows else datetime.time.max, item[1]),
-        ):
-            entry = sheet["columns"].get(key) or _empty_column(key)
-            columns.append({**entry, "teams": sorted(entry["teams"]), "lots": sorted(entry["lots"])})
-        if any(c["key"] == NO_SHIFT for c in columns):
-            columns.sort(key=lambda c: c["key"] == NO_SHIFT)
+        columns = lot_columns(sheet["columns"]) if by_lot else shift_columns(sheet["columns"], windows)
 
         return Ok(
             {
                 "date": date.isoformat(),
                 "work_center": line,
                 "include_pending": include_pending,
+                "group_by": group_by,
                 "columns": columns,
                 "rows": sheet["rows"],
                 "ofs": sheet["ofs"],
             }
         )
 
-    def get_month_recap(self, *, tenant_id: str, month: datetime.date, work_center_id: str) -> Result[dict]:
+    def get_month_recap(
+        self, *, tenant_id: str, month: datetime.date, work_center_id: str, group_by: str = "product"
+    ) -> Result[dict]:
         """A line's month: the same rows as a day sheet, added up over every day, with a
-        column per product produced instead of a column per shift.
+        column per product produced (or per lot) instead of a column per shift.
 
         Validated reports only. The recap is what the month produced, so a report a
         team is still filling in or a supervisor has not signed off is counted in the
@@ -422,39 +467,136 @@ class DaySheetService:
         """
         line = self._line(tenant_id, work_center_id)
         if line is None:
-            return Err("NOT_FOUND", "work center not found")
+            return Err("NOT_FOUND", "work center not found", "poste de charge introuvable")
+        if group_by not in MONTH_GROUPINGS:
+            return Err("INVALID_GROUPING", "group_by must be 'product' or 'lot'", "group_by doit être 'product' ou 'lot'")
 
-        first = month.replace(day=1)
-        last = (first.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
+        first, last = month_bounds(month)
+        by_lot = group_by == "lot"
         sheet = self.read_sheet(
             tenant_id=tenant_id,
             date_from=first,
             date_to=last,
             work_center_id=work_center_id,
             include_pending=False,
-            column_of=lambda report: report["of_product_id"] or NO_PRODUCT,
+            column_of=(lambda report: report["lot"] or NO_LOT) if by_lot else (lambda report: report["product_id"] or NO_PRODUCT),
             yield_by_column=True,
         )
-        names = self._products(tenant_id, {key for key in sheet["columns"] if key != NO_PRODUCT})
-        columns = [
-            {
-                **entry,
-                "name": names.get(key, {}).get("name"),
-                "teams": sorted(entry["teams"]),
-                "lots": sorted(entry["lots"]),
-            }
-            for key, entry in sheet["columns"].items()
-        ]
-        columns.sort(key=lambda c: (c["name"] is None, (c["name"] or "").lower(), c["key"]))
+        if by_lot:
+            columns = lot_columns(sheet["columns"])
+        else:
+            names = self._products(tenant_id, {key for key in sheet["columns"] if key != NO_PRODUCT})
+            columns = product_columns(sheet["columns"], names)
 
         return Ok(
             {
                 "month": first.strftime("%Y-%m"),
                 "work_center": line,
+                "group_by": group_by,
                 "columns": columns,
                 "rows": sheet["rows"],
             }
         )
+
+
+# -- laying a load out ----------------------------------------------------------
+
+
+def month_bounds(month: datetime.date) -> tuple[datetime.date, datetime.date]:
+    first = month.replace(day=1)
+    last = (first.replace(day=28) + datetime.timedelta(days=4)).replace(day=1) - datetime.timedelta(days=1)
+    return first, last
+
+
+def assemble(
+    loaded: LoadedSheet,
+    *,
+    column_of: Callable[[dict], str],
+    yield_by_column: bool = False,
+    include: Callable[[dict], bool] | None = None,
+) -> dict:
+    """The rows and per-column report counts of a load, columns chosen by `column_of`
+    and reports narrowed by `include` (a day of the month, say).
+
+    A column says which teams, lots and products it holds, the first and last day
+    something was filed in it, and how many reports of each kind are added or
+    still waiting.
+    """
+    reports = [r for r in loaded.reports if include is None or include(r)]
+    column = {r["id"]: column_of(r) for r in reports}
+    daily = [replace(loaded.daily_facts[r["id"]], column=column[r["id"]]) for r in reports if r["id"] in loaded.daily_facts]
+    packing = [
+        replace(loaded.packing_facts[r["id"]], column=column[r["id"]]) for r in reports if r["id"] in loaded.packing_facts
+    ]
+    rows = build_rows(daily, packing, packaging_units=loaded.packaging_units, yield_by_column=yield_by_column)
+
+    columns: dict[str, dict] = {}
+    for r in reports:
+        entry = columns.setdefault(column[r["id"]], _empty_column(column[r["id"]]))
+        if r["team"]:
+            entry["teams"].add(r["team"])
+        entry["reports"][r["type"]]["validated" if r["status"] == "validated" else "pending"] += 1
+        # Only a report whose figures are on the sheet says which lots, products and
+        # days the column covers: a draft still being typed is counted as waiting above.
+        if r["id"] not in loaded.daily_facts and r["id"] not in loaded.packing_facts:
+            continue
+        if r["lot"]:
+            entry["lots"].add(r["lot"])
+        if r.get("product_name"):
+            entry["products"].add(r["product_name"])
+        day = r["date"].isoformat()
+        entry["date_from"] = min(entry["date_from"] or day, day)
+        entry["date_to"] = max(entry["date_to"] or day, day)
+
+    of_ids = {r["of_id"] for r in reports if r["id"] in loaded.daily_facts or r["id"] in loaded.packing_facts}
+    ofs = [loaded.ofs[i] for i in of_ids if i in loaded.ofs]
+    return {
+        "columns": columns,
+        "rows": [row.to_dict() for row in rows],
+        "ofs": sorted(ofs, key=lambda o: o["reference"] or ""),
+    }
+
+
+def _plain(entry: dict, **extra) -> dict:
+    return {
+        **entry,
+        "teams": sorted(entry["teams"]),
+        "lots": sorted(entry["lots"]),
+        "products": sorted(entry["products"]),
+        **extra,
+    }
+
+
+def shift_columns(found: dict[str, dict], windows: dict) -> list[dict]:
+    """Shifts in the order the plant's day runs, then any shift a report was filed
+    under that is not a configured one. A configured shift nobody reported on is
+    still a column: an empty one is how a missing report shows on the sheet."""
+    keys = {key.lower(): key for key in found}
+    for lowered, window in windows.items():
+        keys.setdefault(lowered, window.shift)
+    columns = []
+    for lowered, key in sorted(
+        keys.items(),
+        key=lambda item: (windows[item[0]].start if item[0] in windows else datetime.time.max, item[1]),
+    ):
+        columns.append(_plain(found.get(key) or _empty_column(key), name=key or None))
+    if any(c["key"] == NO_SHIFT for c in columns):
+        columns.sort(key=lambda c: c["key"] == NO_SHIFT)
+    return columns
+
+
+def lot_columns(found: dict[str, dict]) -> list[dict]:
+    """Lots in the order they were started, the reports that named none last."""
+    columns = [_plain(entry, name=key or None) for key, entry in found.items()]
+    # A lot with nothing counted yet (every report still waiting) has no first day; it goes last.
+    columns.sort(key=lambda c: (c["key"] == NO_LOT, c["date_from"] is None, c["date_from"] or "", c["key"]))
+    return columns
+
+
+def product_columns(found: dict[str, dict], names: dict[str, dict]) -> list[dict]:
+    columns = [_plain(entry, name=names.get(key, {}).get("name")) for key, entry in found.items()]
+    columns.sort(key=lambda c: (c["name"] is None, (c["name"] or "").lower(), c["key"]))
+    return columns
 
 
 def _empty_column(key: str) -> dict:
@@ -462,5 +604,8 @@ def _empty_column(key: str) -> dict:
         "key": key,
         "teams": set(),
         "lots": set(),
+        "products": set(),
+        "date_from": None,
+        "date_to": None,
         "reports": {kind: {"validated": 0, "pending": 0} for kind in ("daily", "conditionnement")},
     }

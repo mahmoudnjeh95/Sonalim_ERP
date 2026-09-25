@@ -10,11 +10,11 @@ import {
   Line,
   LineChart,
   ReferenceLine,
-  ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from "recharts";
+import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
@@ -462,7 +462,7 @@ export function FinishedGoodsAnalysisTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={240}>
+                <InteractiveChart height={240}>
                   <BarChart data={dailyFinishedGoodsRows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                     <XAxis dataKey="date" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -473,7 +473,7 @@ export function FinishedGoodsAnalysisTab() {
                     />
                     <Bar dataKey="packet" name={t("warehouse.analysis.finishedGoods.chart.packet")} fill={CHART_COLORS.primary} radius={[4, 4, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </CardContent>
             </Card>
 
@@ -485,7 +485,7 @@ export function FinishedGoodsAnalysisTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={240}>
+                <InteractiveChart height={240}>
                   <BarChart data={dailyFinishedGoodsRows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                     <XAxis dataKey="date" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -496,7 +496,7 @@ export function FinishedGoodsAnalysisTab() {
                     />
                     <Bar dataKey="carton" name={t("warehouse.analysis.finishedGoods.chart.carton")} fill={CHART_COLORS.success} radius={[4, 4, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </CardContent>
             </Card>
           </div>
@@ -510,7 +510,7 @@ export function FinishedGoodsAnalysisTab() {
                 </div>
               </CardHeader>
               <CardContent>
-                <ResponsiveContainer width="100%" height={220}>
+                <InteractiveChart height={220}>
                   <BarChart data={dailyFinishedGoodsRows}>
                     <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
                     <XAxis dataKey="date" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -521,7 +521,7 @@ export function FinishedGoodsAnalysisTab() {
                     />
                     <Bar dataKey="other" name={t("warehouse.analysis.finishedGoods.chart.other")} fill={CHART_COLORS.muted} radius={[4, 4, 0, 0]} />
                   </BarChart>
-                </ResponsiveContainer>
+                </InteractiveChart>
               </CardContent>
             </Card>
           )}
@@ -667,7 +667,7 @@ function PackagingVarianceTrendChart({
         <CardDescription>{t("warehouse.analysis.finishedGoods.varianceTrend.subtitle")}</CardDescription>
       </CardHeader>
       <CardContent>
-        <ResponsiveContainer width="100%" height={260}>
+        <InteractiveChart height={260}>
           <LineChart data={trendRows}>
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(214 20% 92%)" vertical={false} />
             <XAxis dataKey="date" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
@@ -695,7 +695,7 @@ function PackagingVarianceTrendChart({
               />
             ))}
           </LineChart>
-        </ResponsiveContainer>
+        </InteractiveChart>
       </CardContent>
     </Card>
   );

@@ -28,6 +28,8 @@ import {
 } from "./shiftApi";
 import { T, useLabel } from "./shiftText";
 import { useShiftReferenceData } from "./useShiftReferenceData";
+import { REGRIND_DEFAULTS_QUERY_KEY, RegrindConfirmDialog, type RegrindChoice } from "./RegrindConfirmDialog";
+import { setRegrindDefault } from "../api";
 import { AppLoader } from "../../../components/patterns/AppLoader";
 
 /**
@@ -193,19 +195,41 @@ function ShiftReviewDialog({
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
   };
 
+  // Rebroyat declared on the production rows, in kg (stored in tonnes): validating opens an OFR for it.
+  const regrindKg = useMemo(() => {
+    const rows = shift?.sections.find((s) => s.key === "runs")?.payload?.runs;
+    return Array.isArray(rows) ? rows.reduce((sum, r) => sum + (Number((r as { regrind_quantity?: unknown }).regrind_quantity) || 0), 0) * 1000 : 0;
+  }, [shift]);
+  // null: closed; otherwise open, and whether the server said the OF has no line for the OFR.
+  const [regrindDialog, setRegrindDialog] = useState<{ lineRequired: boolean } | null>(null);
+
   const approve = useMutation({
-    mutationFn: () =>
-      validateShiftReport(token, shiftId, {
+    mutationFn: async (choice: RegrindChoice | undefined) => {
+      if (choice?.defaultProductId) {
+        await setRegrindDefault(token, choice.defaultProductId);
+        queryClient.invalidateQueries({ queryKey: REGRIND_DEFAULTS_QUERY_KEY });
+      }
+      return validateShiftReport(token, shiftId, {
         // What is on the screen right now: if a section moves on, the server refuses.
         seen_revisions: Object.fromEntries(shift!.sections.map((s) => [s.key, s.revision])),
         shortfall_comment: shortfall?.trim() || null,
-      }),
+        regrind_work_center_id: choice?.workCenterId ?? null,
+      });
+    },
     onSuccess: () => {
       toast.success(label(T.approved));
       done();
     },
-    onError: fail,
+    onError: (error: unknown) => {
+      if (error instanceof ApiError && (error.code === "REGRIND_DEFAULT_MISSING" || error.code === "MISSING_WORK_CENTER")) {
+        setRegrindDialog({ lineRequired: error.code === "MISSING_WORK_CENTER" });
+        return;
+      }
+      setRegrindDialog(null);
+      fail(error);
+    },
   });
+  const startApprove = () => (regrindKg > 0 ? setRegrindDialog({ lineRequired: false }) : approve.mutate(undefined));
   const sendBack = useMutation({
     mutationFn: () => rejectShiftSections(token, shiftId, { sections: [...ticked], reason: reason.trim() }),
     onSuccess: () => {
@@ -307,12 +331,21 @@ function ShiftReviewDialog({
                   {label(T.sendBackSections)} ({ticked.size})
                 </Button>
               ) : null}
-              <Button onClick={() => approve.mutate()} disabled={busy || ticked.size > 0}>
+              <Button onClick={startApprove} disabled={busy || ticked.size > 0}>
                 <CircleCheck className="h-4 w-4" />
                 {approve.isPending ? label(T.approving) : label(T.approve)}
               </Button>
             </div>
           </div>
+        )}
+        {regrindDialog && (
+          <RegrindConfirmDialog
+            regrindKg={regrindKg}
+            lineRequired={regrindDialog.lineRequired}
+            busy={approve.isPending}
+            onConfirm={(choice) => approve.mutate(choice)}
+            onClose={() => setRegrindDialog(null)}
+          />
         )}
       </DialogContent>
     </Dialog>

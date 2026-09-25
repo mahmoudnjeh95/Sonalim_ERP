@@ -207,7 +207,11 @@ class CoreService:
             "SELECT 1 FROM core.products WHERE tenant_id = %s AND sku = %s", (tenant_id, sku)
         ).fetchone()
         if existing is not None:
-            return Err("DUPLICATE_SKU", f"a product with sku {sku!r} already exists")
+            return Err(
+                "DUPLICATE_SKU",
+                f"a product with sku {sku!r} already exists",
+                f"un produit avec sku {sku!r} existe déjà",
+            )
 
         product_id = str(ULID())
         self._connection.execute(
@@ -251,11 +255,15 @@ class CoreService:
     def update_product(self, *, tenant_id: str, actor_id: str, product_id: str, **changes: object) -> Result[Product]:
         current = self.get_product(tenant_id, product_id)
         if current is None:
-            return Err("NOT_FOUND", f"product {product_id} not found")
+            return Err("NOT_FOUND", f"product {product_id} not found", f"produit {product_id} introuvable")
 
         unknown = set(changes) - set(_PRODUCT_EDITABLE_FIELDS)
         if unknown:
-            return Err("INVALID_FIELD", f"cannot edit field(s): {', '.join(sorted(unknown))}")
+            return Err(
+                "INVALID_FIELD",
+                f"cannot edit field(s): {', '.join(sorted(unknown))}",
+                f"champ(s) non modifiable(s) : {', '.join(sorted(unknown))}",
+            )
         merged = {field: changes.get(field, getattr(current, field)) for field in _PRODUCT_EDITABLE_FIELDS}
 
         validation = validate_new_product(
@@ -284,7 +292,11 @@ class CoreService:
                 "SELECT 1 FROM core.products WHERE tenant_id = %s AND sku = %s AND id != %s", (tenant_id, merged["sku"], product_id)
             ).fetchone()
             if existing is not None:
-                return Err("DUPLICATE_SKU", f"a product with sku {merged['sku']!r} already exists")
+                return Err(
+                    "DUPLICATE_SKU",
+                    f"a product with sku {merged['sku']!r} already exists",
+                    f"un produit avec sku {merged['sku']!r} existe déjà",
+                )
 
         set_clauses = ", ".join(f"{field} = %s" for field in _PRODUCT_EDITABLE_FIELDS)
         self._connection.execute(
@@ -305,7 +317,7 @@ class CoreService:
     def delete_product(self, *, tenant_id: str, actor_id: str, product_id: str) -> Result[str]:
         current = self.get_product(tenant_id, product_id)
         if current is None:
-            return Err("NOT_FOUND", f"product {product_id} not found")
+            return Err("NOT_FOUND", f"product {product_id} not found", f"produit {product_id} introuvable")
 
         try:
             self._connection.execute(
@@ -315,6 +327,7 @@ class CoreService:
             return Err(
                 "PRODUCT_IN_USE",
                 "this product is referenced elsewhere (stock, orders, recipes, ...) and cannot be deleted",
+                "ce produit est référencé ailleurs (stock, commandes, recettes, ...) et ne peut pas être supprimé",
             )
 
         record_audit(
@@ -344,7 +357,11 @@ class CoreService:
             "SELECT 1 FROM core.product_attributes WHERE tenant_id = %s AND name = %s", (tenant_id, name)
         ).fetchone()
         if existing is not None:
-            return Err("DUPLICATE_NAME", f"an attribute named {name!r} already exists")
+            return Err(
+                "DUPLICATE_NAME",
+                f"an attribute named {name!r} already exists",
+                f"un attribut nommé {name!r} existe déjà",
+            )
         attribute_id = str(ULID())
         self._connection.execute(
             "INSERT INTO core.product_attributes (id, tenant_id, name) VALUES (%s, %s, %s)", (attribute_id, tenant_id, name)
@@ -377,7 +394,11 @@ class CoreService:
             "SELECT 1 FROM core.product_attribute_values WHERE attribute_id = %s AND value = %s", (attribute_id, value)
         ).fetchone()
         if existing is not None:
-            return Err("DUPLICATE_VALUE", f"value {value!r} already exists for this attribute")
+            return Err(
+                "DUPLICATE_VALUE",
+                f"value {value!r} already exists for this attribute",
+                f"la valeur {value!r} existe déjà pour cet attribut",
+            )
         value_id = str(ULID())
         self._connection.execute(
             "INSERT INTO core.product_attribute_values (id, tenant_id, attribute_id, value) VALUES (%s, %s, %s, %s)",
@@ -394,9 +415,13 @@ class CoreService:
     ) -> Result[Product]:
         parent = self.get_product(tenant_id, parent_product_id)
         if parent is None:
-            return Err("NOT_FOUND", f"product {parent_product_id} not found")
+            return Err("NOT_FOUND", f"product {parent_product_id} not found", f"produit {parent_product_id} introuvable")
         if not attribute_value_ids:
-            return Err("INVALID_VARIANT", "a variant needs at least one attribute value")
+            return Err(
+                "INVALID_VARIANT",
+                "a variant needs at least one attribute value",
+                "une variante a besoin d'au moins une valeur d'attribut",
+            )
 
         result = self.create_product(
             tenant_id=tenant_id,
@@ -446,7 +471,11 @@ class CoreService:
             "SELECT 1 FROM core.product_tags WHERE tenant_id = %s AND name = %s", (tenant_id, name)
         ).fetchone()
         if existing is not None:
-            return Err("DUPLICATE_NAME", f"a tag named {name!r} already exists")
+            return Err(
+                "DUPLICATE_NAME",
+                f"a tag named {name!r} already exists",
+                f"une étiquette nommée {name!r} existe déjà",
+            )
         tag_id = str(ULID())
         self._connection.execute("INSERT INTO core.product_tags (id, tenant_id, name) VALUES (%s, %s, %s)", (tag_id, tenant_id, name))
         record_audit(
@@ -470,7 +499,7 @@ class CoreService:
 
     def set_product_tags(self, *, tenant_id: str, actor_id: str, product_id: str, tag_ids: list[str]) -> Result[list[ProductTag]]:
         if self.get_product(tenant_id, product_id) is None:
-            return Err("NOT_FOUND", f"product {product_id} not found")
+            return Err("NOT_FOUND", f"product {product_id} not found", f"produit {product_id} introuvable")
         self._connection.execute("DELETE FROM core.product_tag_links WHERE product_id = %s", (product_id,))
         for tag_id in tag_ids:
             self._connection.execute(
@@ -624,7 +653,7 @@ class CoreService:
     ) -> Result[Partner]:
         current = self.get_partner(tenant_id, partner_id)
         if current is None:
-            return Err("NOT_FOUND", f"partner {partner_id} not found")
+            return Err("NOT_FOUND", f"partner {partner_id} not found", f"partenaire {partner_id} introuvable")
 
         updated = Partner(
             id=current.id,
@@ -669,7 +698,7 @@ class CoreService:
             (partner_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"partner {partner_id} not found")
+            return Err("NOT_FOUND", f"partner {partner_id} not found", f"partenaire {partner_id} introuvable")
 
         partner = Partner(*row)
         result = transition_partner(partner, "archived")
@@ -698,7 +727,7 @@ class CoreService:
             (partner_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"partner {partner_id} not found")
+            return Err("NOT_FOUND", f"partner {partner_id} not found", f"partenaire {partner_id} introuvable")
 
         partner = Partner(*row)
         result = transition_partner(partner, "active")
@@ -740,7 +769,7 @@ class CoreService:
 
     def set_partner_tags(self, *, tenant_id: str, actor_id: str, partner_id: str, tag_ids: list[str]) -> Result[list[PartnerTagLink]]:
         if self.get_partner(tenant_id, partner_id) is None:
-            return Err("NOT_FOUND", f"partner {partner_id} not found")
+            return Err("NOT_FOUND", f"partner {partner_id} not found", f"partenaire {partner_id} introuvable")
         # Only remove tags being unassigned and only insert newly-assigned ones (ON CONFLICT
         # DO NOTHING) rather than delete-all-then-reinsert, so is_preferred/lead_time_days/
         # min_order_qty on tags that stay assigned survive a bulk tag-picker save.
@@ -777,7 +806,11 @@ class CoreService:
             (partner_id, tag_id),
         ).fetchone()
         if current is None:
-            return Err("NOT_FOUND", f"partner {partner_id} is not tagged with {tag_id}")
+            return Err(
+                "NOT_FOUND",
+                f"partner {partner_id} is not tagged with {tag_id}",
+                f"le partenaire {partner_id} n'a pas l'étiquette {tag_id}",
+            )
 
         merged_preferred = is_preferred if is_preferred is not None else current[0]
         merged_lead_time = lead_time_days if lead_time_days is not None else current[1]
@@ -960,6 +993,7 @@ class CoreService:
             return Err(
                 "NO_RATE_AVAILABLE",
                 f"no exchange rate for {currency_code} on or before {as_of_date.isoformat()}",
+                f"aucun taux de change pour {currency_code} à la date du {as_of_date.isoformat()} ou avant",
             )
         converted = convert_to_base(amount=amount, currency_code=currency_code, rate_to_base=rate.rate_to_base)
         if isinstance(converted, Err):

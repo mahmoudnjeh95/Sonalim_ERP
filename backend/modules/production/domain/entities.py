@@ -48,5 +48,9 @@ class WorkOrder:
 
 def transition(order: WorkOrder, new_status: str) -> Result[WorkOrder]:
     if new_status not in VALID_TRANSITIONS.get(order.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move work order from {order.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move work order from {order.status} to {new_status}",
+            f"impossible de faire passer l'OF de {order.status} à {new_status}",
+        )
     return Ok(replace(order, status=new_status))

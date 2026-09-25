@@ -35,7 +35,7 @@ class EmployeeService:
         if isinstance(validation, Err):
             return validation
         if department_id and self.connection.execute("SELECT 1 FROM hr.departments WHERE id = %s AND tenant_id = %s", (department_id, tenant_id)).fetchone() is None:
-            return Err("NOT_FOUND", "department not found")
+            return Err("NOT_FOUND", "department not found", "département introuvable")
         employee_id = str(ULID())
         try:
             self.connection.execute("""
@@ -43,7 +43,7 @@ class EmployeeService:
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (employee_id, tenant_id, employee_no, first_name, last_name, email, phone, department_id, job_title, hire_date, status))
         except psycopg.errors.UniqueViolation:
-            return Err("DUPLICATE_EMPLOYEE_NO", "employee number already exists")
+            return Err("DUPLICATE_EMPLOYEE_NO", "employee number already exists", "ce matricule existe déjà")
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="employee.created", entity_type="employee", entity_id=employee_id, payload={"employee_no": employee_no})
         return Ok({"id": employee_id, "employee_no": employee_no, "first_name": first_name, "last_name": last_name, "email": email, "phone": phone, "department_id": department_id, "job_title": job_title, "hire_date": hire_date.isoformat(), "status": status})
 
@@ -53,7 +53,7 @@ class EmployeeService:
                         status: str | None = None) -> Result[dict]:
         row = self.connection.execute("SELECT employee_no, first_name, last_name, email, phone, department_id, job_title, hire_date, status FROM hr.employees WHERE id = %s AND tenant_id = %s FOR UPDATE", (employee_id, tenant_id)).fetchone()
         if row is None:
-            return Err("NOT_FOUND", "employee not found")
+            return Err("NOT_FOUND", "employee not found", "employé introuvable")
         values = (row[0], first_name if first_name is not None else row[1], last_name if last_name is not None else row[2], email if email is not None else row[3], phone if phone is not None else row[4], department_id if department_id is not None else row[5], job_title if job_title is not None else row[6], hire_date if hire_date is not None else row[7], status if status is not None else row[8])
         validation = validate_employee(employee_no=values[0], first_name=values[1], last_name=values[2], hire_date=values[7], status=values[8])
         if isinstance(validation, Err):
@@ -76,10 +76,10 @@ class DepartmentService:
         return [{"id": r[0], "code": r[1], "name": r[2], "manager_employee_id": r[3], "employee_count": r[4]} for r in rows]
 
     def create_department(self, *, tenant_id: str, actor_id: str, code: str, name: str) -> Result[dict]:
-        if not code.strip() or not name.strip(): return Err("INVALID_DEPARTMENT", "department code and name are required")
+        if not code.strip() or not name.strip(): return Err("INVALID_DEPARTMENT", "department code and name are required", "le code et le nom du département sont obligatoires")
         department_id = str(ULID())
         try: self.connection.execute("INSERT INTO hr.departments (id, tenant_id, code, name) VALUES (%s,%s,%s,%s)", (department_id, tenant_id, code, name))
-        except psycopg.errors.UniqueViolation: return Err("DUPLICATE_CODE", "department code already exists")
+        except psycopg.errors.UniqueViolation: return Err("DUPLICATE_CODE", "department code already exists", "ce code de département existe déjà")
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="department.created", entity_type="department", entity_id=department_id, payload={"code": code, "name": name})
         return Ok({"id": department_id, "code": code, "name": name, "manager_employee_id": None, "employee_count": 0})
 
@@ -96,16 +96,16 @@ class LeaveService:
     def create_request(self, *, tenant_id: str, actor_id: str, employee_id: str, leave_type: str, start_date: datetime.date, end_date: datetime.date, reason: str | None) -> Result[dict]:
         validation = validate_leave(start_date=start_date, end_date=end_date)
         if isinstance(validation, Err): return validation
-        if self.connection.execute("SELECT 1 FROM hr.employees WHERE id=%s AND tenant_id=%s", (employee_id, tenant_id)).fetchone() is None: return Err("NOT_FOUND", "employee not found")
+        if self.connection.execute("SELECT 1 FROM hr.employees WHERE id=%s AND tenant_id=%s", (employee_id, tenant_id)).fetchone() is None: return Err("NOT_FOUND", "employee not found", "employé introuvable")
         request_id = str(ULID()); self.connection.execute("INSERT INTO hr.leave_requests (id,tenant_id,employee_id,leave_type,start_date,end_date,reason) VALUES (%s,%s,%s,%s,%s,%s,%s)", (request_id,tenant_id,employee_id,leave_type,start_date,end_date,reason))
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="leave_request.created", entity_type="leave_request", entity_id=request_id, payload={"employee_id":employee_id,"start_date":start_date.isoformat(),"end_date":end_date.isoformat()})
         return Ok({"id":request_id,"employee_id":employee_id,"leave_type":leave_type,"start_date":start_date.isoformat(),"end_date":end_date.isoformat(),"reason":reason,"status":"pending"})
 
     def review_request(self, *, tenant_id: str, actor_id: str, request_id: str, status: str) -> Result[dict]:
-        if status not in {"approved", "rejected", "cancelled"}: return Err("INVALID_STATUS", "invalid leave decision")
+        if status not in {"approved", "rejected", "cancelled"}: return Err("INVALID_STATUS", "invalid leave decision", "décision de congé invalide")
         row = self.connection.execute("SELECT employee_id, leave_type, start_date, end_date, reason, status FROM hr.leave_requests WHERE id=%s AND tenant_id=%s FOR UPDATE", (request_id,tenant_id)).fetchone()
-        if row is None: return Err("NOT_FOUND", "leave request not found")
-        if row[5] != "pending": return Err("INVALID_TRANSITION", "only pending leave can be reviewed")
+        if row is None: return Err("NOT_FOUND", "leave request not found", "demande de congé introuvable")
+        if row[5] != "pending": return Err("INVALID_TRANSITION", "only pending leave can be reviewed", "seul un congé en attente peut être passé en revue")
         self.connection.execute("UPDATE hr.leave_requests SET status=%s, reviewed_by=%s WHERE id=%s AND tenant_id=%s", (status,actor_id,request_id,tenant_id))
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="leave_request.status_changed", entity_type="leave_request", entity_id=request_id, payload={"from_status":"pending","to_status":status})
         return Ok({"id":request_id,"employee_id":row[0],"leave_type":row[1],"start_date":row[2].isoformat(),"end_date":row[3].isoformat(),"reason":row[4],"status":status,"reviewed_by":actor_id})

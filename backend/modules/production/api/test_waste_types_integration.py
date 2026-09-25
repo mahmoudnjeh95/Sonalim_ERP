@@ -181,3 +181,71 @@ def test_creating_and_updating_are_both_audited(db, actor):
     assert all(row[1] == actor for row in rows)
     assert rows[1][2]["previous_name"] == "Crosse"
     assert rows[1][2]["name"] == "Cross"
+
+
+def test_an_unused_type_is_deleted_outright(db, actor):
+    service = WasteTypeService(db)
+    created = _create(db, actor, name="Crosse")
+    result = service.delete_type(tenant_id=TENANT, actor_id=actor, waste_type_id=created["id"])
+    assert isinstance(result, Ok)
+    assert result.value["outcome"] == "deleted"
+    assert service.list_types(tenant_id=TENANT) == []
+
+
+def test_deleting_a_type_that_does_not_exist_says_so(db, actor):
+    result = WasteTypeService(db).delete_type(tenant_id=TENANT, actor_id=actor, waste_type_id="nope")
+    assert isinstance(result, Err) and result.code == "NOT_FOUND"
+
+
+def test_a_tenant_that_changed_nothing_has_every_built_in_as_shipped(db):
+    listed = WasteTypeService(db).list_builtin_settings(tenant_id=TENANT)
+    assert [entry["category"] for entry in listed] == [
+        "raw_material", "press", "pouring", "cross", "kneading", "finished_product_conditioning",
+        "product", "packaging",
+    ]
+    assert all(entry["name"] is None and entry["sort_order"] is None and entry["is_active"] for entry in listed)
+
+
+def test_a_built_in_can_be_renamed_hidden_and_reset(db, actor):
+    service = WasteTypeService(db)
+    renamed = service.update_builtin(tenant_id=TENANT, actor_id=actor, category="press", name="  Presse 2 ")
+    assert isinstance(renamed, Ok)
+    assert (renamed.value["name"], renamed.value["is_active"]) == ("Presse 2", True)
+
+    hidden = service.update_builtin(tenant_id=TENANT, actor_id=actor, category="press", is_active=False)
+    assert isinstance(hidden, Ok)
+    assert (hidden.value["name"], hidden.value["is_active"]) == ("Presse 2", False)
+
+    reset = service.update_builtin(tenant_id=TENANT, actor_id=actor, category="press", reset_name=True)
+    assert isinstance(reset, Ok)
+    assert (reset.value["name"], reset.value["is_active"]) == (None, False)
+
+
+def test_a_built_in_cannot_take_the_name_of_a_plant_kind_or_be_unknown(db, actor):
+    service = WasteTypeService(db)
+    _create(db, actor, name="Crosse")
+    clash = service.update_builtin(tenant_id=TENANT, actor_id=actor, category="cross", name="crosse")
+    assert isinstance(clash, Err) and clash.code == "DUPLICATE_WASTE_TYPE"
+    unknown = service.update_builtin(tenant_id=TENANT, actor_id=actor, category="nope", name="x")
+    assert isinstance(unknown, Err) and unknown.code == "NOT_FOUND"
+
+
+def test_built_ins_and_plant_kinds_are_ordered_together(db, actor):
+    service = WasteTypeService(db)
+    film = _create(db, actor, name="Film", report_type="conditionnement")
+    result = service.reorder(
+        tenant_id=TENANT, actor_id=actor, report_type="conditionnement", order=[film["id"], "packaging", "product"]
+    )
+    assert isinstance(result, Ok)
+    orders = {entry["category"]: entry["sort_order"] for entry in service.list_builtin_settings(tenant_id=TENANT)}
+    assert (orders["packaging"], orders["product"]) == (2, 3)
+    assert orders["press"] is None
+    assert service.list_types(tenant_id=TENANT)[0]["sort_order"] == 1
+
+
+def test_an_order_that_misses_or_repeats_a_kind_is_refused(db, actor):
+    service = WasteTypeService(db)
+    film = _create(db, actor, name="Film", report_type="conditionnement")
+    for order in (["packaging", "product"], [film["id"], "packaging", "packaging", "product"], [film["id"], "packaging", "product", "press"]):
+        result = service.reorder(tenant_id=TENANT, actor_id=actor, report_type="conditionnement", order=order)
+        assert isinstance(result, Err) and result.code == "INVALID_ORDER"

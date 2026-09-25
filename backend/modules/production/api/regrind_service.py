@@ -61,7 +61,7 @@ class ScrapService:
             "SELECT 1 FROM core.products WHERE tenant_id = %s AND id = %s", (tenant_id, product_id)
         ).fetchone()
         if product_row is None:
-            return Err("PRODUCT_NOT_FOUND", f"product {product_id} not found")
+            return Err("PRODUCT_NOT_FOUND", f"product {product_id} not found", f"produit {product_id} introuvable")
 
         scrap_id = str(ULID())
         self._connection.execute(
@@ -164,7 +164,11 @@ class RegrindDefaultsService:
         self, *, tenant_id: str, actor_id: str, output_product_id: str, input_product_id: str | None = None
     ) -> Result[dict]:
         if not output_product_id.strip():
-            return Err("MISSING_OUTPUT_PRODUCT", "a regrind default must name the product the regrind yields")
+            return Err(
+                "MISSING_OUTPUT_PRODUCT",
+                "a regrind default must name the product the regrind yields",
+                "le rebroyat par défaut doit indiquer le produit qu'il donne",
+            )
 
         self._connection.execute(
             """
@@ -229,7 +233,11 @@ class RegrindService:
         to the automatic path now applies to both.
         """
         if not scrap_record_ids:
-            return Err("NO_SCRAP_INPUTS", "a regrind batch needs at least one scrap input")
+            return Err(
+                "NO_SCRAP_INPUTS",
+                "a regrind batch needs at least one scrap input",
+                "un lot de rebroyat a besoin d'au moins un rebut en entrée",
+            )
 
         output_product_id = RegrindDefaultsService(self._connection).resolve_output_product(
             tenant_id=tenant_id, input_product_id=None
@@ -238,6 +246,8 @@ class RegrindService:
             return Err(
                 "REGRIND_DEFAULT_MISSING",
                 "no regrind output product is configured — set one in Production Settings before regrinding",
+                "aucun produit de sortie de rebroyat n'est configuré — définissez-en un dans les paramètres de"
+                " production avant de rebroyer",
             )
 
         # Lock every input scrap row up front so a concurrent regrind batch can't
@@ -253,9 +263,13 @@ class RegrindService:
         found_by_id = {r[0]: (r[1], float(r[2]), r[3]) for r in rows}
         for scrap_id in scrap_record_ids:
             if scrap_id not in found_by_id:
-                return Err("NOT_FOUND", f"scrap record {scrap_id} not found")
+                return Err("NOT_FOUND", f"scrap record {scrap_id} not found", f"rebut {scrap_id} introuvable")
             if found_by_id[scrap_id][0]:
-                return Err("ALREADY_REGROUND", f"scrap record {scrap_id} was already reground")
+                return Err(
+                    "ALREADY_REGROUND",
+                    f"scrap record {scrap_id} was already reground",
+                    f"le rebut {scrap_id} a déjà été rebroyé",
+                )
 
         # Scrap is weighed in whatever unit its own product is stocked in — a
         # dough scrap tallied against a raw semolina bought by the tonne isn't
@@ -386,14 +400,20 @@ class RegrindService:
             (work_order_id, tenant_id),
         ).fetchone()
         if batch_row is None:
-            return Err("NOT_FOUND", f"regrind batch {work_order_id} not found")
+            return Err(
+                "NOT_FOUND", f"regrind batch {work_order_id} not found", f"lot de rebroyat {work_order_id} introuvable"
+            )
 
         work_order_service = WorkOrderService(self._connection)
         order = work_order_service.get_work_order(tenant_id=tenant_id, work_order_id=work_order_id)
         if order is None:
-            return Err("NOT_FOUND", f"work order {work_order_id} not found")
+            return Err("NOT_FOUND", f"work order {work_order_id} not found", f"OF {work_order_id} introuvable")
         if order.status != "planned":
-            return Err("ALREADY_ASSIGNED", f"this regrind batch is {order.status}, not new")
+            return Err(
+                "ALREADY_ASSIGNED",
+                f"this regrind batch is {order.status}, not new",
+                f"ce lot de rebroyat est {order.status}, pas nouveau",
+            )
 
         started = work_order_service.start_work_order(
             tenant_id=tenant_id, actor_id=actor_id, work_order_id=work_order_id
@@ -448,25 +468,39 @@ class RegrindService:
             (work_order_id, tenant_id),
         ).fetchone()
         if batch_row is None:
-            return Err("NOT_FOUND", f"regrind batch {work_order_id} not found")
+            return Err(
+                "NOT_FOUND", f"regrind batch {work_order_id} not found", f"lot de rebroyat {work_order_id} introuvable"
+            )
         input_quantity_total = float(batch_row[0])
 
         work_order_service = WorkOrderService(self._connection)
         order = work_order_service.get_work_order(tenant_id=tenant_id, work_order_id=work_order_id)
         if order is None:
-            return Err("NOT_FOUND", f"work order {work_order_id} not found")
+            return Err("NOT_FOUND", f"work order {work_order_id} not found", f"OF {work_order_id} introuvable")
 
         received_quantity = actual_output_quantity if actual_output_quantity is not None else order.planned_quantity
         if received_quantity <= 0:
-            return Err("INVALID_QUANTITY", "actual output quantity must be positive")
+            return Err(
+                "INVALID_QUANTITY",
+                "actual output quantity must be positive",
+                "la quantité réelle de sortie doit être positive",
+            )
 
         # A batch must be assigned to a team before it can be finished — that is
         # what moves it out of `planned` in the first place, so still finding it
         # there means nobody was ever made responsible for grinding it.
         if order.status == "planned":
-            return Err("NOT_ASSIGNED", "assign this regrind batch to a team before finishing it")
+            return Err(
+                "NOT_ASSIGNED",
+                "assign this regrind batch to a team before finishing it",
+                "assignez ce lot de rebroyat à une équipe avant de le terminer",
+            )
         if order.status != "ongoing":
-            return Err("INVALID_STATUS", f"cannot finish a regrind batch that is {order.status}")
+            return Err(
+                "INVALID_STATUS",
+                f"cannot finish a regrind batch that is {order.status}",
+                f"impossible de terminer un lot de rebroyat {order.status}",
+            )
 
         received = StockService(self._connection).receive_stock(
             tenant_id=tenant_id,

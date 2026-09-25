@@ -55,9 +55,7 @@ def _submitted_shift(db, env, *, day=DAY, silo_rows=None, shift="morning", extra
     _ok(orders.start_work_order(tenant_id=TENANT, actor_id=env["actor"], work_order_id=of_id))
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [{
         "of_id": of_id, "start_time": "07:00", "end_time": "14:00", "production_minutes": 420, "finished_product_quantity": 900,
-        "raw_material_location_id": env["silo"],
-        "semolina_lines": [{"product_id": env["semolina"], "quantity": 1000, "location_id": env["silo"]}],
-    }]}))
+    }], "versements": [{"product_id": env["semolina"], "quantity": 1000, "location_id": env["silo"]}]}))
     run_id = _ok(service.get_shift(tenant_id=TENANT, shift_report_id=shift_id))["sections"][0]["payload"]["runs"][0]["id"]
     filled = {"packing": {"rows": [{"run_id": run_id, "packets_counted": 120, "lot_number": f"L-{day.isoformat()}-{shift}"}]}}
     if silo_rows:

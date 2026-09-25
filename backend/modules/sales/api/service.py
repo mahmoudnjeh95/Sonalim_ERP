@@ -122,7 +122,7 @@ class SalesOrderService:
             (order_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"order {order_id} not found")
+            return Err("NOT_FOUND", f"order {order_id} not found", f"commande {order_id} introuvable")
         current_partner_id, current_location_id, status, current_requested_ship_date, opportunity_id = row
 
         line_rows = self._connection.execute(
@@ -182,7 +182,7 @@ class SalesOrderService:
             (order_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"order {order_id} not found")
+            return Err("NOT_FOUND", f"order {order_id} not found", f"commande {order_id} introuvable")
         partner_id, location_id, status, requested_ship_date, opportunity_id = row
 
         line_rows = self._connection.execute(

@@ -50,6 +50,8 @@ import {
   listRegrindBatches,
   listRegrindDefaults,
   listScrapRecords,
+  isGrinderLine,
+  isProductionLine,
   listWorkCenters,
   listWorkOrders,
   recordScrap,
@@ -809,8 +811,7 @@ export function RegrindTab() {
                           <option value="">—</option>
                           {ongoingWorkOrders.map((wo) => (
                             <option key={wo.id} value={wo.id}>
-                              {wo.reference} · {productName(wo.product_id)} · {wo.planned_quantity}
-                            </option>
+                              {wo.reference} · {productName(wo.product_id)}                            </option>
                           ))}
                         </Select>
                       </div>
@@ -818,7 +819,7 @@ export function RegrindTab() {
                         <Label htmlFor="work_center_id">{t("production.regrind.field.line")}</Label>
                         <Select id="work_center_id" {...scrapForm.register("work_center_id")}>
                           <option value="">—</option>
-                          {workCenters.map((wc) => (
+                          {workCenters.filter(isProductionLine).map((wc) => (
                             <option key={wc.id} value={wc.id}>
                               {wc.code} — {wc.name}
                             </option>
@@ -959,7 +960,7 @@ export function RegrindTab() {
                       <Label htmlFor="work_center_id">{t("production.regrind.field.workCenter")}</Label>
                       <Select id="work_center_id" {...batchForm.register("work_center_id")}>
                         <option value="">—</option>
-                        {workCenters.map((wc) => (
+                        {workCenters.filter(isGrinderLine).map((wc) => (
                           <option key={wc.id} value={wc.id}>
                             {wc.code} — {wc.name}
                           </option>

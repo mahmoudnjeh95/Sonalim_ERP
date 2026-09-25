@@ -35,7 +35,11 @@ class SalesOrder:
 
 def confirm(order: SalesOrder) -> Result[SalesOrder]:
     if "confirmed" not in VALID_TRANSITIONS.get(order.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot confirm order in status {order.status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot confirm order in status {order.status}",
+            f"impossible de confirmer une commande au statut {order.status}",
+        )
     return Ok(
         SalesOrder(
             id=order.id,

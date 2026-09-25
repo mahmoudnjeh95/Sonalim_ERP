@@ -235,7 +235,8 @@ def build_shift(rng: random.Random, refs: Refs, orders: OrderBook, lots: Counter
         packets = round(finished * 1000 / product["net_kg"] * rng.uniform(0.97, 0.995))
         cartons = round(packets / product["ppc"])
         packing.append(dict(
-            of_id=runs[-1]["of_id"], run_index=index, equipment_id=refs.equipment[cfg["packing_machine"]], lot_number=lot,
+            of_id=runs[-1]["of_id"], product_id=refs.products[product["sku"]], run_index=index,
+            equipment_id=refs.equipment[cfg["packing_machine"]], lot_number=lot,
             packing_type=product["packing_type"], film_type="Polypropylène",
             finished_product_quantity=round(cartons * product["ppc"] * product["net_kg"] / 1000, 2), packets_counted=packets,
             film_quantity=round(packets * product["film_kg"] * rng.uniform(0.97, 1.03), 2), carton_quantity=cartons,
@@ -246,6 +247,8 @@ def build_shift(rng: random.Random, refs: Refs, orders: OrderBook, lots: Counter
             packaging_location_id=refs.raw_store, finished_goods_location_id=refs.finished_store,
             production_minutes=run_minutes,
         ))
+        # The floor's carton tally includes the waste cartons; only the others hold packets.
+        packing[-1]["carton_quantity"] += packing[-1]["waste_carton_quantity"]
         for category, (low, high), cause in rng.sample(WASTE_KINDS, rng.choice([1, 2, 2, 3])):
             waste_lines.append(dict(
                 category=category, product_id=refs.products["semoule-ble-dur-salem"], quantity=rng.randint(low, high),

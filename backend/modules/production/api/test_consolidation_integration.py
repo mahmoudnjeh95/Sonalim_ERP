@@ -454,7 +454,9 @@ def test_a_plants_own_daily_waste_type_is_restated_and_netted_like_a_built_in(db
     assert waste["net_semoule_waste"] == 200 - 10
 
 
-def test_time_is_summed_across_both_report_types(db, env, of):
+def test_line_and_packing_time_are_reported_apart(db, env, of):
+    """The line and the packing machines run through the same hours of the same
+    shift. Adding them counted every shift twice."""
     _daily(
         db, env, of, date=datetime.date(2026, 9, 1),
         semolina_quantity=1000, production_minutes=400,
@@ -466,8 +468,70 @@ def test_time_is_summed_across_both_report_types(db, env, of):
     )
 
     time = _consolidate(db, of)["time"]
-    assert time["production_minutes"] == 780
-    assert time["downtime_minutes"] == 35
+    assert time == {
+        "production_minutes": 400,
+        "downtime_minutes": 20,
+        "packing_minutes": 380,
+        "packing_downtime_minutes": 15,
+    }
+
+
+def test_water_is_derived_from_the_dosage_when_no_litres_were_typed(db, env, of):
+    """The shift form records only the water %, of the semoule poured."""
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, water_percentage=30)
+    _daily(db, env, of, date=datetime.date(2026, 9, 2), semolina_quantity=500, water_quantity=40, water_percentage=30)
+
+    utilities = _consolidate(db, of)["utilities"]
+    # 30 % of 1000 kg, plus the 40 L the second report typed itself.
+    assert utilities["water_quantity"] == pytest.approx(300 + 40)
+    assert utilities["water_derived"] is True
+
+
+def test_typed_water_is_not_flagged_as_derived(db, env, of):
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, water_quantity=50)
+
+    utilities = _consolidate(db, of)["utilities"]
+    assert utilities["water_quantity"] == 50
+    assert utilities["water_derived"] is False
+
+
+def test_rebroyat_in_tonnes_is_netted_in_kilos(db, env, of):
+    """A shift's rebroyat is counted in the rebroyat product's unit -- tonnes
+    here -- while the daily déchet is weighed in kilos."""
+    tonne_uom, rebroyat = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO core.uoms (id, tenant_id, code, name, category, ratio_to_base) "
+        "VALUES (%s, %s, 'ton', 'Tonne', 'weight', 1000)",
+        (tonne_uom, TENANT),
+    )
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'CONSO-REB-T', 'Rebroyat', %s)",
+        (rebroyat, TENANT, tonne_uom),
+    )
+    RegrindDefaultsService(db).set_default(tenant_id=TENANT, actor_id=env["actor"], output_product_id=rebroyat)
+    _daily(
+        db, env, of, date=datetime.date(2026, 9, 1),
+        semolina_quantity=1000, regrind_quantity=0.15,
+        waste_lines=(WasteLine(category="press", product_id=env["product"], quantity=200),),
+    )
+
+    waste = _consolidate(db, of)["waste"]
+    assert waste["net_semoule_waste"] == pytest.approx(200 - 150)
+    # The report named no rebroyat product, so the figure takes the default's unit.
+    assert waste["regrind"]["product_id"] == rebroyat
+
+
+def test_yield_is_pressed_over_poured_and_matches_the_list(db, env, of):
+    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, finished_product_quantity=900)
+    _packing(db, env, of, date=datetime.date(2026, 9, 2), packets_counted=850)
+
+    result = _consolidate(db, of)
+    assert result["pressed_quantity"] == 900
+    assert result["yield_ratio"] == pytest.approx(0.9)
+    assert result["by_day"] == [
+        {"date": "2026-09-01", "pressed_quantity": 900, "packed_quantity": 0},
+        {"date": "2026-09-02", "pressed_quantity": 0, "packed_quantity": 850},
+    ]
 
 
 def test_completion_is_measured_against_the_plan(db, env, of):
@@ -681,22 +745,49 @@ def test_a_validated_defect_with_no_case_raised_is_flagged(db, env, of):
     assert result["pending_nc_reports"] == []
 
 
-# --- yield, recomputed off the reports --------------------------------------
+# --- yield, recomputed off the validated shifts -----------------------------
+
+
+def _validated_run_shift(db, env, of, *, date, semolina_quantity, finished_product_quantity, regrind_quantity=0, packed_t=None):
+    """A validated shift with one run pouring `semolina_quantity`; a packing row of `packed_t` tonnes when given."""
+    shifts = ShiftReportService(db)
+    actor = env["actor"]
+    shift_id = _ok(shifts.open_shift(tenant_id=TENANT, actor_id=actor, work_center_id=env["work_center"], report_date=date, shift="morning"))["id"]
+    run = {
+        "of_id": of.id, "equipment_id": env["equipment"], "start_time": "07:00", "end_time": "14:00",
+        "production_minutes": 420, "finished_product_quantity": finished_product_quantity,
+        "regrind_quantity": regrind_quantity, "raw_material_location_id": env["location"],
+    }
+    versements = [{"product_id": env["product"], "quantity": semolina_quantity, "location_id": env["location"]}] if semolina_quantity else []
+    _ok(shifts.save_section(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key="runs",
+                            payload={"runs": [run], "versements": versements}))
+    filled = {"runs"}
+    if packed_t is not None:
+        # The product's "packet" weighs a tonne (see env), so N packets are N tonnes.
+        row = {
+            "of_id": of.id, "equipment_id": env["equipment"], "packets_counted": packed_t,
+            "packaging_location_id": env["packaging_location"], "finished_goods_location_id": env["location"],
+        }
+        _ok(shifts.save_section(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key="packing", payload={"rows": [row]}))
+        filled.add("packing")
+    for key in SECTION_KEYS:
+        hand_in = shifts.submit_section if key in filled else shifts.declare_nothing
+        _ok(hand_in(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id))
 
 
 def test_yield_is_computed_from_validated_reports(db, env, of):
-    """finished product / semoule poured in, with every term from the daily reports.
+    """finished product / semoule poured in, with every term from the shift's run.
 
-    finished_product_quantity comes off the daily report's own Produit fini —
-    the tonnage weighed at the press — not the conditionnement report, which can
-    validate days later. A conditionnement report is added here with a different
-    figure specifically to prove it is ignored.
+    finished_product_quantity comes off the run's own Produit fini — the tonnage
+    weighed at the press — not the packing row, which can come days later. A
+    packing row is added here with a different figure specifically to prove it
+    is ignored.
     """
-    _daily(
+    _validated_run_shift(
         db, env, of, date=datetime.date(2026, 9, 1),
-        semolina_quantity=1000, regrind_quantity=50, finished_product_quantity=900,
+        semolina_quantity=1000, regrind_quantity=50, finished_product_quantity=900, packed_t=750,
     )
-    _packing(db, env, of, date=datetime.date(2026, 9, 1), finished_product_quantity=750)
 
     computed = WorkOrderYieldService(db).get_work_order_yield(tenant_id=TENANT, work_order_id=of.id)
     assert computed is not None
@@ -707,17 +798,17 @@ def test_yield_is_computed_from_validated_reports(db, env, of):
 
 
 def test_yield_is_available_before_closure(db, env, of):
-    """Available off the daily report alone -- no conditionnement report needed,
-    since packaging can lag the press by days and a supervisor wants the figure
-    while the shift can still act on it."""
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, finished_product_quantity=900)
+    """Available off the run alone -- no packing needed, since packaging can lag
+    the press by days and a supervisor wants the figure while the shift can
+    still act on it."""
+    _validated_run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=1000, finished_product_quantity=900)
 
     assert WorkOrderYieldService(db).get_work_order_yield(tenant_id=TENANT, work_order_id=of.id) is not None
 
 
 def test_yield_is_undefined_without_validated_semoule(db, env, of):
     """No denominator means no answer — not a zero."""
-    _daily(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=0, finished_product_quantity=900)
+    _validated_run_shift(db, env, of, date=datetime.date(2026, 9, 1), semolina_quantity=0, finished_product_quantity=900)
     assert WorkOrderYieldService(db).get_work_order_yield(tenant_id=TENANT, work_order_id=of.id) is None
 
 

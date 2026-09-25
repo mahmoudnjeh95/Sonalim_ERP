@@ -108,13 +108,17 @@ class ActivityService:
             (activity_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"activity {activity_id} not found")
+            return Err("NOT_FOUND", f"activity {activity_id} not found", f"activité {activity_id} introuvable")
         if row[6] is not None:
-            return Err("ALREADY_COMPLETED", f"activity {activity_id} is already completed and cannot be edited")
+            return Err(
+                "ALREADY_COMPLETED",
+                f"activity {activity_id} is already completed and cannot be edited",
+                f"l'activité {activity_id} est déjà terminée et ne peut pas être modifiée",
+            )
 
         updated_note = note if note is not None else row[4]
         if not updated_note.strip():
-            return Err("EMPTY_NOTE", "note is required")
+            return Err("EMPTY_NOTE", "note is required", "la note est obligatoire")
         updated_due_at = due_at if due_at is not None else row[5]
 
         self._connection.execute(
@@ -151,9 +155,13 @@ class ActivityService:
             (activity_id, tenant_id),
         ).fetchone()
         if row is None:
-            return Err("NOT_FOUND", f"activity {activity_id} not found")
+            return Err("NOT_FOUND", f"activity {activity_id} not found", f"activité {activity_id} introuvable")
         if row[6] is not None:
-            return Err("ALREADY_COMPLETED", f"activity {activity_id} is already completed")
+            return Err(
+                "ALREADY_COMPLETED",
+                f"activity {activity_id} is already completed",
+                f"l'activité {activity_id} est déjà terminée",
+            )
 
         self._connection.execute("UPDATE crm.activities SET completed_at = NOW() WHERE id = %s", (activity_id,))
         completed_at = self._connection.execute(

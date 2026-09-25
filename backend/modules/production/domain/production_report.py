@@ -327,7 +327,7 @@ def validate_semolina_lines(lines: tuple[SemolinaLine, ...]) -> Result[None]:
     """
     for line in lines:
         if line.quantity < 0:
-            return Err("INVALID_QUANTITY", "a semolina quantity cannot be negative")
+            return Err("INVALID_QUANTITY", "a semolina quantity cannot be negative", "une quantité de semoule ne peut pas être négative")
     return Ok(None)
 
 
@@ -356,7 +356,11 @@ def validate_waste_lines(
     """
     built_in = WASTE_CATEGORIES_BY_REPORT_TYPE.get(report_type)
     if built_in is None:
-        return Err("INVALID_REPORT_TYPE", f"report_type must be one of {sorted(VALID_REPORT_TYPES)}")
+        return Err(
+            "INVALID_REPORT_TYPE",
+            f"report_type must be one of {sorted(VALID_REPORT_TYPES)}",
+            f"report_type doit être l'un de {sorted(VALID_REPORT_TYPES)}",
+        )
     allowed = (*built_in, *custom_categories)
 
     for line in lines:
@@ -365,9 +369,11 @@ def validate_waste_lines(
                 "INVALID_WASTE_CATEGORY",
                 f"a {report_type} report has no {line.category!r} waste; "
                 f"expected one of {list(built_in)} or one of the plant's own waste types",
+                f"un rapport {report_type} n'a pas de déchet {line.category!r} ; "
+                f"attendu l'un de {list(built_in)} ou l'un des types de déchets propres au site",
             )
         if line.quantity < 0:
-            return Err("INVALID_QUANTITY", "a waste quantity cannot be negative")
+            return Err("INVALID_QUANTITY", "a waste quantity cannot be negative", "une quantité de déchets ne peut pas être négative")
     return Ok(None)
 
 
@@ -383,17 +389,26 @@ def validate_downtime_lines(lines: tuple[DowntimeLine, ...], *, report_type: str
     """
     allowed = DOWNTIME_MOTIFS_BY_REPORT_TYPE.get(report_type)
     if allowed is None:
-        return Err("INVALID_REPORT_TYPE", f"report_type must be one of {sorted(VALID_REPORT_TYPES)}")
+        return Err(
+            "INVALID_REPORT_TYPE",
+            f"report_type must be one of {sorted(VALID_REPORT_TYPES)}",
+            f"report_type doit être l'un de {sorted(VALID_REPORT_TYPES)}",
+        )
 
     for line in lines:
         if line.minutes < 0:
-            return Err("INVALID_DURATION", "a downtime line cannot have negative minutes")
+            return Err("INVALID_DURATION", "a downtime line cannot have negative minutes", "une ligne d'arrêt ne peut pas avoir de minutes négatives")
         if line.minutes > 0 and not (line.motif or "").strip():
-            return Err("MISSING_DOWNTIME_REASON", "a downtime line needs a motif when it records minutes")
+            return Err(
+                "MISSING_DOWNTIME_REASON",
+                "a downtime line needs a motif when it records minutes",
+                "une ligne d'arrêt a besoin d'un motif quand elle enregistre des minutes",
+            )
         if line.motif and line.motif not in allowed:
             return Err(
                 "INVALID_DOWNTIME_MOTIF",
                 f"motif must be one of {sorted(allowed)}, got {line.motif!r}",
+                f"motif doit être l'un de {sorted(allowed)}, reçu {line.motif!r}",
             )
     return Ok(None)
 
@@ -418,7 +433,11 @@ def waste_total_by_category(lines: tuple[WasteLine, ...]) -> dict[str, float]:
 
 def transition_report(report: ProductionReport, new_status: str) -> Result[ProductionReport]:
     if new_status not in REPORT_TRANSITIONS.get(report.status, set()):
-        return Err("INVALID_TRANSITION", f"cannot move report from {report.status} to {new_status}")
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot move report from {report.status} to {new_status}",
+            f"impossible de faire passer le rapport de {report.status} à {new_status}",
+        )
     return Ok(replace(report, status=new_status))
 
 
@@ -436,15 +455,15 @@ def validate_daily_detail(
     """
     for field in DAILY_QUANTITY_FIELDS:
         if getattr(detail, field) < 0:
-            return Err("INVALID_QUANTITY", f"{field} cannot be negative")
+            return Err("INVALID_QUANTITY", f"{field} cannot be negative", f"{field} ne peut pas être négatif")
     if detail.water_percentage > 100:
-        return Err("INVALID_QUANTITY", "water_percentage cannot exceed 100")
+        return Err("INVALID_QUANTITY", "water_percentage cannot exceed 100", "water_percentage ne peut pas dépasser 100")
     if detail.production_minutes < 0:
-        return Err("INVALID_DURATION", "production_minutes cannot be negative")
+        return Err("INVALID_DURATION", "production_minutes cannot be negative", "production_minutes ne peut pas être négatif")
     if detail.start_time is not None and detail.end_time is not None and detail.end_time < detail.start_time:
         # A shift crossing midnight is real, but it is entered as two reports —
         # one per report_date — so within one report the end never precedes the start.
-        return Err("INVALID_TIME_RANGE", "end_time cannot be before start_time")
+        return Err("INVALID_TIME_RANGE", "end_time cannot be before start_time", "end_time ne peut pas être antérieur à start_time")
     downtime_check = validate_downtime_lines(detail.downtime_lines, report_type="daily")
     if isinstance(downtime_check, Err):
         return downtime_check
@@ -480,28 +499,35 @@ def validate_conditionnement_detail(
     """
     for field in CONDITIONNEMENT_QUANTITY_FIELDS:
         if getattr(detail, field) < 0:
-            return Err("INVALID_QUANTITY", f"{field} cannot be negative")
+            return Err("INVALID_QUANTITY", f"{field} cannot be negative", f"{field} ne peut pas être négatif")
     if detail.waste_carton_quantity > detail.carton_quantity:
         return Err(
-            "INVALID_QUANTITY", "waste_carton_quantity cannot exceed carton_quantity -- it is a subset of it"
+            "INVALID_QUANTITY",
+            "waste_carton_quantity cannot exceed carton_quantity -- it is a subset of it",
+            "waste_carton_quantity ne peut pas dépasser carton_quantity -- c'en est un sous-ensemble",
         )
     if detail.machine_speed is not None and detail.machine_speed < 0:
-        return Err("INVALID_QUANTITY", "machine_speed cannot be negative")
+        return Err("INVALID_QUANTITY", "machine_speed cannot be negative", "machine_speed ne peut pas être négatif")
     if detail.production_minutes < 0:
-        return Err("INVALID_DURATION", "production_minutes cannot be negative")
+        return Err("INVALID_DURATION", "production_minutes cannot be negative", "production_minutes ne peut pas être négatif")
     if detail.downtime_minutes < 0:
-        return Err("INVALID_DURATION", "downtime_minutes cannot be negative")
+        return Err("INVALID_DURATION", "downtime_minutes cannot be negative", "downtime_minutes ne peut pas être négatif")
     if detail.downtime_minutes > 0 and not (detail.downtime_reason or "").strip():
-        return Err("MISSING_DOWNTIME_REASON", "a downtime reason is required when downtime minutes are recorded")
+        return Err(
+            "MISSING_DOWNTIME_REASON",
+            "a downtime reason is required when downtime minutes are recorded",
+            "une raison d'arrêt est obligatoire quand des minutes d'arrêt sont enregistrées",
+        )
     allowed_motifs = DOWNTIME_MOTIFS_BY_REPORT_TYPE.get("conditionnement", ())
     if detail.downtime_reason and detail.downtime_reason not in allowed_motifs:
         return Err(
             "INVALID_DOWNTIME_MOTIF",
             f"motif must be one of {sorted(allowed_motifs)}, got {detail.downtime_reason!r}",
+            f"motif doit être l'un de {sorted(allowed_motifs)}, reçu {detail.downtime_reason!r}",
         )
 
     if detail.dlc_date is not None and not (detail.lot_number or "").strip():
-        return Err("INCOMPLETE_DLC", "a DLC date needs the lot number it belongs to")
+        return Err("INCOMPLETE_DLC", "a DLC date needs the lot number it belongs to", "une date DLC a besoin du lot auquel elle appartient")
     return validate_waste_lines(detail.waste_lines, report_type="conditionnement", custom_categories=waste_categories)
 
 
@@ -516,14 +542,30 @@ def validate_daily_stock_targets(detail: DailyReportDetail) -> Result[None]:
         if line.quantity <= 0:
             continue
         if not (line.product_id or "").strip():
-            return Err("MISSING_STOCK_TARGET", "each semolina line must name the product it consumed")
+            return Err(
+                "MISSING_STOCK_TARGET",
+                "each semolina line must name the product it consumed",
+                "chaque ligne de semoule doit nommer le produit qu'elle a consommé",
+            )
         if not (line.location_id or "").strip():
-            return Err("MISSING_STOCK_TARGET", "each semolina line must name the store it came out of")
+            return Err(
+                "MISSING_STOCK_TARGET",
+                "each semolina line must name the store it came out of",
+                "chaque ligne de semoule doit nommer le magasin d'où elle provient",
+            )
     if detail.regrind_input_quantity > 0:
         if not (detail.regrind_input_product_id or "").strip():
-            return Err("MISSING_STOCK_TARGET", "the rebroyat poured in must name the product it consumed")
+            return Err(
+                "MISSING_STOCK_TARGET",
+                "the rebroyat poured in must name the product it consumed",
+                "le rebroyat versé doit nommer le produit qu'il a consommé",
+            )
         if not (detail.raw_material_location_id or "").strip():
-            return Err("MISSING_STOCK_TARGET", "the rebroyat poured in must name the store it came out of")
+            return Err(
+                "MISSING_STOCK_TARGET",
+                "the rebroyat poured in must name the store it came out of",
+                "le rebroyat versé doit nommer le magasin d'où il provient",
+            )
     return validate_waste_products(detail.waste_lines)
 
 
@@ -537,7 +579,7 @@ def validate_waste_products(lines: tuple[WasteLine, ...]) -> Result[None]:
     """
     for line in lines:
         if line.quantity > 0 and not (line.product_id or "").strip():
-            return Err("MISSING_WASTE_PRODUCT", "a waste line must name the item that was lost")
+            return Err("MISSING_WASTE_PRODUCT", "a waste line must name the item that was lost", "une ligne de déchets doit nommer l'article perdu")
     return Ok(None)
 
 
@@ -548,7 +590,11 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
     # tonnage and no packets posts no finished product and needs no store -- the
     # ecart is what makes that visible, not a refusal here.
     if detail.packets_counted > 0 and not (detail.finished_goods_location_id or "").strip():
-        return Err("MISSING_STOCK_TARGET", "the finished product must name the store it goes into")
+        return Err(
+            "MISSING_STOCK_TARGET",
+            "the finished product must name the store it goes into",
+            "le produit fini doit nommer le magasin dans lequel il entre",
+        )
 
     for quantity_field, product_field, label in (
         ("film_quantity", "film_product_id", "film"),
@@ -558,9 +604,17 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
     ):
         if getattr(detail, quantity_field) > 0:
             if not (getattr(detail, product_field) or "").strip():
-                return Err("MISSING_STOCK_TARGET", f"the {label} figure must name the product it consumed")
+                return Err(
+                    "MISSING_STOCK_TARGET",
+                    f"the {label} figure must name the product it consumed",
+                    f"le chiffre {label} doit nommer le produit qu'il a consommé",
+                )
             if not (detail.packaging_location_id or "").strip():
-                return Err("MISSING_STOCK_TARGET", "packaging figures must name the store they came out of")
+                return Err(
+                    "MISSING_STOCK_TARGET",
+                    "packaging figures must name the store they came out of",
+                    "les chiffres d'emballage doivent nommer le magasin d'où ils proviennent",
+                )
     # Packing waste is a kind and a weight in kilos, recorded as a figure rather than moved as
     # stock, so unlike production waste it is not asked to name an item.
     return Ok(None)
@@ -568,7 +622,11 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
 
 def validate_report_header(*, report_type: str, of_id: str) -> Result[None]:
     if report_type not in VALID_REPORT_TYPES:
-        return Err("INVALID_REPORT_TYPE", f"report_type must be one of {sorted(VALID_REPORT_TYPES)}")
+        return Err(
+            "INVALID_REPORT_TYPE",
+            f"report_type must be one of {sorted(VALID_REPORT_TYPES)}",
+            f"report_type doit être l'un de {sorted(VALID_REPORT_TYPES)}",
+        )
     if not of_id.strip():
-        return Err("MISSING_OF", "a report must belong to a work order")
+        return Err("MISSING_OF", "a report must belong to a work order", "un rapport doit appartenir à un OF")
     return Ok(None)

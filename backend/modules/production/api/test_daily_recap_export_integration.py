@@ -16,18 +16,14 @@ from ulid import ULID
 
 from core.domain.result import Ok
 from modules.procurement.api.service import PurchaseOrderService
-from modules.production.api.conditionnement_service import ConditionnementReportService
 from modules.production.api.daily_recap_export import build_daily_recap_workbook, day_phrase
 from modules.production.api.finished_goods_service import FinishedGoodsService
 from modules.production.api.mp_consumption_service import MaterialConsumptionService
 from modules.production.api.consumption_report_service import ConsumptionReportService
-from modules.production.api.production_report_service import ProductionReportService
 from modules.production.api.service import WorkOrderService
-from modules.production.domain.production_report import (
-    ConditionnementReportDetail,
-    DailyReportDetail,
-    SemolinaLine,
-)
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.shift_validation_service import ShiftValidationService
+from modules.production.domain.shift_report import SECTION_KEYS
 from modules.warehouse.api.service import StockService
 
 TENANT = "integration-test-daily-recap"
@@ -75,9 +71,9 @@ def env(db):
         "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) VALUES (%s, %s, %s, 'TEST-EQ', 'Test machine')",
         (equipment, TENANT, work_center),
     )
-    # Semoule must already be in stock for the daily report's semolina line to
-    # validate (validation posts a stock move consuming it), same as the
-    # packaging products in test_consumption_report_integration.py.
+    # Semoule must already be in stock for the shift's versement to validate
+    # (validation posts a stock move consuming it), same as the packaging
+    # products in test_consumption_report_integration.py.
     StockService(db).receive_stock(
         tenant_id=TENANT, product_id=semoule, location_id=location,
         quantity=1000, correlation_id=str(ULID()), reference="test-seed", actor_id=actor,
@@ -131,21 +127,44 @@ def _confirm_a_receipt(db, env, *, quantity: float, base_cost: float, transport_
     assert isinstance(confirmed, Ok), getattr(confirmed, "message", "")
 
 
+def _ok(result):
+    assert isinstance(result, Ok), getattr(result, "message", result)
+    return result.value
+
+
+def _validated_shift(db, env, of_id, day, *, semoule: float | None = None, packing: dict | None = None) -> None:
+    """A validated shift on `day`: a run pouring `semoule` tonnes and/or one packing row."""
+    service = ShiftReportService(db)
+    actor = env["actor"]
+    shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=actor, work_center_id=env["work_center"], report_date=day, shift="morning"))["id"]
+    filled = set()
+    if semoule is not None:
+        run = {
+            "of_id": of_id, "equipment_id": env["equipment"], "start_time": "07:00", "end_time": "14:00",
+            "production_minutes": 420, "finished_product_quantity": 0, "raw_material_location_id": env["location"],
+        }
+        versements = [{"product_id": env["semoule"], "quantity": semoule, "location_id": env["location"]}]
+        _ok(service.save_section(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key="runs",
+                                 payload={"runs": [run], "versements": versements}))
+        filled.add("runs")
+    if packing is not None:
+        row = {
+            "of_id": of_id, "equipment_id": env["equipment"],
+            "packaging_location_id": env["location"], "finished_goods_location_id": env["location"], **packing,
+        }
+        _ok(service.save_section(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key="packing", payload={"rows": [row]}))
+        filled.add("packing")
+    for key in SECTION_KEYS:
+        hand_in = service.submit_section if key in filled else service.declare_nothing
+        _ok(hand_in(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id, section_key=key))
+    _ok(ShiftValidationService(db).validate_shift(tenant_id=TENANT, actor_id=actor, shift_report_id=shift_id))
+
+
 def test_mp_consumption_is_priced_from_landed_cost(db, env, of):
     _confirm_a_receipt(db, env, quantity=100, base_cost=50_000_000, transport_fee=5_000_000)
     # Landed cost/tonne = (50M + 5M) / 100 = 550,000 CFA/tonne.
 
-    report_date = datetime.date(2026, 9, 10)
-    daily = ProductionReportService(db).create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        equipment_id=env["equipment"], shift="morning",
-        detail=DailyReportDetail(
-            semolina_lines=(SemolinaLine(product_id=env["semoule"], quantity=5, location_id=env["location"]),),
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    validated = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    assert isinstance(validated, Ok), getattr(validated, "message", "")
+    _validated_shift(db, env, of.id, datetime.date(2026, 9, 10), semoule=5)
 
     rows = MaterialConsumptionService(db).list_consumption(tenant_id=TENANT, date_from="2026-09-10", date_to="2026-09-10")
     assert len(rows) == 1
@@ -158,34 +177,16 @@ def test_mp_consumption_is_priced_from_landed_cost(db, env, of):
 
 
 def test_consumption_outside_the_date_range_is_excluded(db, env, of):
-    report_date = datetime.date(2026, 9, 10)
-    daily = ProductionReportService(db).create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        equipment_id=env["equipment"], shift="morning",
-        detail=DailyReportDetail(
-            semolina_lines=(SemolinaLine(product_id=env["semoule"], quantity=3, location_id=env["location"]),),
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
+    _validated_shift(db, env, of.id, datetime.date(2026, 9, 10), semoule=3)
 
-    rows = MaterialConsumptionService(db).list_consumption(tenant_id=TENANT, date_from="2026-09-11", date_to="2026-09-11")
-    assert rows == []
+    service = MaterialConsumptionService(db)
+    assert len(service.list_consumption(tenant_id=TENANT, date_from="2026-09-10", date_to="2026-09-10")) == 1
+    assert service.list_consumption(tenant_id=TENANT, date_from="2026-09-11", date_to="2026-09-11") == []
 
 
 def test_finished_goods_grouped_by_product_and_pc_pl(db, env, of):
-    report_date = datetime.date(2026, 9, 10)
-    cond = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        shift="morning", equipment_id=env["equipment"],
-        detail=ConditionnementReportDetail(
-            packets_counted=5000,  # 5000 * 500g (see env's net_weight_grams) = 2.5 tonnes, derived on validation
-            packaging_location_id=env["location"], finished_goods_location_id=env["location"],
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    validated = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    assert isinstance(validated, Ok), getattr(validated, "message", "")
+    # 5000 * 500g (see env's net_weight_grams) = 2.5 tonnes, derived on validation
+    _validated_shift(db, env, of.id, datetime.date(2026, 9, 10), packing={"packets_counted": 5000})
 
     rows = FinishedGoodsService(db).list_finished_goods(tenant_id=TENANT, date_from="2026-09-10", date_to="2026-09-10")
     assert len(rows) == 1
@@ -201,31 +202,11 @@ def test_daily_recap_workbook_builds_and_wires_the_charge_formula(db, env, of):
     production' subtotal cell rather than a hardcoded number -- that's the
     whole point of keeping charges manually editable in the exported file."""
     _confirm_a_receipt(db, env, quantity=100, base_cost=55_000_000)
-    report_date = datetime.date(2026, 9, 10)
-
-    daily = ProductionReportService(db).create_daily_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        equipment_id=env["equipment"], shift="morning",
-        detail=DailyReportDetail(
-            semolina_lines=(SemolinaLine(product_id=env["semoule"], quantity=4, location_id=env["location"]),),
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    validated_daily = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=daily.id)
-    assert isinstance(validated_daily, Ok), getattr(validated_daily, "message", "")
-
-    cond = ConditionnementReportService(db).create_report(
-        tenant_id=TENANT, actor_id=env["actor"], of_id=of.id, report_date=report_date,
-        shift="morning", equipment_id=env["equipment"],
-        detail=ConditionnementReportDetail(
-            packets_counted=7600,  # 7600 * 500g (see env's net_weight_grams) = 3.8 tonnes, derived on validation
-            carton_quantity=760, carton_product_id=env["carton"],
-            packaging_location_id=env["location"], finished_goods_location_id=env["location"],
-        ),
-    ).value["report"]
-    ProductionReportService(db).submit_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    validated_cond = ProductionReportService(db).validate_report(tenant_id=TENANT, actor_id=env["actor"], report_id=cond.id)
-    assert isinstance(validated_cond, Ok), getattr(validated_cond, "message", "")
+    # 7600 * 500g (see env's net_weight_grams) = 3.8 tonnes, derived on validation
+    _validated_shift(
+        db, env, of.id, datetime.date(2026, 9, 10), semoule=4,
+        packing={"packets_counted": 7600, "carton_quantity": 760, "carton_product_id": env["carton"]},
+    )
 
     mp_rows = MaterialConsumptionService(db).list_consumption(tenant_id=TENANT, date_from="2026-09-10", date_to="2026-09-10")
     packaging_rows = ConsumptionReportService(db).list_monthly_consumption_by_supplier(

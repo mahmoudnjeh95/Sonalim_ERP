@@ -83,7 +83,7 @@ class OfConsolidationService:
             (of_id, tenant_id),
         ).fetchone()
         if work_order is None:
-            return Err("NOT_FOUND", f"work order {of_id} not found")
+            return Err("NOT_FOUND", f"work order {of_id} not found", f"OF {of_id} introuvable")
         reference, product_id, planned_quantity, status, work_center_id, start_date, closed_at = work_order
 
         # Every product the order's validated packing reports cover, earliest first: one order can
@@ -122,6 +122,11 @@ class OfConsolidationService:
         # otherwise counted in tonnes.
         material_input = semolina + daily["regrind_input_quantity_normalized"]
 
+        # What the press weighed off the line, against the same input. The same
+        # definition the OF list's "Rendement" uses (WorkOrderYieldService), so the
+        # list and this page can never show two different yields for one order.
+        pressed = daily["reported_finished_product_quantity"]
+
         return Ok(
             {
                 "of_id": of_id,
@@ -149,6 +154,10 @@ class OfConsolidationService:
                 # Produced against what was poured in, not against the plan.
                 "material_input_quantity": material_input,
                 "transformation_ratio": (produced / material_input) if material_input > 0 else None,
+                "pressed_quantity": pressed,
+                "yield_ratio": (pressed / material_input) if material_input > 0 and pressed > 0 else None,
+                # Pressed and packed tonnage per day, oldest first, for the OF's trend.
+                "by_day": self._by_day(tenant_id=tenant_id, of_id=of_id),
                 "raw_material": {
                     "semolina_quantity": semolina,
                     "semolina_product_id": daily["semolina_product_id"],
@@ -174,6 +183,9 @@ class OfConsolidationService:
                 },
                 "utilities": {
                     "water_quantity": daily["water_quantity"],
+                    # True when some of that water was worked out from the shift's
+                    # dosage % (the shift form records only the %), not typed in.
+                    "water_derived": daily["water_derived"],
                     "fuel_quantity": daily["fuel_quantity"],
                     "gasoil_quantity": daily["gasoil_quantity"],
                     "electricity_quantity": daily["electricity_quantity"],
@@ -198,7 +210,11 @@ class OfConsolidationService:
                     # it is what the shift writes on the same line of the form.
                     "regrind": {
                         "quantity": daily["regrind_quantity"],
-                        "product_id": daily["regrind_product_id"],
+                        # The rebroyat product the quantity is counted in. A shift
+                        # never names one -- its rebroyat always becomes the
+                        # tenant's default rebroyat product -- so that is the
+                        # fallback, and the figure keeps a unit.
+                        "product_id": daily["regrind_product_id"] or daily["regrind_default_product_id"],
                     },
                     # The semoule genuinely lost: daily-report déchet (never
                     # conditionnement's product/packaging, which isn't semoule
@@ -207,11 +223,18 @@ class OfConsolidationService:
                     # Both terms are the form's own kilos -- see
                     # `_waste_totals`'s `daily_raw_kg_total` -- not the
                     # per-item-unit figures `by_category` reports above.
-                    "net_semoule_waste": waste["daily_raw_kg_total"] - daily["regrind_quantity"],
+                    # Rebroyat is counted in its product's unit (tonnes, from
+                    # the shift form), so it is restated in kilos first.
+                    "net_semoule_waste": waste["daily_raw_kg_total"] - daily["regrind_quantity_kg"],
                 },
+                # The line and the packing machines, apart. They run through the
+                # same hours of the same shifts, so adding them counted every
+                # shift twice.
                 "time": {
-                    "production_minutes": daily["production_minutes"] + packing["production_minutes"],
-                    "downtime_minutes": daily["downtime_minutes"] + packing["downtime_minutes"],
+                    "production_minutes": daily["production_minutes"],
+                    "downtime_minutes": daily["downtime_minutes"],
+                    "packing_minutes": packing["production_minutes"],
+                    "packing_downtime_minutes": packing["downtime_minutes"],
                 },
                 "quality": quality,
                 "report_counts": {
@@ -229,6 +252,8 @@ class OfConsolidationService:
         # `_semolina_totals`'s `weight_ratio_to_base`.
         semolina = self._semolina_totals(tenant_id=tenant_id, of_id=of_id)
         anchor_ratio = semolina["weight_ratio_to_base"] or 1.0
+        regrind_default_product_id, regrind_default_ratio = self._regrind_default(tenant_id=tenant_id)
+        water_quantity, water_derived = self._water_totals(tenant_id=tenant_id, of_id=of_id)
 
         row = self._connection.execute(
             f"""
@@ -245,9 +270,16 @@ class OfConsolidationService:
                 COALESCE(SUM(d.production_minutes), 0),
                 COALESCE(SUM(d.finished_product_quantity), 0),
                 CASE WHEN COUNT(DISTINCT d.regrind_input_product_id) = 1 THEN MIN(d.regrind_input_product_id) END,
-                CASE WHEN COUNT(DISTINCT d.regrind_product_id) = 1 THEN MIN(d.regrind_product_id) END
+                CASE WHEN COUNT(DISTINCT d.regrind_product_id) = 1 THEN MIN(d.regrind_product_id) END,
+                -- Rebroyat made, in kilos: each figure is in its own rebroyat
+                -- product's unit, the tenant default's when the report names none.
+                COALESCE(SUM(
+                    d.regrind_quantity * CASE WHEN rgu.category = 'weight' THEN rgu.ratio_to_base ELSE %s END
+                ), 0)
             FROM production.production_reports r
             JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            LEFT JOIN core.products rgp ON rgp.id = d.regrind_product_id AND rgp.tenant_id = r.tenant_id
+            LEFT JOIN core.uoms rgu ON rgu.id = rgp.uom_id AND rgu.tenant_id = rgp.tenant_id
             -- Rebroyat poured back in is weighed against whatever product the
             -- report names for it -- the dedicated rebroyat product most of
             -- the time, but an old report can name a raw material bought in a
@@ -262,10 +294,13 @@ class OfConsolidationService:
             LEFT JOIN core.uoms riu ON riu.id = rip.uom_id AND riu.tenant_id = rip.tenant_id
             WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'daily' AND r.{_VALIDATED}
             """,
-            (anchor_ratio, anchor_ratio, tenant_id, of_id),
+            (anchor_ratio, anchor_ratio, regrind_default_ratio, tenant_id, of_id),
         ).fetchone()
         return {
             "report_count": int(row[0]),
+            "regrind_quantity_kg": float(row[13]),
+            "regrind_default_product_id": regrind_default_product_id,
+            "water_derived": water_derived,
             "semolina_quantity": semolina["total"],
             "semolina_by_product": semolina["by_product"],
             "regrind_input_quantity": float(row[1]),
@@ -274,7 +309,7 @@ class OfConsolidationService:
             "regrind_input_quantity_normalized": float(row[2]),
             "dough_quantity": float(row[3]),
             "regrind_quantity": float(row[4]),
-            "water_quantity": float(row[5]),
+            "water_quantity": water_quantity,
             "fuel_quantity": float(row[6]),
             "gasoil_quantity": float(row[7]),
             "electricity_quantity": float(row[8]),
@@ -289,6 +324,83 @@ class OfConsolidationService:
             "regrind_input_product_id": row[11],
             "regrind_product_id": row[12],
         }
+
+    def _regrind_default(self, *, tenant_id: str) -> tuple[str | None, float]:
+        """The tenant's rebroyat product and its kilos-per-unit (1 when there is none)."""
+        row = self._connection.execute(
+            """
+            SELECT d.output_product_id, CASE WHEN u.category = 'weight' THEN u.ratio_to_base END
+            FROM production.regrind_defaults d
+            LEFT JOIN core.products p ON p.id = d.output_product_id AND p.tenant_id = d.tenant_id
+            LEFT JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
+            WHERE d.tenant_id = %s AND d.input_product_id IS NULL
+            """,
+            (tenant_id,),
+        ).fetchone()
+        if row is None:
+            return None, 1.0
+        return row[0], float(row[1]) if row[1] is not None else 1.0
+
+    def _water_totals(self, *, tenant_id: str, of_id: str) -> tuple[float, bool]:
+        """Litres of water, and whether any of them were worked out from a dosage %.
+
+        The old daily form stored litres, derived from the % the operator typed
+        (migration 0028: % of the semoule poured, rebroyat included). The shift
+        form records only the %, so its litres are stored as 0. Where a report
+        has a % and no litres, the same derivation applies here -- kilos of mix
+        times the %, a kilo of water being a litre.
+        """
+        row = self._connection.execute(
+            f"""
+            WITH sem AS (
+                SELECT sl.report_id, SUM(sl.quantity * u.ratio_to_base) AS kg
+                FROM production.report_semolina_lines sl
+                JOIN core.products p ON p.id = sl.product_id AND p.tenant_id = sl.tenant_id
+                JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id AND u.category = 'weight'
+                WHERE sl.tenant_id = %s
+                GROUP BY sl.report_id
+            )
+            SELECT
+                COALESCE(SUM(
+                    CASE WHEN d.water_quantity > 0 THEN d.water_quantity
+                         ELSE d.water_percentage / 100 * (
+                             COALESCE(sem.kg, 0)
+                             + CASE WHEN riu.category = 'weight' THEN d.regrind_input_quantity * riu.ratio_to_base ELSE 0 END
+                         )
+                    END
+                ), 0),
+                COALESCE(BOOL_OR(d.water_quantity <= 0 AND d.water_percentage > 0), false)
+            FROM production.production_reports r
+            JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            LEFT JOIN sem ON sem.report_id = r.id
+            LEFT JOIN core.products rip ON rip.id = d.regrind_input_product_id AND rip.tenant_id = r.tenant_id
+            LEFT JOIN core.uoms riu ON riu.id = rip.uom_id AND riu.tenant_id = rip.tenant_id
+            WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type = 'daily' AND r.{_VALIDATED}
+            """,
+            (tenant_id, tenant_id, of_id),
+        ).fetchone()
+        return float(row[0]), bool(row[1])
+
+    def _by_day(self, *, tenant_id: str, of_id: str) -> list[dict]:
+        """Tonnage pressed and packed per report date, validated reports only."""
+        rows = self._connection.execute(
+            f"""
+            SELECT r.report_date,
+                   COALESCE(SUM(d.finished_product_quantity), 0),
+                   COALESCE(SUM(c.finished_product_quantity), 0)
+            FROM production.production_reports r
+            LEFT JOIN production.daily_reports d ON d.report_id = r.id AND d.tenant_id = r.tenant_id
+            LEFT JOIN production.conditionnement_reports c ON c.report_id = r.id AND c.tenant_id = r.tenant_id
+            WHERE r.tenant_id = %s AND r.of_id = %s AND r.report_type IN ('daily', 'conditionnement') AND r.{_VALIDATED}
+            GROUP BY r.report_date
+            ORDER BY r.report_date
+            """,
+            (tenant_id, of_id),
+        ).fetchall()
+        return [
+            {"date": report_date.isoformat(), "pressed_quantity": float(pressed), "packed_quantity": float(packed)}
+            for report_date, pressed, packed in rows
+        ]
 
     def _downtime_totals(self, *, tenant_id: str, of_id: str) -> int:
         """Minutes lost across every arrêt on the OF's validated daily reports.

@@ -105,13 +105,21 @@ class WorkOrderService:
         reference_prefix: str = "OF-",
     ) -> Result[WorkOrder]:
         if planned_quantity is not None and planned_quantity <= 0:
-            return Err("INVALID_QUANTITY", "planned quantity must be positive")
+            return Err("INVALID_QUANTITY", "planned quantity must be positive", "la quantité planifiée doit être positive")
         if not (work_center_id or "").strip():
-            return Err("MISSING_WORK_CENTER", "a work order must name the work center it runs on")
+            return Err(
+                "MISSING_WORK_CENTER",
+                "a work order must name the work center it runs on",
+                "un OF doit indiquer le poste de charge sur lequel il tourne",
+            )
 
         poured_inputs = poured_inputs or []
         if poured_inputs and not poured_inputs_location_id:
-            return Err("MISSING_POURED_INPUTS_LOCATION", "poured_inputs_location_id is required when poured_inputs is provided")
+            return Err(
+                "MISSING_POURED_INPUTS_LOCATION",
+                "poured_inputs_location_id is required when poured_inputs is provided",
+                "poured_inputs_location_id est obligatoire quand poured_inputs est fourni",
+            )
 
         work_order_id = str(ULID())
         reference = next_sequence_value(self._connection, tenant_id=tenant_id, name=reference_sequence, prefix=reference_prefix)
@@ -292,7 +300,7 @@ class WorkOrderService:
         """Move one OF to a new status under a row lock. Posts no stock, by design."""
         current = self._load_for_update(tenant_id=tenant_id, work_order_id=work_order_id)
         if current is None:
-            return Err("NOT_FOUND", f"work order {work_order_id} not found")
+            return Err("NOT_FOUND", f"work order {work_order_id} not found", f"OF {work_order_id} introuvable")
 
         result = transition(current, new_status)
         if isinstance(result, Err):
@@ -333,12 +341,12 @@ class WorkOrderService:
     ) -> Result[WorkOrder]:
         current = self._load_for_update(tenant_id=tenant_id, work_order_id=work_order_id)
         if current is None:
-            return Err("NOT_FOUND", f"work order {work_order_id} not found")
+            return Err("NOT_FOUND", f"work order {work_order_id} not found", f"OF {work_order_id} introuvable")
 
         updated_product_id = product_id if product_id is not None else current.product_id
         updated_quantity = planned_quantity if planned_quantity is not None else current.planned_quantity
         if updated_quantity is not None and updated_quantity <= 0:
-            return Err("INVALID_QUANTITY", "planned quantity must be positive")
+            return Err("INVALID_QUANTITY", "planned quantity must be positive", "la quantité planifiée doit être positive")
         updated_work_center_id = work_center_id if work_center_id is not None else current.work_center_id
         updated_supervisor_id = supervisor_id if supervisor_id is not None else current.supervisor_id
         updated_recipe_id = recipe_id if recipe_id is not None else current.recipe_id
@@ -463,7 +471,7 @@ class WorkOrderService:
         """
         order = self.get_work_order(tenant_id=tenant_id, work_order_id=work_order_id)
         if order is None:
-            return Err("NOT_FOUND", f"work order {work_order_id} not found")
+            return Err("NOT_FOUND", f"work order {work_order_id} not found", f"OF {work_order_id} introuvable")
 
         counts = dict(
             self._connection.execute(
@@ -581,9 +589,15 @@ class WorkOrderService:
                 "OF_HAS_BLOCKERS",
                 "this order still has unfinished reports: "
                 + ", ".join(f"{b['count']} {b['code'].lower().replace('_', ' ')}" for b in blockers),
+                "cet OF a encore des rapports non finalisés : "
+                + ", ".join(f"{b['count']} {b['code'].lower().replace('_', ' ')}" for b in blockers),
             )
         if blockers and force and not (force_reason or "").strip():
-            return Err("MISSING_REASON", "closing over unfinished reports must record why")
+            return Err(
+                "MISSING_REASON",
+                "closing over unfinished reports must record why",
+                "la clôture forcée malgré des rapports non finalisés doit indiquer pourquoi",
+            )
 
         result = self._apply_transition(
             tenant_id=tenant_id,
