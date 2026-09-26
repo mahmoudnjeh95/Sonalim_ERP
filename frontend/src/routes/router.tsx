@@ -27,6 +27,7 @@ import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
 import { EmployeesPage } from "../features/hr/EmployeesPage";
+import { EmployeeFilePage } from "../features/hr/employee/EmployeeFilePage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
 import { ProductsPage } from "../features/products/ProductsPage";
 import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
@@ -88,6 +89,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/admin/activity-log", element: <ActivityLogPage /> },
   { path: "/settings", element: <SettingsPage /> },
   { path: "/hr/employees", element: <EmployeesPage /> },
+  { path: "/hr/employees/:employeeId", element: <EmployeeFilePage /> },
   { path: "/hr", element: <HrPage /> },
 ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
 
