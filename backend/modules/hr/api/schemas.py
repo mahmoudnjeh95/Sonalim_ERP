@@ -103,3 +103,36 @@ class EmployeePatch(BaseModel):
     site: str | None = None
     termination_date: datetime.date | None = None
     termination_reason: str | None = None
+
+
+class DependantCreate(BaseModel):
+    kind: str
+    name: str
+    valid_from: datetime.date
+    birth_date: datetime.date | None = None
+    dependent_for_tax: bool = False
+    valid_to: datetime.date | None = None
+
+
+class DependantPatch(BaseModel):
+    kind: str | None = None
+    name: str | None = None
+    valid_from: datetime.date | None = None
+    birth_date: datetime.date | None = None
+    dependent_for_tax: bool = False  # never null: only sent when it changes
+    valid_to: datetime.date | None = None
+
+
+class PaymentMethodBody(BaseModel):
+    method: str
+    share_percent: Decimal
+    is_primary: bool = False
+    bank_name: str | None = None
+    account_no: str | None = None
+    mobile_operator: str | None = None
+    mobile_number: str | None = None
+
+
+class PaymentSetBody(BaseModel):
+    valid_from: datetime.date
+    methods: list[PaymentMethodBody]

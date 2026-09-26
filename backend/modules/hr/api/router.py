@@ -12,19 +12,26 @@ from modules.hr.api.service import DepartmentService, EmployeeService, LeaveServ
 from modules.hr.api.contract_service import ContractService
 from modules.hr.api.payroll_service import AttendanceService, PayrollService
 from modules.hr.api.organisation_service import GradeService, PositionService
-from modules.hr.api.access import can_view_sensitive, require_sensitive_for
+from modules.hr.api.access import can_view_sensitive, require, require_sensitive_for
+from modules.hr.api.dependant_service import DependantService
+from modules.hr.api.payment_method_service import PaymentMethodService
 from modules.hr.api.schemas import (
+    DependantCreate,
+    DependantPatch,
     DepartmentCreate,
     DepartmentPatch,
     EmployeeCreate,
     EmployeePatch,
     GradeCreate,
     GradePatch,
+    PaymentSetBody,
     PositionCreate,
     PositionPatch,
 )
+from modules.hr.domain.dependant import Dependant
 from modules.hr.domain.employee import EmployeeFile
-from modules.hr.domain.sensitive import EMPLOYEE_FIELDS, filled, mask, written
+from modules.hr.domain.payment import PaymentMethod
+from modules.hr.domain.sensitive import EMPLOYEE_FIELDS, PAYMENT_FIELDS, filled, mask, written
 
 router = APIRouter(prefix="/hr", tags=["hr"])
 
@@ -277,3 +284,62 @@ def update_employee(employee_id: str, body: EmployeePatch, tenant: TenantContext
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, changes=changes
         )
         return mask(respond(connection, result), EMPLOYEE_FIELDS, visible=visible)
+
+
+# ---- family and payment -----------------------------------------------------------------------
+
+
+def _masked_sets(sets: list[dict], visible: bool) -> list[dict]:
+    return [{**entry, "methods": [mask(method, PAYMENT_FIELDS, visible=visible) for method in entry["methods"]]} for entry in sets]
+
+
+@router.get("/employees/{employee_id}/dependants")
+def list_dependants(employee_id: str, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection:
+        return DependantService(connection).list_dependants(tenant_id=tenant.tenant_id, employee_id=employee_id)
+
+
+@router.post("/employees/{employee_id}/dependants", status_code=status.HTTP_201_CREATED)
+def create_dependant(employee_id: str, body: DependantCreate, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
+    with get_connection() as connection:
+        result = DependantService(connection).create_dependant(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, dependant=Dependant(**body.model_dump())
+        )
+        return respond(connection, result)
+
+
+@router.patch("/dependants/{dependant_id}")
+def update_dependant(dependant_id: str, body: DependantPatch, tenant: TenantContext = Depends(require_permission("hr.admin_employees"))):
+    with get_connection() as connection:
+        result = DependantService(connection).update_dependant(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, dependant_id=dependant_id, changes=body.model_dump(exclude_unset=True)
+        )
+        return respond(connection, result)
+
+
+@router.get("/employees/{employee_id}/payment-methods")
+def list_payment_methods(employee_id: str, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection:
+        sets = PaymentMethodService(connection).list_sets(tenant_id=tenant.tenant_id, employee_id=employee_id)
+        return _masked_sets(sets, can_view_sensitive(connection, tenant))
+
+
+@router.put("/employees/{employee_id}/payment-methods")
+def replace_payment_methods(employee_id: str, body: PaymentSetBody, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
+    """A new start date is a creation (hr.manage_employees); replacing or removing an existing
+    arrangement is an edit (hr.admin_employees). Account and phone numbers need hr.view_sensitive."""
+    methods = [method.model_dump() for method in body.methods]
+    with get_connection() as connection:
+        service = PaymentMethodService(connection)
+        if service.set_exists(tenant_id=tenant.tenant_id, employee_id=employee_id, valid_from=body.valid_from):
+            require(connection, tenant, "hr.admin_employees")
+        require_sensitive_for(connection, tenant, [name for method in methods for name in filled(method, PAYMENT_FIELDS)])
+        visible = can_view_sensitive(connection, tenant)
+        result = service.replace_set(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            employee_id=employee_id,
+            valid_from=body.valid_from,
+            methods=[PaymentMethod(**method) for method in methods],
+        )
+        return _masked_sets(respond(connection, result), visible)
