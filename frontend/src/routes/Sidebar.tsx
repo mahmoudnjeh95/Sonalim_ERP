@@ -133,7 +133,10 @@ const QUALITY_TABS: NavChild[] = [
 const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.hr",
-    items: [{ to: "/hr", labelKey: "nav.hr", icon: BriefcaseBusiness }],
+    items: [
+      { to: "/hr/employees", labelKey: "nav.hrEmployees", icon: Users, permission: "hr.view_employees" },
+      { to: "/hr", labelKey: "nav.hrLegacy", icon: BriefcaseBusiness, exact: true },
+    ],
   },
   {
     labelKey: "nav.crm",
