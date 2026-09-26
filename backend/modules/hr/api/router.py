@@ -16,6 +16,10 @@ from modules.hr.api.access import can_view_sensitive, require, require_sensitive
 from modules.hr.api.dependant_service import DependantService
 from modules.hr.api.payment_method_service import PaymentMethodService
 from modules.hr.api.schemas import (
+    ContractAmend,
+    ContractCreate,
+    ContractEnd,
+    ContractPatch,
     DependantCreate,
     DependantPatch,
     DepartmentCreate,
@@ -28,10 +32,11 @@ from modules.hr.api.schemas import (
     PositionCreate,
     PositionPatch,
 )
+from modules.hr.domain.contract import ContractComponent, ContractTerms
 from modules.hr.domain.dependant import Dependant
 from modules.hr.domain.employee import EmployeeFile
 from modules.hr.domain.payment import PaymentMethod
-from modules.hr.domain.sensitive import EMPLOYEE_FIELDS, PAYMENT_FIELDS, filled, mask, written
+from modules.hr.domain.sensitive import CONTRACT_WRITE_FIELDS, EMPLOYEE_FIELDS, PAYMENT_FIELDS, filled, mask, mask_contract, written
 
 router = APIRouter(prefix="/hr", tags=["hr"])
 
@@ -44,15 +49,6 @@ class LeaveBody(BaseModel):
 
 class LeaveReviewBody(BaseModel):
     status: str
-
-class ContractBody(BaseModel):
-    employee_id: str
-    contract_type: str
-    start_date: datetime.date
-    end_date: datetime.date | None = None
-    salary: float = 0
-    currency: str = "USD"
-    status: str = "active"
 
 class AttendanceBody(BaseModel):
     employee_id: str
@@ -118,17 +114,6 @@ def create_leave(body: LeaveBody, tenant: TenantContext = Depends(require_permis
 def review_leave(request_id: str, body: LeaveReviewBody, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
     with get_connection() as connection:
         result = LeaveService(connection).review_request(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, request_id=request_id, status=body.status)
-        if isinstance(result, Err): connection.rollback(); fail(result)
-        connection.commit(); return result.value
-
-@router.get("/contracts")
-def contracts(employee_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_contracts"))):
-    with get_connection() as connection: return ContractService(connection).list_contracts(tenant.tenant_id, employee_id)
-
-@router.post("/contracts", status_code=status.HTTP_201_CREATED)
-def create_contract(body: ContractBody, tenant: TenantContext = Depends(require_permission("hr.manage_contracts"))):
-    with get_connection() as connection:
-        result = ContractService(connection).create_contract(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
         if isinstance(result, Err): connection.rollback(); fail(result)
         connection.commit(); return result.value
 
@@ -343,3 +328,83 @@ def replace_payment_methods(employee_id: str, body: PaymentSetBody, tenant: Tena
             methods=[PaymentMethod(**method) for method in methods],
         )
         return _masked_sets(respond(connection, result), visible)
+
+
+# ---- contracts ------------------------------------------------------------------------------------
+
+_CONTRACT_NOT_FOUND = Err("NOT_FOUND", "contract not found", "contrat introuvable")
+
+
+def _terms_from(data: dict) -> ContractTerms:
+    components = tuple(ContractComponent(**component) for component in data.pop("components"))
+    return ContractTerms(**data, components=components)
+
+
+@router.get("/contracts")
+def list_contracts(employee_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_contracts"))):
+    with get_connection() as connection:
+        contracts = ContractService(connection).list_contracts(tenant.tenant_id, employee_id)
+        visible = can_view_sensitive(connection, tenant)
+        return [mask_contract(contract, visible=visible) for contract in contracts]
+
+
+@router.get("/contracts/{contract_id}")
+def get_contract(contract_id: str, tenant: TenantContext = Depends(require_permission("hr.view_contracts"))):
+    with get_connection() as connection:
+        contract = ContractService(connection).get_contract(tenant_id=tenant.tenant_id, contract_id=contract_id)
+        if contract is None:
+            fail(_CONTRACT_NOT_FOUND)
+        return mask_contract(contract, visible=can_view_sensitive(connection, tenant))
+
+
+@router.post("/contracts", status_code=status.HTTP_201_CREATED)
+def create_contract(body: ContractCreate, tenant: TenantContext = Depends(require_permission("hr.manage_contracts"))):
+    """A contract always sets pay, so creating one needs hr.view_sensitive."""
+    data = body.model_dump()
+    with get_connection() as connection:
+        require_sensitive_for(connection, tenant, filled(data, CONTRACT_WRITE_FIELDS))
+        visible = can_view_sensitive(connection, tenant)
+        result = ContractService(connection).create_contract(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, terms=_terms_from(data))
+        return mask_contract(respond(connection, result), visible=visible)
+
+
+@router.patch("/contracts/{contract_id}")
+def update_contract(contract_id: str, body: ContractPatch, tenant: TenantContext = Depends(require_permission("hr.admin_contracts"))):
+    changes = body.model_dump(exclude_unset=True)
+    with get_connection() as connection:
+        require_sensitive_for(connection, tenant, written(changes, CONTRACT_WRITE_FIELDS))
+        visible = can_view_sensitive(connection, tenant)
+        result = ContractService(connection).update_contract(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contract_id=contract_id, changes=changes
+        )
+        return mask_contract(respond(connection, result), visible=visible)
+
+
+@router.post("/contracts/{contract_id}/activate")
+def activate_contract(contract_id: str, tenant: TenantContext = Depends(require_permission("hr.manage_contracts"))):
+    with get_connection() as connection:
+        visible = can_view_sensitive(connection, tenant)
+        result = ContractService(connection).activate_contract(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contract_id=contract_id)
+        return mask_contract(respond(connection, result), visible=visible)
+
+
+@router.post("/contracts/{contract_id}/end")
+def end_contract(contract_id: str, body: ContractEnd, tenant: TenantContext = Depends(require_permission("hr.manage_contracts"))):
+    with get_connection() as connection:
+        visible = can_view_sensitive(connection, tenant)
+        result = ContractService(connection).end_contract(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contract_id=contract_id, end_date=body.end_date, end_reason=body.end_reason
+        )
+        return mask_contract(respond(connection, result), visible=visible)
+
+
+@router.post("/contracts/{contract_id}/amend", status_code=status.HTTP_201_CREATED)
+def amend_contract(contract_id: str, body: ContractAmend, tenant: TenantContext = Depends(require_permission("hr.manage_contracts"))):
+    changes = body.model_dump(exclude_unset=True, exclude={"effective_date"})
+    with get_connection() as connection:
+        require_sensitive_for(connection, tenant, written(changes, CONTRACT_WRITE_FIELDS))
+        visible = can_view_sensitive(connection, tenant)
+        result = ContractService(connection).amend_contract(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contract_id=contract_id, effective_date=body.effective_date, changes=changes
+        )
+        return mask_contract(respond(connection, result), visible=visible)

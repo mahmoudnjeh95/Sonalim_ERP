@@ -52,6 +52,7 @@ PURGE_TABLES = [
     "crm.opportunities",
     "finance.invoices",
     "hr.attendance_records",
+    "hr.contract_components",
     "hr.contracts",
     "hr.departments",
     "hr.dependants",

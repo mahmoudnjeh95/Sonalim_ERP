@@ -136,3 +136,56 @@ class PaymentMethodBody(BaseModel):
 class PaymentSetBody(BaseModel):
     valid_from: datetime.date
     methods: list[PaymentMethodBody]
+
+
+class ComponentBody(BaseModel):
+    component_code: str
+    amount: Decimal | None = None
+    rate: Decimal | None = None  # percent: 10 means 10 %
+
+
+class ContractCreate(BaseModel):
+    employee_id: str
+    contract_type: str
+    start_date: datetime.date
+    base_salary: Decimal
+    end_date: datetime.date | None = None
+    trial_end_date: datetime.date | None = None
+    weekly_hours: Decimal = Decimal("40")
+    pay_frequency: str = "monthly"
+    position_id: str | None = None
+    grade_id: str | None = None
+    status: str = "active"
+    components: list[ComponentBody] = []
+
+
+class ContractPatch(BaseModel):
+    contract_type: str | None = None
+    start_date: datetime.date | None = None
+    base_salary: Decimal | None = None
+    end_date: datetime.date | None = None
+    trial_end_date: datetime.date | None = None
+    weekly_hours: Decimal | None = None
+    pay_frequency: str | None = None
+    position_id: str | None = None
+    grade_id: str | None = None
+    status: str | None = None
+    end_reason: str | None = None
+    components: list[ComponentBody] | None = None
+
+
+class ContractAmend(BaseModel):
+    effective_date: datetime.date
+    contract_type: str | None = None
+    end_date: datetime.date | None = None
+    weekly_hours: Decimal | None = None
+    base_salary: Decimal | None = None
+    pay_frequency: str | None = None
+    position_id: str | None = None
+    grade_id: str | None = None
+    components: list[ComponentBody] | None = None
+
+
+class ContractEnd(BaseModel):
+    end_date: datetime.date
+    end_reason: str
