@@ -15,6 +15,9 @@ from modules.hr.api.organisation_service import GradeService, PositionService
 from modules.hr.api.access import can_view_sensitive, require, require_sensitive_for
 from modules.hr.api.dependant_service import DependantService
 from modules.hr.api.payment_method_service import PaymentMethodService
+from modules.hr.api.alert_service import HrAlertService
+from modules.hr.api.document_service import DocumentService
+from modules.hr.api.settings_service import HrSettingsService
 from modules.hr.api.schemas import (
     ContractAmend,
     ContractCreate,
@@ -24,6 +27,8 @@ from modules.hr.api.schemas import (
     DependantPatch,
     DepartmentCreate,
     DepartmentPatch,
+    DocumentCreate,
+    DocumentPatch,
     EmployeeCreate,
     EmployeePatch,
     GradeCreate,
@@ -31,10 +36,12 @@ from modules.hr.api.schemas import (
     PaymentSetBody,
     PositionCreate,
     PositionPatch,
+    SettingsBody,
     TerminationBody,
 )
 from modules.hr.domain.contract import ContractComponent, ContractTerms
 from modules.hr.domain.dependant import Dependant
+from modules.hr.domain.document import EmployeeDocument
 from modules.hr.domain.employee import EmployeeFile
 from modules.hr.domain.payment import PaymentMethod
 from modules.hr.domain.sensitive import CONTRACT_WRITE_FIELDS, EMPLOYEE_FIELDS, PAYMENT_FIELDS, filled, mask, mask_contract, written
@@ -420,3 +427,49 @@ def amend_contract(contract_id: str, body: ContractAmend, tenant: TenantContext 
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, contract_id=contract_id, effective_date=body.effective_date, changes=changes
         )
         return mask_contract(respond(connection, result), visible=visible)
+
+
+# ---- documents, settings, alerts --------------------------------------------------------------
+
+
+@router.get("/employees/{employee_id}/documents")
+def list_documents(employee_id: str, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection:
+        return DocumentService(connection).list_documents(tenant_id=tenant.tenant_id, employee_id=employee_id)
+
+
+@router.post("/employees/{employee_id}/documents", status_code=status.HTTP_201_CREATED)
+def create_document(employee_id: str, body: DocumentCreate, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
+    with get_connection() as connection:
+        result = DocumentService(connection).create_document(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, document=EmployeeDocument(**body.model_dump())
+        )
+        return respond(connection, result)
+
+
+@router.patch("/documents/{document_id}")
+def update_document(document_id: str, body: DocumentPatch, tenant: TenantContext = Depends(require_permission("hr.admin_employees"))):
+    with get_connection() as connection:
+        result = DocumentService(connection).update_document(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, document_id=document_id, changes=body.model_dump(exclude_unset=True)
+        )
+        return respond(connection, result)
+
+
+@router.get("/settings")
+def get_settings(tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection:
+        return HrSettingsService(connection).get(tenant.tenant_id)
+
+
+@router.put("/settings")
+def save_settings(body: SettingsBody, tenant: TenantContext = Depends(require_permission("hr.admin_employees"))):
+    with get_connection() as connection:
+        result = HrSettingsService(connection).save(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        return respond(connection, result)
+
+
+@router.get("/alerts/expiries")
+def expiry_alerts(tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection:
+        return HrAlertService(connection).expiry_alerts(tenant_id=tenant.tenant_id, today=datetime.date.today())

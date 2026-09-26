@@ -194,3 +194,25 @@ class ContractEnd(BaseModel):
 class TerminationBody(BaseModel):
     termination_date: datetime.date
     termination_reason: str
+
+
+class DocumentCreate(BaseModel):
+    kind: str
+    title: str | None = None
+    file_ref: str | None = None
+    issued_on: datetime.date | None = None
+    expires_on: datetime.date | None = None
+
+
+class DocumentPatch(BaseModel):
+    kind: str | None = None
+    title: str | None = None
+    file_ref: str | None = None
+    issued_on: datetime.date | None = None
+    expires_on: datetime.date | None = None
+
+
+class SettingsBody(BaseModel):
+    contract_expiry_horizon_days: int | None = None
+    trial_end_horizon_days: int | None = None
+    document_expiry_horizon_days: int | None = None
