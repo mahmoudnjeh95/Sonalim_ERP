@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime
+from typing import NoReturn
+
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from core.db import get_connection
@@ -64,9 +66,36 @@ class PayslipUpdateBody(BaseModel):
     deductions: float | None = None
     taxes: float | None = None
 
-def fail(result: Err) -> None:
-    code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_409_CONFLICT if result.code.startswith("DUPLICATE") else status.HTTP_422_UNPROCESSABLE_ENTITY
+# Refusals answered 404 / 409; every other refusal is a 422. Later phases add their codes here.
+_NOT_FOUND_CODES = {"NOT_FOUND"}
+_CONFLICT_CODES = {
+    "BADGE_TAKEN",
+    "USER_ALREADY_LINKED",
+    "CONTRACT_OVERLAP",
+    "ALREADY_TERMINATED",
+    "EMPLOYEE_TERMINATED",
+    "CONTRACT_AFTER_TERMINATION",
+    "INVALID_TRANSITION",
+}
+
+
+def fail(result: Err) -> NoReturn:
+    if result.code in _NOT_FOUND_CODES:
+        code = status.HTTP_404_NOT_FOUND
+    elif result.code in _CONFLICT_CODES or result.code.startswith("DUPLICATE"):
+        code = status.HTTP_409_CONFLICT
+    else:
+        code = status.HTTP_422_UNPROCESSABLE_ENTITY
     raise HTTPException(code, err_detail(result))
+
+
+def respond(connection, result):
+    """Commit a successful write and return its value; roll back and raise on a refusal."""
+    if isinstance(result, Err):
+        connection.rollback()
+        fail(result)
+    connection.commit()
+    return result.value
 
 @router.get("/employees")
 def employees(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
