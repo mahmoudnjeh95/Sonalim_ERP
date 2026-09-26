@@ -12,20 +12,21 @@ from modules.hr.api.service import DepartmentService, EmployeeService, LeaveServ
 from modules.hr.api.contract_service import ContractService
 from modules.hr.api.payroll_service import AttendanceService, PayrollService
 from modules.hr.api.organisation_service import GradeService, PositionService
-from modules.hr.api.schemas import DepartmentCreate, DepartmentPatch, GradeCreate, GradePatch, PositionCreate, PositionPatch
+from modules.hr.api.access import can_view_sensitive, require_sensitive_for
+from modules.hr.api.schemas import (
+    DepartmentCreate,
+    DepartmentPatch,
+    EmployeeCreate,
+    EmployeePatch,
+    GradeCreate,
+    GradePatch,
+    PositionCreate,
+    PositionPatch,
+)
+from modules.hr.domain.employee import EmployeeFile
+from modules.hr.domain.sensitive import EMPLOYEE_FIELDS, filled, mask, written
 
 router = APIRouter(prefix="/hr", tags=["hr"])
-
-class EmployeeBody(BaseModel):
-    employee_no: str
-    first_name: str
-    last_name: str
-    email: str | None = None
-    phone: str | None = None
-    department_id: str | None = None
-    job_title: str | None = None
-    hire_date: datetime.date
-    status: str = "active"
 
 class LeaveBody(BaseModel):
     employee_id: str
@@ -94,25 +95,6 @@ def respond(connection, result):
         fail(result)
     connection.commit()
     return result.value
-
-@router.get("/employees")
-def employees(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
-    with get_connection() as connection: return EmployeeService(connection).list_employees(tenant.tenant_id, status_filter)
-
-@router.post("/employees", status_code=status.HTTP_201_CREATED)
-def create_employee(body: EmployeeBody, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
-    with get_connection() as connection:
-        result = EmployeeService(connection).create_employee(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
-        if isinstance(result, Err): connection.rollback(); fail(result)
-        connection.commit(); return result.value
-
-@router.patch("/employees/{employee_id}")
-def update_employee(employee_id: str, body: EmployeeBody, tenant: TenantContext = Depends(require_permission("hr.admin_employees"))):
-    data = body.model_dump(exclude={"employee_no"})
-    with get_connection() as connection:
-        result = EmployeeService(connection).update_employee(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, **data)
-        if isinstance(result, Err): connection.rollback(); fail(result)
-        connection.commit(); return result.value
 
 @router.get("/leave-requests")
 def leave_requests(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_leave"))):
@@ -251,3 +233,47 @@ def update_grade(grade_id: str, body: GradePatch, tenant: TenantContext = Depend
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, grade_id=grade_id, changes=body.model_dump(exclude_unset=True)
         )
         return respond(connection, result)
+
+
+# ---- the employee file ------------------------------------------------------------------------
+
+_EMPLOYEE_NOT_FOUND = Err("NOT_FOUND", "employee not found", "employé introuvable")
+
+
+@router.get("/employees")
+def list_employees(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection:
+        return EmployeeService(connection).list_employees(tenant.tenant_id, status_filter)
+
+
+@router.get("/employees/{employee_id}")
+def get_employee(employee_id: str, tenant: TenantContext = Depends(require_permission("hr.view_employees"))):
+    with get_connection() as connection:
+        record = EmployeeService(connection).get_employee(tenant_id=tenant.tenant_id, employee_id=employee_id)
+        if record is None:
+            fail(_EMPLOYEE_NOT_FOUND)
+        return mask(record, EMPLOYEE_FIELDS, visible=can_view_sensitive(connection, tenant))
+
+
+@router.post("/employees", status_code=status.HTTP_201_CREATED)
+def create_employee(body: EmployeeCreate, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
+    data = body.model_dump()
+    with get_connection() as connection:
+        require_sensitive_for(connection, tenant, filled(data, EMPLOYEE_FIELDS))
+        visible = can_view_sensitive(connection, tenant)
+        result = EmployeeService(connection).create_employee(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee=EmployeeFile(**data)
+        )
+        return mask(respond(connection, result), EMPLOYEE_FIELDS, visible=visible)
+
+
+@router.patch("/employees/{employee_id}")
+def update_employee(employee_id: str, body: EmployeePatch, tenant: TenantContext = Depends(require_permission("hr.admin_employees"))):
+    changes = body.model_dump(exclude_unset=True)
+    with get_connection() as connection:
+        require_sensitive_for(connection, tenant, written(changes, EMPLOYEE_FIELDS))
+        visible = can_view_sensitive(connection, tenant)
+        result = EmployeeService(connection).update_employee(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, changes=changes
+        )
+        return mask(respond(connection, result), EMPLOYEE_FIELDS, visible=visible)

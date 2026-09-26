@@ -48,3 +48,58 @@ class GradePatch(BaseModel):
     echelon: str | None = None
     base_salary: Decimal | None = None
     valid_from: datetime.date | None = None
+
+
+class EmployeeCreate(BaseModel):
+    employee_no: str
+    first_name: str
+    last_name: str
+    hire_date: datetime.date
+    status: str = "active"
+    email: str | None = None
+    phone: str | None = None
+    department_id: str | None = None
+    job_title: str | None = None
+    user_id: str | None = None
+    gender: str | None = None
+    birth_date: datetime.date | None = None
+    birth_place: str | None = None
+    nationality: str | None = None
+    national_id: str | None = None
+    inps_no: str | None = None
+    amo_no: str | None = None
+    marital_status: str | None = None
+    address: str | None = None
+    emergency_contact: str | None = None
+    badge_no: str | None = None
+    position_id: str | None = None
+    grade_id: str | None = None
+    site: str | None = None
+
+
+class EmployeePatch(BaseModel):
+    first_name: str | None = None
+    last_name: str | None = None
+    hire_date: datetime.date | None = None
+    status: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    department_id: str | None = None
+    job_title: str | None = None
+    user_id: str | None = None
+    gender: str | None = None
+    birth_date: datetime.date | None = None
+    birth_place: str | None = None
+    nationality: str | None = None
+    national_id: str | None = None
+    inps_no: str | None = None
+    amo_no: str | None = None
+    marital_status: str | None = None
+    address: str | None = None
+    emergency_contact: str | None = None
+    badge_no: str | None = None
+    position_id: str | None = None
+    grade_id: str | None = None
+    site: str | None = None
+    termination_date: datetime.date | None = None
+    termination_reason: str | None = None
