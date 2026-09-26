@@ -9,6 +9,9 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.hr.domain.entities import Employee, validate_employee, validate_leave
 
+# Re-exported: the dashboard route and later phases import it from here.
+from modules.hr.api.organisation_service import DepartmentService  # noqa: F401
+
 
 class EmployeeService:
     def __init__(self, connection: psycopg.Connection) -> None:
@@ -65,23 +68,6 @@ class EmployeeService:
     @staticmethod
     def _employee(row) -> dict:
         return {"id": row[0], "employee_no": row[1], "first_name": row[2], "last_name": row[3], "email": row[4], "phone": row[5], "department_id": row[6], "department_name": row[7], "job_title": row[8], "hire_date": row[9].isoformat(), "status": row[10]}
-
-
-class DepartmentService:
-    def __init__(self, connection: psycopg.Connection) -> None:
-        self.connection = connection
-
-    def list_departments(self, tenant_id: str) -> list[dict]:
-        rows = self.connection.execute("SELECT d.id, d.code, d.name, d.manager_employee_id, COUNT(e.id) FROM hr.departments d LEFT JOIN hr.employees e ON e.department_id=d.id AND e.tenant_id=d.tenant_id WHERE d.tenant_id=%s GROUP BY d.id ORDER BY d.name", (tenant_id,)).fetchall()
-        return [{"id": r[0], "code": r[1], "name": r[2], "manager_employee_id": r[3], "employee_count": r[4]} for r in rows]
-
-    def create_department(self, *, tenant_id: str, actor_id: str, code: str, name: str) -> Result[dict]:
-        if not code.strip() or not name.strip(): return Err("INVALID_DEPARTMENT", "department code and name are required", "le code et le nom du département sont obligatoires")
-        department_id = str(ULID())
-        try: self.connection.execute("INSERT INTO hr.departments (id, tenant_id, code, name) VALUES (%s,%s,%s,%s)", (department_id, tenant_id, code, name))
-        except psycopg.errors.UniqueViolation: return Err("DUPLICATE_CODE", "department code already exists", "ce code de département existe déjà")
-        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="department.created", entity_type="department", entity_id=department_id, payload={"code": code, "name": name})
-        return Ok({"id": department_id, "code": code, "name": name, "manager_employee_id": None, "employee_count": 0})
 
 
 class LeaveService:

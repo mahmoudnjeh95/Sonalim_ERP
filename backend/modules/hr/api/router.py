@@ -11,6 +11,8 @@ from core.tenancy import TenantContext, require_permission
 from modules.hr.api.service import DepartmentService, EmployeeService, LeaveService
 from modules.hr.api.contract_service import ContractService
 from modules.hr.api.payroll_service import AttendanceService, PayrollService
+from modules.hr.api.organisation_service import GradeService, PositionService
+from modules.hr.api.schemas import DepartmentCreate, DepartmentPatch, GradeCreate, GradePatch, PositionCreate, PositionPatch
 
 router = APIRouter(prefix="/hr", tags=["hr"])
 
@@ -24,10 +26,6 @@ class EmployeeBody(BaseModel):
     job_title: str | None = None
     hire_date: datetime.date
     status: str = "active"
-
-class DepartmentBody(BaseModel):
-    code: str
-    name: str
 
 class LeaveBody(BaseModel):
     employee_id: str
@@ -116,17 +114,6 @@ def update_employee(employee_id: str, body: EmployeeBody, tenant: TenantContext 
         if isinstance(result, Err): connection.rollback(); fail(result)
         connection.commit(); return result.value
 
-@router.get("/departments")
-def departments(tenant: TenantContext = Depends(require_permission("hr.view_departments"))):
-    with get_connection() as connection: return DepartmentService(connection).list_departments(tenant.tenant_id)
-
-@router.post("/departments", status_code=status.HTTP_201_CREATED)
-def create_department(body: DepartmentBody, tenant: TenantContext = Depends(require_permission("hr.manage_departments"))):
-    with get_connection() as connection:
-        result = DepartmentService(connection).create_department(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
-        if isinstance(result, Err): connection.rollback(); fail(result)
-        connection.commit(); return result.value
-
 @router.get("/leave-requests")
 def leave_requests(status_filter: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_leave"))):
     with get_connection() as connection: return LeaveService(connection).list_requests(tenant.tenant_id, status_filter)
@@ -196,3 +183,71 @@ def update_payslip(payslip_id: str, body: PayslipUpdateBody, tenant: TenantConte
         result = PayrollService(connection).update_payslip(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, payslip_id=payslip_id, **body.model_dump())
         if isinstance(result, Err): connection.rollback(); fail(result)
         connection.commit(); return result.value
+
+# ---- organisation: departments, positions, grades -------------------------------------------
+
+
+@router.get("/departments")
+def list_departments(tenant: TenantContext = Depends(require_permission("hr.view_departments"))):
+    with get_connection() as connection:
+        return DepartmentService(connection).list_departments(tenant.tenant_id)
+
+
+@router.post("/departments", status_code=status.HTTP_201_CREATED)
+def create_department(body: DepartmentCreate, tenant: TenantContext = Depends(require_permission("hr.manage_departments"))):
+    with get_connection() as connection:
+        result = DepartmentService(connection).create_department(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        return respond(connection, result)
+
+
+@router.patch("/departments/{department_id}")
+def update_department(department_id: str, body: DepartmentPatch, tenant: TenantContext = Depends(require_permission("hr.admin_departments"))):
+    with get_connection() as connection:
+        result = DepartmentService(connection).update_department(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, department_id=department_id, changes=body.model_dump(exclude_unset=True)
+        )
+        return respond(connection, result)
+
+
+@router.get("/positions")
+def list_positions(tenant: TenantContext = Depends(require_permission("hr.view_positions"))):
+    with get_connection() as connection:
+        return PositionService(connection).list_positions(tenant.tenant_id)
+
+
+@router.post("/positions", status_code=status.HTTP_201_CREATED)
+def create_position(body: PositionCreate, tenant: TenantContext = Depends(require_permission("hr.manage_positions"))):
+    with get_connection() as connection:
+        result = PositionService(connection).create_position(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        return respond(connection, result)
+
+
+@router.patch("/positions/{position_id}")
+def update_position(position_id: str, body: PositionPatch, tenant: TenantContext = Depends(require_permission("hr.admin_positions"))):
+    with get_connection() as connection:
+        result = PositionService(connection).update_position(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, position_id=position_id, changes=body.model_dump(exclude_unset=True)
+        )
+        return respond(connection, result)
+
+
+@router.get("/grades")
+def list_grades(tenant: TenantContext = Depends(require_permission("hr.view_positions"))):
+    with get_connection() as connection:
+        return GradeService(connection).list_grades(tenant.tenant_id)
+
+
+@router.post("/grades", status_code=status.HTTP_201_CREATED)
+def create_grade(body: GradeCreate, tenant: TenantContext = Depends(require_permission("hr.manage_positions"))):
+    with get_connection() as connection:
+        result = GradeService(connection).create_grade(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump())
+        return respond(connection, result)
+
+
+@router.patch("/grades/{grade_id}")
+def update_grade(grade_id: str, body: GradePatch, tenant: TenantContext = Depends(require_permission("hr.admin_positions"))):
+    with get_connection() as connection:
+        result = GradeService(connection).update_grade(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, grade_id=grade_id, changes=body.model_dump(exclude_unset=True)
+        )
+        return respond(connection, result)
