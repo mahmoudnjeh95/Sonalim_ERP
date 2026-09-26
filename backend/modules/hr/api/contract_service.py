@@ -233,6 +233,38 @@ class ContractService:
             return inserted
         return Ok(self.get_contract(tenant_id=tenant_id, contract_id=inserted.value))
 
+    def close_for_termination(
+        self, *, tenant_id: str, actor_id: str, employee_id: str, termination_date: datetime.date, termination_reason: str
+    ) -> Result[list[str]]:
+        """End every active contract in force on the exit day, on that day, for that reason.
+        A signed contract starting after the exit is a contradiction the user must resolve first."""
+        later = self.connection.execute(
+            "SELECT start_date FROM hr.contracts WHERE tenant_id = %s AND employee_id = %s AND status <> 'draft' AND start_date > %s "
+            "ORDER BY start_date LIMIT 1",
+            (tenant_id, employee_id, termination_date),
+        ).fetchone()
+        if later is not None:
+            day = later[0].isoformat()
+            return Err(
+                "CONTRACT_AFTER_TERMINATION",
+                f"a signed contract starts on {day}, after the exit date",
+                f"un contrat signé commence le {day}, après la date de sortie",
+            )
+        rows = self.connection.execute(
+            "SELECT id FROM hr.contracts WHERE tenant_id = %s AND employee_id = %s AND status = 'active' "
+            "AND start_date <= %s AND (end_date IS NULL OR end_date >= %s) ORDER BY start_date",
+            (tenant_id, employee_id, termination_date, termination_date),
+        ).fetchall()
+        closed: list[str] = []
+        for (contract_id,) in rows:
+            current = self._locked_terms(tenant_id, contract_id)
+            self._close(
+                tenant_id=tenant_id, actor_id=actor_id, contract_id=contract_id, current=current,
+                end_date=termination_date, end_reason=termination_reason,
+            )
+            closed.append(contract_id)
+        return Ok(closed)
+
     def update_contract(self, *, tenant_id: str, actor_id: str, contract_id: str, changes: Mapping[str, object]) -> Result[dict]:
         """Edit in place (hr.admin_contracts): any term, whatever the status."""
         unknown = sorted(set(changes) - _EDITABLE)

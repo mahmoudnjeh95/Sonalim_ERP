@@ -3,7 +3,7 @@ how their employment ended. Pure rules, no database."""
 from __future__ import annotations
 
 import datetime
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 
 from core.domain.result import Err, Ok, Result
 
@@ -107,3 +107,12 @@ def validate_employee_file(employee: EmployeeFile) -> Result[EmployeeFile]:
     if candidate.termination_date is not None and candidate.termination_date < candidate.hire_date:
         return Err("INVALID_DATES", "the exit date cannot precede the hire date", "la date de sortie ne peut pas précéder la date d'embauche")
     return Ok(candidate)
+
+
+def terminate(employee: EmployeeFile, *, termination_date: datetime.date, termination_reason: str) -> Result[EmployeeFile]:
+    """The file of someone who leaves on `termination_date` (the last day worked)."""
+    if employee.status == "terminated":
+        return Err("ALREADY_TERMINATED", "this employee has already left", "cet employé est déjà sorti")
+    return validate_employee_file(
+        replace(employee, status="terminated", termination_date=termination_date, termination_reason=termination_reason)
+    )

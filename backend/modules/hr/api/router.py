@@ -31,6 +31,7 @@ from modules.hr.api.schemas import (
     PaymentSetBody,
     PositionCreate,
     PositionPatch,
+    TerminationBody,
 )
 from modules.hr.domain.contract import ContractComponent, ContractTerms
 from modules.hr.domain.dependant import Dependant
@@ -267,6 +268,17 @@ def update_employee(employee_id: str, body: EmployeePatch, tenant: TenantContext
         visible = can_view_sensitive(connection, tenant)
         result = EmployeeService(connection).update_employee(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, changes=changes
+        )
+        return mask(respond(connection, result), EMPLOYEE_FIELDS, visible=visible)
+
+
+@router.post("/employees/{employee_id}/terminate")
+def terminate_employee(employee_id: str, body: TerminationBody, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
+    with get_connection() as connection:
+        visible = can_view_sensitive(connection, tenant)
+        result = EmployeeService(connection).terminate_employee(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id,
+            termination_date=body.termination_date, termination_reason=body.termination_reason,
         )
         return mask(respond(connection, result), EMPLOYEE_FIELDS, visible=visible)
 

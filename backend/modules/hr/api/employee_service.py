@@ -11,8 +11,9 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from modules.hr.api.contract_service import ContractService
 from modules.hr.api.support import change_payload, execute_guarded, iso_dates, missing_reference
-from modules.hr.domain.employee import EDITABLE_FIELDS, FIELDS, EmployeeFile, validate_employee_file
+from modules.hr.domain.employee import EDITABLE_FIELDS, FIELDS, EmployeeFile, terminate, validate_employee_file
 from modules.hr.domain.sensitive import EMPLOYEE_FIELDS
 
 _UNIQUE_REFUSALS = {
@@ -202,6 +203,44 @@ class EmployeeService:
             entity_type="employee",
             entity_id=employee_id,
             payload=change_payload(asdict(current), asdict(candidate), EMPLOYEE_FIELDS),
+        )
+        return Ok(self.get_employee(tenant_id=tenant_id, employee_id=employee_id))
+
+    def terminate_employee(
+        self, *, tenant_id: str, actor_id: str, employee_id: str, termination_date: datetime.date, termination_reason: str
+    ) -> Result[dict]:
+        """Record the exit: the contract in force that day ends on it, and the file carries the date
+        and reason the next payroll's final settlement is built from."""
+        current = self._locked(tenant_id, employee_id)
+        if current is None:
+            return _NOT_FOUND
+        left = terminate(current, termination_date=termination_date, termination_reason=termination_reason)
+        if isinstance(left, Err):
+            return left
+        closed = ContractService(self.connection).close_for_termination(
+            tenant_id=tenant_id, actor_id=actor_id, employee_id=employee_id,
+            termination_date=termination_date, termination_reason=termination_reason,
+        )
+        if isinstance(closed, Err):
+            return closed
+        self.connection.execute(
+            "UPDATE hr.employees SET status = 'terminated', termination_date = %s, termination_reason = %s WHERE id = %s AND tenant_id = %s",
+            (termination_date, termination_reason, employee_id, tenant_id),
+        )
+        record_audit(
+            self.connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="employee.terminated",
+            entity_type="employee",
+            entity_id=employee_id,
+            payload={
+                "from_status": current.status,
+                "to_status": "terminated",
+                "termination_date": termination_date.isoformat(),
+                "termination_reason": termination_reason,
+                "closed_contract_ids": closed.value,
+            },
         )
         return Ok(self.get_employee(tenant_id=tenant_id, employee_id=employee_id))
 

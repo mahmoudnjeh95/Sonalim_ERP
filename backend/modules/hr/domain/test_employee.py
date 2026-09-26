@@ -2,6 +2,7 @@ import datetime
 
 from core.domain.result import Ok
 from modules.hr.domain.employee import EmployeeFile, validate_employee_file
+from modules.hr.domain.employee import terminate  # noqa: E402
 
 HIRED = datetime.date(2024, 3, 1)
 
@@ -44,3 +45,22 @@ def test_amended_ends_a_contract_never_an_employment():
     assert validate_employee_file(
         _file(status="terminated", termination_date=datetime.date(2026, 1, 31), termination_reason="amended")
     ).code == "INVALID_TERMINATION"
+
+
+def test_terminating_sets_status_date_and_reason():
+    result = terminate(_file(), termination_date=datetime.date(2026, 9, 30), termination_reason="resignation")
+    assert isinstance(result, Ok)
+    assert (result.value.status, result.value.termination_date, result.value.termination_reason) == (
+        "terminated", datetime.date(2026, 9, 30), "resignation",
+    )
+
+
+def test_an_exit_needs_a_known_reason_and_cannot_precede_hiring():
+    assert terminate(_file(), termination_date=datetime.date(2026, 9, 30), termination_reason="amended").code == "INVALID_TERMINATION"
+    assert terminate(_file(), termination_date=datetime.date(2026, 9, 30), termination_reason="").code == "INVALID_TERMINATION"
+    assert terminate(_file(), termination_date=datetime.date(2024, 2, 1), termination_reason="resignation").code == "INVALID_DATES"
+
+
+def test_an_employee_leaves_only_once():
+    left = terminate(_file(), termination_date=datetime.date(2026, 9, 30), termination_reason="resignation").value
+    assert terminate(left, termination_date=datetime.date(2026, 10, 31), termination_reason="dismissal").code == "ALREADY_TERMINATED"

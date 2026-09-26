@@ -189,3 +189,8 @@ class ContractAmend(BaseModel):
 class ContractEnd(BaseModel):
     end_date: datetime.date
     end_reason: str
+
+
+class TerminationBody(BaseModel):
+    termination_date: datetime.date
+    termination_reason: str
