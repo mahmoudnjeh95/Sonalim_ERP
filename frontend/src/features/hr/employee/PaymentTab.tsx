@@ -105,6 +105,7 @@ export function PaymentTab({ employee }: { employee: EmployeeRecord }) {
         employeeId={employee.id}
         open={dialog.open}
         set={dialog.set}
+        existingDates={sets.map((entry) => entry.valid_from)}
         canSeeSensitive={canSeeSensitive}
         onOpenChange={(open) => setDialog((current) => ({ ...current, open }))}
       />
@@ -164,12 +165,14 @@ function PaymentSetDialog({
   employeeId,
   open,
   set,
+  existingDates,
   canSeeSensitive,
   onOpenChange,
 }: {
   employeeId: string;
   open: boolean;
   set: PaymentSet | null;
+  existingDates: string[];
   canSeeSensitive: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -186,6 +189,9 @@ function PaymentSetDialog({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, set?.valid_from]);
 
+  // "New arrangement" (set === null) with a date that already has a set would turn the save
+  // into a silent replace of that set — including any hidden numbers it holds. Block it here.
+  const clashesWithExisting = set === null && existingDates.includes(validFrom);
   const total = rows.reduce((sum, row) => sum + (Number(row.share_percent) || 0), 0);
   const mutation = useMutation({
     mutationFn: (methods: PaymentMethodInput[]) => replacePaymentSet(session!.token, employeeId, { valid_from: validFrom, methods }),
@@ -211,10 +217,11 @@ function PaymentSetDialog({
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
+            if (clashesWithExisting) return;
             mutation.mutate(rows.map(toInput));
           }}
         >
-          <FormField id="payment-from" label={t("hr.payment.field.validFrom")}>
+          <FormField id="payment-from" label={t("hr.payment.field.validFrom")} error={clashesWithExisting ? t("hr.payment.dateClash") : undefined}>
             <Input id="payment-from" type="date" required readOnly={set !== null} value={validFrom} onChange={(event) => setValidFrom(event.target.value)} />
           </FormField>
           {!canSeeSensitive && <p className="text-xs text-muted-foreground">{t("hr.payment.cashOnly")}</p>}
@@ -301,7 +308,7 @@ function PaymentSetDialog({
                 {t("hr.payment.removeSet")}
               </Button>
             )}
-            <Button type="submit" className="flex-1" disabled={mutation.isPending}>
+            <Button type="submit" className="flex-1" disabled={mutation.isPending || clashesWithExisting}>
               {mutation.isPending ? t("common.saving") : t("common.save")}
             </Button>
           </div>

@@ -53,6 +53,20 @@ class PaymentMethodService:
         ).fetchone()
         return row is not None
 
+    def set_holds_numbers(self, *, tenant_id: str, employee_id: str, valid_from: datetime.date) -> bool:
+        """Whether the set starting on `valid_from` carries a bank account or mobile number today,
+        before a replace or a remove is about to overwrite or delete it."""
+        row = self.connection.execute(
+            """
+            SELECT 1 FROM hr.payment_methods
+            WHERE tenant_id = %s AND employee_id = %s AND valid_from = %s
+              AND (account_no IS NOT NULL OR mobile_number IS NOT NULL)
+            LIMIT 1
+            """,
+            (tenant_id, employee_id, valid_from),
+        ).fetchone()
+        return row is not None
+
     def replace_set(
         self, *, tenant_id: str, actor_id: str, employee_id: str, valid_from: datetime.date, methods: Sequence[PaymentMethod]
     ) -> Result[list[dict]]:

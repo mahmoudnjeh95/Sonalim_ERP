@@ -331,14 +331,26 @@ def list_payment_methods(employee_id: str, tenant: TenantContext = Depends(requi
 @router.put("/employees/{employee_id}/payment-methods")
 def replace_payment_methods(employee_id: str, body: PaymentSetBody, tenant: TenantContext = Depends(require_permission("hr.manage_employees"))):
     """A new start date is a creation (hr.manage_employees); replacing or removing an existing
-    arrangement is an edit (hr.admin_employees). Account and phone numbers need hr.view_sensitive."""
+    arrangement is an edit (hr.admin_employees). Account and phone numbers need hr.view_sensitive.
+    A caller who cannot see the numbers must not be able to erase them either: replacing or
+    removing a set that already carries a number needs hr.view_sensitive too, even when the new
+    body carries none (an empty body removes the set)."""
     methods = [method.model_dump() for method in body.methods]
     with get_connection() as connection:
         service = PaymentMethodService(connection)
+        visible = can_view_sensitive(connection, tenant)
         if service.set_exists(tenant_id=tenant.tenant_id, employee_id=employee_id, valid_from=body.valid_from):
             require(connection, tenant, "hr.admin_employees")
+            if not visible and service.set_holds_numbers(tenant_id=tenant.tenant_id, employee_id=employee_id, valid_from=body.valid_from):
+                raise HTTPException(
+                    status.HTTP_403_FORBIDDEN,
+                    {
+                        "code": "FORBIDDEN",
+                        "message": "this arrangement holds a bank or mobile number; missing permission: hr.view_sensitive",
+                        "message_fr": "cet arrangement comporte un numéro bancaire ou mobile ; permission manquante : hr.view_sensitive",
+                    },
+                )
         require_sensitive_for(connection, tenant, [name for method in methods for name in filled(method, PAYMENT_FIELDS)])
-        visible = can_view_sensitive(connection, tenant)
         result = service.replace_set(
             tenant_id=tenant.tenant_id,
             actor_id=tenant.user_id,

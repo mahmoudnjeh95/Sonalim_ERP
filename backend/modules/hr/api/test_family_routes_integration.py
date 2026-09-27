@@ -43,6 +43,45 @@ def test_a_bad_split_is_a_422_in_french_too(hr_api):
     assert refused.json()["detail"]["message_fr"] == "les parts totalisent 90 %, pas 100 %"
 
 
+def test_replacing_a_set_that_holds_numbers_needs_view_sensitive_even_with_no_number_in_the_new_body(hr_api):
+    hr_api.grant("hr.manage_employees", "hr.view_sensitive")
+    employee_id = _employee(hr_api)
+    url = f"/hr/employees/{employee_id}/payment-methods"
+    assert hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": [BANK]}).status_code == 200
+    hr_api.db.execute("DELETE FROM core.user_permissions WHERE user_id = %s AND permission = 'hr.view_sensitive'", (hr_api.user_id,))
+    hr_api.grant("hr.admin_employees")
+    refused = hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": [CASH]})
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["message_fr"]
+    stored = hr_api.db.execute("SELECT method, account_no FROM hr.payment_methods WHERE employee_id = %s", (employee_id,)).fetchone()
+    assert stored == ("bank", "ML-1")
+    hr_api.grant("hr.view_sensitive")
+    assert hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": [CASH]}).status_code == 200
+
+
+def test_removing_a_set_that_holds_numbers_needs_view_sensitive(hr_api):
+    hr_api.grant("hr.manage_employees", "hr.view_sensitive")
+    employee_id = _employee(hr_api)
+    url = f"/hr/employees/{employee_id}/payment-methods"
+    assert hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": [BANK]}).status_code == 200
+    hr_api.db.execute("DELETE FROM core.user_permissions WHERE user_id = %s AND permission = 'hr.view_sensitive'", (hr_api.user_id,))
+    hr_api.grant("hr.admin_employees")
+    refused = hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": []})
+    assert refused.status_code == 403
+    stored = hr_api.db.execute("SELECT 1 FROM hr.payment_methods WHERE employee_id = %s", (employee_id,)).fetchone()
+    assert stored is not None
+    hr_api.grant("hr.view_sensitive")
+    assert hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": []}).status_code == 200
+
+
+def test_replacing_a_cash_only_set_needs_no_view_sensitive(hr_api):
+    hr_api.grant("hr.manage_employees", "hr.admin_employees")
+    employee_id = _employee(hr_api)
+    url = f"/hr/employees/{employee_id}/payment-methods"
+    assert hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": [CASH]}).status_code == 200
+    assert hr_api.client.put(url, json={"valid_from": "2025-01-01", "methods": [CASH]}).status_code == 200
+
+
 def test_dependants_are_added_with_manage_and_corrected_with_admin(hr_api):
     employee_id = _employee(hr_api)
     created = hr_api.client.post(
