@@ -1,9 +1,9 @@
 {
   "name": "warehouse",
-  "version": "0.8.0",
+  "version": "0.9.0",
   "depends": ["core"],
   "optional_depends": [],
-  "provides_api": ["StockService", "LocationService", "LotService", "WarehouseAnalyticsService"],
+  "provides_api": ["StockService", "LocationService", "LotService", "WarehouseAnalyticsService", "SiteService"],
   "publishes_events": ["warehouse.stock.reserved", "warehouse.stock.received", "warehouse.stock.issued"],
   "subscribes_events": ["procurement.purchase_order_receipt.confirmed", "core.product.created"],
   "migrations_path": "./migrations",
@@ -15,6 +15,8 @@
     "warehouse.admin_locations",
     "warehouse.view_lots",
     "warehouse.manage_lots",
-    "warehouse.set_lot_expiry"
+    "warehouse.set_lot_expiry",
+    "warehouse.manage_sites",
+    "warehouse.admin_sites"
   ]
 }

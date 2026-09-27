@@ -38,36 +38,44 @@ class StockService:
             return Ok(None)
         return validate_quantity_for_uom(quantity, uom)
 
-    def list_stock_items(self, tenant_id: str, location_id: str | None = None) -> list[StockLevel]:
+    def list_stock_items(
+        self, tenant_id: str, location_id: str | None = None, site_id: str | None = None
+    ) -> list[StockLevel]:
+        clauses = ["si.tenant_id = %s"]
+        params: list[object] = [tenant_id]
         if location_id is not None:
-            rows = self._connection.execute(
-                """
-                SELECT location_id, product_id, quantity_on_hand, quantity_reserved, quantity_in_production
-                FROM warehouse.stock_items
-                WHERE tenant_id = %s AND location_id = %s
-                ORDER BY product_id
-                """,
-                (tenant_id, location_id),
-            ).fetchall()
-        else:
-            rows = self._connection.execute(
-                """
-                SELECT location_id, product_id, quantity_on_hand, quantity_reserved, quantity_in_production
-                FROM warehouse.stock_items
-                WHERE tenant_id = %s
-                ORDER BY location_id, product_id
-                """,
-                (tenant_id,),
-            ).fetchall()
+            clauses.append("si.location_id = %s")
+            params.append(location_id)
+        if site_id is not None:
+            clauses.append("loc.site_id = %s")
+            params.append(site_id)
+        # Only join locations when a site filter needs it -- every other call
+        # site keeps the exact query it had before this filter existed.
+        join = (
+            "JOIN warehouse.locations loc ON loc.id = si.location_id AND loc.tenant_id = si.tenant_id"
+            if site_id is not None
+            else ""
+        )
+        order = "si.product_id" if location_id is not None else "si.location_id, si.product_id"
+        rows = self._connection.execute(
+            f"""
+            SELECT si.location_id, si.product_id, si.quantity_on_hand, si.quantity_reserved, si.quantity_in_production
+            FROM warehouse.stock_items si
+            {join}
+            WHERE {' AND '.join(clauses)}
+            ORDER BY {order}
+            """,
+            params,
+        ).fetchall()
         return [
             StockLevel(
-                location_id=location_id,
+                location_id=row_location_id,
                 product_id=product_id,
                 quantity_on_hand=float(on_hand),
                 quantity_reserved=float(reserved),
                 quantity_in_production=float(in_production),
             )
-            for location_id, product_id, on_hand, reserved, in_production in rows
+            for row_location_id, product_id, on_hand, reserved, in_production in rows
         ]
 
     def get_available_quantity(self, tenant_id: str, product_id: str, location_id: str) -> float:

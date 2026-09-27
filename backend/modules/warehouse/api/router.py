@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
@@ -12,7 +13,8 @@ from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.service import StockService
-from modules.warehouse.domain.entities import Location
+from modules.warehouse.api.site_service import SiteService
+from modules.warehouse.domain.entities import Location, Site
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
 
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
@@ -58,6 +60,13 @@ class AdminSetStockRequest(BaseModel):
 class CreateLocationRequest(BaseModel):
     code: str
     name: str
+    # Optional so the Stock tab's existing location dialog (predates sites)
+    # keeps working unchanged -- an omitted site_id falls back to the
+    # tenant's default site, same as a location created before Phase 1.
+    site_id: str | None = None
+    location_type: Literal["zone", "aisle", "rack", "bin"] = "bin"
+    parent_location_id: str | None = None
+    sequence: int | None = None
     # A blocked location holds stock that cannot be promised — quarantine above all.
     is_blocked: bool = False
     blocked_reason: str | None = None
@@ -68,16 +77,41 @@ def _location_response(location: Location) -> dict:
         "id": location.id,
         "code": location.code,
         "name": location.name,
+        "site_id": location.site_id,
+        "location_type": location.location_type,
+        "parent_location_id": location.parent_location_id,
+        "sequence": location.sequence,
         "is_blocked": location.is_blocked,
         "blocked_reason": location.blocked_reason,
     }
 
 
+def _site_response(site: Site) -> dict:
+    return {"id": site.id, "code": site.code, "name": site.name, "address": site.address, "is_active": site.is_active}
+
+
 @router.get("/locations")
-def list_locations(tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> list[dict]:
+def list_locations(
+    site_id: str | None = None,
+    location_type: str | None = None,
+    parent_location_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("warehouse.view_moves")),
+) -> list[dict]:
     with get_connection() as connection:
         service = LocationService(connection)
-        locations = service.list_locations(tenant_id=tenant.tenant_id)
+        locations = service.list_locations(
+            tenant_id=tenant.tenant_id, site_id=site_id, location_type=location_type, parent_location_id=parent_location_id
+        )
+    return [_location_response(location) for location in locations]
+
+
+@router.get("/locations/tree")
+def get_location_tree(
+    site_id: str, tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))
+) -> list[dict]:
+    with get_connection() as connection:
+        service = LocationService(connection)
+        locations = service.get_location_tree(tenant_id=tenant.tenant_id, site_id=site_id)
     return [_location_response(location) for location in locations]
 
 
@@ -87,16 +121,115 @@ def create_location(
 ) -> dict:
     with get_connection() as connection:
         service = LocationService(connection)
-        location = service.create_location(
+        result = service.create_location(
             tenant_id=tenant.tenant_id,
             actor_id=tenant.user_id,
             code=body.code,
             name=body.name,
+            site_id=body.site_id,
+            location_type=body.location_type,
+            parent_location_id=body.parent_location_id,
+            sequence=body.sequence,
             is_blocked=body.is_blocked,
             blocked_reason=body.blocked_reason,
         )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, err_detail(result))
         connection.commit()
-    return _location_response(location)
+    return _location_response(result.value)
+
+
+class ReparentLocationRequest(BaseModel):
+    parent_location_id: str | None = None
+
+
+@router.patch("/locations/{location_id}/reparent")
+def reparent_location(
+    location_id: str,
+    body: ReparentLocationRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.admin_locations")),
+) -> dict:
+    with get_connection() as connection:
+        service = LocationService(connection)
+        result = service.reparent_location(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            location_id=location_id,
+            parent_location_id=body.parent_location_id,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, err_detail(result))
+        connection.commit()
+    return _location_response(result.value)
+
+
+# --- Sites --------------------------------------------------------------------------------
+
+
+class CreateSiteRequest(BaseModel):
+    code: str
+    name: str
+    address: str | None = None
+
+
+class UpdateSiteRequest(BaseModel):
+    code: str | None = None
+    name: str | None = None
+    address: str | None = None
+    is_active: bool | None = None
+
+
+@router.get("/sites")
+def list_sites(tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> list[dict]:
+    with get_connection() as connection:
+        service = SiteService(connection)
+        sites = service.list_sites(tenant_id=tenant.tenant_id)
+    return [_site_response(site) for site in sites]
+
+
+@router.post("/sites", status_code=status.HTTP_201_CREATED)
+def create_site(
+    body: CreateSiteRequest, tenant: TenantContext = Depends(require_permission("warehouse.manage_sites"))
+) -> dict:
+    with get_connection() as connection:
+        service = SiteService(connection)
+        result = service.create_site(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, code=body.code, name=body.name, address=body.address
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
+        connection.commit()
+    return _site_response(result.value)
+
+
+@router.patch("/sites/{site_id}")
+def update_site(
+    site_id: str,
+    body: UpdateSiteRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.admin_sites")),
+) -> dict:
+    with get_connection() as connection:
+        service = SiteService(connection)
+        result = service.update_site(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            site_id=site_id,
+            code=body.code,
+            name=body.name,
+            address=body.address,
+            is_active=body.is_active,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
+            raise HTTPException(code, err_detail(result))
+        connection.commit()
+    return _site_response(result.value)
 
 
 class UpdateLocationRequest(BaseModel):
@@ -133,11 +266,13 @@ def update_location(
 
 @router.get("/stock")
 def list_stock(
-    location_id: str | None = None, tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))
+    location_id: str | None = None,
+    site_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("warehouse.view_moves")),
 ) -> list[dict]:
     with get_connection() as connection:
         service = StockService(connection)
-        items = service.list_stock_items(tenant.tenant_id, location_id=location_id)
+        items = service.list_stock_items(tenant.tenant_id, location_id=location_id, site_id=site_id)
     return [
         {
             "location_id": item.location_id,
@@ -180,6 +315,7 @@ def analytics_overview(
     date_to: datetime.date | None = None,
     consumption_window_days: int = Query(default=30, ge=1, le=365),
     dormant_after_days: int = Query(default=60, ge=1, le=730),
+    site_id: str | None = None,
     tenant: TenantContext = Depends(require_permission("warehouse.view_moves")),
 ) -> dict:
     """Stock KPIs for the warehouse screen. The period bounds the movement figures
@@ -199,6 +335,7 @@ def analytics_overview(
             consumption_window_days=consumption_window_days,
             dormant_after_days=dormant_after_days,
             today=today,
+            site_id=site_id,
         )
 
 

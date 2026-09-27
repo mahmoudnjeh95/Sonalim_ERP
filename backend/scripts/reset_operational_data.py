@@ -154,6 +154,7 @@ KEPT_TABLES = [
     "production.waste_type_builtin_settings",
     "production.work_centers",
     "warehouse.locations",
+    "warehouse.sites",
 ]
 
 # Numbering counters restarted so the first real OF is OF-1, not OF-58.

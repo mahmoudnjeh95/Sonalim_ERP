@@ -160,14 +160,26 @@ def seed() -> None:
             (str(ULID()), DEMO_TENANT_ID),
         )
 
+        # Matches the id the 0012 migration's backfill would assign, so seeding
+        # stays consistent whether it runs on a fresh DB or one migrated from
+        # pre-multi-site data.
+        demo_site_id = "default-site-" + DEMO_TENANT_ID
+        connection.execute(
+            """
+            INSERT INTO warehouse.sites (id, tenant_id, code, name)
+            VALUES (%s, %s, 'main', 'Site principal')
+            ON CONFLICT (tenant_id, code) DO NOTHING
+            """,
+            (demo_site_id, DEMO_TENANT_ID),
+        )
         for code, name in [("raw-materials", "Matières premières"), ("spare-parts", "Pièces de rechange")]:
             connection.execute(
                 """
-                INSERT INTO warehouse.locations (id, tenant_id, code, name)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO warehouse.locations (id, tenant_id, code, name, site_id)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (tenant_id, code) DO NOTHING
                 """,
-                (str(ULID()), DEMO_TENANT_ID, code, name),
+                (str(ULID()), DEMO_TENANT_ID, code, name, demo_site_id),
             )
 
         # --- CRM demo data -----------------------------------------------
