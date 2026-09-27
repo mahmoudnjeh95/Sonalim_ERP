@@ -8,6 +8,9 @@ from decimal import Decimal
 from core.domain.result import Err, Ok, Result
 from modules.hr.domain.money import invalid_amount, is_whole_amount
 
+# headcount_budget is a plain INTEGER column: PostgreSQL's int4 range is -2147483648..2147483647.
+MAX_HEADCOUNT_BUDGET = 2_147_483_647
+
 
 @dataclass(frozen=True)
 class DepartmentInput:
@@ -52,8 +55,12 @@ def validate_department(department: DepartmentInput) -> Result[DepartmentInput]:
 def validate_position(position: PositionInput) -> Result[PositionInput]:
     if _blank(position.code) or _blank(position.title):
         return Err("INVALID_POSITION", "position code and title are required", "le code et l'intitulé du poste sont obligatoires")
-    if position.headcount_budget is not None and position.headcount_budget < 0:
-        return Err("INVALID_POSITION", "the headcount budget cannot be negative", "l'effectif budgété ne peut pas être négatif")
+    if position.headcount_budget is not None and not 0 <= position.headcount_budget <= MAX_HEADCOUNT_BUDGET:
+        return Err(
+            "INVALID_POSITION",
+            f"the headcount budget cannot be negative or above {MAX_HEADCOUNT_BUDGET}",
+            f"l'effectif budgété ne peut pas être négatif ni dépasser {MAX_HEADCOUNT_BUDGET}",
+        )
     return Ok(
         PositionInput(
             code=position.code.strip(),

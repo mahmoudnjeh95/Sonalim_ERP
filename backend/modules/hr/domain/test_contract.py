@@ -41,6 +41,16 @@ def test_weekly_hours_stay_within_a_week():
     assert isinstance(validate_terms(_terms(weekly_hours=Decimal("48"))), Ok)
 
 
+def test_weekly_hours_allow_two_decimals_but_not_three():
+    assert isinstance(validate_terms(_terms(weekly_hours=Decimal("37.75"))), Ok)
+    assert validate_terms(_terms(weekly_hours=Decimal("37.755"))).code == "INVALID_CONTRACT"
+
+
+def test_base_salary_stays_below_the_numeric_18_0_column():
+    assert isinstance(validate_terms(_terms(base_salary=Decimal(10) ** 18 - 1)), Ok)
+    assert validate_terms(_terms(base_salary=Decimal(10) ** 18)).code == "INVALID_AMOUNT"
+
+
 def test_dates_hold_together():
     assert validate_terms(_terms(start_date=None)).code == "INVALID_DATES"
     assert validate_terms(_terms(end_date=D(2025, 12, 31))).code == "INVALID_DATES"
@@ -60,6 +70,16 @@ def test_a_component_has_an_amount_or_a_rate_never_both_or_neither():
     assert validate_components([neither]).code == "INVALID_COMPONENT"
     assert validate_components([ContractComponent(component_code="HOUSING", rate=Decimal("-1"))]).code == "INVALID_COMPONENT"
     assert validate_components([ContractComponent(component_code="9X", amount=Decimal("1"))]).code == "INVALID_COMPONENT"
+
+
+def test_a_component_rate_stays_below_the_numeric_9_4_column_with_at_most_four_decimals():
+    assert isinstance(validate_components([ContractComponent(component_code="HOUSING", rate=Decimal("12.3456"))]), Ok)
+    assert validate_components([ContractComponent(component_code="HOUSING", rate=Decimal("100000"))]).code == "INVALID_COMPONENT"
+    assert validate_components([ContractComponent(component_code="HOUSING", rate=Decimal("12.34567"))]).code == "INVALID_COMPONENT"
+
+
+def test_a_component_amount_stays_below_the_numeric_18_0_column():
+    assert validate_components([ContractComponent(component_code="HOUSING", amount=Decimal(10) ** 18)]).code == "INVALID_AMOUNT"
 
 
 def test_a_component_appears_once():

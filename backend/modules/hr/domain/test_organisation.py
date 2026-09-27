@@ -24,6 +24,11 @@ def test_amounts_are_whole_non_negative_francs():
     assert not is_whole_amount(None)
 
 
+def test_amounts_stay_below_the_numeric_18_0_column():
+    assert is_whole_amount(Decimal(10) ** 18 - 1)
+    assert not is_whole_amount(Decimal(10) ** 18)
+
+
 def test_a_department_needs_a_code_and_a_name_and_is_trimmed():
     assert isinstance(validate_department(DepartmentInput(code=" ", name="Production")), Err)
     ok = validate_department(DepartmentInput(code=" PROD ", name=" Production ", manager_employee_id=""))
@@ -34,6 +39,12 @@ def test_a_position_budget_cannot_be_negative_but_can_be_absent():
     refused = validate_position(PositionInput(code="OP", title="Opérateur", headcount_budget=-1))
     assert isinstance(refused, Err) and refused.code == "INVALID_POSITION"
     assert validate_position(PositionInput(code="OP", title="Opérateur")).value.headcount_budget is None
+
+
+def test_a_position_budget_cannot_exceed_the_integer_column():
+    assert isinstance(validate_position(PositionInput(code="OP", title="Opérateur", headcount_budget=2_147_483_647)), Ok)
+    refused = validate_position(PositionInput(code="OP", title="Opérateur", headcount_budget=2_147_483_648))
+    assert isinstance(refused, Err) and refused.code == "INVALID_POSITION"
 
 
 def test_a_grade_minimum_is_whole_francs():

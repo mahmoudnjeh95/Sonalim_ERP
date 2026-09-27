@@ -16,6 +16,10 @@ CONTRACT_TYPES = ("cdi", "cdd", "apprentice", "daily", "intern")
 PAY_FREQUENCIES = ("monthly", "daily")
 CONTRACT_STATUSES = ("draft", "active", "expired", "terminated")
 HOURS_IN_A_WEEK = Decimal("168")
+HOUR_STEP = Decimal("0.01")  # weekly_hours is NUMERIC(5,2): at most two decimals.
+# rate is NUMERIC(9,4): 9 digits total, 4 after the point, so the whole part is below 10**5.
+MAX_RATE = Decimal(10) ** 5
+RATE_STEP = Decimal("0.0001")
 _COMPONENT_CODE = re.compile(r"^[A-Z][A-Z0-9_]{1,31}$")
 
 
@@ -70,8 +74,17 @@ def validate_components(components: Iterable[ContractComponent]) -> Result[tuple
             return Err("INVALID_COMPONENT", f"{code}: give either an amount or a rate", f"{code} : indiquez soit un montant, soit un taux")
         if component.amount is not None and not is_whole_amount(component.amount):
             return invalid_amount(f"the amount of {code}", f"le montant de {code}")
-        if component.rate is not None and (not component.rate.is_finite() or component.rate < 0):
-            return Err("INVALID_COMPONENT", f"{code}: a rate cannot be negative", f"{code} : un taux ne peut pas être négatif")
+        if component.rate is not None and (
+            not component.rate.is_finite()
+            or component.rate < 0
+            or component.rate >= MAX_RATE
+            or component.rate != component.rate.quantize(RATE_STEP)
+        ):
+            return Err(
+                "INVALID_COMPONENT",
+                f"{code}: a rate cannot be negative, must be below {MAX_RATE}, with at most four decimals",
+                f"{code} : un taux ne peut pas être négatif, doit être inférieur à {MAX_RATE}, avec au plus quatre décimales",
+            )
         cleaned.append(ContractComponent(component_code=code, amount=component.amount, rate=component.rate))
     codes = [component.component_code for component in cleaned]
     if len(codes) != len(set(codes)):
@@ -98,8 +111,16 @@ def validate_terms(terms: ContractTerms) -> Result[ContractTerms]:
         return Err("INVALID_DATES", "a contract needs a start date", "un contrat demande une date de début")
     if not is_whole_amount(terms.base_salary):
         return invalid_amount("the base salary", "le salaire de base")
-    if terms.weekly_hours is None or not Decimal("0") < terms.weekly_hours <= HOURS_IN_A_WEEK:
-        return Err("INVALID_CONTRACT", "weekly hours are above 0 and at most 168", "les heures hebdomadaires sont supérieures à 0 et au plus 168")
+    if (
+        terms.weekly_hours is None
+        or not Decimal("0") < terms.weekly_hours <= HOURS_IN_A_WEEK
+        or terms.weekly_hours != terms.weekly_hours.quantize(HOUR_STEP)
+    ):
+        return Err(
+            "INVALID_CONTRACT",
+            "weekly hours are above 0, at most 168, with at most two decimals",
+            "les heures hebdomadaires sont supérieures à 0, au plus 168, avec au plus deux décimales",
+        )
     if terms.end_date is not None and terms.end_date < terms.start_date:
         return Err("INVALID_DATES", "a contract cannot end before it starts", "un contrat ne peut pas finir avant de commencer")
     if terms.trial_end_date is not None and (
