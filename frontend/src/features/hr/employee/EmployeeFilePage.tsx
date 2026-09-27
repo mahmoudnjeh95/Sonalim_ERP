@@ -2,7 +2,7 @@ import { useState, type ComponentType } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowLeft, Ban, CalendarDays, FileText, Pencil, Receipt, UserRound, Users } from "lucide-react";
+import { ArrowLeft, Ban, CalendarDays, FileStack, FileText, Pencil, Receipt, UserRound, Users, Wallet } from "lucide-react";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { AppLoader } from "../../../components/patterns/AppLoader";
@@ -15,9 +15,11 @@ import { getEmployee, hrKeys, type EmployeeRecord } from "../api";
 import { EMPLOYEE_STATUS_LABEL, EMPLOYEE_STATUS_VARIANT } from "../employeeLabels";
 import { EmployeeFormDialog } from "../EmployeeFormDialog";
 import { ContractsTab } from "./ContractsTab";
+import { DocumentsTab } from "./DocumentsTab";
 import { FamilyTab } from "./FamilyTab";
 import { IdentityTab } from "./IdentityTab";
 import { LeaveTab } from "./LeaveTab";
+import { PaymentTab } from "./PaymentTab";
 import { PayslipsTab } from "./PayslipsTab";
 import { TerminateDialog } from "./TerminateDialog";
 
@@ -30,11 +32,12 @@ interface TabDef {
   permission: string;
 }
 
-// In display order. Task 13 still inserts payment and documents after contracts.
 const TABS: TabDef[] = [
   { value: "identity", labelKey: "hr.file.tab.identity", icon: UserRound, permission: "hr.view_employees" },
   { value: "family", labelKey: "hr.file.tab.family", icon: Users, permission: "hr.view_employees" },
   { value: "contracts", labelKey: "hr.file.tab.contracts", icon: FileText, permission: "hr.view_contracts" },
+  { value: "payment", labelKey: "hr.file.tab.payment", icon: Wallet, permission: "hr.view_employees" },
+  { value: "documents", labelKey: "hr.file.tab.documents", icon: FileStack, permission: "hr.view_employees" },
   { value: "leave", labelKey: "hr.file.tab.leave", icon: CalendarDays, permission: "hr.view_leave" },
   { value: "payslips", labelKey: "hr.file.tab.payslips", icon: Receipt, permission: "hr.view_employees" },
 ];
@@ -47,6 +50,10 @@ function TabBody({ tab, employee }: { tab: TabValue; employee: EmployeeRecord })
       return <FamilyTab employee={employee} />;
     case "contracts":
       return <ContractsTab employee={employee} />;
+    case "payment":
+      return <PaymentTab employee={employee} />;
+    case "documents":
+      return <DocumentsTab employee={employee} />;
     case "leave":
       return <LeaveTab employee={employee} />;
     case "payslips":
