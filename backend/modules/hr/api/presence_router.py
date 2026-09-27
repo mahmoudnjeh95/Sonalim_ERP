@@ -6,11 +6,12 @@ from typing import Callable, NoReturn
 
 import psycopg
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from core.db import get_connection
 from core.domain.result import Err, Result, err_detail
 from core.tenancy import TenantContext, require_permission
+from modules.hr.api.clock_import_service import ClockImportService, ClockProfileService
 from modules.hr.api.presence_service import PresenceService
 from modules.hr.api.schedule_service import HolidayService, PresenceSettingsService, ScheduleService
 from modules.hr.domain.presence import ManualEntry
@@ -275,3 +276,83 @@ def save_presence_days(body: PresenceDaysBody, tenant: TenantContext = Depends(r
 @router.get("/presence/employee-month")
 def presence_employee_month(employee_id: str, period: datetime.date, tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
     return _read_result(lambda c: PresenceService(c).employee_month(tenant_id=tenant.tenant_id, employee_id=employee_id, period=_period(period)))
+
+
+# ---- clock profiles and imports -----------------------------------------------------
+
+class ClockProfileBody(BaseModel):
+    code: str
+    name: str
+    delimiter: str
+    has_header: bool
+    badge_column: str
+    timestamp_column: str
+    timestamp_format: str
+    time_column: str | None = None
+    direction_column: str | None = None
+    in_values: list[str] = Field(default_factory=list)
+    out_values: list[str] = Field(default_factory=list)
+
+
+class ClockProfileUpdateBody(BaseModel):
+    name: str | None = None
+    delimiter: str | None = None
+    has_header: bool | None = None
+    badge_column: str | None = None
+    timestamp_column: str | None = None
+    timestamp_format: str | None = None
+    time_column: str | None = None
+    direction_column: str | None = None
+    in_values: list[str] | None = None
+    out_values: list[str] | None = None
+    active: bool | None = None
+
+
+class ClockImportBody(BaseModel):
+    profile_id: str
+    file_name: str
+    content: str
+    date_from: datetime.date
+    date_to: datetime.date
+
+
+@router.get("/clock-profiles")
+def list_clock_profiles(tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
+    return _read(lambda c: ClockProfileService(c).list_profiles(tenant_id=tenant.tenant_id))
+
+
+@router.post("/clock-profiles", status_code=status.HTTP_201_CREATED)
+def create_clock_profile(body: ClockProfileBody, tenant: TenantContext = Depends(require_permission("hr.import_clock"))):
+    return _write(lambda c: ClockProfileService(c).create_profile(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+@router.patch("/clock-profiles/{profile_id}")
+def update_clock_profile(profile_id: str, body: ClockProfileUpdateBody, tenant: TenantContext = Depends(require_permission("hr.admin_presence"))):
+    return _write(lambda c: ClockProfileService(c).update_profile(
+        tenant_id=tenant.tenant_id, actor_id=tenant.user_id, profile_id=profile_id, **body.model_dump()
+    ))
+
+
+@router.get("/clock-imports")
+def list_clock_imports(tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
+    return _read(lambda c: ClockImportService(c).list_imports(tenant_id=tenant.tenant_id))
+
+
+@router.post("/clock-imports", status_code=status.HTTP_201_CREATED)
+def stage_clock_import(body: ClockImportBody, tenant: TenantContext = Depends(require_permission("hr.import_clock"))):
+    return _write(lambda c: ClockImportService(c).stage(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+@router.get("/clock-imports/{import_id}")
+def get_clock_import(import_id: str, tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
+    return _read_result(lambda c: ClockImportService(c).get_import(tenant_id=tenant.tenant_id, import_id=import_id))
+
+
+@router.post("/clock-imports/{import_id}/commit")
+def commit_clock_import(import_id: str, tenant: TenantContext = Depends(require_permission("hr.import_clock"))):
+    return _write(lambda c: ClockImportService(c).commit(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, import_id=import_id))
+
+
+@router.post("/clock-imports/{import_id}/discard")
+def discard_clock_import(import_id: str, tenant: TenantContext = Depends(require_permission("hr.import_clock"))):
+    return _write(lambda c: ClockImportService(c).discard(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, import_id=import_id))

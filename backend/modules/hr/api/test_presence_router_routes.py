@@ -48,3 +48,18 @@ def test_presence_grid_routes_and_their_permissions():
     }
     routes = _routes()
     assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_clock_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/clock-profiles"): "hr.view_presence",
+        ("POST", "/hr/clock-profiles"): "hr.import_clock",
+        ("PATCH", "/hr/clock-profiles/{profile_id}"): "hr.admin_presence",
+        ("GET", "/hr/clock-imports"): "hr.view_presence",
+        ("POST", "/hr/clock-imports"): "hr.import_clock",
+        ("GET", "/hr/clock-imports/{import_id}"): "hr.view_presence",
+        ("POST", "/hr/clock-imports/{import_id}/commit"): "hr.import_clock",
+        ("POST", "/hr/clock-imports/{import_id}/discard"): "hr.import_clock",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected
