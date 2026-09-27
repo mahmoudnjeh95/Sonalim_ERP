@@ -23,6 +23,12 @@ ALTER TABLE hr.contracts
 -- payroll screen until phase 3 retires it; a later migration drops it.
 UPDATE hr.contracts SET base_salary = ROUND(salary) WHERE base_salary = 0 AND salary > 0;
 ALTER TABLE hr.contracts ALTER COLUMN currency SET DEFAULT 'XOF';
+-- The old screens had no currency field and always wrote 'USD', but the amounts were typed in
+-- F CFA (client decision 2026-09-27): legacy USD rows are relabelled XOF, never converted. The
+-- legacy payslip lines copied that label from the contract, so they are relabelled with it.
+UPDATE hr.contracts SET currency = 'XOF' WHERE currency = 'USD';
+UPDATE hr.payroll_items SET currency = 'XOF' WHERE currency = 'USD';
+ALTER TABLE hr.payroll_items ALTER COLUMN currency SET DEFAULT 'XOF';
 
 ALTER TABLE hr.contracts ADD CONSTRAINT hr_contracts_type_check
     CHECK (contract_type IN ('cdi', 'cdd', 'apprentice', 'daily', 'intern'));

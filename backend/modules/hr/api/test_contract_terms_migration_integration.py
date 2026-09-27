@@ -69,19 +69,31 @@ def test_the_migration_maps_legacy_contract_types_and_takes_base_salary_from_sal
     free_text_with_end = _legacy_contract(db, _employee(db), contract_type="Stage", start=D(2024, 1, 1), end=D(2024, 6, 30), salary=40_000)
     free_text_open_ended = _legacy_contract(db, _employee(db), contract_type="Journalier", start=D(2022, 1, 1), salary=3_500)
     usd_row = _legacy_contract(db, _employee(db), contract_type="permanent", start=D(2019, 1, 1), salary=1_800, currency="USD")
+    eur_row = _legacy_contract(db, _employee(db), contract_type="permanent", start=D(2020, 1, 1), salary=500, currency="EUR")
+    run_id, payslip_line = str(ULID()), str(ULID())
+    db.execute("INSERT INTO hr.payroll_runs (id, tenant_id, period_month, status) VALUES (%s, %s, '2019-01-01', 'calculated')", (run_id, TENANT))
+    db.execute(
+        "INSERT INTO hr.payroll_items (id, tenant_id, payroll_run_id, employee_id, base_salary, bonuses, deductions, taxes, net_salary, currency) "
+        "VALUES (%s, %s, %s, %s, 1800, 0, 0, 0, 1800, 'USD')",
+        (payslip_line, TENANT, run_id, _employee(db)),
+    )
 
     db.execute(MIGRATION.read_text(encoding="utf-8"))
 
     # 'permanent' (a known value, case aside) keeps its meaning: CDI.
-    assert _row(db, permanent) == ("cdi", 150_000, "USD")
+    assert _row(db, permanent) == ("cdi", 150_000, "XOF")
     # A value already on the closed list (any case) is just lower-cased.
-    assert _row(db, known_cdd) == ("cdd", 90_000, "USD")
+    assert _row(db, known_cdd) == ("cdd", 90_000, "XOF")
     # A free-text type is not in the closed list: an end date means fixed-term (CDD)...
-    assert _row(db, free_text_with_end) == ("cdd", 40_000, "USD")
+    assert _row(db, free_text_with_end) == ("cdd", 40_000, "XOF")
     # ...and no end date means CDI, exactly like 'permanent'.
-    assert _row(db, free_text_open_ended) == ("cdi", 3_500, "USD")
-    # currency is carried through untouched: 0006 does not decide what a legacy USD row means.
-    assert _row(db, usd_row) == ("cdi", 1_800, "USD")
+    assert _row(db, free_text_open_ended) == ("cdi", 3_500, "XOF")
+    # The old screens always wrote USD for amounts typed in F CFA: relabelled XOF, not converted...
+    assert _row(db, usd_row) == ("cdi", 1_800, "XOF")
+    # ...and so is the legacy payslip line that copied the contract's label...
+    assert db.execute("SELECT currency FROM hr.payroll_items WHERE id = %s", (payslip_line,)).fetchone()[0] == "XOF"
+    # ...while any other currency is left as it was.
+    assert _row(db, eur_row) == ("cdi", 500, "EUR")
 
     # The CHECKs are back and hold for the table, not just the rows just mapped: a contract type
     # outside the closed list is refused for a brand new insert too.
