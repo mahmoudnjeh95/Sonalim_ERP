@@ -148,7 +148,10 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
         );
         return createEmployee(token, toPayload(values, keys) as unknown as EmployeeInput);
       }
-      const keys = (Object.keys(dirtyFields) as FormKey[]).filter((key) => key !== "employee_no");
+      // Relinking user_id (not just leaving it as it is) needs hr.view_sensitive: once
+      // self-service ships, whoever holds the login reads that file's hidden fields and
+      // payslips through it. Follow the same "never send it" rule as the other sensitive keys.
+      const keys = (Object.keys(dirtyFields) as FormKey[]).filter((key) => key !== "employee_no" && (canSeeSensitive || key !== "user_id"));
       return updateEmployee(token, employee.id, toPayload(values, keys) as unknown as EmployeeChanges);
     },
     onSuccess: (record) => {
@@ -165,6 +168,9 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
   const sensitivePlaceholder = canSeeSensitive ? undefined : "••••";
   const sensitiveHint = canSeeSensitive ? undefined : t("hr.sensitive.readOnly");
   const sensitiveClass = canSeeSensitive ? undefined : "bg-muted";
+  // Setting the link on create is open (nothing hidden exists yet); relinking an existing file
+  // needs hr.view_sensitive, since self-service reads that file's hidden fields through it.
+  const userLinkLocked = employee !== null && !canSeeSensitive;
   const grid = "grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3";
 
   return (
@@ -309,8 +315,8 @@ export function EmployeeFormDialog({ open, onOpenChange, employee, onSaved }: Em
               <FormField id="badge_no" label={t("hr.field.badgeNo")}>
                 <Input id="badge_no" {...register("badge_no")} />
               </FormField>
-              <FormField id="user_id" label={t("hr.field.user")}>
-                <Select id="user_id" {...register("user_id")}>
+              <FormField id="user_id" label={t("hr.field.user")} hint={userLinkLocked ? t("hr.sensitive.readOnly") : undefined}>
+                <Select id="user_id" disabled={userLinkLocked} className={userLinkLocked ? "bg-muted" : undefined} {...register("user_id")}>
                   <option value="">{t("hr.form.noUser")}</option>
                   {(users.data ?? []).map((user) => (
                     <option key={user.id} value={user.id}>

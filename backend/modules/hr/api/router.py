@@ -269,11 +269,19 @@ def create_employee(body: EmployeeCreate, tenant: TenantContext = Depends(requir
 
 @router.patch("/employees/{employee_id}")
 def update_employee(employee_id: str, body: EmployeePatch, tenant: TenantContext = Depends(require_permission("hr.admin_employees"))):
+    """Relinking user_id (not just setting it the first time) needs hr.view_sensitive too: once
+    self-service ships, whoever holds that file's login reads its unmasked NINA/INPS/AMO and
+    payslips through get_by_user. Setting it on create stays open (nothing hidden exists yet)."""
     changes = body.model_dump(exclude_unset=True)
     with get_connection() as connection:
+        service = EmployeeService(connection)
         require_sensitive_for(connection, tenant, written(changes, EMPLOYEE_FIELDS))
+        if "user_id" in changes:
+            current = service.get_employee(tenant_id=tenant.tenant_id, employee_id=employee_id)
+            if current is not None and changes["user_id"] != current["user_id"]:
+                require(connection, tenant, "hr.view_sensitive")
         visible = can_view_sensitive(connection, tenant)
-        result = EmployeeService(connection).update_employee(
+        result = service.update_employee(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, employee_id=employee_id, changes=changes
         )
         return mask(respond(connection, result), EMPLOYEE_FIELDS, visible=visible)

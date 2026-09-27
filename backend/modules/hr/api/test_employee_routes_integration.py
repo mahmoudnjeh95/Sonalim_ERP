@@ -1,6 +1,17 @@
 """The employee file over HTTP: hr.view_sensitive hides NINA / INPS / AMO and guards writing them."""
 from __future__ import annotations
 
+from ulid import ULID
+
+
+def _user(hr_api, email: str) -> str:
+    user_id = str(ULID())
+    hr_api.db.execute(
+        "INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
+        (user_id, hr_api.tenant_id, email),
+    )
+    return user_id
+
 
 def _create(hr_api, **extra):
     body = {"employee_no": "R-001", "first_name": "Awa", "last_name": "Traoré", "hire_date": "2024-03-01", **extra}
@@ -59,6 +70,25 @@ def test_an_edit_needs_admin_employees(hr_api):
     hr_api.grant("hr.manage_employees")
     employee_id = _create(hr_api).json()["id"]
     assert hr_api.client.patch(f"/hr/employees/{employee_id}", json={"phone": "1"}).status_code == 403
+
+
+def test_relinking_user_id_needs_view_sensitive_but_setting_it_on_create_does_not(hr_api):
+    hr_api.grant("hr.manage_employees", "hr.view_employees", "hr.admin_employees")
+    first_user = _user(hr_api, "first@test.local")
+    second_user = _user(hr_api, "second@test.local")
+    # Setting the link on create stays open: nothing hidden exists on a brand-new file yet.
+    employee_id = _create(hr_api, user_id=first_user).json()["id"]
+    assert hr_api.client.get(f"/hr/employees/{employee_id}").json()["user_id"] == first_user
+    # Relinking on an edit without hr.view_sensitive is refused, and the link is unchanged.
+    refused = hr_api.client.patch(f"/hr/employees/{employee_id}", json={"user_id": second_user})
+    assert refused.status_code == 403
+    assert hr_api.client.get(f"/hr/employees/{employee_id}").json()["user_id"] == first_user
+    # Patching with the same value it already holds is not a relink, so it needs no extra right.
+    assert hr_api.client.patch(f"/hr/employees/{employee_id}", json={"phone": "70 00 00 00"}).status_code == 200
+    # With hr.view_sensitive, the relink goes through.
+    hr_api.grant("hr.view_sensitive")
+    relinked = hr_api.client.patch(f"/hr/employees/{employee_id}", json={"user_id": second_user})
+    assert relinked.status_code == 200 and relinked.json()["user_id"] == second_user
 
 
 def test_a_taken_badge_is_a_409_and_an_unknown_file_a_404(hr_api):
