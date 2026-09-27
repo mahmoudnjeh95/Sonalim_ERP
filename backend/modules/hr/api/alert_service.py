@@ -25,32 +25,48 @@ class HrAlertService:
 
     def expiry_alerts(self, *, tenant_id: str, today: datetime.date) -> dict:
         settings = HrSettingsService(self.connection).get(tenant_id)
+        contract_days = settings["contract_expiry_horizon_days"]
+        trial_days = settings["trial_end_horizon_days"]
         return {
             "as_of": today.isoformat(),
             **settings,
-            "contracts_ending": self._contracts(tenant_id, "end_date", today, window_end(today, settings["contract_expiry_horizon_days"])),
-            "trials_ending": self._contracts(tenant_id, "trial_end_date", today, window_end(today, settings["trial_end_horizon_days"])),
+            # No lower bound on end_date: a CDD nobody renewed stays listed (as 'expired') for as
+            # long as it takes HR to act on it, instead of vanishing the day after it lapses.
+            "contracts_ending": self._contracts(tenant_id, "end_date", today, window_end(today, contract_days), contract_days, open_ended=True),
+            "trials_ending": self._contracts(tenant_id, "trial_end_date", today, window_end(today, trial_days), trial_days, open_ended=False),
             "documents_expiring": self._documents(tenant_id, today, settings["document_expiry_horizon_days"]),
         }
 
-    def _contracts(self, tenant_id: str, column: str, today: datetime.date, until: datetime.date | None) -> list[dict]:
+    def _contracts(
+        self, tenant_id: str, column: str, today: datetime.date, until: datetime.date | None, horizon_days: int | None, *, open_ended: bool
+    ) -> list[dict]:
         # `column` is one of the two literals above, never user input.
         if until is None:
             return []
         renewal = _NOT_RENEWED if column == "end_date" else ""
+        window = f"c.{column} <= %s" if open_ended else f"c.{column} BETWEEN %s AND %s"
+        params: tuple = (tenant_id, until) if open_ended else (tenant_id, today, until)
         rows = self.connection.execute(
             f"""
             SELECT c.id, c.employee_id, e.employee_no, e.first_name || ' ' || e.last_name, c.contract_type, c.{column}
             FROM hr.contracts c
             JOIN hr.employees e ON e.id = c.employee_id
             WHERE c.tenant_id = %s AND c.status = 'active' AND e.status <> 'terminated'
-              AND c.{column} BETWEEN %s AND %s {renewal}
+              AND {window} {renewal}
             ORDER BY c.{column}, e.employee_no
             """,
-            (tenant_id, today, until),
+            params,
         ).fetchall()
         return [
-            {"contract_id": r[0], "employee_id": r[1], "employee_no": r[2], "employee_name": r[3], "contract_type": r[4], "date": r[5].isoformat()}
+            {
+                "contract_id": r[0],
+                "employee_id": r[1],
+                "employee_no": r[2],
+                "employee_name": r[3],
+                "contract_type": r[4],
+                "date": r[5].isoformat(),
+                "state": expiry_state(r[5], today, horizon_days),
+            }
             for r in rows
         ]
 

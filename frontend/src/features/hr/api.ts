@@ -377,6 +377,7 @@ export interface ContractAlert {
   employee_name: string;
   contract_type: ContractType;
   date: string;
+  state: DocumentState;
 }
 export interface DocumentAlert {
   document_id: string;

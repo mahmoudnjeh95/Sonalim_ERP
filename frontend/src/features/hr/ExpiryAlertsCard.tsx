@@ -88,8 +88,11 @@ function ContractLine({ item }: { item: ContractAlert }) {
       <Link to={`/hr/employees/${item.employee_id}?tab=contracts`} className="truncate hover:underline">
         {item.employee_name}
       </Link>
-      <span className="shrink-0 text-xs text-muted-foreground">
+      <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
         {t(CONTRACT_TYPE_LABEL[item.contract_type])} · {formatDate(item.date)}
+        {item.state === "expired" && (
+          <Badge variant={DOCUMENT_STATE_VARIANT.expired}>{t(DOCUMENT_STATE_LABEL.expired)}</Badge>
+        )}
       </span>
     </li>
   );

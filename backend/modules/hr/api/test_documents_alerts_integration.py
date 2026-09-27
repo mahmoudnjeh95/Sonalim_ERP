@@ -78,6 +78,45 @@ def test_a_cdd_ending_inside_the_horizon_is_listed_until_it_is_renewed(db, world
     assert _alerts(db)["contracts_ending"] == []
 
 
+def test_an_unrenewed_cdd_past_its_end_date_stays_listed_as_expired(db, world):
+    _horizons(db, world)
+    _contract(db, world, end_date=D(2026, 8, 1))  # 55 days before TODAY, well outside the 30-day horizon
+    [listed] = _alerts(db)["contracts_ending"]
+    assert (listed["employee_no"], listed["date"], listed["state"]) == ("A-001", "2026-08-01", "expired")
+
+
+def test_a_cdd_ending_soon_is_listed_as_expiring_not_expired(db, world):
+    _horizons(db, world)
+    _contract(db, world, end_date=D(2026, 10, 10))
+    [listed] = _alerts(db)["contracts_ending"]
+    assert listed["state"] == "expiring"
+
+
+def test_a_renewed_cdd_past_its_end_date_is_not_listed(db, world):
+    _horizons(db, world)
+    _contract(db, world, end_date=D(2026, 8, 1))
+    _contract(db, world, start_date=D(2026, 8, 2), end_date=D(2027, 2, 1))
+    assert _alerts(db)["contracts_ending"] == []
+
+
+def test_a_cdd_ended_via_the_end_action_past_its_agreed_end_date_is_not_listed(db, world):
+    _horizons(db, world)
+    contract = _contract(db, world, end_date=D(2026, 12, 1))
+    ContractService(db).end_contract(
+        tenant_id=TENANT, actor_id=world.actor, contract_id=contract["id"], end_date=D(2026, 8, 1), end_reason="resignation"
+    )
+    assert _alerts(db)["contracts_ending"] == []
+
+
+def test_an_unrenewed_cdd_of_someone_who_left_is_not_listed(db, world):
+    _horizons(db, world)
+    _contract(db, world, end_date=D(2026, 8, 1))
+    EmployeeService(db).terminate_employee(
+        tenant_id=TENANT, actor_id=world.actor, employee_id=world.employee_id, termination_date=D(2026, 8, 1), termination_reason="resignation"
+    )
+    assert _alerts(db)["contracts_ending"] == []
+
+
 def test_a_trial_is_listed_only_inside_its_own_horizon(db, world):
     _horizons(db, world)
     _contract(db, world, contract_type="cdi", start_date=D(2026, 8, 1), trial_end_date=D(2026, 10, 5))
