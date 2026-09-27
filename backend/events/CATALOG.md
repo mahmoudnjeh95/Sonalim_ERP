@@ -7,6 +7,7 @@
 | `warehouse.stock.received` | 1.0 | warehouse | — | `product_id`, `location_id`, `quantity`, `reference` |
 | `warehouse.stock.issued` | 1.0 | warehouse | — | `product_id`, `location_id`, `quantity`, `reference` |
 | `warehouse.cycle_count.completed` | 1.0 | warehouse | — | `cycle_count_id`, `site_id`, `line_count`, `variance_count` |
+| `warehouse.putaway.confirmed` | 1.0 | warehouse | — | `product_id`, `from_location_id`, `to_location_id`, `quantity`, `followed_suggestion` |
 | `production.work_order.closed` | 2.0 | production | — | `work_order_id`, `product_id`, `planned_quantity` — fires when an OF is closed. Closure is archival and posts no stock, so this carries what was planned, not what was produced. Replaces `production.work_order.completed`, which no longer exists: the OF stopped meaning "completed with output" in Phase 1. |
 | `production.report.validated` | 1.0 | production | — | `report_id`, `of_id`, `report_type`, `report_date` — the event that means stock moved. |
 | `production.report.rejected` | 1.0 | production | — | `report_id`, `of_id`, `report_type`, `reason` |

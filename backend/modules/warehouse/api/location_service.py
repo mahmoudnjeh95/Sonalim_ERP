@@ -122,6 +122,18 @@ class LocationService:
             )
         )
 
+    def get_locations_by_ids(self, *, tenant_id: str, location_ids: list[str]) -> list[Location]:
+        """Resolves a list of ids to full Location rows -- callers that already
+        have a ranked/ordered id list (put-away suggestions, say) reorder the
+        result themselves, since SQL's ANY() makes no order guarantee."""
+        if not location_ids:
+            return []
+        rows = self._connection.execute(
+            f"SELECT {_LOCATION_COLUMNS} FROM warehouse.locations WHERE tenant_id = %s AND id = ANY(%s)",
+            (tenant_id, location_ids),
+        ).fetchall()
+        return [_location_from_row(row) for row in rows]
+
     def list_locations(
         self,
         *,

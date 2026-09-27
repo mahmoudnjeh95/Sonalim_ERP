@@ -164,6 +164,7 @@ KEPT_TABLES = [
     "production.work_centers",
     "warehouse.locations",
     "warehouse.sites",
+    "warehouse.putaway_rules",
 ]
 
 # Numbering counters restarted so the first real OF is OF-1, not OF-58.

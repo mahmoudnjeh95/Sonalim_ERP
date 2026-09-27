@@ -13,11 +13,13 @@ from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
 from modules.warehouse.api.cycle_count_service import CycleCountService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
+from modules.warehouse.api.putaway_service import PutAwayService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
 from modules.warehouse.domain.cycle_count import CycleCount, CycleCountLine
 from modules.warehouse.domain.entities import Location, Site
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
+from modules.warehouse.domain.putaway import PutawayRule
 
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
 
@@ -835,3 +837,119 @@ def cancel_cycle_count(
             raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
         connection.commit()
     return _cycle_count_response(result.value)
+
+
+# --- Put-away -----------------------------------------------------------------------------
+
+
+class CreatePutawayRuleRequest(BaseModel):
+    site_id: str
+    product_id: str
+    target_location_id: str
+
+
+class ConfirmPutawayRequest(BaseModel):
+    site_id: str
+    product_id: str
+    from_location_id: str
+    to_location_id: str
+    quantity: float
+    correlation_id: str
+
+
+def _putaway_rule_response(rule: PutawayRule) -> dict:
+    return {
+        "id": rule.id,
+        "site_id": rule.site_id,
+        "product_id": rule.product_id,
+        "target_location_id": rule.target_location_id,
+        "created_by": rule.created_by,
+        "created_at": rule.created_at,
+    }
+
+
+def _putaway_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    return status.HTTP_400_BAD_REQUEST
+
+
+@router.get("/putaway/suggestions")
+def get_putaway_suggestions(
+    site_id: str,
+    product_id: str,
+    from_location_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("warehouse.view_putaway")),
+) -> list[dict]:
+    with get_connection() as connection:
+        service = PutAwayService(connection)
+        suggestions = service.suggest_locations(
+            tenant_id=tenant.tenant_id, site_id=site_id, product_id=product_id, exclude_location_id=from_location_id
+        )
+    return [_location_response(location) for location in suggestions]
+
+
+@router.get("/putaway/rules")
+def list_putaway_rules(
+    site_id: str | None = None, tenant: TenantContext = Depends(require_permission("warehouse.view_putaway"))
+) -> list[dict]:
+    with get_connection() as connection:
+        service = PutAwayService(connection)
+        rules = service.list_rules(tenant_id=tenant.tenant_id, site_id=site_id)
+    return [_putaway_rule_response(rule) for rule in rules]
+
+
+@router.post("/putaway/rules", status_code=status.HTTP_201_CREATED)
+def create_putaway_rule(
+    body: CreatePutawayRuleRequest, tenant: TenantContext = Depends(require_permission("warehouse.manage_putaway"))
+) -> dict:
+    with get_connection() as connection:
+        service = PutAwayService(connection)
+        result = service.create_rule(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            site_id=body.site_id,
+            product_id=body.product_id,
+            target_location_id=body.target_location_id,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_putaway_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _putaway_rule_response(result.value)
+
+
+@router.delete("/putaway/rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def delete_putaway_rule(
+    rule_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_putaway"))
+) -> None:
+    with get_connection() as connection:
+        service = PutAwayService(connection)
+        result = service.delete_rule(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, rule_id=rule_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_putaway_err_status(result.code), err_detail(result))
+        connection.commit()
+
+
+@router.post("/putaway/confirm", status_code=status.HTTP_201_CREATED)
+def confirm_putaway(
+    body: ConfirmPutawayRequest, tenant: TenantContext = Depends(require_permission("warehouse.manage_putaway"))
+) -> dict:
+    with get_connection() as connection:
+        service = PutAwayService(connection)
+        result = service.confirm_putaway(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            site_id=body.site_id,
+            product_id=body.product_id,
+            from_location_id=body.from_location_id,
+            to_location_id=body.to_location_id,
+            quantity=body.quantity,
+            correlation_id=body.correlation_id,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(status.HTTP_409_CONFLICT, err_detail(result))
+        connection.commit()
+    return {"status": "ok"}

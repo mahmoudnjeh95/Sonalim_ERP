@@ -1,14 +1,15 @@
 {
   "name": "warehouse",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "depends": ["core"],
   "optional_depends": [],
-  "provides_api": ["StockService", "LocationService", "LotService", "WarehouseAnalyticsService", "SiteService", "CycleCountService"],
+  "provides_api": ["StockService", "LocationService", "LotService", "WarehouseAnalyticsService", "SiteService", "CycleCountService", "PutAwayService"],
   "publishes_events": [
     "warehouse.stock.reserved",
     "warehouse.stock.received",
     "warehouse.stock.issued",
-    "warehouse.cycle_count.completed"
+    "warehouse.cycle_count.completed",
+    "warehouse.putaway.confirmed"
   ],
   "subscribes_events": ["procurement.purchase_order_receipt.confirmed", "core.product.created"],
   "migrations_path": "./migrations",
@@ -25,6 +26,8 @@
     "warehouse.admin_sites",
     "warehouse.view_cycle_counts",
     "warehouse.manage_cycle_counts",
-    "warehouse.admin_cycle_counts"
+    "warehouse.admin_cycle_counts",
+    "warehouse.view_putaway",
+    "warehouse.manage_putaway"
   ]
 }
