@@ -10,10 +10,12 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
+from modules.warehouse.api.cycle_count_service import CycleCountService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
+from modules.warehouse.domain.cycle_count import CycleCount, CycleCountLine
 from modules.warehouse.domain.entities import Location, Site
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
 
@@ -604,3 +606,232 @@ def transition_lot(
             raise HTTPException(_lot_err_status(result.code), err_detail(result))
         connection.commit()
     return _lot_response(result.value)
+
+
+# --- Cycle counts -----------------------------------------------------------------------
+
+
+class CreateCycleCountRequest(BaseModel):
+    site_id: str
+    scope_location_id: str | None = None
+    count_type: Literal["scheduled", "blind"] = "scheduled"
+    scheduled_for: datetime.date | None = None
+
+
+class UpdateCycleCountRequest(BaseModel):
+    scheduled_for: datetime.date | None = None
+    count_type: Literal["scheduled", "blind"] | None = None
+
+
+class SubmitLineCountRequest(BaseModel):
+    counted_quantity: float
+
+
+class ResolveLineVarianceRequest(BaseModel):
+    decision: Literal["approve", "reject"]
+
+
+class CompleteCycleCountRequest(BaseModel):
+    correlation_id: str
+
+
+def _cycle_count_response(count: CycleCount) -> dict:
+    return {
+        "id": count.id,
+        "site_id": count.site_id,
+        "scope_location_id": count.scope_location_id,
+        "count_type": count.count_type,
+        "status": count.status,
+        "scheduled_for": count.scheduled_for,
+        "started_at": count.started_at,
+        "completed_at": count.completed_at,
+        "created_by": count.created_by,
+        "created_at": count.created_at,
+    }
+
+
+def _cycle_count_line_response(line: CycleCountLine) -> dict:
+    return {
+        "id": line.id,
+        "cycle_count_id": line.cycle_count_id,
+        "location_id": line.location_id,
+        "product_id": line.product_id,
+        "expected_quantity": line.expected_quantity,
+        "counted_quantity": line.counted_quantity,
+        "status": line.status,
+        "resolution": line.resolution,
+        "counted_by": line.counted_by,
+        "counted_at": line.counted_at,
+        "resolved_by": line.resolved_by,
+        "resolved_at": line.resolved_at,
+    }
+
+
+def _cycle_count_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNRESOLVED"):
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+@router.get("/cycle-counts")
+def list_cycle_counts(
+    site_id: str | None = None,
+    status_filter: str | None = Query(default=None, alias="status"),
+    tenant: TenantContext = Depends(require_permission("warehouse.view_cycle_counts")),
+) -> list[dict]:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        counts = service.list_counts(tenant_id=tenant.tenant_id, site_id=site_id, status=status_filter)
+    return [_cycle_count_response(count) for count in counts]
+
+
+@router.post("/cycle-counts", status_code=status.HTTP_201_CREATED)
+def create_cycle_count(
+    body: CreateCycleCountRequest, tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts"))
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        result = service.create_count(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            site_id=body.site_id,
+            scope_location_id=body.scope_location_id,
+            count_type=body.count_type,
+            scheduled_for=body.scheduled_for,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_response(result.value)
+
+
+@router.get("/cycle-counts/{cycle_count_id}")
+def get_cycle_count(
+    cycle_count_id: str, tenant: TenantContext = Depends(require_permission("warehouse.view_cycle_counts"))
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        count_result = service.get_count(tenant_id=tenant.tenant_id, cycle_count_id=cycle_count_id)
+        if isinstance(count_result, Err):
+            raise HTTPException(_cycle_count_err_status(count_result.code), err_detail(count_result))
+        lines_result = service.list_lines(tenant_id=tenant.tenant_id, cycle_count_id=cycle_count_id)
+        if isinstance(lines_result, Err):
+            raise HTTPException(_cycle_count_err_status(lines_result.code), err_detail(lines_result))
+    return {**_cycle_count_response(count_result.value), "lines": [_cycle_count_line_response(line) for line in lines_result.value]}
+
+
+@router.patch("/cycle-counts/{cycle_count_id}")
+def update_cycle_count(
+    cycle_count_id: str,
+    body: UpdateCycleCountRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.admin_cycle_counts")),
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        result = service.admin_update_count(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            cycle_count_id=cycle_count_id,
+            scheduled_for=body.scheduled_for,
+            count_type=body.count_type,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_response(result.value)
+
+
+@router.post("/cycle-counts/{cycle_count_id}/start")
+def start_cycle_count(
+    cycle_count_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts"))
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        result = service.start_count(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, cycle_count_id=cycle_count_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_response(result.value)
+
+
+@router.post("/cycle-counts/{cycle_count_id}/lines/{line_id}/count")
+def submit_cycle_count_line(
+    cycle_count_id: str,
+    line_id: str,
+    body: SubmitLineCountRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts")),
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        result = service.submit_line_count(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            cycle_count_id=cycle_count_id,
+            line_id=line_id,
+            counted_quantity=body.counted_quantity,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_line_response(result.value)
+
+
+@router.post("/cycle-counts/{cycle_count_id}/lines/{line_id}/resolve")
+def resolve_cycle_count_line(
+    cycle_count_id: str,
+    line_id: str,
+    body: ResolveLineVarianceRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts")),
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        result = service.resolve_line_variance(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            cycle_count_id=cycle_count_id,
+            line_id=line_id,
+            decision=body.decision,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_line_response(result.value)
+
+
+@router.post("/cycle-counts/{cycle_count_id}/complete")
+def complete_cycle_count(
+    cycle_count_id: str,
+    body: CompleteCycleCountRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts")),
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        result = service.complete_count(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, cycle_count_id=cycle_count_id, correlation_id=body.correlation_id
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_response(result.value)
+
+
+@router.post("/cycle-counts/{cycle_count_id}/cancel")
+def cancel_cycle_count(
+    cycle_count_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts"))
+) -> dict:
+    with get_connection() as connection:
+        service = CycleCountService(connection)
+        result = service.cancel_count(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, cycle_count_id=cycle_count_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_response(result.value)
