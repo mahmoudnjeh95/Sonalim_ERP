@@ -85,6 +85,11 @@ function toComponents(rows: ComponentRow[]): ContractComponent[] {
     }));
 }
 
+/** A row with a code but no value would otherwise save as 0 (`Number("") === 0`): refuse it instead. */
+function hasEmptyValue(row: ComponentRow): boolean {
+  return row.component_code.trim() !== "" && row.value.trim() === "";
+}
+
 /** What the user changed; an amendment never carries the start or trial dates. */
 function changes(initial: ContractForm, form: ContractForm, mode: "edit" | "amend"): ContractChanges {
   const out: ContractChanges = {};
@@ -169,6 +174,7 @@ export function ContractFormDialog({
   const setRow = (index: number, patch: Partial<ComponentRow>) =>
     set({ components: form.components.map((row, i) => (i === index ? { ...row, ...patch } : row)) });
   const payLocked = !canSeeSensitive;
+  const hasEmptyComponentValue = form.components.some(hasEmptyValue);
   const title = mode === "create" ? "hr.contracts.dialog.createTitle" : mode === "edit" ? "hr.contracts.dialog.editTitle" : "hr.contracts.dialog.amendTitle";
   const description =
     mode === "create" ? "hr.contracts.dialog.createDescription" : mode === "edit" ? "hr.contracts.dialog.editDescription" : "hr.contracts.dialog.amendDescription";
@@ -184,6 +190,7 @@ export function ContractFormDialog({
           className="space-y-4"
           onSubmit={(event) => {
             event.preventDefault();
+            if (hasEmptyComponentValue) return;
             mutation.mutate();
           }}
         >
@@ -216,7 +223,7 @@ export function ContractFormDialog({
               </FormField>
             )}
             <FormField id="contract-hours" label={t("hr.contracts.field.hours")}>
-              <Input id="contract-hours" type="number" min="1" max="168" step="0.5" required value={form.weekly_hours} onChange={(event) => set({ weekly_hours: event.target.value })} />
+              <Input id="contract-hours" type="number" min="0.01" max="168" step="0.01" required value={form.weekly_hours} onChange={(event) => set({ weekly_hours: event.target.value })} />
             </FormField>
             <FormField id="contract-frequency" label={t("hr.contracts.field.frequency")}>
               <Select id="contract-frequency" value={form.pay_frequency} onChange={(event) => set({ pay_frequency: event.target.value as PayFrequency })}>
@@ -270,38 +277,41 @@ export function ContractFormDialog({
           <div className="space-y-2">
             <p className="text-sm font-medium">{t("hr.contracts.field.components")}</p>
             {form.components.map((row, index) => (
-              <div key={index} className="grid grid-cols-[1fr_8rem_1fr_auto] items-end gap-2">
-                <Input
-                  aria-label={t("hr.contracts.field.componentCode")}
-                  placeholder="TRANSPORT"
-                  readOnly={payLocked}
-                  value={row.component_code}
-                  onChange={(event) => setRow(index, { component_code: event.target.value.toUpperCase() })}
-                />
-                <Select disabled={payLocked} value={row.kind} onChange={(event) => setRow(index, { kind: event.target.value as ComponentRow["kind"] })}>
-                  <option value="amount">{t("hr.contracts.kind.amount")}</option>
-                  <option value="rate">{t("hr.contracts.kind.rate")}</option>
-                </Select>
-                <Input
-                  aria-label={t(row.kind === "amount" ? "hr.contracts.field.componentAmount" : "hr.contracts.field.componentRate")}
-                  placeholder={payLocked ? "••••" : t(row.kind === "amount" ? "hr.contracts.field.componentAmount" : "hr.contracts.field.componentRate")}
-                  type="number"
-                  min="0"
-                  step={row.kind === "amount" ? "1" : "0.01"}
-                  readOnly={payLocked}
-                  value={row.value}
-                  onChange={(event) => setRow(index, { value: event.target.value })}
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  disabled={payLocked}
-                  aria-label={t("hr.contracts.removeComponent")}
-                  onClick={() => set({ components: form.components.filter((_, i) => i !== index) })}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
+              <div key={index}>
+                <div className="grid grid-cols-[1fr_8rem_1fr_auto] items-end gap-2">
+                  <Input
+                    aria-label={t("hr.contracts.field.componentCode")}
+                    placeholder="TRANSPORT"
+                    readOnly={payLocked}
+                    value={row.component_code}
+                    onChange={(event) => setRow(index, { component_code: event.target.value.toUpperCase() })}
+                  />
+                  <Select disabled={payLocked} value={row.kind} onChange={(event) => setRow(index, { kind: event.target.value as ComponentRow["kind"] })}>
+                    <option value="amount">{t("hr.contracts.kind.amount")}</option>
+                    <option value="rate">{t("hr.contracts.kind.rate")}</option>
+                  </Select>
+                  <Input
+                    aria-label={t(row.kind === "amount" ? "hr.contracts.field.componentAmount" : "hr.contracts.field.componentRate")}
+                    placeholder={payLocked ? "••••" : t(row.kind === "amount" ? "hr.contracts.field.componentAmount" : "hr.contracts.field.componentRate")}
+                    type="number"
+                    min="0"
+                    step={row.kind === "amount" ? "1" : "0.01"}
+                    readOnly={payLocked}
+                    value={row.value}
+                    onChange={(event) => setRow(index, { value: event.target.value })}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    disabled={payLocked}
+                    aria-label={t("hr.contracts.removeComponent")}
+                    onClick={() => set({ components: form.components.filter((_, i) => i !== index) })}
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+                {hasEmptyValue(row) && <p className="text-xs text-destructive">{t("hr.contracts.componentValueRequired")}</p>}
               </div>
             ))}
             <Button
@@ -323,7 +333,7 @@ export function ContractFormDialog({
             </div>
           )}
 
-          <Button type="submit" className="w-full" disabled={mutation.isPending}>
+          <Button type="submit" className="w-full" disabled={mutation.isPending || hasEmptyComponentValue}>
             {mutation.isPending
               ? t("common.saving")
               : t(mode === "create" ? "hr.contracts.create" : mode === "amend" ? "hr.contracts.saveAmendment" : "common.save")}
