@@ -9,8 +9,9 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
-from modules.hr.api.contract_service import ContractService
+from modules.hr.api.contract_service import _OVERLAP_GUARD, ContractService
 from modules.hr.api.service import EmployeeService
+from modules.hr.api.support import execute_guarded
 from modules.hr.domain.contract import ContractComponent, ContractTerms
 from modules.hr.domain.employee import EmployeeFile
 
@@ -146,6 +147,32 @@ def test_amending_a_non_xof_contract_is_refused_and_inserts_nothing(db, world):
     assert after == before
     unchanged = db.execute("SELECT currency, salary, status FROM hr.contracts WHERE id = %s", (contract["id"],)).fetchone()
     assert unchanged == ("USD", Decimal("1800"), "active")
+
+
+def test_execute_guarded_turns_the_races_exclusion_violation_into_contract_overlap_and_the_connection_stays_usable(db, world):
+    """_check_overlap is an app-level pre-check: it can miss a genuine race between two
+    concurrent inserts, which is exactly what the database's own exclusion constraint
+    (hr_contracts_no_overlap, 0007) exists to catch. This bypasses the pre-check entirely and
+    calls execute_guarded the way _insert does, to prove that catch path on its own."""
+    original = _create(db, world).value  # a first signed contract, open-ended from 2024-01-01
+    refused = execute_guarded(
+        db,
+        "INSERT INTO hr.contracts (id, tenant_id, employee_id, contract_type, start_date, salary, currency, status) "
+        "VALUES (%s, %s, %s, 'cdi', %s, %s, 'XOF', 'active')",
+        (str(ULID()), TENANT, world.employee_id, D(2024, 6, 1), Decimal("100000")),
+        _OVERLAP_GUARD,
+    )
+    assert isinstance(refused, Err) and refused.code == "CONTRACT_OVERLAP"
+    assert refused.message_fr
+    # The savepoint rollback inside execute_guarded left the outer transaction usable: a real
+    # database error in the middle of it (not caught and rolled back) would instead abort the
+    # whole transaction, making any further statement fail with "current transaction is aborted".
+    still_usable = db.execute("SELECT COUNT(*) FROM hr.contracts WHERE tenant_id = %s", (TENANT,)).fetchone()
+    assert still_usable == (1,)  # the race's own insert never landed; only the first contract is there
+    ended = ContractService(db).end_contract(
+        tenant_id=TENANT, actor_id=world.actor, contract_id=original["id"], end_date=D(2024, 12, 31), end_reason="resignation"
+    )
+    assert isinstance(ended, Ok)
 
 
 def test_an_edit_can_replace_components_and_audits_pay_by_name_only(db, world):
