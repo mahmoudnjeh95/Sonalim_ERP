@@ -143,8 +143,20 @@ def _day(rng: random.Random, year: int) -> datetime.date:
     return datetime.date(year, rng.randint(1, 12), rng.randint(1, 28))
 
 
-def plans() -> list[Plan]:
-    """The same 60 people on every run (fixed random seed)."""
+def _add_years(day: datetime.date, years: int) -> datetime.date:
+    """`date.replace(year=...)` raises for a 29 Feb birth date landing on a non-leap year.
+    Fall back to 28 Feb, same day as `_day()` already stays clear of (it never produces day 29-31)."""
+    try:
+        return day.replace(year=day.year + years)
+    except ValueError:
+        return day.replace(month=2, day=28, year=day.year + years)
+
+
+def plans(*, today: datetime.date | None = None) -> list[Plan]:
+    """The same 60 people on every run (fixed random seed), for a given day. Every year bound is
+    derived from `today` (defaulting to the real today) so the plan stays computable on any date,
+    including years past the ones this file was written in."""
+    today = today or TODAY
     rng = random.Random(RNG_SEED)
     result: list[Plan] = []
     number = 0
@@ -154,32 +166,32 @@ def plans() -> list[Plan]:
             number += 1
             female = rng.random() < (0.55 if department == "CONDI" else 0.2)
             age = rng.randint(22, 55)
-            birth = _day(rng, TODAY.year - age)
+            birth = _day(rng, today.year - age)
             married = age >= 28 and rng.random() < 0.7
             contract_type, frequency, end, trial = "cdi", "monthly", None, None
-            hire = _day(rng, rng.randint(max(2012, birth.year + 19), 2024))
+            hire = _day(rng, rng.randint(max(2012, birth.year + 19), max(birth.year + 19, today.year - 2)))
             salary = minimum + rng.randint(0, 8) * 5_000
             if number in DAILY:
                 contract_type, frequency = "daily", "daily"
-                hire = _day(rng, rng.randint(max(2024, birth.year + 19), 2025))
+                hire = _day(rng, rng.randint(max(2024, birth.year + 19), max(birth.year + 19, today.year - 1)))
                 salary = 3_000 + rng.randint(0, 6) * 250  # F CFA per day (DEMO)
             elif number in APPRENTICES:
-                contract_type, hire = "apprentice", TODAY - datetime.timedelta(days=200)
+                contract_type, hire = "apprentice", today - datetime.timedelta(days=200)
                 end, salary = hire + datetime.timedelta(days=730), 50_000
             elif number in INTERNS:
-                contract_type, hire = "intern", TODAY - datetime.timedelta(days=40)
+                contract_type, hire = "intern", today - datetime.timedelta(days=40)
                 end, salary = hire + datetime.timedelta(days=182), 40_000
             elif number in CDD_ENDS_IN_DAYS:
                 contract_type = "cdd"
-                hire = TODAY - datetime.timedelta(days=rng.randint(200, 330))
-                end = TODAY + datetime.timedelta(days=CDD_ENDS_IN_DAYS[number])
+                hire = today - datetime.timedelta(days=rng.randint(200, 330))
+                end = today + datetime.timedelta(days=CDD_ENDS_IN_DAYS[number])
             elif number in RECENT_HIRES_TRIAL_DAYS:
-                hire = TODAY - datetime.timedelta(days=45)
-                trial = TODAY + datetime.timedelta(days=RECENT_HIRES_TRIAL_DAYS[number])
+                hire = today - datetime.timedelta(days=45)
+                trial = today + datetime.timedelta(days=RECENT_HIRES_TRIAL_DAYS[number])
             children = tuple(
-                _day(rng, rng.randint(max(birth.year + 22, 2000), min(TODAY.year - 1, birth.year + 45)))
+                _day(rng, rng.randint(max(birth.year + 22, 2000), min(today.year - 1, birth.year + 45)))
                 for _ in range(rng.choice([0, 1, 2, 2, 3, 3, 4]) if married else rng.choice([0, 0, 1]))
-            ) if birth.year + 22 <= TODAY.year - 1 else ()
+            ) if birth.year + 22 <= today.year - 1 else ()
             if number in DAILY:
                 payment = "cash" if number % 2 == 0 else "mobile"
             elif number % 10 == 0:
@@ -337,7 +349,7 @@ def _create(conn, actor: str, plan: Plan, departments, grades, positions, self_s
                 tenant_id=TENANT, actor_id=actor, employee_id=employee["id"],
                 dependant=Dependant(
                     kind="spouse", name=f"{rng.choice(MALE if plan.gender == 'female' else FEMALE)} {rng.choice(LAST)}",
-                    birth_date=spouse_birth, valid_from=max(spouse_birth, plan.birth_date).replace(year=max(spouse_birth, plan.birth_date).year + 25),
+                    birth_date=spouse_birth, valid_from=_add_years(max(spouse_birth, plan.birth_date), 25),
                     dependent_for_tax=plan.gender == "male",
                 ),
             )
