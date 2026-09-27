@@ -131,6 +131,23 @@ def test_an_amendment_takes_effect_after_the_start_and_only_on_an_active_contrac
     assert isinstance(not_signed, Err) and not_signed.code == "INVALID_TRANSITION"
 
 
+def test_amending_a_non_xof_contract_is_refused_and_inserts_nothing(db, world):
+    # Every new contract is XOF; a non-XOF row is a legacy one the old screen created. Simulate
+    # it directly, since create_contract itself always writes 'XOF'.
+    contract = _create(db, world, base_salary=Decimal("1800")).value
+    db.execute("UPDATE hr.contracts SET currency = 'USD' WHERE id = %s", (contract["id"],))
+    before = db.execute("SELECT COUNT(*) FROM hr.contracts WHERE employee_id = %s", (world.employee_id,)).fetchone()[0]
+    refused = ContractService(db).amend_contract(
+        tenant_id=TENANT, actor_id=world.actor, contract_id=contract["id"], effective_date=D(2024, 6, 1), changes={"base_salary": Decimal("2000")}
+    )
+    assert isinstance(refused, Err) and refused.code == "CONTRACT_NOT_XOF"
+    assert refused.message_fr
+    after = db.execute("SELECT COUNT(*) FROM hr.contracts WHERE employee_id = %s", (world.employee_id,)).fetchone()[0]
+    assert after == before
+    unchanged = db.execute("SELECT currency, salary, status FROM hr.contracts WHERE id = %s", (contract["id"],)).fetchone()
+    assert unchanged == ("USD", Decimal("1800"), "active")
+
+
 def test_an_edit_can_replace_components_and_audits_pay_by_name_only(db, world):
     contract = _create(db, world).value
     edited = ContractService(db).update_contract(

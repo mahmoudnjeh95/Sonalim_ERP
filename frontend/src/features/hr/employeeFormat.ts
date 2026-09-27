@@ -6,6 +6,14 @@ export function formatXof(amount: number | null | undefined): string {
   return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
 }
 
+/** An amount in whatever currency it is actually recorded in (a legacy non-XOF contract keeps
+ * its own currency rather than being relabelled F CFA); "—" when the value is hidden or absent. */
+export function formatMoney(amount: number | null | undefined, currency: string): string {
+  if (amount == null) return "—";
+  if (currency === "XOF") return formatXof(amount);
+  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency }).format(amount);
+}
+
 /** An ISO date (yyyy-mm-dd) in the app's language; "—" when absent. */
 export function formatDate(iso: string | null | undefined): string {
   if (!iso) return "—";

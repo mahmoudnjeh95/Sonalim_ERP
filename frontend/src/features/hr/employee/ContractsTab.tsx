@@ -14,7 +14,7 @@ import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
 import { activateContract, CONTRACT_STATUSES, hrKeys, listContracts, type Contract, type ContractStatus, type EmployeeRecord } from "../api";
 import { CONTRACT_STATUS_LABEL, CONTRACT_STATUS_VARIANT, CONTRACT_TYPE_LABEL, END_REASON_LABEL, PAY_FREQUENCY_LABEL } from "../employeeLabels";
-import { formatDate, formatXof } from "../employeeFormat";
+import { formatDate, formatMoney, formatXof } from "../employeeFormat";
 import { HrTable } from "../HrTable";
 import { Masked } from "../Masked";
 import { ContractFormDialog, type ContractDialogMode } from "./ContractFormDialog";
@@ -65,7 +65,11 @@ export function ContractsTab({ employee }: { employee: EmployeeRecord }) {
       actions.push({ key: "activate", label: t("hr.contracts.action.activate"), icon: <CheckCircle2 className="h-3.5 w-3.5" />, onSelect: () => activate.mutate(row) });
     }
     if (hasPermission("hr.manage_contracts") && row.status === "active") {
-      actions.push({ key: "amend", label: t("hr.contracts.action.amend"), icon: <Split className="h-3.5 w-3.5" />, onSelect: () => setForm({ open: true, mode: "amend", contract: row }) });
+      // Amending a non-XOF (legacy) contract is refused server-side (CONTRACT_NOT_XOF): hide the
+      // action rather than let the user hit a 422 with no other way to fix the currency yet.
+      if (row.currency === "XOF") {
+        actions.push({ key: "amend", label: t("hr.contracts.action.amend"), icon: <Split className="h-3.5 w-3.5" />, onSelect: () => setForm({ open: true, mode: "amend", contract: row }) });
+      }
       actions.push({ key: "end", label: t("hr.contracts.action.end"), icon: <Ban className="h-3.5 w-3.5" />, tone: "destructive", onSelect: () => setEnding(row) });
     }
     return actions;
@@ -86,8 +90,7 @@ export function ContractsTab({ employee }: { employee: EmployeeRecord }) {
           <Masked />
         ) : (
           <span className="tabular-nums">
-            {formatXof(row.base_salary)} {t(row.pay_frequency === "daily" ? "hr.contracts.perDay" : "hr.contracts.perMonth")}
-            {row.currency !== "XOF" && <span className="ml-1 text-xs text-destructive">{row.currency}</span>}
+            {formatMoney(row.base_salary, row.currency)} {t(row.pay_frequency === "daily" ? "hr.contracts.perDay" : "hr.contracts.perMonth")}
           </span>
         ),
       filterCell: {

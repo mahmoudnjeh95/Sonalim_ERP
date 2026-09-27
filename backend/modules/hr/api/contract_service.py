@@ -27,6 +27,16 @@ from modules.hr.domain.employee import END_REASONS
 from modules.hr.domain.sensitive import CONTRACT_WRITE_FIELDS
 
 _NOT_FOUND = Err("NOT_FOUND", "contract not found", "contrat introuvable")
+# Interim guard only: every new contract is XOF (_insert always writes 'XOF'), so this only
+# ever fires on a legacy row the old screen created in another currency. amend_contract would
+# otherwise silently turn that amount into XOF with the same number, changing what it means.
+# What those legacy USD amounts actually mean (real dollars, or F CFA typed under a hidden USD
+# default) is the user's call, not this fix's; until decided, amending one is simply refused.
+_CONTRACT_NOT_XOF = Err(
+    "CONTRACT_NOT_XOF",
+    "this contract is not in F CFA; it cannot be amended until its currency is resolved",
+    "ce contrat n'est pas en F CFA ; il ne peut pas faire l'objet d'un avenant tant que sa devise n'est pas résolue",
+)
 _OVERLAP_GUARD = {
     "hr_contracts_no_overlap": Err(
         "CONTRACT_OVERLAP", "the employee already has a signed contract on those days", "l'employé a déjà un contrat signé sur ces jours"
@@ -113,6 +123,15 @@ class ContractService:
         if row is None:
             return None
         return ContractTerms(*row, components=self._components([contract_id]).get(contract_id, ()))
+
+    def _currency_of(self, tenant_id: str, contract_id: str) -> str | None:
+        # currency is not a ContractTerms field (every new contract is XOF, written by _insert);
+        # this is only needed to catch a legacy non-XOF row before an amendment silently
+        # relabels its amount as XOF.
+        row = self.connection.execute(
+            "SELECT currency FROM hr.contracts WHERE id = %s AND tenant_id = %s", (contract_id, tenant_id)
+        ).fetchone()
+        return None if row is None else row[0]
 
     # ---- checks ---------------------------------------------------------------------------------
 
@@ -363,6 +382,8 @@ class ContractService:
         current = self._locked_terms(tenant_id, contract_id)
         if current is None:
             return _NOT_FOUND
+        if self._currency_of(tenant_id, contract_id) != "XOF":
+            return _CONTRACT_NOT_XOF
         if current.status != "active":
             return Err("INVALID_TRANSITION", "only an active contract can be amended", "seul un contrat actif peut faire l'objet d'un avenant")
         if effective_date <= current.start_date or (current.end_date is not None and effective_date > current.end_date):
