@@ -122,6 +122,25 @@ def test_an_amendment_closes_the_old_terms_and_carries_them_on(db, world):
     assert (closed["end_date"], closed["end_reason"], closed["status"]) == ("2024-12-31", "amended", "expired")
 
 
+def test_an_amendment_carries_over_a_trial_still_running_at_its_effective_date(db, world):
+    service = ContractService(db)
+    old = _create(db, world, trial_end_date=D(2024, 6, 30)).value
+    # effective_date falls before the trial ends: still running, so it is carried over.
+    still_running = service.amend_contract(
+        tenant_id=TENANT, actor_id=world.actor, contract_id=old["id"], effective_date=D(2024, 3, 1), changes={"base_salary": Decimal("175000")}
+    ).value
+    assert still_running["trial_end_date"] == "2024-06-30"
+
+
+def test_an_amendment_carries_over_a_trial_ending_exactly_on_its_effective_date(db, world):
+    service = ContractService(db)
+    old = _create(db, world, trial_end_date=D(2024, 6, 30)).value
+    on_the_day = service.amend_contract(
+        tenant_id=TENANT, actor_id=world.actor, contract_id=old["id"], effective_date=D(2024, 6, 30), changes={}
+    ).value
+    assert on_the_day["trial_end_date"] == "2024-06-30"
+
+
 def test_an_amendment_takes_effect_after_the_start_and_only_on_an_active_contract(db, world):
     service = ContractService(db)
     contract = _create(db, world).value

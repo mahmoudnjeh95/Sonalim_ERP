@@ -374,8 +374,10 @@ class ContractService:
         self, *, tenant_id: str, actor_id: str, contract_id: str, effective_date: datetime.date, changes: Mapping[str, object]
     ) -> Result[dict]:
         """An avenant: the current terms end the day before `effective_date` and a new active
-        contract carries them on from that day with `changes` applied. The trial period is not
-        carried over; the allowances are, unless `changes` replaces them."""
+        contract carries them on from that day with `changes` applied. A trial period still
+        running on or after `effective_date` is carried over (it is not over yet); one that
+        already ended before `effective_date` is dropped, as before. The allowances are carried
+        over too, unless `changes` replaces them."""
         unknown = sorted(set(changes) - _AMENDABLE)
         if unknown:
             return Err("INVALID_CONTRACT", f"an amendment cannot change: {', '.join(unknown)}", f"un avenant ne peut pas modifier : {', '.join(unknown)}")
@@ -395,8 +397,12 @@ class ContractService:
         updates = dict(changes)
         if "components" in updates:
             updates["components"] = _components_of(updates["components"])
+        carried_trial_end = current.trial_end_date if current.trial_end_date is not None and current.trial_end_date >= effective_date else None
         validated = validate_terms(
-            replace(current, start_date=effective_date, trial_end_date=None, status="active", amends_contract_id=contract_id, end_reason=None, **updates)
+            replace(
+                current, start_date=effective_date, trial_end_date=carried_trial_end, status="active",
+                amends_contract_id=contract_id, end_reason=None, **updates,
+            )
         )
         if isinstance(validated, Err):
             return validated
