@@ -27,6 +27,10 @@ MODULE_LABELS = {
 
 ADMINISTRATOR_ROLE_CODE = "administrateur"
 
+# Permissions that open personal data (salary, national id, bank details). Like admin_*, they
+# are granted one at a time on purpose and never bundled into a module's everyday role.
+DELIBERATE_GRANT_PERMISSIONS = {"hr.view_sensitive"}
+
 # Permissions core itself defines that aren't tied to any business module.
 CORE_PERMISSIONS = [
     "core.manage_permissions",
@@ -75,7 +79,9 @@ def default_role_catalog() -> list[dict[str, object]]:
         permissions = [
             entry["permission"]
             for entry in catalog
-            if entry["module"] == module and not entry["permission"].split(".", 1)[1].startswith("admin_")
+            if entry["module"] == module
+            and not entry["permission"].split(".", 1)[1].startswith("admin_")
+            and entry["permission"] not in DELIBERATE_GRANT_PERMISSIONS
         ]
         if not permissions:
             continue

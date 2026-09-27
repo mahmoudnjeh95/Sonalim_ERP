@@ -350,7 +350,8 @@ export const SECTIONS: SectionDef[] = [
         payloadKey: "rows",
         shape: "rows",
         serverDerived: [
-          "run_id", "packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id", "waste_carton_quantity",
+          "run_id", "packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id",
+          "film_location_id", "carton_location_id", "scotch_location_id", "ruban_location_id", "waste_carton_quantity",
         ],
         addLabel: L("Add a lot", "Ajouter un lot"),
         columns: [
