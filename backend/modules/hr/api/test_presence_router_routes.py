@@ -37,3 +37,14 @@ def test_schedule_routes_and_their_permissions():
     }
     routes = _routes()
     assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_presence_grid_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/presence/grid"): "hr.view_presence",
+        ("GET", "/hr/presence/week"): "hr.view_presence",
+        ("PUT", "/hr/presence/days"): "hr.manage_presence",
+        ("GET", "/hr/presence/employee-month"): "hr.view_presence",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected

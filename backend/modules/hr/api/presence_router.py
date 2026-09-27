@@ -11,7 +11,9 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.result import Err, Result, err_detail
 from core.tenancy import TenantContext, require_permission
+from modules.hr.api.presence_service import PresenceService
 from modules.hr.api.schedule_service import HolidayService, PresenceSettingsService, ScheduleService
+from modules.hr.domain.presence import ManualEntry
 
 router = APIRouter(prefix="/hr", tags=["hr.presence"])
 
@@ -224,3 +226,52 @@ def get_presence_settings(tenant: TenantContext = Depends(require_permission("hr
 @router.put("/presence/settings")
 def save_presence_settings(body: PresenceSettingsBody, tenant: TenantContext = Depends(require_permission("hr.admin_presence"))):
     return _write(lambda c: PresenceSettingsService(c).update(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+# ---- presence grid ------------------------------------------------------------------
+
+class PresenceEntryBody(BaseModel):
+    employee_id: str
+    work_date: datetime.date
+    status: str
+    worked_minutes: int | None = None
+    late_minutes: int = 0
+    ot_minutes_day: int = 0
+    ot_minutes_night: int = 0
+    justified: bool = False
+    note: str | None = None
+
+
+class PresenceDaysBody(BaseModel):
+    entries: list[PresenceEntryBody]
+
+
+@router.get("/presence/grid")
+def presence_grid(
+    work_date: datetime.date,
+    department_id: str | None = None,
+    schedule_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("hr.view_presence")),
+):
+    return _read(lambda c: PresenceService(c).grid(tenant_id=tenant.tenant_id, work_date=work_date, department_id=department_id, schedule_id=schedule_id))
+
+
+@router.get("/presence/week")
+def presence_week(
+    date_from: datetime.date,
+    department_id: str | None = None,
+    schedule_id: str | None = None,
+    tenant: TenantContext = Depends(require_permission("hr.view_presence")),
+):
+    return _read(lambda c: PresenceService(c).week(tenant_id=tenant.tenant_id, date_from=date_from, department_id=department_id, schedule_id=schedule_id))
+
+
+@router.put("/presence/days")
+def save_presence_days(body: PresenceDaysBody, tenant: TenantContext = Depends(require_permission("hr.manage_presence"))):
+    entries = [ManualEntry(**entry.model_dump()) for entry in body.entries]
+    return _write(lambda c: PresenceService(c).save_days(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, entries=entries))
+
+
+@router.get("/presence/employee-month")
+def presence_employee_month(employee_id: str, period: datetime.date, tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
+    return _read_result(lambda c: PresenceService(c).employee_month(tenant_id=tenant.tenant_id, employee_id=employee_id, period=_period(period)))
