@@ -20,6 +20,7 @@ MODULE_MIGRATION_DIRS: dict[str, Path] = {
     "sales": REPO_ROOT / "modules" / "sales" / "migrations",
     "finance": REPO_ROOT / "modules" / "finance" / "migrations",
     "hr": REPO_ROOT / "modules" / "hr" / "migrations",
+    "payroll": REPO_ROOT / "modules" / "payroll" / "migrations",
     "procurement": REPO_ROOT / "modules" / "procurement" / "migrations",
     "qc": REPO_ROOT / "modules" / "qc" / "migrations",
     "maintenance": REPO_ROOT / "modules" / "maintenance" / "migrations",
@@ -32,7 +33,9 @@ MODULE_MIGRATION_DIRS: dict[str, Path] = {
 # maintenance runs last: its init migration copies rows out of production.machines
 # and its second migration drops that table, both of which need production's
 # migrations (which create that table) to have already run.
-MODULE_ORDER = ["core", "warehouse", "production", "crm", "sales", "finance", "hr", "procurement", "qc", "maintenance"]
+# payroll runs right after hr: its rows carry hr employee ids as opaque text (no foreign key)
+# and it reads hr only through hr's api services, so hr's schema must exist first.
+MODULE_ORDER = ["core", "warehouse", "production", "crm", "sales", "finance", "hr", "payroll", "procurement", "qc", "maintenance"]
 
 
 def _ensure_tracking_table(connection: psycopg.Connection) -> None:

@@ -1,0 +1,23 @@
+{
+  "name": "payroll",
+  "version": "0.1.0",
+  "depends": ["core", "hr"],
+  "optional_depends": [],
+  "provides_api": ["PayrollPostingService", "PayrollReportService"],
+  "publishes_events": ["payroll.run.approved", "payroll.run.paid", "payroll.run.reversed"],
+  "subscribes_events": [],
+  "migrations_path": "./migrations",
+  "permissions": [
+    "payroll.view_runs",
+    "payroll.calculate_runs",
+    "payroll.approve_runs",
+    "payroll.pay_runs",
+    "payroll.reverse_runs",
+    "payroll.manage_inputs",
+    "payroll.view_rules",
+    "payroll.manage_rules",
+    "payroll.confirm_rules",
+    "payroll.view_declarations",
+    "payroll.admin_payslips"
+  ]
+}

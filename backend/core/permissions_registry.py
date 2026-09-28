@@ -18,6 +18,7 @@ MODULE_LABELS = {
     "finance": "Finance",
     "hr": "Ressources humaines",
     "maintenance": "Maintenance",
+    "payroll": "Paie",
     "procurement": "Achats",
     "production": "Production",
     "qc": "Qualité",
