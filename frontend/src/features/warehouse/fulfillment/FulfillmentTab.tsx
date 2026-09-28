@@ -53,31 +53,24 @@ export function FulfillmentTab() {
     { key: "shipment", kind: "text", getValue: (row) => shipmentFor(row.id)?.number ?? "" },
   ]);
 
-  const textFilter = (key: string, placeholder: string) => ({
-    type: "text" as const,
-    placeholder,
-    value: columnFilters.text[key] ?? "",
-    onChange: (v: string) => columnFilters.setTextValue(key, v),
-  });
-
   const columns: ColumnDef<PickList>[] = [
     {
       key: "number",
       header: t("warehouse.fulfillment.column.number"),
       cell: (row) => <span className="font-mono text-xs">{row.number}</span>,
-      filterCell: textFilter("number", t("warehouse.fulfillment.column.number")),
+      filterCell: columnFilters.textCell("number", t("warehouse.fulfillment.column.number")),
     },
     {
       key: "customer",
       header: t("warehouse.fulfillment.column.customer"),
       cell: (row) => customerName(row.partner_id),
-      filterCell: textFilter("customer", t("warehouse.fulfillment.column.customer")),
+      filterCell: columnFilters.textCell("customer", t("warehouse.fulfillment.column.customer")),
     },
     {
       key: "location",
       header: t("warehouse.fulfillment.column.location"),
       cell: (row) => locationName(row.location_id),
-      filterCell: textFilter("location", t("warehouse.fulfillment.column.location")),
+      filterCell: columnFilters.textCell("location", t("warehouse.fulfillment.column.location")),
     },
     {
       key: "status",
@@ -92,7 +85,7 @@ export function FulfillmentTab() {
         const shipment = shipmentFor(row.id);
         return shipment ? <span className="font-mono text-xs">{shipment.number}</span> : "—";
       },
-      filterCell: textFilter("shipment", t("warehouse.fulfillment.column.shipment")),
+      filterCell: columnFilters.textCell("shipment", t("warehouse.fulfillment.column.shipment")),
     },
     {
       key: "created",

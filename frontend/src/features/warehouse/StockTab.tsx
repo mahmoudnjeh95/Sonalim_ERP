@@ -13,7 +13,6 @@ import {
   PackageCheck,
   PackageMinus,
   Pencil,
-  Plus,
   Trash2,
   TrendingUp,
   TriangleAlert,
@@ -27,6 +26,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
+import { formatXof } from "../../lib/currency";
 import { productRequiresIntegerQuantity, productUnit } from "../../lib/units";
 import { ApiError } from "../../lib/api";
 import { cn } from "../../lib/utils";
@@ -55,7 +55,6 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { StockMoveHistoryTable } from "../../components/patterns/StockMoveHistoryTable";
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { StockHistoryChart } from "../../components/patterns/StockHistoryChart";
-import { ProductSelect } from "../../components/patterns/ProductSelect";
 import { CATEGORY_ORDER, useCatalogLabels, useProductCatalog, type CatalogProduct } from "../products/catalog";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { CategoryIcon } from "../../components/patterns/CategoryIcon";
@@ -76,7 +75,6 @@ import {
   listStock,
   listStockMoves,
   listUoms,
-  reserveStock,
   transferStock,
   updateLocation,
   type Location,
@@ -87,14 +85,6 @@ import {
 } from "./api";
 import { getRegrindBatch, listWorkOrders, type RegrindScrapInput } from "../production/api";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
-
-const reserveSchema = z.object({
-  product_id: z.string().min(1, "Required"),
-  location_id: z.string().min(1, "Required"),
-  quantity: z.coerce.number().positive("Must be > 0"),
-  reference: z.string().min(1, "Required"),
-});
-type ReserveForm = z.infer<typeof reserveSchema>;
 
 const newLocationSchema = z.object({
   code: z.string().min(1, "Required"),
@@ -140,10 +130,6 @@ const RECEIPT_LINES_QUERY_KEY = ["procurement", "receipt-lines"] as const;
 
 function formatQty(amount: number) {
   return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 1 }).format(amount);
-}
-
-function formatMoney(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
 }
 
 interface ProductValuation {
@@ -208,7 +194,6 @@ export function StockTab() {
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
-  const [dialogOpen, setDialogOpen] = useState(false);
   const [locationDialogOpen, setLocationDialogOpen] = useState(false);
   const [editingLocation, setEditingLocation] = useState<Location | null>(null);
   const [activeLocationId, setActiveLocationId] = useState<string | "all">("all");
@@ -288,15 +273,6 @@ export function StockTab() {
     if (query.data) regrindSourcesByWorkOrderId[regrindBatchIds[index]] = query.data.scrap_inputs;
   });
 
-  const {
-    register,
-    handleSubmit,
-    reset,
-    watch,
-    formState: { errors },
-  } = useForm<ReserveForm>({ resolver: zodResolver(reserveSchema) });
-  const reserveProductId = watch("product_id");
-
   // A file download, not a cached read: a mutation gives it a pending state and
   // fetches fresh figures every click.
   const exportMutation = useMutation({
@@ -312,19 +288,6 @@ export function StockTab() {
       URL.revokeObjectURL(url);
     },
     onError: () => toast.error(t("warehouse.stock.export.error")),
-  });
-
-  const reserveMutation = useMutation({
-    mutationFn: (input: ReserveForm) => reserveStock(token, input),
-    onSuccess: (result) => {
-      queryClient.invalidateQueries({ queryKey: STOCK_QUERY_KEY });
-      setDialogOpen(false);
-      reset();
-      toast.success(t("warehouse.stock.reservedToast"), { description: result.product_id });
-    },
-    onError: (error) => {
-      toast.error(t("warehouse.stock.reserveError"), { description: error instanceof ApiError ? error.message : undefined });
-    },
   });
 
   const locationForm = useForm<NewLocationForm>({ resolver: zodResolver(newLocationSchema) });
@@ -620,7 +583,7 @@ export function StockTab() {
         if (!valuation) return <span className="text-muted-foreground">—</span>;
         return (
           <span className="tabular-nums text-muted-foreground">
-            {formatMoney(valuation.avgCostPerUnit)} / {productUomCode(item.product_id)}
+            {formatXof(valuation.avgCostPerUnit)} / {productUomCode(item.product_id)}
           </span>
         );
       },
@@ -642,7 +605,7 @@ export function StockTab() {
         }
         return (
           <span className={cn("tabular-nums", valuation.margin >= 0 ? "text-success" : "text-destructive")}>
-            {formatMoney(valuation.margin)} ({valuation.marginPct.toFixed(0)}%)
+            {formatXof(valuation.margin)} ({valuation.marginPct.toFixed(0)}%)
           </span>
         );
       },
@@ -888,65 +851,6 @@ export function StockTab() {
             <CardTitle>{t("warehouse.stock.table.title")}</CardTitle>
             <p className="mt-0.5 text-sm text-muted-foreground">{t("warehouse.stock.table.subtitle")}</p>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button disabled={locations.length === 0} title={locations.length === 0 ? t("warehouse.stock.createLocationFirst") : undefined}>
-                <Plus className="h-4 w-4" />
-                {t("warehouse.stock.reserveStock")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{t("warehouse.stock.dialog.reserve.title")}</DialogTitle>
-                <DialogDescription>{t("warehouse.stock.dialog.reserve.description")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={handleSubmit((input) => reserveMutation.mutate(input))}>
-                <div className="space-y-1.5">
-                  <Label htmlFor="location_id">{t("warehouse.stock.field.location")}</Label>
-                  <Select id="location_id" {...register("location_id")}>
-                    <option value="">—</option>
-                    {locations.map((location) => (
-                      <option key={location.id} value={location.id}>
-                        {location.name}
-                      </option>
-                    ))}
-                  </Select>
-                  {errors.location_id && <p className="text-sm text-destructive">{errors.location_id.message}</p>}
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="product_id">{t("warehouse.stock.field.productId")}</Label>
-                  <ProductSelect id="product_id" products={catalog} {...register("product_id")} />
-                  {errors.product_id && <p className="text-sm text-destructive">{errors.product_id.message}</p>}
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="quantity">
-                    {t("warehouse.stock.field.quantity")}
-                    {reserveProductId && <span className="text-muted-foreground"> ({quantityLabelSuffix(reserveProductId)})</span>}
-                  </Label>
-                  <Input
-                    id="quantity"
-                    type="number"
-                    step={productRequiresIntegerQuantity(reserveProductId, products, uoms) ? "1" : "any"}
-                    {...register("quantity")}
-                  />
-                  {errors.quantity && <p className="text-sm text-destructive">{errors.quantity.message}</p>}
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="reference">{t("warehouse.stock.field.reference")}</Label>
-                  <Input id="reference" placeholder="e.g. sales_order:123" {...register("reference")} />
-                  {errors.reference && <p className="text-sm text-destructive">{errors.reference.message}</p>}
-                </div>
-                {reserveMutation.isError && (
-                  <p className="text-sm text-destructive">
-                    {reserveMutation.error instanceof ApiError ? reserveMutation.error.message : t("warehouse.stock.reserveError")}
-                  </p>
-                )}
-                <Button type="submit" className="w-full" disabled={reserveMutation.isPending}>
-                  {reserveMutation.isPending ? t("warehouse.stock.reserving") : t("warehouse.stock.reserve")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
         </CardHeader>
         <CardContent className="p-0">
           <Table colWidths={colWidths}>
@@ -1026,7 +930,7 @@ export function StockTab() {
                     </div>
                     <div>
                       <p className="text-2xl font-semibold tabular-nums tracking-tight">
-                        {formatMoney(valuation.avgCostPerUnit)}
+                        {formatXof(valuation.avgCostPerUnit)}
                         <span className="ml-1 text-base font-medium text-muted-foreground">
                           / {productUomCode(historyProductId)}
                         </span>
@@ -1051,7 +955,7 @@ export function StockTab() {
                             valuation.margin >= 0 ? "text-success" : "text-destructive",
                           )}
                         >
-                          {formatMoney(valuation.margin)}
+                          {formatXof(valuation.margin)}
                           <span className="ml-1 text-base font-medium text-muted-foreground">
                             ({valuation.marginPct.toFixed(0)}%)
                           </span>

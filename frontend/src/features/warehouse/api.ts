@@ -55,6 +55,9 @@ export interface ReserveStockInput {
   location_id: string;
   quantity: number;
   reference: string;
+  // Optional hold expiry (ISO instant); the worker releases it once lapsed.
+  // Omitted for a reservation meant to last until released by hand.
+  expires_at?: string;
 }
 
 export function listStock(token: string) {

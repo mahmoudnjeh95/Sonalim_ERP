@@ -1,4 +1,5 @@
 import { useState } from "react";
+import type { FilterCell } from "../components/patterns/ColumnFilterRow";
 
 export type TextFilterField<Row> = {
   key: string;
@@ -63,5 +64,22 @@ export function useColumnFilters<Row>(fields: FilterField<Row>[]) {
     );
   }
 
-  return { text, range, setTextValue, setRangeValue, isActive, reset, apply };
+  /** A ready `FilterCell` for `<ColumnFilterRow>` -- avoids every table
+   * re-declaring the same `{ type: "text", value, onChange }` closure. */
+  function textCell(key: string, placeholder: string): FilterCell {
+    return { type: "text", placeholder, value: text[key] ?? "", onChange: (value) => setTextValue(key, value) };
+  }
+
+  function rangeCell(key: string): FilterCell {
+    const bounds = range[key];
+    return {
+      type: "range",
+      min: bounds?.min ?? "",
+      max: bounds?.max ?? "",
+      onMinChange: (value) => setRangeValue(key, "min", value),
+      onMaxChange: (value) => setRangeValue(key, "max", value),
+    };
+  }
+
+  return { text, range, setTextValue, setRangeValue, isActive, reset, apply, textCell, rangeCell };
 }

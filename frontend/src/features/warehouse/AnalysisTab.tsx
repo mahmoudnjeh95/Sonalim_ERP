@@ -8,7 +8,8 @@ import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { currentLocale, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
+import { formatXof } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -75,10 +76,6 @@ const orderSchema = z.object({
   quantity_ordered: z.coerce.number().positive("Must be > 0"),
 });
 type OrderForm = z.infer<typeof orderSchema>;
-
-function formatMoney(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
-}
 
 export function AnalysisTab() {
   const { session } = useAuth();
@@ -225,14 +222,14 @@ export function AnalysisTab() {
       key: "totalCost",
       header: t("warehouse.analysis.column.totalCost"),
       defaultWidth: 140,
-      cell: (row) => <span className="tabular-nums text-muted-foreground">{formatMoney(row.totalCost)}</span>,
+      cell: (row) => <span className="tabular-nums text-muted-foreground">{formatXof(row.totalCost)}</span>,
       sortValue: (row) => row.totalCost,
     },
     {
       key: "avgCostPerTon",
       header: t("warehouse.analysis.column.avgCostPerTon"),
       defaultWidth: 160,
-      cell: (row) => <span className="tabular-nums text-muted-foreground">{formatMoney(row.avgCostPerTon)}</span>,
+      cell: (row) => <span className="tabular-nums text-muted-foreground">{formatXof(row.avgCostPerTon)}</span>,
       sortValue: (row) => row.avgCostPerTon,
     },
     {
@@ -297,7 +294,7 @@ export function AnalysisTab() {
       defaultWidth: 150,
       cell: (row) => (
         <span className="tabular-nums text-muted-foreground">
-          {formatMoney(row.average_cost_per_unit)} / {row.unitLabel}
+          {formatXof(row.average_cost_per_unit)} / {row.unitLabel}
         </span>
       ),
       sortValue: (row) => row.average_cost_per_unit,
@@ -308,7 +305,7 @@ export function AnalysisTab() {
       defaultWidth: 160,
       cell: (row) => (
         <span className={`tabular-nums ${row.isBestForProduct ? "font-semibold text-success" : "text-muted-foreground"}`}>
-          {formatMoney(row.best_cost_per_unit)} / {row.unitLabel}
+          {formatXof(row.best_cost_per_unit)} / {row.unitLabel}
           {row.isBestForProduct && <Badge variant="success" className="ml-2">{t("warehouse.analysis.bestCost.badge")}</Badge>}
         </span>
       ),
@@ -361,7 +358,7 @@ export function AnalysisTab() {
       defaultWidth: 150,
       cell: (row) => (
         <span className="tabular-nums text-muted-foreground">
-          {formatMoney(row.cost_per_unit_base)} / {row.unitLabel}
+          {formatXof(row.cost_per_unit_base)} / {row.unitLabel}
         </span>
       ),
       sortValue: (row) => row.cost_per_unit_base,
@@ -372,7 +369,7 @@ export function AnalysisTab() {
       defaultWidth: 150,
       cell: (row) => (
         <span className="tabular-nums text-muted-foreground">
-          {row.baseline_avg_cost_per_unit != null ? `${formatMoney(row.baseline_avg_cost_per_unit)} / ${row.unitLabel}` : "—"}
+          {row.baseline_avg_cost_per_unit != null ? `${formatXof(row.baseline_avg_cost_per_unit)} / ${row.unitLabel}` : "—"}
         </span>
       ),
       sortValue: (row) => row.baseline_avg_cost_per_unit ?? 0,
@@ -547,7 +544,7 @@ export function AnalysisTab() {
                       tickLine={false}
                     />
                     <Tooltip
-                      formatter={(value) => formatMoney(Number(value))}
+                      formatter={(value) => formatXof(Number(value))}
                       contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
                     />
                     <Bar dataKey="avgCostPerTon" fill={CHART_COLORS.primary} radius={[0, 4, 4, 0]} />
@@ -570,7 +567,7 @@ export function AnalysisTab() {
                     <XAxis dataKey="month" tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
                     <YAxis tick={{ fontSize: 12, fill: "hsl(215 16% 47%)" }} axisLine={false} tickLine={false} />
                     <Tooltip
-                      formatter={(value) => formatMoney(Number(value))}
+                      formatter={(value) => formatXof(Number(value))}
                       contentStyle={{ borderRadius: 10, border: "1px solid hsl(214 20% 88%)", fontSize: 13, fontFamily: "Inter, sans-serif" }}
                     />
                     <Line type="monotone" dataKey="avgCostPerTon" stroke={CHART_COLORS.accent} strokeWidth={2} dot={{ r: 3 }} />
