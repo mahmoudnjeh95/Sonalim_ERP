@@ -1,6 +1,7 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-28**. Written for the client and for whoever picks this work up.
+Last updated: **2026-09-29 (phase 3a final whole-branch review dispatched)**. Written for the
+client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
 were reviewed, and where work stopped. When it disagrees with `git log` or a phase's SDD
@@ -22,8 +23,22 @@ ledger, those win — they move first.
 > column the QC-on-shift-reports migration dropped in September, unrelated to this work).
 >
 > **Phases 1–2 PUSHED and DEPLOYING** (`a58c298`/`cfe5665`, 2026-09-28). **Phase 3a (payroll
-> engine) is now IN PROGRESS**, Task 1 of 11 building, in worktree
-> `.worktrees/hr-p3a-payroll-engine`.
+> engine) is SHIPPED locally** — all 11 tasks built and reviewed clean, final commit `814e90a`
+> on `hr-p3a-payroll-engine` (worktree `.worktrees/hr-p3a-payroll-engine`, off
+> `huge_production_migration` at `cfe5665`). `modules/payroll` suite: 106 passed, 0 skipped, real
+> DB. Two tasks in this phase are worth knowing about when picking this up: Task 9's implementer
+> hit the session's API rate limit right after committing and never filed its report (the
+> controller independently verified the commit and wrote the report in its place; review still
+> ran the normal path and came back clean), and Task 10 (`RuleSetService`, carrying Review Focus
+> #1 — the confirmation lock) had its lock independently traced across all five mutation paths by
+> both the controller and the reviewer. Nothing here is taken on faith without a second, concrete
+> pass — every pinned risk in this phase was hand-verified, not just read.
+>
+> **2026-09-29: the phase 3a whole-branch review is running now** — dispatched on the most
+> capable model against the full `cfe5665..814e90a` diff (11 commits), per this file's own
+> "How this work runs" section (same step phases 1 and 2 went through before their finishing
+> decision). Not merged or pushed yet; that stays the next decision once the review — and its one
+> permitted fix wave, if it finds anything — clears.
 >
 > **Action still required on the server, before the phase 1+2 deploy is usable:**
 > 1. Run phase 2's pending migrations on the server (0010–0014, `hr` module only — the warehouse
@@ -49,12 +64,12 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
 | 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
-| 3a — Payroll engine | 11 | 0 | 0 | **In progress** — Task 1 building |
+| 3a — Payroll engine | 11 | 11 | 11 | **Shipped locally** (`814e90a`, not merged/pushed) |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **29** | **29** | |
+| **Total** | **89** | **40** | **40** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -211,29 +226,88 @@ the reviewer. The implementer added its own fix (`hr.leaveRequests.status.*`) ra
 stopping a second time; ruled deferred rather than reworked (see the Task 13 deferred minor
 above) since it's cosmetic.
 
-## Phase 3a — Payroll engine (11 tasks) — in progress
+## Phase 3a — Payroll engine (11 tasks) — shipped locally, not merged/pushed
 
 New `payroll` module: configurable, effective-dated Mali rule tables and a pure calculation
 engine. Statutory values are seeded as **drafts**; a run cannot be approved until an accountant
 confirms them. Backend-only — no `/payroll/*` screens until phase 3c. Worktree
-`.worktrees/hr-p3a-payroll-engine`, off `huge_production_migration` at `cfe5665`.
+`.worktrees/hr-p3a-payroll-engine`, off `huge_production_migration` at `cfe5665`. All 11 tasks
+built and reviewed clean; final commit `814e90a`. `modules/payroll` suite: **106 passed, 0
+skipped**, against a real database throughout. No whole-phase review has run yet — that,
+plus the merge, are the next decisions.
 
-| # | Task | State |
-|---|---|---|
-| 1 | Module skeleton, rule tables, permissions, wiring | 🔨 building |
-| 2 | Money rounding, engine value objects, rule set, synthetic test rules | ⬜ |
-| 3 | Rule row validation and the confirmation gate | ⬜ |
-| 4 | Engine step 1 — earnings up to the gross | ⬜ |
-| 5 | Engine steps 2–3 — contributable base, ceilings, contributions | ⬜ |
-| 6 | Engine step 4 — taxable base, brackets, reliefs, tax rounding | ⬜ |
-| 7 | Engine steps 5–6 — deductions, net floor with carry-forward, employer charges, totals | ⬜ |
-| 8 | Final settlement arithmetic | ⬜ |
-| 9 | The engine — `calculate_payslip` and golden payslips | ⬜ |
-| 10 | `RuleSetService` — payroll country, rule sets, rows, confirmation, loading | ⬜ |
-| 11 | Rules HTTP routes | ⬜ |
+| # | Task | Commit | State |
+|---|---|---|---|
+| 1 | Module skeleton, rule tables, permissions, wiring | — | ✅ |
+| 2 | Money rounding, engine value objects, rule set, synthetic test rules | — | ✅ |
+| 3 | Rule row validation and the confirmation gate | — | ✅ |
+| 4 | Engine step 1 — earnings up to the gross | — | ✅ |
+| 5 | Engine steps 2–3 — contributable base, ceilings, contributions | `ac55f9f` | ✅ |
+| 6 | Engine step 4 — taxable base, brackets, reliefs, tax rounding | `bbf37da` | ✅ |
+| 7 | Engine steps 5–6 — deductions, net floor with carry-forward, employer charges, totals | `c987770` | ✅ |
+| 8 | Final settlement arithmetic | `1e77314` | ✅ (controller independently re-verified the tiered severance math — the review report was thinner than usual) |
+| 9 | The engine — `calculate_payslip` and golden payslips | `f09a995` | ✅ (1 minor deferred) |
+| 10 | `RuleSetService` — payroll country, rule sets, rows, confirmation, loading | `d565aae` | ✅ (3 minors, inherited/forward-looking) |
+| 11 | Rules HTTP routes | `814e90a` | ✅ (1 minor coverage gap, verified not a live bug) |
 
 The **seniority bonus** (prime d'ancienneté — the client's "loyalty bonus") is a configurable
 scale of years to a percentage of base salary, in Task 2's rule tables and Task 4's earnings step.
+
+**Task 9 note:** the implementer hit the session's API rate limit immediately after committing
+`f09a995` and was terminated before writing its report or replying with its contract. The
+controller read the commit directly rather than treat it as failed or re-run it: `engine.py` is a
+verbatim match to the task brief's own reference code; the commit message matches exactly;
+`pytest modules/payroll/domain -q` gives 81 passed, 0 skipped (matches the brief's expected
+count, no regressions). Two things carried into this task were checked concretely, not just
+read: the net-floor wiring flagged by Task 7's review (`apply_net_floor`'s post-floor
+`kept_lines` feed the totals, not `deduction_lines`'s raw pre-floor output — confirmed at
+`engine.py:102-104` and behaviorally via `test_golden_net_negative_carries_the_overflow`, which
+carries exactly 22 000 and clamps net to 0, never negative), and Review Focus #4, the daily-paid
+contract (`test_golden_daily_worker` pins `pay_frequency="daily"` paying per worked + paid-leave
++ holiday day, never as a monthly salary). The controller wrote `task-9-report.md` on the
+implementer's behalf and dispatched a reviewer on the normal path anyway — nothing here is taken
+on faith without a second pass.
+
+**Task 9 review:** Approved, zero Critical/Important findings. Both pinned risks independently
+hand-traced to the exact franc against the actual code path (not re-read from docstrings) and
+both check out; the diff is byte-identical to the brief's reference implementation; all
+constraints hold; 81/81 domain tests pass. **1 Minor, deferred:** `earnings.py:70-73` — a
+daily-paid employee's unpaid absence days are silently excluded from `paid_days` rather than
+surfaced as an explicit `UNPAID_ABSENCE` line, asymmetric with the monthly path
+(`earnings.py:78-82`); no golden test covers this combination. Not a blocker — flagged as a
+follow-up golden test for a later task.
+
+**Task 10 note:** the module's first DB-backed task (raw psycopg SQL, tenant-scoped). Carries
+**Review Focus #1**: a confirmed rule set must refuse every edit/add/delete with
+`RULESET_LOCKED`, because phase 3b will trust `confirmed_at` to gate payroll run approval. Both
+the controller and the reviewer independently traced this across all five mutation paths
+(`update_rule_set`, `delete_rule_set`, `add_child`, `update_child`, `delete_child`) rather than
+accept the implementer's own claim — all five gate through either an explicit status check or the
+shared `_editable` chokepoint, under `FOR UPDATE` row locking. `confirmed_at` correctly uses
+`clock_timestamp()`, not `NOW()` (which freezes per-transaction in Postgres and would break the
+later comparison against a run's calculation time). `modules/payroll -q`: 100 passed, 0 skipped,
+against a real database (not silently skipped). **3 Minor, all deferred, none blocking:**
+(1) `copy_rule_set`'s child-row `SELECT` doesn't itself filter by `tenant_id`, relying on
+`rule_set_id` having already been tenant-checked one call earlier — not exploitable today, and
+matches the brief's own reference code verbatim; (2) `update_child`/`delete_child`'s mutating SQL
+keys on row `id` alone, same safe-by-read-sequence pattern; (3) `delete_rule_set`'s
+`RULESET_IN_USE` / `ForeignKeyViolation` catch is currently dead code — no `payroll_runs` table
+exists yet and all child tables cascade on delete — forward-looking for phase 3b, which must add
+that FK as `ON DELETE RESTRICT` or the branch stays permanently unreachable.
+
+**Task 11 note (last task of the phase):** thin HTTP wiring over Task 10's already-reviewed
+service — 13 routes, each requiring a specific permission (`payroll.view_rules`,
+`payroll.manage_rules`, or `payroll.confirm_rules`). Both the controller and the reviewer walked
+every route against the brief's table individually rather than sampling; all match. The one risk
+worth a second look — that FastAPI's declaration-order route matching could let the generic
+`/rule-sets/{id}/{kind}` route swallow the fixed-word `/rule-sets/{id}/copy` and `.../confirm`
+routes — was empirically tested by the reviewer (a throwaway POST to the `copy` route correctly
+hit `copy_rule_set`, not the `{kind}` catch-all) rather than taken on the code's word. `106
+passed, 0 skipped` on `modules/payroll` + the bilingual guard test, confirmed twice (implementer,
+then independently by the controller and the reviewer) to be running for real against `httpx`,
+not silently skipped. **1 Minor, non-blocking:** no shipped test directly exercises the `copy`
+route reaching `copy_rule_set` (`confirm` has that coverage, `copy` doesn't) — a coverage gap,
+verified not to be a live bug.
 
 ## Phase 3b — Payroll runs (13 tasks) — planned
 
