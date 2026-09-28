@@ -12,10 +12,9 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **IN PROGRESS: phase 2, Task 9 — built and committed (`d47de69`), review in flight.**
+> **IN PROGRESS: phase 2, Task 10 — built and committed (`7f14a84`), review in flight.**
 >
-> Next action: when Task 9's review lands, resolve any findings, then run Tasks 10–14
-> (frontend).
+> Next action: when Task 10's review lands, resolve any findings, then run Tasks 11–14.
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -31,13 +30,13 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 9 | 8 | **In progress** — Task 9 review in flight |
+| 2 — Presence & leave | 14 | 10 | 9 | **In progress** — Task 10 review in flight |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **24** | **23** | |
+| **Total** | **89** | **25** | **24** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -88,8 +87,8 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 6 | Clock imports — profiles, staging, review, commit into presence days | `f388ba9` | ✅ |
 | 7 | Leave domain — counted days, monthly accrual, balances with carry-over | `252dbd5` | ✅ |
 | 8 | Leave types, requests with approval, balances — tables, services, routes | `2952aba` | ✅ (2 minors deferred) |
-| 9 | Month close and reopen, the payroll summary, the closed event and the payroll-lock consumers | `d47de69` | 🔨 **review in flight** |
-| 10 | Frontend foundation + `/hr/schedules` (schedules, rotations, assignments, holidays, settings) | — | ⬜ |
+| 9 | Month close and reopen, the payroll summary, the closed event and the payroll-lock consumers | `d47de69` | ✅ (2 minors, plan-mandated) |
+| 10 | Frontend foundation + `/hr/schedules` (schedules, rotations, assignments, holidays, settings) | `7f14a84` | 🔨 **review in flight** |
 | 11 | `/hr/presence` — day grid, week grid, employee month, month close | — | ⬜ |
 | 12 | `/hr/presence/imports` — device profiles, upload, staging review, commit | — | ⬜ |
 | 13 | `/hr/leave` — leave types, requests with approval, balances | — | ⬜ |
@@ -105,6 +104,17 @@ integrate (merge locally, a PR, or keep the branch).
 - Task 8: `leave_service.py:663` (`update_request`, approved-leave edit) recomputes the leave
   plan twice — once in `update_request`, again inside `_apply`. No correctness impact; the
   shape is plan-mandated, not an implementer choice.
+- Task 9: `presence_month_service.py`'s `close`/`reopen` re-check `period.day != 1` even though
+  the router already rejects a non-first-of-month date before the service is called — harmless,
+  plan-mandated defence in depth. `month_summary`'s docstring says to read it only once a month
+  is closed, but nothing enforces that yet — a note for whichever later task reads it.
+
+**Ruling (Task 10):** the brief's presence-settings i18n keys (`hr.settings.title`, `.saved`,
+`.error`) would have silently overwritten phase 1's already-shipped `hr.settings.*` keys used by
+`HrSettingsTab.tsx` (Alert horizons) — a duplicate key in the same object literal wins silently,
+and this is not caught by `tsc`. Renamed this task's 12 presence-settings keys to
+`hr.presenceSettings.*` instead of touching the shipped screen. Confirmed `t()` is typed against
+the full key union, so any stale reference would have failed `tsc -b --force` — it didn't.
 
 ## Phase 3a — Payroll engine (11 tasks) — planned
 
