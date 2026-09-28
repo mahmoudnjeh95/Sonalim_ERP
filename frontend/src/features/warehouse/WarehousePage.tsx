@@ -8,6 +8,7 @@ import ScanIcon from "../../assets/icons/warehouse/scan.svg?react";
 import LocationTreeIcon from "../../assets/icons/warehouse/location-tree.svg?react";
 import CountSheetIcon from "../../assets/icons/warehouse/count-sheet.svg?react";
 import PutawayIcon from "../../assets/icons/warehouse/putaway.svg?react";
+import ShipmentIcon from "../../assets/icons/warehouse/shipment.svg?react";
 import { StockTab } from "./StockTab";
 import { WarehouseOverviewTab } from "./WarehouseOverviewTab";
 import { AnalysisTab } from "./AnalysisTab";
@@ -18,12 +19,14 @@ import { ScannerTab } from "./scanning/ScannerTab";
 import { LocationsTab } from "./locations/LocationsTab";
 import { CycleCountsTab } from "./cycleCounts/CycleCountsTab";
 import { PutAwayTab } from "./putaway/PutAwayTab";
+import { FulfillmentTab } from "./fulfillment/FulfillmentTab";
 
 const TABS = [
   { value: "overview", labelKey: "warehouse.tabs.overview", icon: LayoutDashboard, Component: WarehouseOverviewTab },
   { value: "stock", labelKey: "warehouse.tabs.stock", icon: Boxes, Component: StockTab },
   { value: "locations", labelKey: "warehouse.tabs.locations", icon: LocationTreeIcon, Component: LocationsTab },
   { value: "putaway", labelKey: "warehouse.tabs.putaway", icon: PutawayIcon, Component: PutAwayTab },
+  { value: "fulfillment", labelKey: "warehouse.tabs.fulfillment", icon: ShipmentIcon, Component: FulfillmentTab },
   { value: "cycle-counts", labelKey: "warehouse.tabs.cycleCounts", icon: CountSheetIcon, Component: CycleCountsTab },
   { value: "analysis", labelKey: "warehouse.tabs.analysis", icon: BarChart3, Component: AnalysisTab },
   { value: "finished-goods-analysis", labelKey: "warehouse.tabs.finishedGoodsAnalysis", icon: Package, Component: FinishedGoodsAnalysisTab },

@@ -7,7 +7,10 @@ from core.domain.result import Err, Ok, Result
 
 VALID_TRANSITIONS = {
     "draft": {"confirmed"},
-    "confirmed": set(),
+    # Set by warehouse.shipment.shipped, never by a user action: an order is
+    # shipped when the goods have physically left, which only warehouse knows.
+    "confirmed": {"shipped"},
+    "shipped": set(),
 }
 
 
@@ -51,3 +54,13 @@ def confirm(order: SalesOrder) -> Result[SalesOrder]:
             opportunity_id=order.opportunity_id,
         )
     )
+
+
+def mark_shipped(order_status: str) -> Result[str]:
+    if "shipped" not in VALID_TRANSITIONS.get(order_status, set()):
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot mark an order in status {order_status} as shipped",
+            f"impossible de marquer comme expédiée une commande au statut {order_status}",
+        )
+    return Ok("shipped")

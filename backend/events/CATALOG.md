@@ -8,6 +8,8 @@
 | `warehouse.stock.issued` | 1.0 | warehouse | — | `product_id`, `location_id`, `quantity`, `reference` |
 | `warehouse.cycle_count.completed` | 1.0 | warehouse | — | `cycle_count_id`, `site_id`, `line_count`, `variance_count` |
 | `warehouse.putaway.confirmed` | 1.0 | warehouse | — | `product_id`, `from_location_id`, `to_location_id`, `quantity`, `followed_suggestion` |
+| `warehouse.pick_list.cancelled` | 1.0 | warehouse | — | `pick_list_id`, `source_type`, `source_id` — the order's reservation was released with it |
+| `warehouse.shipment.shipped` | 1.0 | warehouse | sales | `shipment_id`, `pick_list_id`, `source_type`, `source_id`, `location_id`, `lines` (`product_id`, `quantity_requested`, `quantity_shipped`) — stock was issued; a short pick's remainder was released, not backordered |
 | `production.work_order.closed` | 2.0 | production | — | `work_order_id`, `product_id`, `planned_quantity` — fires when an OF is closed. Closure is archival and posts no stock, so this carries what was planned, not what was produced. Replaces `production.work_order.completed`, which no longer exists: the OF stopped meaning "completed with output" in Phase 1. |
 | `production.report.validated` | 1.0 | production | — | `report_id`, `of_id`, `report_type`, `report_date` — the event that means stock moved. |
 | `production.report.rejected` | 1.0 | production | — | `report_id`, `of_id`, `report_type`, `reason` |
@@ -15,7 +17,7 @@
 | `crm.lead.converted` | 1.0 | crm | — | `lead_id`, `partner_id`, `opportunity_id` |
 | `crm.opportunity.won` | 1.1 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount`, `sales_order_id` — a draft sales order is created synchronously in the same transaction as the win, so `sales_order_id` is always populated |
 | `crm.opportunity.lost` | 1.0 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount` |
-| `sales.order.confirmed` | 1.0 | sales | finance | `order_id`, `partner_id`, `total_amount`, `currency` |
+| `sales.order.confirmed` | 1.1 | sales | finance, warehouse | `order_id`, `partner_id`, `total_amount`, `currency`, `location_id`, `reservation_reference`, `lines` (`product_id`, `quantity`) — 1.1 added the last three (additive) so warehouse can open a pick list against the reservation confirm already made; warehouse skips 1.0 events, which lack them |
 | `finance.invoice.issued` | 1.0 | finance | — | `invoice_id`, `partner_id`, `amount`, `currency` |
 | `finance.invoice.paid` | 1.0 | finance | — | `invoice_id`, `partner_id`, `amount`, `currency` |
 | `procurement.purchase_order.status_changed` | 1.0 | procurement | — | `purchase_order_id`, `from_status`, `to_status` |

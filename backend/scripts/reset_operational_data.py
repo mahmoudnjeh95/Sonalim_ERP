@@ -111,6 +111,9 @@ PURGE_TABLES = [
     "warehouse.lots",
     "warehouse.cycle_count_lines",
     "warehouse.cycle_counts",
+    "warehouse.shipments",
+    "warehouse.pick_list_lines",
+    "warehouse.pick_lists",
 ]
 
 # Tables that are edited in place rather than emptied (see purge()).

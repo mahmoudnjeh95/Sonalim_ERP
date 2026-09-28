@@ -8,7 +8,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
-from modules.sales.domain.entities import OrderLine, SalesOrder, confirm
+from modules.sales.domain.entities import OrderLine, SalesOrder, confirm, mark_shipped
 from modules.warehouse.api.service import StockService
 
 
@@ -227,6 +227,7 @@ class SalesOrderService:
         publish_event(
             self._connection,
             event_type="sales.order.confirmed",
+            event_version="1.1",
             producer="sales",
             tenant_id=tenant_id,
             correlation_id=correlation_id,
@@ -235,6 +236,11 @@ class SalesOrderService:
                 "partner_id": partner_id,
                 "total_amount": result.value.total_amount,
                 "currency": "XOF",
+                # 1.1 (additive): what warehouse needs to open a pick list
+                # against the reservation made just above.
+                "location_id": location_id,
+                "reservation_reference": f"sales_order:{order_id}",
+                "lines": [{"product_id": line.product_id, "quantity": line.quantity} for line in lines],
             },
         )
         record_audit(
@@ -247,3 +253,30 @@ class SalesOrderService:
             payload={"total_amount": result.value.total_amount},
         )
         return result
+
+    def mark_order_shipped(
+        self, *, tenant_id: str, order_id: str, shipment_id: str, actor_id: str = "system:event-consumer"
+    ) -> Result[None]:
+        """Idempotent: an order already shipped is left alone, so a redelivered
+        warehouse.shipment.shipped is harmless even past the processed-events log."""
+        row = self._connection.execute(
+            "SELECT status FROM sales.orders WHERE id = %s AND tenant_id = %s FOR UPDATE", (order_id, tenant_id)
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"order {order_id} not found", f"commande {order_id} introuvable")
+        if row[0] == "shipped":
+            return Ok(None)
+        transition = mark_shipped(row[0])
+        if isinstance(transition, Err):
+            return transition
+        self._connection.execute("UPDATE sales.orders SET status = 'shipped' WHERE id = %s AND tenant_id = %s", (order_id, tenant_id))
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="sales_order.status_changed",
+            entity_type="sales_order",
+            entity_id=order_id,
+            payload={"from_status": row[0], "to_status": "shipped", "shipment_id": shipment_id},
+        )
+        return Ok(None)

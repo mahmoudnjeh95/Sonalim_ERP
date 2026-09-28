@@ -11,6 +11,7 @@ from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
 from modules.warehouse.api.cycle_count_service import CycleCountService
+from modules.warehouse.api.fulfillment_service import FulfillmentService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.putaway_service import PutAwayService
@@ -18,6 +19,7 @@ from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
 from modules.warehouse.domain.cycle_count import CycleCount, CycleCountLine
 from modules.warehouse.domain.entities import Location, Site
+from modules.warehouse.domain.fulfillment import PickList, PickListLine, Shipment
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
 from modules.warehouse.domain.putaway import PutawayRule
 
@@ -953,3 +955,234 @@ def confirm_putaway(
             raise HTTPException(status.HTTP_409_CONFLICT, err_detail(result))
         connection.commit()
     return {"status": "ok"}
+
+
+# --- Fulfillment (pick -> pack -> ship) -----------------------------------------------------
+
+
+class SubmitPickRequest(BaseModel):
+    quantity_picked: float
+
+
+class CorrelatedRequest(BaseModel):
+    correlation_id: str
+
+
+class PackPickListRequest(BaseModel):
+    package_count: int
+    total_weight_kg: float | None = None
+    carrier: str | None = None
+    tracking_reference: str | None = None
+
+
+class UpdateShipmentRequest(BaseModel):
+    package_count: int | None = None
+    total_weight_kg: float | None = None
+    carrier: str | None = None
+    tracking_reference: str | None = None
+
+
+def _pick_list_response(pick_list: PickList) -> dict:
+    return {
+        "id": pick_list.id,
+        "number": pick_list.number,
+        "source_type": pick_list.source_type,
+        "source_id": pick_list.source_id,
+        "partner_id": pick_list.partner_id,
+        "location_id": pick_list.location_id,
+        "status": pick_list.status,
+        "created_at": pick_list.created_at,
+        "picked_at": pick_list.picked_at,
+        "cancelled_at": pick_list.cancelled_at,
+    }
+
+
+def _pick_line_response(line: PickListLine) -> dict:
+    return {
+        "id": line.id,
+        "pick_list_id": line.pick_list_id,
+        "product_id": line.product_id,
+        "quantity_requested": line.quantity_requested,
+        "quantity_picked": line.quantity_picked,
+        "picked_by": line.picked_by,
+        "picked_at": line.picked_at,
+    }
+
+
+def _shipment_response(shipment: Shipment) -> dict:
+    return {
+        "id": shipment.id,
+        "number": shipment.number,
+        "pick_list_id": shipment.pick_list_id,
+        "status": shipment.status,
+        "package_count": shipment.package_count,
+        "total_weight_kg": shipment.total_weight_kg,
+        "carrier": shipment.carrier,
+        "tracking_reference": shipment.tracking_reference,
+        "packed_by": shipment.packed_by,
+        "packed_at": shipment.packed_at,
+        "shipped_by": shipment.shipped_by,
+        "shipped_at": shipment.shipped_at,
+    }
+
+
+def _fulfillment_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNPICKED", "NOTHING_PICKED", "ALREADY_PACKED", "INSUFFICIENT_STOCK"):
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+def _raise_fulfillment(connection, result: Err) -> None:
+    connection.rollback()
+    raise HTTPException(_fulfillment_err_status(result.code), err_detail(result))
+
+
+@router.get("/pick-lists")
+def list_pick_lists(
+    status_filter: str | None = Query(default=None, alias="status"),
+    tenant: TenantContext = Depends(require_permission("warehouse.view_fulfillment")),
+) -> list[dict]:
+    with get_connection() as connection:
+        pick_lists = FulfillmentService(connection).list_pick_lists(tenant_id=tenant.tenant_id, status=status_filter)
+    return [_pick_list_response(pick_list) for pick_list in pick_lists]
+
+
+@router.get("/pick-lists/{pick_list_id}")
+def get_pick_list(
+    pick_list_id: str, tenant: TenantContext = Depends(require_permission("warehouse.view_fulfillment"))
+) -> dict:
+    with get_connection() as connection:
+        service = FulfillmentService(connection)
+        result = service.get_pick_list(tenant_id=tenant.tenant_id, pick_list_id=pick_list_id)
+        if isinstance(result, Err):
+            raise HTTPException(_fulfillment_err_status(result.code), err_detail(result))
+        lines = service.list_pick_lines(tenant_id=tenant.tenant_id, pick_list_id=pick_list_id)
+        shipment = service.get_shipment_for_pick_list(tenant_id=tenant.tenant_id, pick_list_id=pick_list_id)
+    return {
+        **_pick_list_response(result.value),
+        "lines": [_pick_line_response(line) for line in lines],
+        "shipment": _shipment_response(shipment) if shipment else None,
+    }
+
+
+@router.post("/pick-lists/{pick_list_id}/lines/{line_id}/pick")
+def submit_pick(
+    pick_list_id: str,
+    line_id: str,
+    body: SubmitPickRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_fulfillment")),
+) -> dict:
+    with get_connection() as connection:
+        result = FulfillmentService(connection).submit_pick(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            pick_list_id=pick_list_id,
+            line_id=line_id,
+            quantity_picked=body.quantity_picked,
+        )
+        if isinstance(result, Err):
+            _raise_fulfillment(connection, result)
+        connection.commit()
+    return _pick_line_response(result.value)
+
+
+@router.post("/pick-lists/{pick_list_id}/complete")
+def complete_picking(
+    pick_list_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_fulfillment"))
+) -> dict:
+    with get_connection() as connection:
+        result = FulfillmentService(connection).complete_picking(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, pick_list_id=pick_list_id
+        )
+        if isinstance(result, Err):
+            _raise_fulfillment(connection, result)
+        connection.commit()
+    return _pick_list_response(result.value)
+
+
+@router.post("/pick-lists/{pick_list_id}/cancel")
+def cancel_pick_list(
+    pick_list_id: str,
+    body: CorrelatedRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_fulfillment")),
+) -> dict:
+    with get_connection() as connection:
+        result = FulfillmentService(connection).cancel_pick_list(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, pick_list_id=pick_list_id, correlation_id=body.correlation_id
+        )
+        if isinstance(result, Err):
+            _raise_fulfillment(connection, result)
+        connection.commit()
+    return _pick_list_response(result.value)
+
+
+@router.post("/pick-lists/{pick_list_id}/pack", status_code=status.HTTP_201_CREATED)
+def pack_pick_list(
+    pick_list_id: str,
+    body: PackPickListRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_fulfillment")),
+) -> dict:
+    with get_connection() as connection:
+        result = FulfillmentService(connection).pack(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            pick_list_id=pick_list_id,
+            package_count=body.package_count,
+            total_weight_kg=body.total_weight_kg,
+            carrier=body.carrier,
+            tracking_reference=body.tracking_reference,
+        )
+        if isinstance(result, Err):
+            _raise_fulfillment(connection, result)
+        connection.commit()
+    return _shipment_response(result.value)
+
+
+@router.get("/shipments")
+def list_shipments(
+    status_filter: str | None = Query(default=None, alias="status"),
+    tenant: TenantContext = Depends(require_permission("warehouse.view_fulfillment")),
+) -> list[dict]:
+    with get_connection() as connection:
+        shipments = FulfillmentService(connection).list_shipments(tenant_id=tenant.tenant_id, status=status_filter)
+    return [_shipment_response(shipment) for shipment in shipments]
+
+
+@router.patch("/shipments/{shipment_id}")
+def update_shipment(
+    shipment_id: str,
+    body: UpdateShipmentRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.admin_shipments")),
+) -> dict:
+    with get_connection() as connection:
+        result = FulfillmentService(connection).admin_update_shipment(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            shipment_id=shipment_id,
+            package_count=body.package_count,
+            total_weight_kg=body.total_weight_kg,
+            carrier=body.carrier,
+            tracking_reference=body.tracking_reference,
+        )
+        if isinstance(result, Err):
+            _raise_fulfillment(connection, result)
+        connection.commit()
+    return _shipment_response(result.value)
+
+
+@router.post("/shipments/{shipment_id}/ship")
+def ship_shipment(
+    shipment_id: str,
+    body: CorrelatedRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_fulfillment")),
+) -> dict:
+    with get_connection() as connection:
+        result = FulfillmentService(connection).ship(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, shipment_id=shipment_id, correlation_id=body.correlation_id
+        )
+        if isinstance(result, Err):
+            _raise_fulfillment(connection, result)
+        connection.commit()
+    return _shipment_response(result.value)
