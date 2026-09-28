@@ -27,5 +27,6 @@
 | `qc.quality_report.validated` | 1.0 | qc | — | `quality_report_id`, `is_conforming` |
 | `qc.non_conformity.raised` | 1.0 | qc | — | `non_conformity_id`, `of_id`, `product_id`, `quantity`, `location_id` |
 | `qc.non_conformity.dispositioned` | 1.0 | qc | production | `non_conformity_id`, `of_id`, `product_id`, `lines` (`component`, `disposition`, `quantity`) |
+| `hr.presence_month.closed` | 1.0 | hr | payroll (phase 3) | `period` (ISO date, first day of the month) — every presence day of the month is locked and complete; `PresenceService.month_summary` for it is final until the month is reopened. |
 
 Every event uses the standard envelope defined in `.claude/skills/erp-platform-architecture/SKILL.md`. Add a row here before merging any new publishing code.

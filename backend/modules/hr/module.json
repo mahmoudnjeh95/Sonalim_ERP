@@ -12,10 +12,14 @@
     "LeaveService",
     "HrDashboardService",
     "HrAlertService",
-    "PayrollSnapshotService"
+    "PayrollSnapshotService",
+    "PresenceService",
+    "ScheduleService",
+    "LeaveRequestService",
+    "LeaveBalanceService"
   ],
-  "publishes_events": [],
-  "subscribes_events": [],
+  "publishes_events": ["hr.presence_month.closed"],
+  "subscribes_events": ["payroll.run.approved", "payroll.run.reversed"],
   "migrations_path": "./migrations",
   "permissions": [
     "hr.view_employees",
