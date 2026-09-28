@@ -117,6 +117,12 @@ and this is not caught by `tsc`. Renamed this task's 12 presence-settings keys t
 `hr.presenceSettings.*` instead of touching the shipped screen. Confirmed `t()` is typed against
 the full key union, so any stale reference would have failed `tsc -b --force` — it didn't.
 
+**Ruling (Task 13):** the same failure mode again — the brief's new `/hr/leave` screen's page
+chrome (`hr.leave.title`, `.subtitle`, `.loading`, `.tab.*`) collides on `hr.leave.title` with
+the legacy `HrPage.tsx`'s leave-requests card ("Leave requests"/"Demandes de congé"). Renamed
+the 6 new-screen page-chrome keys to `hr.leaveScreen.*`; left `HrPage.tsx`'s existing
+`hr.leave.*` keys (type/dates/approve/reject/new/created/bulk*/dialog.*) untouched.
+
 ## Phase 3a — Payroll engine (11 tasks) — planned
 
 New `payroll` module: configurable, effective-dated Mali rule tables and a pure calculation
