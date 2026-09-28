@@ -1,6 +1,6 @@
 {
   "name": "warehouse",
-  "version": "0.12.0",
+  "version": "0.13.0",
   "depends": ["core"],
   "optional_depends": ["sales"],
   "provides_api": [
@@ -11,7 +11,8 @@
     "SiteService",
     "CycleCountService",
     "PutAwayService",
-    "FulfillmentService"
+    "FulfillmentService",
+    "BarcodeService"
   ],
   "publishes_events": [
     "warehouse.stock.reserved",
@@ -42,6 +43,8 @@
     "warehouse.manage_putaway",
     "warehouse.view_fulfillment",
     "warehouse.manage_fulfillment",
-    "warehouse.admin_shipments"
+    "warehouse.admin_shipments",
+    "warehouse.manage_barcodes",
+    "warehouse.admin_barcodes"
   ]
 }

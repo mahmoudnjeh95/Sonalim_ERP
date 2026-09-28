@@ -10,6 +10,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
+from modules.warehouse.api.barcode_service import BarcodeService
 from modules.warehouse.api.cycle_count_service import CycleCountService
 from modules.warehouse.api.fulfillment_service import FulfillmentService
 from modules.warehouse.api.location_service import LocationService
@@ -17,6 +18,7 @@ from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.putaway_service import PutAwayService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
+from modules.warehouse.domain.barcode import ProductBarcode
 from modules.warehouse.domain.cycle_count import CycleCount, CycleCountLine
 from modules.warehouse.domain.entities import Location, Site
 from modules.warehouse.domain.fulfillment import PickList, PickListLine, Shipment
@@ -1186,3 +1188,113 @@ def ship_shipment(
             _raise_fulfillment(connection, result)
         connection.commit()
     return _shipment_response(result.value)
+
+
+# --- Barcodes & scan resolution -------------------------------------------------------------
+
+
+class CreateBarcodeRequest(BaseModel):
+    product_id: str
+    barcode: str
+    barcode_type: Literal["gtin", "internal"]
+    units_per_scan: float = 1
+    label: str | None = None
+
+
+class UpdateBarcodeRequest(BaseModel):
+    barcode: str | None = None
+    barcode_type: Literal["gtin", "internal"] | None = None
+    units_per_scan: float | None = None
+    label: str | None = None
+
+
+def _barcode_response(barcode: ProductBarcode) -> dict:
+    return {
+        "id": barcode.id,
+        "product_id": barcode.product_id,
+        "barcode": barcode.barcode,
+        "barcode_type": barcode.barcode_type,
+        "units_per_scan": barcode.units_per_scan,
+        "label": barcode.label,
+        "created_by": barcode.created_by,
+        "created_at": barcode.created_at,
+    }
+
+
+def _barcode_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    if code == "DUPLICATE_BARCODE":
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+@router.get("/scan/resolve")
+def resolve_scan(code: str, tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> dict:
+    with get_connection() as connection:
+        return BarcodeService(connection).resolve(tenant_id=tenant.tenant_id, code=code)
+
+
+@router.get("/product-barcodes")
+def list_product_barcodes(
+    product_id: str | None = None, tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))
+) -> list[dict]:
+    with get_connection() as connection:
+        barcodes = BarcodeService(connection).list_barcodes(tenant_id=tenant.tenant_id, product_id=product_id)
+    return [_barcode_response(barcode) for barcode in barcodes]
+
+
+@router.post("/product-barcodes", status_code=status.HTTP_201_CREATED)
+def create_product_barcode(
+    body: CreateBarcodeRequest, tenant: TenantContext = Depends(require_permission("warehouse.manage_barcodes"))
+) -> dict:
+    with get_connection() as connection:
+        result = BarcodeService(connection).create_barcode(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            product_id=body.product_id,
+            barcode=body.barcode,
+            barcode_type=body.barcode_type,
+            units_per_scan=body.units_per_scan,
+            label=body.label,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_barcode_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _barcode_response(result.value)
+
+
+@router.patch("/product-barcodes/{barcode_id}")
+def update_product_barcode(
+    barcode_id: str,
+    body: UpdateBarcodeRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.admin_barcodes")),
+) -> dict:
+    with get_connection() as connection:
+        result = BarcodeService(connection).update_barcode(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            barcode_id=barcode_id,
+            barcode=body.barcode,
+            barcode_type=body.barcode_type,
+            units_per_scan=body.units_per_scan,
+            label=body.label,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_barcode_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _barcode_response(result.value)
+
+
+@router.delete("/product-barcodes/{barcode_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def delete_product_barcode(
+    barcode_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_barcodes"))
+) -> None:
+    with get_connection() as connection:
+        result = BarcodeService(connection).delete_barcode(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, barcode_id=barcode_id)
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_barcode_err_status(result.code), err_detail(result))
+        connection.commit()

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { CheckCircle2, ChevronDown, MapPin, Package, RefreshCw, ScanLine, Trash2, XCircle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui/card";
@@ -13,6 +13,8 @@ import { clearScannerConfig, loadScannerConfig, type ScannerConfig } from "./sca
 import { applyScanTransform, useBarcodeCapture, type CapturedScan } from "./useBarcodeScanner";
 import { closeSerialPort, reacquireSerialPort, type MinimalSerialPort } from "./serialPort";
 import { ScannerWizard } from "./ScannerWizard";
+import { BarcodesPanel } from "./BarcodesPanel";
+import { resolveScan, scanResolveQueryKey, type ScanResolution } from "./barcodesApi";
 
 const LOCATIONS_QUERY_KEY = ["warehouse", "locations"] as const;
 
@@ -20,7 +22,8 @@ interface ScanEntry {
   key: string;
   value: string;
   timestamp: number;
-  match: { type: "product" | "location"; label: string } | null;
+  // "pending" while the server resolves the read; null when nothing matched.
+  match: { type: "product" | "location" | "lot"; label: string } | null | "pending";
 }
 
 export function ScannerTab() {
@@ -29,6 +32,7 @@ export function ScannerTab() {
   const token = session!.token;
   const { products } = useProductCatalog();
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
+  const queryClient = useQueryClient();
 
   const [config, setConfig] = useState<ScannerConfig | null>(() => loadScannerConfig());
   const [wizardOpen, setWizardOpen] = useState(false);
@@ -70,6 +74,26 @@ export function ScannerTab() {
     };
   }, [config?.mode, config?.usbVendorId, config?.usbProductId, config?.baudRate]);
 
+  const describeResolution = useCallback(
+    (resolution: ScanResolution): ScanEntry["match"] => {
+      const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
+      switch (resolution.kind) {
+        case "product": {
+          const quantity = resolution.quantity !== 1 ? ` ×${resolution.quantity}` : "";
+          const lot = resolution.lot_number ? ` · ${resolution.lot_number}` : "";
+          return { type: "product", label: `${productName(resolution.product_id)}${quantity}${lot}` };
+        }
+        case "location":
+          return { type: "location", label: locations.find((l) => l.id === resolution.location_id)?.name ?? resolution.location_id };
+        case "lot":
+          return { type: "lot", label: `${t("warehouse.scanner.live.match.lot")} · ${productName(resolution.product_id)}` };
+        default:
+          return null;
+      }
+    },
+    [products, locations, t],
+  );
+
   const handleCapture = useCallback(
     (scan: CapturedScan) => {
       if (!config) return;
@@ -79,16 +103,19 @@ export function ScannerTab() {
         minLength: config.minLength,
       });
       if (value === null) return;
-      const product = products.find((p) => p.sku.toLowerCase() === value.toLowerCase());
-      const location = product ? null : locations.find((l) => l.code.toLowerCase() === value.toLowerCase());
-      const match = product
-        ? { type: "product" as const, label: product.name }
-        : location
-          ? { type: "location" as const, label: location.name }
-          : null;
-      setScans((prev) => [{ key: `${scan.timestamp}-${value}`, value, timestamp: scan.timestamp, match }, ...prev].slice(0, 20));
+      const key = `${scan.timestamp}-${value}`;
+      setScans((prev) => [{ key, value, timestamp: scan.timestamp, match: "pending" as const }, ...prev].slice(0, 20));
+      // The server owns what a read means (GS1 labels, carton GTINs, SKUs,
+      // location codes, lot numbers) so every scanning screen agrees.
+      queryClient
+        .fetchQuery({ queryKey: scanResolveQueryKey(value), queryFn: () => resolveScan(token, value), staleTime: 30_000 })
+        .then((resolution) => {
+          const match = describeResolution(resolution);
+          setScans((prev) => prev.map((entry) => (entry.key === key ? { ...entry, match } : entry)));
+        })
+        .catch(() => setScans((prev) => prev.map((entry) => (entry.key === key ? { ...entry, match: null } : entry))));
     },
-    [config, products, locations],
+    [config, queryClient, token, describeResolution],
   );
 
   useBarcodeCapture({
@@ -186,7 +213,9 @@ export function ScannerTab() {
                     className="flex items-center justify-between gap-3 rounded-md border border-border px-3 py-2 text-sm"
                   >
                     <span className="truncate font-mono">{scan.value}</span>
-                    {scan.match ? (
+                    {scan.match === "pending" ? (
+                      <span className="shrink-0 text-muted-foreground">…</span>
+                    ) : scan.match ? (
                       <span className="flex shrink-0 items-center gap-1.5 text-success">
                         {scan.match.type === "product" ? <Package className="h-3.5 w-3.5" /> : <MapPin className="h-3.5 w-3.5" />}
                         <span className="max-w-[10rem] truncate">{scan.match.label}</span>
@@ -205,6 +234,8 @@ export function ScannerTab() {
           </CardContent>
         </Card>
       )}
+
+      <BarcodesPanel />
 
       <HelpFaq />
 
