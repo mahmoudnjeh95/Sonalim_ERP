@@ -42,7 +42,7 @@ function BarcodeDialog({
   const { session } = useAuth();
   const token = session!.token;
   const queryClient = useQueryClient();
-  const { products } = useProductCatalog();
+  const { catalog } = useProductCatalog();
 
   const [productId, setProductId] = useState("");
   const [barcode, setBarcode] = useState("");
@@ -80,7 +80,7 @@ function BarcodeDialog({
         <div className="space-y-3">
           <div className="space-y-1">
             <Label>{t("warehouse.barcodes.column.product")}</Label>
-            <ProductSelect products={products} value={productId} onChange={(e) => setProductId(e.target.value)} disabled={editing !== null} />
+            <ProductSelect products={catalog} value={productId} onChange={(e) => setProductId(e.target.value)} disabled={editing !== null} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1">

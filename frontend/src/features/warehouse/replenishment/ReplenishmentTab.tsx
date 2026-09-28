@@ -47,12 +47,12 @@ function errorText(error: unknown, fallback: string) {
 function useLookups() {
   const { session } = useAuth();
   const token = session!.token;
-  const { products } = useProductCatalog();
+  const { products, catalog } = useProductCatalog();
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
   const { data: sites = [] } = useQuery({ queryKey: ["warehouse", "sites"], queryFn: () => listSites(token) });
   const suppliers = partners.filter((p) => p.kind === "supplier" || p.kind === "both");
   return {
-    products,
+    catalog,
     suppliers,
     sites,
     productName: (id: string) => products.find((p) => p.id === id)?.name ?? id,
@@ -66,7 +66,7 @@ function RuleDialog({ open, onOpenChange, editing }: { open: boolean; onOpenChan
   const { session } = useAuth();
   const token = session!.token;
   const queryClient = useQueryClient();
-  const { products, suppliers, sites } = useLookups();
+  const { catalog, suppliers, sites } = useLookups();
 
   const [productId, setProductId] = useState("");
   const [siteId, setSiteId] = useState("");
@@ -113,7 +113,7 @@ function RuleDialog({ open, onOpenChange, editing }: { open: boolean; onOpenChan
         <div className="space-y-3">
           <div className="space-y-1">
             <Label>{t("warehouse.replenishment.column.product")}</Label>
-            <ProductSelect products={products} value={productId} onChange={(e) => setProductId(e.target.value)} disabled={editing !== null} />
+            <ProductSelect products={catalog} value={productId} onChange={(e) => setProductId(e.target.value)} disabled={editing !== null} />
           </div>
           <div className="space-y-1">
             <Label>{t("warehouse.replenishment.column.scope")}</Label>
