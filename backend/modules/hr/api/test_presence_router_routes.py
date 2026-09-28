@@ -81,3 +81,15 @@ def test_leave_routes_and_their_permissions():
     }
     routes = _routes()
     assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_month_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/presence/months"): "hr.view_presence",
+        ("GET", "/hr/presence/months/{period}/gaps"): "hr.view_presence",
+        ("GET", "/hr/presence/months/{period}/summary"): "hr.view_presence",
+        ("POST", "/hr/presence/months/{period}/close"): "hr.close_presence",
+        ("POST", "/hr/presence/months/{period}/reopen"): "hr.admin_presence",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected

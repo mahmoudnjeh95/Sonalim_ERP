@@ -16,7 +16,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.hr.api.schedule_service import HolidayService, PresenceSettingsService, ScheduleService
-from modules.hr.domain.presence import DayFigures, ManualEntry, default_status, figures_for_entry, validate_entry
+from modules.hr.domain.presence import DayFigures, ManualEntry, SummaryRow, default_status, figures_for_entry, summarize_month, validate_entry
 from modules.hr.domain.schedule import date_range
 
 _RECORD_KEYS = (
@@ -114,6 +114,43 @@ class PresenceService:
             "SELECT status FROM hr.presence_months WHERE tenant_id = %s AND period = %s", (tenant_id, period)
         ).fetchone()
         return row is not None and row[0] == "closed"
+
+    def month_summary(self, *, tenant_id: str, period: datetime.date, employee_ids: list[str] | None = None) -> list[dict]:
+        """Payroll's only presence input (cross-phase contract). One dict per employee, every count an int.
+
+        With `employee_ids`, every requested id is returned (zeros when nothing is recorded);
+        without, the employees that have presence rows in the month. Read it once the month is
+        closed (`is_month_closed`): before that the figures can still change.
+        """
+        first, last = month_bounds(period)
+        params: list[object] = [tenant_id, first, last]
+        clause = ""
+        if employee_ids is not None:
+            clause = " AND p.employee_id = ANY(%s)"
+            params.append(list(employee_ids))
+        rows = self.connection.execute(
+            f"""
+            SELECT p.employee_id, p.work_date, p.status, p.scheduled_minutes, p.worked_minutes, p.late_minutes,
+                   p.ot_minutes_day, p.ot_minutes_night, p.ot_minutes_rest_holiday, p.night_minutes, p.justified, t.paid
+            FROM hr.presence_days p
+            LEFT JOIN hr.leave_requests r ON r.id = p.leave_request_id
+            LEFT JOIN hr.leave_types t ON t.id = r.leave_type_id
+            WHERE p.tenant_id = %s AND p.work_date BETWEEN %s AND %s{clause}
+            """,
+            params,
+        ).fetchall()
+        summary_rows = [
+            SummaryRow(
+                employee_id=r[0], work_date=r[1], status=r[2], scheduled_minutes=r[3], worked_minutes=r[4], late_minutes=r[5],
+                ot_minutes_day=r[6], ot_minutes_night=r[7], ot_minutes_rest_holiday=r[8], night_minutes=r[9], justified=r[10],
+                leave_paid=r[11] if r[2] == "leave" else None,
+            )
+            for r in rows
+        ]
+        holidays = HolidayService(self.connection).holiday_map(tenant_id=tenant_id, date_from=first, date_to=last)
+        paid_holidays = {day for day, paid in holidays.items() if paid}
+        ids = list(employee_ids) if employee_ids is not None else sorted({row.employee_id for row in summary_rows})
+        return summarize_month(ids, summary_rows, paid_holidays)
 
     def existing_days(
         self, *, tenant_id: str, employee_ids: list[str], date_from: datetime.date, date_to: datetime.date

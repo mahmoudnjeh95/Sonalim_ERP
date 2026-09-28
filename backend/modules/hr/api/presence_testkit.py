@@ -15,7 +15,9 @@ import pytest
 from ulid import ULID
 
 from core.domain.result import Ok
+from modules.hr.api.presence_service import PresenceService
 from modules.hr.api.schedule_service import PresenceSettingsService, ScheduleService
+from modules.hr.domain.presence import ManualEntry
 
 TENANT = "integration-test-presence"
 AUG_1 = datetime.date(2026, 8, 1)
@@ -130,3 +132,18 @@ def presence_env(db) -> PresenceEnv:
         actor=actor, department=department, day_schedule=day.value["id"], night_schedule=night.value["id"],
         day_worker=day_worker, night_worker=night_worker,
     )
+
+
+def fill_month(db, env: PresenceEnv, period: datetime.date) -> None:
+    """Saves 'present' on every working day of both test workers that has no row yet (public holidays left alone)."""
+    presence = PresenceService(db)
+    entries: list[ManualEntry] = []
+    for employee_id in (env.day_worker, env.night_worker):
+        month = presence.employee_month(tenant_id=TENANT, employee_id=employee_id, period=period).value
+        entries += [
+            ManualEntry(employee_id=employee_id, work_date=datetime.date.fromisoformat(day["work_date"]), status="present")
+            for day in month["days"]
+            if day["default_status"] == "present" and day["record"] is None
+        ]
+    saved = presence.save_days(tenant_id=TENANT, actor_id=env.actor, entries=entries)
+    assert isinstance(saved, Ok), saved

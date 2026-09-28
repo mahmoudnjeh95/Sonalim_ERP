@@ -14,6 +14,7 @@ from core.domain.result import Err, Result, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.hr.api.clock_import_service import ClockImportService, ClockProfileService
 from modules.hr.api.leave_service import LeaveBalanceService, LeaveRequestService, LeaveTypeService
+from modules.hr.api.presence_month_service import PresenceMonthService
 from modules.hr.api.presence_service import PresenceService
 from modules.hr.api.schedule_service import HolidayService, PresenceSettingsService, ScheduleService
 from modules.hr.domain.presence import ManualEntry
@@ -477,3 +478,38 @@ def list_leave_balances(year: int, employee_id: str | None = None, tenant: Tenan
 @router.post("/leave/balances/adjust")
 def adjust_leave_balance(body: LeaveAdjustBody, tenant: TenantContext = Depends(require_permission("hr.admin_leave"))):
     return _write(lambda c: LeaveBalanceService(c).adjust(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+# ---- month close ---------------------------------------------------------------------
+
+class ReopenBody(BaseModel):
+    reason: str
+
+
+@router.get("/presence/months")
+def list_presence_months(year: int, tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
+    return _read(lambda c: PresenceMonthService(c).list_months(tenant_id=tenant.tenant_id, year=year))
+
+
+@router.get("/presence/months/{period}/gaps")
+def presence_month_gaps(period: datetime.date, tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
+    return _read(lambda c: PresenceMonthService(c).gaps(tenant_id=tenant.tenant_id, period=_period(period)))
+
+
+@router.get("/presence/months/{period}/summary")
+def presence_month_summary(period: datetime.date, employee_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_presence"))):
+    return _read(lambda c: PresenceService(c).month_summary(
+        tenant_id=tenant.tenant_id, period=_period(period), employee_ids=[employee_id] if employee_id else None
+    ))
+
+
+@router.post("/presence/months/{period}/close")
+def close_presence_month(period: datetime.date, tenant: TenantContext = Depends(require_permission("hr.close_presence"))):
+    return _write(lambda c: PresenceMonthService(c).close(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, period=_period(period)))
+
+
+@router.post("/presence/months/{period}/reopen")
+def reopen_presence_month(period: datetime.date, body: ReopenBody, tenant: TenantContext = Depends(require_permission("hr.admin_presence"))):
+    return _write(lambda c: PresenceMonthService(c).reopen(
+        tenant_id=tenant.tenant_id, actor_id=tenant.user_id, period=_period(period), reason=body.reason
+    ))
