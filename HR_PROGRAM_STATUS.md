@@ -12,9 +12,10 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **IN PROGRESS: phase 2, Task 12 — built and committed (`311f6a9`), review in flight.**
+> **IN PROGRESS: phase 2, Task 13 — building `/hr/leave` (last screen; only the seed, Task 14,
+> follows).**
 >
-> Next action: when Task 12's review lands, resolve any findings, then run Tasks 13–14.
+> Next action: review Task 13 once committed, then run Task 14.
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -30,7 +31,7 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 12 | 11 | **In progress** — Task 12 review in flight |
+| 2 — Presence & leave | 14 | 12 | 12 | **In progress** — Task 13 building |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
@@ -90,8 +91,8 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 9 | Month close and reopen, the payroll summary, the closed event and the payroll-lock consumers | `d47de69` | ✅ (2 minors, plan-mandated) |
 | 10 | Frontend foundation + `/hr/schedules` (schedules, rotations, assignments, holidays, settings) | `7f14a84` | ✅ (2 minors, non-issues) |
 | 11 | `/hr/presence` — day grid, week grid, employee month, month close | `e1023be` | ✅ (2 minors, non-issues) |
-| 12 | `/hr/presence/imports` — device profiles, upload, staging review, commit | `311f6a9` | 🔨 **review in flight** |
-| 13 | `/hr/leave` — leave types, requests with approval, balances | — | ⬜ |
+| 12 | `/hr/presence/imports` — device profiles, upload, staging review, commit | `311f6a9` | ✅ (2 minors, non-issues) |
+| 13 | `/hr/leave` — leave types, requests with approval, balances | — | 🔨 building |
 | 14 | Extend the dev seed with a month of presence, a clock sample and leave | — | ⬜ |
 
 After Task 14: a whole-branch review, one round of fixes, then the client chooses how to
