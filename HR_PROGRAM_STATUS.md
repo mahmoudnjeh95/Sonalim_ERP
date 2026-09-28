@@ -12,11 +12,15 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **IN PROGRESS: the fix wave is committed (`5751d3e`) and its scoped re-review is running.**
+> **PHASE 2 IS DONE.** All 14 tasks built and reviewed clean. The whole-branch review (Opus)
+> found 2 Important cross-task gaps; the one fix wave (`5751d3e`) fixed both with tests, and the
+> scoped re-review confirmed every finding addressed with no new breakage. Final HEAD `5751d3e`,
+> 17 commits ahead of phase 1's merge point (`d77c1a2`). modules/hr: 299 passed, 0 skipped.
+> Nothing is merged or pushed — **waiting on the client's finishing choice** (merge locally, a
+> PR, or keep the branch), the same open question as phase 1.
 >
-> Next action: when the re-review lands, if clean, delete the plan's SDD workspace and hand the
-> merge/PR/keep decision to the client; if it finds new breakage, adjudicate per the skill's
-> breaker rules (there is no second fix wave).
+> Next action: once the client decides how to integrate phase 2, start phase 3a (payroll
+> engine — 11 tasks). Recommend a dev-DB reset + reseed before any HR walkthrough (see below).
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -32,13 +36,13 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 14 | 14 | **All tasks reviewed** — whole-branch review in flight |
+| 2 — Presence & leave | 14 | 14 | 14 | **Done, not yet merged** — awaiting the client's choice |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **28** | **27** | |
+| **Total** | **89** | **29** | **29** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -74,10 +78,11 @@ without it nobody can create a contract.
 the status `active`; a future exit date marks someone "Left" straight away; the admin PATCH
 route can bypass the lifecycle rules; legacy free-text contract types lose their label.
 
-## Phase 2 — Presence & leave (14 tasks) — in progress
+## Phase 2 — Presence & leave (14 tasks) — done, not yet merged
 
 Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules/hr` suite was
-163 tests before this phase and is **295 passed, 0 skipped** now.
+163 tests before this phase and is **299 passed, 0 skipped** now (after the whole-branch
+review's fix wave added 4 more).
 
 | # | Task | Commit | State |
 |---|---|---|---|
@@ -96,46 +101,55 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 13 | `/hr/leave` — leave types, requests with approval, balances | `0d20b9b` | ✅ (1 minor deferred) |
 | 14 | Extend the dev seed with a month of presence, a clock sample and leave | `ad3bbcd` | ✅ (2 minors, non-issues) |
 
-All 14 tasks are built and reviewed clean. **Whole-branch review complete** (base `d77c1a2`,
-head `ad3bbcd`, 15 commits, on Opus): **ready to merge with fixes**. It independently re-ran the
-full suite (295 passed, 0 skipped), `tsc`, an AST scan of all 91 backend `Err()` calls (all
+All 14 tasks are built and reviewed clean. **Whole-branch review** (base `d77c1a2`, head
+`ad3bbcd`, 15 commits, on Opus): ready to merge **with fixes** — it independently re-ran the full
+suite (295 passed, 0 skipped), `tsc`, an AST scan of all 91 backend `Err()` calls (all
 bilingual), an i18n key-parity check, and reproduced both Important findings itself in
 rolled-back transactions under a throwaway tenant.
 
-**2 Important findings, both real cross-task gaps invisible to any single task's review — now
-being fixed in the one allowed fix wave:**
-1. The legacy `/hr` leave-approval route can approve a request made on the new `/hr/leave`
-   screen without touching its balance; a later cancel on the new screen then refunds days that
-   were never taken (reproduced: 5.00 → legacy-approve → still 5.00 → cancel → 7.00). Fix:
-   refuse the legacy route with a new `LEAVE_TYPED_REQUEST` error when the request has a leave
-   type.
-2. A closed month's `month_summary` — the exact figures phase 3 payroll will read — drifts if a
-   holiday or a leave type's paid flag is edited afterward, contradicting the events catalog's
-   promise that it's "final until reopened" (reproduced with self-contradictory figures). Fix:
-   refuse editing a holiday dated in a closed month, and refuse changing a leave type's paid
-   flag while it has leave days in a closed month.
+**2 Important findings, both real cross-task gaps invisible to any single task's review — fixed
+in the one allowed fix wave (`5751d3e`), each with a dedicated integration test:**
+1. The legacy `/hr` leave-approval route could approve a request made on the new `/hr/leave`
+   screen without touching its balance; a later cancel on the new screen then refunded days that
+   were never taken (reproduced: 5.00 → legacy-approve → still 5.00 → cancel → 7.00). **Fixed:**
+   the legacy route now refuses with `LEAVE_TYPED_REQUEST` when the request has a leave type.
+2. A closed month's `month_summary` — the exact figures phase 3 payroll will read — drifted if a
+   holiday or a leave type's paid flag was edited afterward, contradicting the events catalog's
+   promise that it's "final until reopened" (reproduced with self-contradictory figures).
+   **Fixed:** editing a holiday dated in a closed month, or changing a leave type's paid flag
+   while it has leave days in a closed month, is now refused with `PRESENCE_MONTH_CLOSED`.
 
-Also being fixed in the same wave (the reviewer's own "worth doing since you're already
-committing" minors): `tenant_id` defence-in-depth on child-row deletes in 3 files; the seed's
-"confirm with HR" banner doesn't actually print the draft values; the seed's Mali holiday is
-dated a month wrong (22 Aug vs. the real 22 Sept); a stale `context.md` would land on the deploy
-branch.
+**Also fixed in the same wave:** `tenant_id` defence-in-depth on the 2 real child-row deletes
+found (of 6 guessed — the other 4 either didn't exist or were already scoped); the seed's
+"confirm with HR" banner now prints its actual draft values; the seed's demo holiday was
+mislabelled with a real Mali date it doesn't fall on, so it's renamed to a neutral demo label
+(kept at its original date, since the seed's month-close logic needs it inside the closed
+period); a stale `context.md` that would have landed on the deploy branch is removed.
 
-**Deferred, not part of this fix wave** (none load-bearing, and the skill allows only one wave):
-punch anomalies not surfaced at month close; a low-likelihood month-close concurrency race; an
-invisible BOM character in `clock_csv.py`; the imports page's default date range breaking on the
-1st of a month. Also confirmed: Task 14's flagged dev-DB fixture pollution is genuinely not in
-the code (only in a stale `context.md`) — **the dev DB should be reset and reseeded after merge,
-before any HR walkthrough**, so stray test data doesn't confuse that review.
+**Re-reviewed clean:** every fix independently verified against the live code (not the fix
+report's word) — router wiring, the new tests' independent-path assertions, the closed-month
+query's tenant/type scoping and no-false-positive behaviour, both "nothing to fix here" claims
+confirmed by direct grep. No new breakage.
 
-**Merge-time notes:** `origin/huge_production_migration` is 10 commits ahead locally and also
-touches `i18n.tsx`/`CATALOG.md`/`worker/main.py` — textual conflicts only, no key collisions,
+**Deferred, not part of this fix wave** (none load-bearing): punch anomalies not surfaced at
+month close; a low-likelihood month-close concurrency race; an invisible BOM character in
+`clock_csv.py`; the imports page's default date range breaking on the 1st of a month; Task 13's
+cosmetic i18n-key duplication. Also confirmed: Task 14's flagged dev-DB fixture pollution is
+genuinely not in the code (only was in the now-removed `context.md`) — **recommend a dev-DB
+reset and reseed after merge, before any HR walkthrough**, so stray test data doesn't confuse
+that review.
+
+**Merge-time notes:** `origin/huge_production_migration` is ahead locally and also touches
+`i18n.tsx`/`CATALOG.md`/`worker/main.py` — textual conflicts only, no key collisions expected,
 but re-run the i18n key-parity check and `tsc` after resolving. The main checkout has another
 session's unrelated uncommitted edits to `app/main.py`/`worker/main.py`/`runner.py`. The stray
-commit `02372b2` merges cleanly (identical content to `252dbd5`). `scripts/migration_sql.py` is
-still untracked and needs a commit before the deploy runbook's `--since` command works.
+commit `02372b2` (see Task 7 history) merges cleanly (identical content to `252dbd5`) — still
+sitting on `huge_production_migration` in the main checkout, still the client's call whether to
+drop it (`git reset --keep d77c1a2`) or leave it. `scripts/migration_sql.py` is still untracked
+and needs a commit before the deploy runbook's `--since` command works.
 
-Nothing of phase 2 is merged or pushed.
+Nothing of phase 2 is merged or pushed. The phase's SDD workspace has been deleted — this file
+plus `git log` on `hr-p2-presence-leave` is now the record.
 
 **Deferred minors**, to fix in the final round:
 - Task 2: `schedule_service.py`'s child-row DELETEs (lines 573, 682) omit `tenant_id`. Not
@@ -286,7 +300,7 @@ spec, plan and build.
 | **F — Self-service & manager space, multi-channel** (replaces phase 5's read-only version) | Web and phone, kiosk (badge + PIN), SMS — each employee choosing their channels; requests (attestation, RIB or address change, with approval); my presence and overtime; managers approve their team's leave and see their team's presence |
 | **G — Analytics** (extends phase 5) | Turnover, age/seniority pyramids, gender mix and pay gap, headcount vs budget, leave liability, **labour cost per production line and work order**, Excel export |
 
-**Proposed order:** finish phase 2 → **A** → **B** → phase 3 (plans amended) → phase 4 →
+**Proposed order:** phase 2 done → **A** → **B** → phase 3 (plans amended) → phase 4 →
 **F** → **G** → **C, D, E**.
 
 A comes first because B–F all sit on storage, notifications and approvals. B comes before
