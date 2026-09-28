@@ -12,15 +12,18 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **PHASE 2 IS DONE.** All 14 tasks built and reviewed clean. The whole-branch review (Opus)
-> found 2 Important cross-task gaps; the one fix wave (`5751d3e`) fixed both with tests, and the
-> scoped re-review confirmed every finding addressed with no new breakage. Final HEAD `5751d3e`,
-> 17 commits ahead of phase 1's merge point (`d77c1a2`). modules/hr: 299 passed, 0 skipped.
-> Nothing is merged or pushed — **waiting on the client's finishing choice** (merge locally, a
-> PR, or keep the branch), the same open question as phase 1.
+> **PHASE 2 IS MERGED into `huge_production_migration` locally** (commit `81b6364`), together
+> with `origin`'s warehouse module work (phases 0–6C, merged first as `de5e58a`) that had landed
+> on the deploy branch in the meantime. One follow-up commit (`5a6dabe`) classifies phase 2's new
+> `hr.*` tables in the go-live reset script, which nothing had done yet. Verified after both
+> merges: `tsc -b --force` exits 0; the full backend suite is **1704 passed, 1 skipped, 0
+> failures caused by either merge** (the sole remaining failure, `test_a_team_used_by_a_
+> quality_report_is_retired_too`, was already broken before `d77c1a2` — a stale test against a
+> column the QC-on-shift-reports migration dropped in September, unrelated to this work).
 >
-> Next action: once the client decides how to integrate phase 2, start phase 3a (payroll
-> engine — 11 tasks). Recommend a dev-DB reset + reseed before any HR walkthrough (see below).
+> **Not yet pushed.** Recommend a dev-DB reset + reseed before any HR walkthrough (pre-existing
+> test fixtures, not from this branch — see below). Next: start phase 3a (payroll engine, 11
+> tasks) once the client confirms the push.
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -36,7 +39,7 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 14 | 14 | **Done, not yet merged** — awaiting the client's choice |
+| 2 — Presence & leave | 14 | 14 | 14 | **Merged locally** (`81b6364`) — not yet pushed |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
@@ -78,7 +81,7 @@ without it nobody can create a contract.
 the status `active`; a future exit date marks someone "Left" straight away; the admin PATCH
 route can bypass the lifecycle rules; legacy free-text contract types lose their label.
 
-## Phase 2 — Presence & leave (14 tasks) — done, not yet merged
+## Phase 2 — Presence & leave (14 tasks) — merged locally, not yet pushed
 
 Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules/hr` suite was
 163 tests before this phase and is **299 passed, 0 skipped** now (after the whole-branch
@@ -139,17 +142,30 @@ genuinely not in the code (only was in the now-removed `context.md`) — **recom
 reset and reseed after merge, before any HR walkthrough**, so stray test data doesn't confuse
 that review.
 
-**Merge-time notes:** `origin/huge_production_migration` is ahead locally and also touches
-`i18n.tsx`/`CATALOG.md`/`worker/main.py` — textual conflicts only, no key collisions expected,
-but re-run the i18n key-parity check and `tsc` after resolving. The main checkout has another
-session's unrelated uncommitted edits to `app/main.py`/`worker/main.py`/`runner.py`. The stray
-commit `02372b2` (see Task 7 history) merges cleanly (identical content to `252dbd5`) — still
-sitting on `huge_production_migration` in the main checkout, still the client's call whether to
-drop it (`git reset --keep d77c1a2`) or leave it. `scripts/migration_sql.py` is still untracked
-and needs a commit before the deploy runbook's `--since` command works.
+**Merge done, 2026-09-28.** `origin/huge_production_migration` had 9 new warehouse-module
+commits (phases 0–6C: cycle counts, put-away, fulfillment, barcodes, FIFO valuation,
+reorder-point replenishment) merged in first (`de5e58a`), then `hr-p2-presence-leave` on top
+(`81b6364`). One textual conflict each time in `backend/worker/main.py` (both branches added an
+import line) — resolved by keeping both. `i18n.tsx` merged with no conflict (the Task 10/13
+renames held). The other session's in-progress deploy-safety edits
+(`app/main.py`/`worker/main.py`/`core/migrations/runner.py`/`.env.example`/`CLAUDE.md`/
+`compose.yaml`, plus the untracked `scripts/migration_sql.py`) were confirmed complete and
+committed first (`8b49e33`), rather than merged over: `AUTO_MIGRATE` is now off by default, and
+`migration_sql.py` prints pending migrations to run by hand. A separate untracked script,
+`backend/scripts/seed_shift_recent.py` (unrelated production-module work by another session),
+was left untouched.
 
-Nothing of phase 2 is merged or pushed. The phase's SDD workspace has been deleted — this file
-plus `git log` on `hr-p2-presence-leave` is now the record.
+Applying the merged migrations to the shared dev DB surfaced that phase 2's 17 new `hr.*` tables
+weren't classified in `scripts/reset_operational_data.py` — fixed in `5a6dabe` (8 configuration
+tables kept, like `hr.settings`; 9 operational tables purged, like `hr.employees`), verified by
+its own behavioural tests (not just the classification check).
+
+The stray commit `02372b2` (see Task 7 history) is folded into the merge, content-identical to
+`252dbd5` — no action needed, it's just part of the history now.
+
+**Not yet pushed** — a push to `huge_production_migration` deploys to the live server. The phase's
+SDD workspace was deleted before the merge; this file plus `git log` on
+`huge_production_migration` is now the record.
 
 **Deferred minors**, to fix in the final round:
 - Task 2: `schedule_service.py`'s child-row DELETEs (lines 573, 682) omit `tenant_id`. Not
