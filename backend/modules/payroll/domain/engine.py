@@ -105,9 +105,13 @@ def _calculate(employee: EmployeeInput, presence: PresenceInput, rules: RuleSet,
     lines += employer_charge_lines(rules, gross=gross, contributable=contributable, earned=earned, include_fixed=include_salary)
 
     ordered = tuple(order_lines(lines))
+    # available < 0 means contributions + tax alone already exceed gross (e.g. a whole
+    # month unpaid with a misconfigured UNPAID_ABSENCE component) -- the floor only
+    # guards deduction lines, so this must be flagged even when nothing was carried.
+    warn_negative = carried or available < ZERO
     return PayslipResult(
         lines=ordered,
         totals=payslip_totals(ordered),
         carry_forwards=tuple(carried),
-        warnings=("NET_NEGATIVE",) if carried else (),
+        warnings=("NET_NEGATIVE",) if warn_negative else (),
     )

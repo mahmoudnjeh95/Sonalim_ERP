@@ -13,7 +13,7 @@ from modules.payroll.domain.rule_validation import (
     validate_tax_bracket,
     validate_tax_relief,
 )
-from modules.payroll.domain.rules import TaxBracket
+from modules.payroll.domain.rules import ComponentRule, TaxBracket
 from modules.payroll.domain.synthetic import synthetic_rule_set
 
 D = Decimal
@@ -109,6 +109,18 @@ def test_a_missing_system_component_or_band_blocks_confirmation():
                                       overtime_rates=rules.overtime_rates[:2]))
     assert ("component SEVERANCE is missing", "la rubrique SEVERANCE manque") in problems
     assert any("rest_holiday" in english for english, _ in problems)
+
+
+def test_unpaid_absence_flags_mismatched_with_base_block_confirmation():
+    # UNPAID_ABSENCE is deducted from earned_base to lower the taxable/contributable
+    # base; if an accountant edits its flags off BASE's, the absence stops reducing
+    # what it's meant to reduce and the engine can produce a silently wrong ITS.
+    rules = synthetic_rule_set()
+    base = next(c for c in rules.components if c.code == "BASE")
+    mismatched = replace(base, code="UNPAID_ABSENCE", formula_type="per_day", contributable=not base.contributable)
+    components = tuple(mismatched if c.code == "UNPAID_ABSENCE" else c for c in rules.components)
+    problems = check_complete(replace(rules, components=components))
+    assert any("UNPAID_ABSENCE" in english and "BASE" in english for english, _ in problems)
 
 
 def test_bracket_gaps_overlaps_and_mixed_periods_block_confirmation():

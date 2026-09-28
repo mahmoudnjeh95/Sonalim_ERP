@@ -113,6 +113,26 @@ def test_golden_net_negative_carries_the_overflow():
     assert result.value.warnings == ("NET_NEGATIVE",)
 
 
+def test_golden_net_negative_before_any_deduction_still_warns():
+    """A misconfigured rule set (UNPAID_ABSENCE not tagged contributable/taxable like BASE)
+    lets contributions be computed on the full base while the whole month is unpaid absence:
+    gross 0, but PENSION/HEALTH/TAX were charged on 400 000 -- net goes negative with nothing
+    to carry, since apply_net_floor only guards deduction lines, not a negative `available`."""
+    rules = synthetic_rule_set()
+    mismatched = tuple(
+        replace(c, taxable=False, contributable=False) if c.code == "UNPAID_ABSENCE" else c
+        for c in rules.components
+    )
+    broken_rules = replace(rules, components=mismatched)
+    employee = synthetic_employee()
+    presence = PresenceInput(scheduled_days=22, unpaid_absence_days=22)
+    result = calculate_payslip(employee=employee, presence=presence, rules=broken_rules, period=SEPT, inputs=[])
+    assert isinstance(result, Ok), result
+    assert result.value.totals.gross == D(0)
+    assert result.value.totals.net < D(0)
+    assert result.value.warnings == ("NET_NEGATIVE",)
+
+
 def test_golden_final_settlement():
     """Leaves 15 Sept after 12 years, 10 of 20 days: BASE 150 000; seniority 5 % = 7 500; leave 10 d ×
     15 000 = 150 000; notice 1 month 300 000; severance 5×20 % + 5×25 % + 2×30 % of 300 000 = 855 000

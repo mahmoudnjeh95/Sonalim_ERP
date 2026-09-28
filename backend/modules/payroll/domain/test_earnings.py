@@ -65,6 +65,15 @@ def test_a_daily_rate_is_paid_per_worked_leave_and_holiday_day():
     assert amounts(base_salary_lines(daily, presence, RULES, SEPT)) == {"BASE": D(200000)}
 
 
+def test_a_worked_holiday_draws_one_day_rate_not_two():
+    # hr's month_summary counts a worked holiday in both worked_days and holiday_days
+    # (holidays_worked_days marks the overlap) -- the daily base must not pay it twice;
+    # its hours are paid separately as OT_REST_HOLIDAY overtime.
+    daily = synthetic_employee(base_salary=D(10000), pay_frequency="daily")
+    presence = PresenceInput(worked_days=19, holiday_days=1, holidays_worked_days=1)
+    assert amounts(base_salary_lines(daily, presence, RULES, SEPT)) == {"BASE": D(190000)}
+
+
 def test_seniority_uses_the_highest_step_reached_by_the_end_of_the_month():
     assert seniority_line(synthetic_employee(hire_date=date(2021, 9, 1)), D(400000), RULES, SEPT).amount == D(20000)
     assert seniority_line(synthetic_employee(hire_date=date(2021, 10, 1)), D(400000), RULES, SEPT).amount == D(12000)

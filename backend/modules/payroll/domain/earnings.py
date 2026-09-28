@@ -67,7 +67,10 @@ def earning_line(rule: ComponentRule, amount: Decimal, *, base: Decimal | None =
 def base_salary_lines(employee: EmployeeInput, presence: PresenceInput, rules: RuleSet, period: datetime.date) -> list[PayslipLine]:
     base_rule = rules.require(BASE)
     if employee.pay_frequency == "daily":
-        paid_days = presence.worked_days + presence.paid_leave_days + presence.holiday_days
+        # holidays_worked_days is counted in both worked_days and holiday_days (hr's
+        # month_summary, see presence.py) -- subtract it once so a worked holiday draws
+        # one day rate, not two. Its hours are paid separately as rest_holiday overtime.
+        paid_days = presence.worked_days + presence.paid_leave_days + presence.holiday_days - presence.holidays_worked_days
         return [earning_line(base_rule, rules.round(employee.base_salary * paid_days), base=employee.base_salary, qty=Decimal(paid_days))]
 
     factor = coverage_factor(employee, presence, rules, period)

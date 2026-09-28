@@ -13,8 +13,10 @@ from typing import Any
 from core.domain.result import Err, Ok, Result
 from modules.payroll.domain.money import ROUND_MODES
 from modules.payroll.domain.rules import (
+    BASE,
     OVERTIME_BANDS,
     SYSTEM_COMPONENTS,
+    UNPAID_ABSENCE,
     FamilyRelief,
     FamilyReliefStep,
     ProfessionalRelief,
@@ -320,10 +322,19 @@ def _bound(value: Decimal | None) -> str:
 def check_complete(rule_set: RuleSet) -> list[tuple[str, str]]:
     """What stops this rule set from being confirmed, as (english, french) pairs."""
     problems: list[tuple[str, str]] = []
-    codes = {component.code for component in rule_set.components}
+    by_code = {component.code: component for component in rule_set.components}
     for code in SYSTEM_COMPONENTS:
-        if code not in codes:
+        if code not in by_code:
             problems.append((f"component {code} is missing", f"la rubrique {code} manque"))
+    if BASE in by_code and UNPAID_ABSENCE in by_code:
+        base, absence = by_code[BASE], by_code[UNPAID_ABSENCE]
+        if (absence.taxable, absence.contributable) != (base.taxable, base.contributable):
+            problems.append((
+                f"{UNPAID_ABSENCE} must have the same taxable/contributable flags as {BASE}, "
+                "or the absence would not reduce the base it is deducted from",
+                f"{UNPAID_ABSENCE} doit avoir les mêmes indicateurs imposable/cotisable que {BASE}, "
+                "sinon l'absence ne réduirait pas la base dont elle est déduite",
+            ))
     bands = {rate.band_code for rate in rule_set.overtime_rates}
     for band in OVERTIME_BANDS:
         if band not in bands:
