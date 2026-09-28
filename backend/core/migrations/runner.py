@@ -72,12 +72,26 @@ def apply_module_migrations(connection: psycopg.Connection, module_name: str, mi
         connection.commit()
 
 
+# Arbitrary constant key for pg_advisory_lock: app and worker start together on every
+# deploy and both call apply_all_migrations; without the lock they can run the same
+# file concurrently and one of them crashes on the duplicate tracking row.
+MIGRATION_LOCK_KEY = 72_210_001
+
+
 def apply_all_migrations() -> None:
     with get_connection() as connection:
-        _ensure_tracking_table(connection)
-        connection.commit()
-        for module_name in MODULE_ORDER:
-            apply_module_migrations(connection, module_name, MODULE_MIGRATION_DIRS[module_name])
+        connection.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
+        try:
+            _ensure_tracking_table(connection)
+            connection.commit()
+            # The applied set is re-read per module inside the lock, so whoever waited
+            # sees what the first process just applied and skips it.
+            for module_name in MODULE_ORDER:
+                apply_module_migrations(connection, module_name, MODULE_MIGRATION_DIRS[module_name])
+        finally:
+            connection.rollback()
+            connection.execute("SELECT pg_advisory_unlock(%s)", (MIGRATION_LOCK_KEY,))
+            connection.commit()
 
 
 def pending_migrations(connection: psycopg.Connection) -> list[tuple[str, Path]]:
@@ -105,9 +119,9 @@ def auto_migrate_enabled() -> bool:
 def migrate_on_startup() -> None:
     """Called by the app and the worker at startup.
 
-    Off by default so a deploy never changes the server database: pending migrations
-    are only listed in the log, and applied by hand from `python -m scripts.migration_sql`.
-    Local dev sets AUTO_MIGRATE=true in the repo-root .env to keep applying them here.
+    With AUTO_MIGRATE on (compose.yaml's default) pending migrations are applied here.
+    Set it to false to only list them in the log and apply the SQL from
+    `python -m scripts.migration_sql` by hand.
     """
     if auto_migrate_enabled():
         apply_all_migrations()

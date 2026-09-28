@@ -8,9 +8,11 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:${RABBITMQ_PASSWORD:-erp}@rabbitmq:5672/}
       GROQ_API_KEY: ${GROQ_API_KEY:-}
       FRONTEND_ORIGINS: ${FRONTEND_ORIGINS:-http://localhost}
-      # A deploy never changes the database: pending migrations are only listed in
-      # the log. Get their SQL with `docker compose exec -T app python -m scripts.migration_sql`.
-      AUTO_MIGRATE: ${AUTO_MIGRATE:-false}
+      # Pending schema migrations are applied on startup (under an advisory lock, so
+      # app and worker never run them twice). Migrations never carry test/demo data --
+      # core/migrations/test_migration_data_guard.py enforces that. Set AUTO_MIGRATE=false
+      # in the server .env to go back to applying `python -m scripts.migration_sql` by hand.
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -45,7 +47,7 @@ services:
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://erp:${POSTGRES_PASSWORD:-erp}@postgres:5432/erp}
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:${RABBITMQ_PASSWORD:-erp}@rabbitmq:5672/}
-      AUTO_MIGRATE: ${AUTO_MIGRATE:-false}
+      AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
     depends_on:
       postgres:
         condition: service_healthy
