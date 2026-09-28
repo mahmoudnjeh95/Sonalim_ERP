@@ -12,17 +12,11 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **SESSION PAUSED 2026-09-28 at the user's request, with the whole-branch review still
-> running in the background.** All 14 tasks of phase 2 are built and reviewed clean; the
-> whole-branch review (`ad3bbcd`, base `d77c1a2`, 15 commits, on Opus) had not yet reported
-> when the session stopped.
+> **IN PROGRESS: the fix wave is committed (`5751d3e`) and its scoped re-review is running.**
 >
-> Next action on resume: check for the reviewer's report first (it arrives as a background-agent
-> notification to the session that dispatched it — see the phase 2 SDD ledger's last entry,
-> `.superpowers/sdd/2026-09-25-hr-p2-presence-leave/progress.md`, for the exact resume note). If
-> clean, delete that plan's workspace and move to finishing the branch (merge/PR/keep is the
-> user's choice, never done without asking). If it has findings, one fix dispatch with the full
-> list, one scoped re-review, then hand any residual findings to the user.
+> Next action: when the re-review lands, if clean, delete the plan's SDD workspace and hand the
+> merge/PR/keep decision to the client; if it finds new breakage, adjudicate per the skill's
+> breaker rules (there is no second fix wave).
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -102,10 +96,46 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 13 | `/hr/leave` — leave types, requests with approval, balances | `0d20b9b` | ✅ (1 minor deferred) |
 | 14 | Extend the dev seed with a month of presence, a clock sample and leave | `ad3bbcd` | ✅ (2 minors, non-issues) |
 
-All 14 tasks are built and reviewed clean. **Whole-branch review was in flight when the session
-paused** (base `d77c1a2`, head `ad3bbcd`, 15 commits, on Opus) — its verdict had not yet arrived.
-One round of fixes if it finds anything, then the client chooses how to integrate (merge
-locally, a PR, or keep the branch). Nothing of phase 2 is merged or pushed.
+All 14 tasks are built and reviewed clean. **Whole-branch review complete** (base `d77c1a2`,
+head `ad3bbcd`, 15 commits, on Opus): **ready to merge with fixes**. It independently re-ran the
+full suite (295 passed, 0 skipped), `tsc`, an AST scan of all 91 backend `Err()` calls (all
+bilingual), an i18n key-parity check, and reproduced both Important findings itself in
+rolled-back transactions under a throwaway tenant.
+
+**2 Important findings, both real cross-task gaps invisible to any single task's review — now
+being fixed in the one allowed fix wave:**
+1. The legacy `/hr` leave-approval route can approve a request made on the new `/hr/leave`
+   screen without touching its balance; a later cancel on the new screen then refunds days that
+   were never taken (reproduced: 5.00 → legacy-approve → still 5.00 → cancel → 7.00). Fix:
+   refuse the legacy route with a new `LEAVE_TYPED_REQUEST` error when the request has a leave
+   type.
+2. A closed month's `month_summary` — the exact figures phase 3 payroll will read — drifts if a
+   holiday or a leave type's paid flag is edited afterward, contradicting the events catalog's
+   promise that it's "final until reopened" (reproduced with self-contradictory figures). Fix:
+   refuse editing a holiday dated in a closed month, and refuse changing a leave type's paid
+   flag while it has leave days in a closed month.
+
+Also being fixed in the same wave (the reviewer's own "worth doing since you're already
+committing" minors): `tenant_id` defence-in-depth on child-row deletes in 3 files; the seed's
+"confirm with HR" banner doesn't actually print the draft values; the seed's Mali holiday is
+dated a month wrong (22 Aug vs. the real 22 Sept); a stale `context.md` would land on the deploy
+branch.
+
+**Deferred, not part of this fix wave** (none load-bearing, and the skill allows only one wave):
+punch anomalies not surfaced at month close; a low-likelihood month-close concurrency race; an
+invisible BOM character in `clock_csv.py`; the imports page's default date range breaking on the
+1st of a month. Also confirmed: Task 14's flagged dev-DB fixture pollution is genuinely not in
+the code (only in a stale `context.md`) — **the dev DB should be reset and reseeded after merge,
+before any HR walkthrough**, so stray test data doesn't confuse that review.
+
+**Merge-time notes:** `origin/huge_production_migration` is 10 commits ahead locally and also
+touches `i18n.tsx`/`CATALOG.md`/`worker/main.py` — textual conflicts only, no key collisions,
+but re-run the i18n key-parity check and `tsc` after resolving. The main checkout has another
+session's unrelated uncommitted edits to `app/main.py`/`worker/main.py`/`runner.py`. The stray
+commit `02372b2` merges cleanly (identical content to `252dbd5`). `scripts/migration_sql.py` is
+still untracked and needs a commit before the deploy runbook's `--since` command works.
+
+Nothing of phase 2 is merged or pushed.
 
 **Deferred minors**, to fix in the final round:
 - Task 2: `schedule_service.py`'s child-row DELETEs (lines 573, 682) omit `tenant_id`. Not
