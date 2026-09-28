@@ -141,6 +141,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/hr", labelKey: "nav.hrLegacy", icon: BriefcaseBusiness, exact: true },
       { to: "/hr/presence", labelKey: "nav.hrPresence", icon: CalendarCheck, exact: true, permission: "hr.view_presence" },
       { to: "/hr/presence/imports", labelKey: "nav.hrClockImports", icon: Fingerprint, permission: "hr.view_presence" },
+      { to: "/hr/leave", labelKey: "nav.hrLeave", icon: CalendarDays, permission: "hr.view_leave" },
       { to: "/hr/schedules", labelKey: "nav.hrSchedules", icon: CalendarClock, permission: "hr.view_presence" },
     ],
   },
