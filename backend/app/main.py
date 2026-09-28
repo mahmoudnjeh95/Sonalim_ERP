@@ -19,7 +19,7 @@ from core.audit import router as core_audit_router
 from core.auth import router as auth_router
 from core.exchange_rates import currencies_router as core_currencies_router
 from core.exchange_rates import router as core_exchange_rates_router
-from core.migrations.runner import apply_all_migrations
+from core.migrations.runner import migrate_on_startup
 from core.partners import router as core_partners_router
 from core.report_options import router as core_report_options_router
 from core.roles import router as core_roles_router
@@ -42,7 +42,7 @@ from modules.qc.api.router import router as qc_router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    apply_all_migrations()
+    migrate_on_startup()
     yield
 
 

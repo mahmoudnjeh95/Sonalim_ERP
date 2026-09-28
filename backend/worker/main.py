@@ -11,7 +11,7 @@ from core.db import get_connection
 from core.events import consumers as event_consumers
 from core.events.dispatcher import EXCHANGE, dispatch_pending
 from core.exchange_rate_rollover import roll_forward_missing_rates
-from core.migrations.runner import apply_all_migrations
+from core.migrations.runner import migrate_on_startup
 
 # Imported for the side effect of registering their event handlers with core.events.consumers.
 from modules.finance.events import consumers as _finance_consumers  # noqa: F401
@@ -47,7 +47,7 @@ def run_exchange_rate_rollover() -> None:
 
 
 def run() -> None:
-    apply_all_migrations()
+    migrate_on_startup()
     rabbitmq_url = os.environ["RABBITMQ_URL"]
     threading.Thread(target=run_outbox_dispatcher, args=(rabbitmq_url,), daemon=True).start()
     threading.Thread(target=run_exchange_rate_rollover, daemon=True).start()

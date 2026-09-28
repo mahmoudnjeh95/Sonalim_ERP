@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import logging
+import os
 from pathlib import Path
 
 import psycopg
 
 from core.db import get_connection
+
+logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -74,3 +78,50 @@ def apply_all_migrations() -> None:
         connection.commit()
         for module_name in MODULE_ORDER:
             apply_module_migrations(connection, module_name, MODULE_MIGRATION_DIRS[module_name])
+
+
+def pending_migrations(connection: psycopg.Connection) -> list[tuple[str, Path]]:
+    """(module_name, file) for every migration file not recorded in core.module_migrations, in apply order. Read-only."""
+    if connection.execute("SELECT to_regclass('core.module_migrations')").fetchone()[0] is None:
+        applied: set[tuple[str, str]] = set()
+    else:
+        applied = {
+            (row[0], row[1])
+            for row in connection.execute("SELECT module_name, version FROM core.module_migrations").fetchall()
+        }
+    return [
+        (module_name, migration_file)
+        for module_name in MODULE_ORDER
+        if MODULE_MIGRATION_DIRS[module_name].exists()
+        for migration_file in sorted(MODULE_MIGRATION_DIRS[module_name].glob("*.sql"))
+        if (module_name, migration_file.name) not in applied
+    ]
+
+
+def auto_migrate_enabled() -> bool:
+    return os.getenv("AUTO_MIGRATE", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def migrate_on_startup() -> None:
+    """Called by the app and the worker at startup.
+
+    Off by default so a deploy never changes the server database: pending migrations
+    are only listed in the log, and applied by hand from `python -m scripts.migration_sql`.
+    Local dev sets AUTO_MIGRATE=true in the repo-root .env to keep applying them here.
+    """
+    if auto_migrate_enabled():
+        apply_all_migrations()
+        return
+    try:
+        with get_connection() as connection:
+            pending = pending_migrations(connection)
+    except psycopg.Error as exc:
+        logger.warning("Could not check pending migrations: %s", exc)
+        return
+    if pending:
+        logger.warning(
+            "%d migration(s) not applied (AUTO_MIGRATE is off) -- generate the SQL with "
+            "`python -m scripts.migration_sql`: %s",
+            len(pending),
+            ", ".join(f"{module_name}/{migration_file.name}" for module_name, migration_file in pending),
+        )
