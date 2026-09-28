@@ -1,9 +1,15 @@
 import { apiFetch } from "../../lib/api";
 
+export type LocationType = "zone" | "aisle" | "rack" | "bin";
+
 export interface Location {
   id: string;
   code: string;
   name: string;
+  site_id: string;
+  location_type: LocationType;
+  parent_location_id: string | null;
+  sequence: number | null;
   // Stock in a blocked location exists and stays on the books, but is excluded
   // from available quantity so no module can promise it. Quarantine is the case
   // this was built for.
@@ -136,7 +142,9 @@ export type StockMoveType =
   | "production_consumption"
   | "transfer_out"
   | "transfer_in"
-  | "admin_correction";
+  | "admin_correction"
+  | "shipment"
+  | "reservation_expired";
 
 export interface StockMove {
   id: string;

@@ -2,7 +2,7 @@
   "name": "crm",
   "version": "0.4.0",
   "depends": ["core"],
-  "optional_depends": ["sales"],
+  "optional_depends": ["sales", "warehouse"],
   "provides_api": ["LeadService", "OpportunityService", "ActivityService", "ContactService", "CrmDashboardService"],
   "publishes_events": ["crm.lead.qualified", "crm.lead.converted", "crm.opportunity.won", "crm.opportunity.lost"],
   "subscribes_events": [],

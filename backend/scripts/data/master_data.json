@@ -376,40 +376,72 @@
    "min_order_qty": null
   }
  ],
+ "warehouse.sites": [
+  {
+   "code": "main",
+   "name": "Site principal",
+   "address": null,
+   "is_active": true
+  }
+ ],
  "warehouse.locations": [
   {
    "code": "Other MP",
    "name": "Other MP",
+   "site_id": "main",
+   "location_type": "bin",
+   "parent_location_id": null,
+   "sequence": null,
    "is_blocked": false,
    "blocked_reason": null
   },
   {
    "code": "QUARANTINE",
    "name": "Quarantaine",
+   "site_id": "main",
+   "location_type": "bin",
+   "parent_location_id": null,
+   "sequence": null,
    "is_blocked": true,
    "blocked_reason": "Awaiting QC disposition"
   },
   {
    "code": "produits-finis",
    "name": "Entrepôt Produits Finis",
+   "site_id": "main",
+   "location_type": "bin",
+   "parent_location_id": null,
+   "sequence": null,
    "is_blocked": false,
    "blocked_reason": null
   },
   {
    "code": "raw-materials",
    "name": "Matières premières",
+   "site_id": "main",
+   "location_type": "bin",
+   "parent_location_id": null,
+   "sequence": null,
    "is_blocked": false,
    "blocked_reason": null
   },
   {
    "code": "spare-parts",
    "name": "Pièces de rechange",
+   "site_id": "main",
+   "location_type": "bin",
+   "parent_location_id": null,
+   "sequence": null,
    "is_blocked": false,
    "blocked_reason": null
   },
   {
    "code": "stock-ligne",
    "name": "Stock ligne",
+   "site_id": "main",
+   "location_type": "bin",
+   "parent_location_id": null,
+   "sequence": null,
    "is_blocked": false,
    "blocked_reason": null
   }

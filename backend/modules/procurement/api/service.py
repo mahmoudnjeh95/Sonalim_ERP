@@ -689,6 +689,9 @@ class PurchaseOrderService:
 
         receipt_lines = self.list_receipt_lines(tenant_id=tenant_id, purchase_order_receipt_id=receipt_id)
         event_lines: list[dict] = []
+        # Landed cost per line, in the receipt's currency and the line's unit --
+        # kept beside event_lines rather than in them, so the event payload is unchanged.
+        line_costs: list[float] = []
         for receipt_line in receipt_lines:
             line_row = self._connection.execute(
                 f"SELECT {_LINE_COLUMNS} FROM procurement.purchase_order_lines WHERE id = %s AND tenant_id = %s FOR UPDATE",
@@ -725,6 +728,7 @@ class PurchaseOrderService:
                     "lot_number": receipt_line.lot_number,
                 }
             )
+            line_costs.append(receipt_line.cost_per_unit)
 
         all_line_statuses = [line.status for line in self.list_lines(tenant_id=tenant_id, purchase_order_id=order.id)]
         order_result = receive_against_order(order, all_line_statuses)
@@ -766,7 +770,13 @@ class PurchaseOrderService:
         stock_service = StockService(self._connection)
         lot_service = LotService(self._connection)
         core_service = CoreService(self._connection)
-        for event_line in event_lines:
+        # FIFO valuation is in XOF. Unlike the cost reports (which fall back to an
+        # unconverted figure), a missing rate here means "unknown cost" -- warehouse
+        # then values the layer at the catalog price instead of at a wrong number.
+        exchange_rate = core_service.get_exchange_rate(
+            tenant_id=tenant_id, currency_code=receipt.currency_code, as_of_date=datetime.date.today()
+        )
+        for event_line, line_cost in zip(event_lines, line_costs):
             # The receipt line was placed against `event_line["uom_id"]` (the PO
             # line's own unit), which may legitimately differ from the product's
             # stocked unit (ordered in tons, tracked in kg) -- convert via
@@ -783,6 +793,12 @@ class PurchaseOrderService:
                     f"l'unité de la ligne {line_uom.code} ne correspond pas à l'unité du produit {product_uom.code}",
                 )
             converted_quantity = event_line["quantity"] * float(line_uom.ratio_to_base) / float(product_uom.ratio_to_base)
+            # Same total cost spread over the product-unit quantity.
+            unit_cost_base = (
+                line_cost * float(exchange_rate.rate_to_base) * float(product_uom.ratio_to_base) / float(line_uom.ratio_to_base)
+                if exchange_rate is not None and line_cost > 0
+                else None
+            )
 
             stock_result = stock_service.receive_stock(
                 tenant_id=tenant_id,
@@ -792,6 +808,7 @@ class PurchaseOrderService:
                 correlation_id=correlation_id,
                 reference=f"purchase_order_receipt:{receipt_id}",
                 actor_id=actor_id,
+                unit_cost=unit_cost_base,
             )
             if isinstance(stock_result, Err):
                 return stock_result

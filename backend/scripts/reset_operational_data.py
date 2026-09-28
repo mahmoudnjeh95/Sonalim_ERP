@@ -7,8 +7,8 @@ KEPT      users, roles and permissions, products (and their classification / tag
           configuration table.
 WIPED     work orders (OF) and regrind orders (OFR), the legacy Daily/Conditionnement
           reports and the per-shift reports with everything under them, QC reports and
-          non-conformities, stock moves and lots, purchasing, sales, CRM, finance, HR,
-          the audit log, the event outbox and the AI assistant history.
+          non-conformities, stock moves and lots, cycle counts, purchasing, sales, CRM,
+          finance, HR, the audit log, the event outbox and the AI assistant history.
 ZEROED    every stock quantity in warehouse.stock_items (the rows stay, so each
           product/location keeps its place -- only on-hand / reserved / in-production
           go to 0) and the OF-/OFR-/NC- numbering counters.
@@ -109,6 +109,15 @@ PURGE_TABLES = [
     "warehouse.stock_moves",
     "warehouse.lot_stock",
     "warehouse.lots",
+    "warehouse.cycle_count_lines",
+    "warehouse.cycle_counts",
+    "warehouse.shipments",
+    "warehouse.pick_list_lines",
+    "warehouse.pick_lists",
+    "warehouse.stock_reservations",
+    "warehouse.cost_layer_consumptions",
+    "warehouse.cost_layers",
+    "warehouse.replenishment_proposals",
 ]
 
 # Tables that are edited in place rather than emptied (see purge()).
@@ -161,6 +170,10 @@ KEPT_TABLES = [
     "production.waste_type_builtin_settings",
     "production.work_centers",
     "warehouse.locations",
+    "warehouse.sites",
+    "warehouse.putaway_rules",
+    "warehouse.product_barcodes",
+    "warehouse.reorder_rules",
 ]
 
 # Numbering counters restarted so the first real OF is OF-1, not OF-58.
