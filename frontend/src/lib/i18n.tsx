@@ -2853,6 +2853,8 @@ const en = {
 
   "warehouse.stock.allLocations": "All locations",
   "warehouse.stock.newLocation": "New location",
+  "warehouse.stock.export.action": "Export (.xlsx)",
+  "warehouse.stock.export.error": "The stock export could not be generated.",
   "warehouse.stock.dialog.newLocation.title": "New location",
   "warehouse.stock.dialog.newLocation.description": "Adds a new stock pool, e.g. for a separate storage area.",
   "warehouse.stock.field.code": "Code",
@@ -7349,6 +7351,8 @@ const fr: Record<TranslationKey, string> = {
 
   "warehouse.stock.allLocations": "Tous les emplacements",
   "warehouse.stock.newLocation": "Nouvel emplacement",
+  "warehouse.stock.export.action": "Exporter (.xlsx)",
+  "warehouse.stock.export.error": "L'export du stock n'a pas pu être généré.",
   "warehouse.stock.dialog.newLocation.title": "Nouvel emplacement",
   "warehouse.stock.dialog.newLocation.description": "Ajoute une nouvelle zone de stockage, par ex. pour une aire de stockage distincte.",
   "warehouse.stock.field.code": "Code",

@@ -7,6 +7,7 @@ import {
   ArrowLeftRight,
   Boxes,
   Coins,
+  Download,
   MoreHorizontal,
   Package,
   PackageCheck,
@@ -69,6 +70,7 @@ import {
   adminSetStock,
   createLocation,
   deleteStockItem,
+  exportStock,
   listConfirmedReceiptLineDetails,
   listLocations,
   listStock,
@@ -294,6 +296,23 @@ export function StockTab() {
     formState: { errors },
   } = useForm<ReserveForm>({ resolver: zodResolver(reserveSchema) });
   const reserveProductId = watch("product_id");
+
+  // A file download, not a cached read: a mutation gives it a pending state and
+  // fetches fresh figures every click.
+  const exportMutation = useMutation({
+    mutationFn: () => exportStock(token),
+    onSuccess: (blob) => {
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `stock-${new Date().toISOString().slice(0, 10)}.xlsx`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    },
+    onError: () => toast.error(t("warehouse.stock.export.error")),
+  });
 
   const reserveMutation = useMutation({
     mutationFn: (input: ReserveForm) => reserveStock(token, input),
@@ -774,6 +793,10 @@ export function StockTab() {
           </Button>
         )}
         <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
+        <Button variant="ghost" size="sm" onClick={() => exportMutation.mutate()} disabled={exportMutation.isPending}>
+          <Download className="h-3.5 w-3.5" />
+          {t("warehouse.stock.export.action")}
+        </Button>
         <Dialog
           open={locationDialogOpen}
           onOpenChange={(open) => {
