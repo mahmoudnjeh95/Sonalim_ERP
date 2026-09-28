@@ -196,7 +196,7 @@ class PurchaseOrderService:
                     line["uom_id"],
                     line["quantity_ordered"],
                     line.get("unit_price", 0),
-                    line.get("unit_price_currency", "EUR"),
+                    line.get("unit_price_currency", "XOF"),
                 ),
             )
         record_audit(
@@ -378,7 +378,7 @@ class PurchaseOrderService:
         uom_id: str,
         quantity_ordered: float,
         unit_price: float = 0,
-        unit_price_currency: str = "EUR",
+        unit_price_currency: str = "XOF",
     ) -> Result[PurchaseOrderLine]:
         order = self._get_order(tenant_id, purchase_order_id, for_update=True)
         if order is None:
