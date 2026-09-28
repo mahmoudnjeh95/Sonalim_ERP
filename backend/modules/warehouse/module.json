@@ -1,6 +1,6 @@
 {
   "name": "warehouse",
-  "version": "0.14.0",
+  "version": "0.15.0",
   "depends": ["core"],
   "optional_depends": ["sales"],
   "provides_api": [
@@ -13,7 +13,8 @@
     "PutAwayService",
     "FulfillmentService",
     "BarcodeService",
-    "ReservationService"
+    "ReservationService",
+    "ValuationService"
   ],
   "publishes_events": [
     "warehouse.stock.reserved",
@@ -48,6 +49,7 @@
     "warehouse.admin_shipments",
     "warehouse.manage_barcodes",
     "warehouse.admin_barcodes",
-    "warehouse.admin_reservations"
+    "warehouse.admin_reservations",
+    "warehouse.view_valuation"
   ]
 }

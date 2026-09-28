@@ -20,6 +20,7 @@ from modules.warehouse.domain.entities import (
     reserve,
     send_to_production,
 )
+from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.domain.reservation import validate_reservation_expiry
 
 
@@ -28,6 +29,8 @@ class StockService:
 
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
+        # FIFO cost layers move in the same transaction as the stock they value.
+        self._valuation = ValuationService(connection)
 
     def _validate_quantity(self, *, tenant_id: str, product_id: str, quantity: float) -> Result[None]:
         """Every quantity that lands in warehouse.stock_items must respect its
@@ -369,6 +372,9 @@ class StockService:
                 of_id,
             ),
         )
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=delta, reference=reference, move_type=move_type
+        )
         publish_event(
             self._connection,
             event_type="warehouse.stock.received" if direction == "in" else "warehouse.stock.issued",
@@ -589,7 +595,11 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
         move_type: str = "receipt",
+        unit_cost: float | None = None,
     ) -> Result[StockLevel]:
+        """`unit_cost` (XOF per product unit) is the FIFO layer's cost; only a
+        purchase receipt knows its real landed cost, everything else falls
+        back to the catalog purchase price."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
@@ -630,6 +640,10 @@ class StockService:
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id),
+        )
+        self._valuation.record_inflow(
+            tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type=move_type,
+            unit_cost=unit_cost,
         )
         publish_event(
             self._connection,
@@ -677,6 +691,9 @@ class StockService:
         result = issue(current, quantity)
         if isinstance(result, Err):
             return result
+        self._valuation.record_outflow(
+            tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type=move_type
+        )
 
         self._connection.execute(
             """
@@ -806,6 +823,9 @@ class StockService:
             """,
             (str(ULID()), tenant_id, location_id, product_id, quantity, reference, actor_id),
         )
+        self._valuation.record_outflow(
+            tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type="production_consumption"
+        )
         return result
 
     def adjust_stock(
@@ -860,6 +880,9 @@ class StockService:
             VALUES (%s, %s, %s, %s, %s, 'adjustment', %s, %s, %s)
             """,
             (str(ULID()), tenant_id, location_id, product_id, delta, reference, actor_id, reason),
+        )
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=delta, reference=reference, move_type="adjustment"
         )
         return result
 
@@ -1062,6 +1085,10 @@ class StockService:
                 ),
             ),
         )
+        owned_delta = (quantity_on_hand + quantity_in_production) - (before.quantity_on_hand + before.quantity_in_production)
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=owned_delta, reference="admin_set_stock", move_type="admin_correction"
+        )
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -1127,5 +1154,9 @@ class StockService:
         self._connection.execute(
             "DELETE FROM warehouse.stock_items WHERE tenant_id = %s AND product_id = %s AND location_id = %s",
             (tenant_id, product_id, location_id),
+        )
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=-(quantity_on_hand + quantity_in_production),
+            reference="delete_stock_item", move_type="admin_correction",
         )
         return Ok(None)

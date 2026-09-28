@@ -115,6 +115,8 @@ PURGE_TABLES = [
     "warehouse.pick_list_lines",
     "warehouse.pick_lists",
     "warehouse.stock_reservations",
+    "warehouse.cost_layer_consumptions",
+    "warehouse.cost_layers",
 ]
 
 # Tables that are edited in place rather than emptied (see purge()).

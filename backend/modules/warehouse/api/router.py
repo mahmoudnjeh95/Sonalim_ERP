@@ -19,6 +19,7 @@ from modules.warehouse.api.putaway_service import PutAwayService
 from modules.warehouse.api.reservation_service import ReservationService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
+from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.domain.barcode import ProductBarcode
 from modules.warehouse.domain.cycle_count import CycleCount, CycleCountLine
 from modules.warehouse.domain.entities import Location, Site
@@ -26,6 +27,7 @@ from modules.warehouse.domain.fulfillment import PickList, PickListLine, Shipmen
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
 from modules.warehouse.domain.putaway import PutawayRule
 from modules.warehouse.domain.reservation import StockReservation
+from modules.warehouse.domain.valuation import CostLayer
 
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
 
@@ -1383,3 +1385,57 @@ def update_reservation(
             raise HTTPException(_reservation_err_status(result.code), err_detail(result))
         connection.commit()
     return _reservation_response(result.value)
+
+
+# --- FIFO valuation -------------------------------------------------------------------------
+
+
+def _layer_response(layer: CostLayer) -> dict:
+    return {
+        "id": layer.id,
+        "product_id": layer.product_id,
+        "reference": layer.reference,
+        "move_type": layer.move_type,
+        "quantity_in": layer.quantity_in,
+        "quantity_remaining": layer.quantity_remaining,
+        "unit_cost": layer.unit_cost,
+        "received_at": layer.received_at,
+    }
+
+
+@router.get("/valuation")
+def get_valuation(tenant: TenantContext = Depends(require_permission("warehouse.view_valuation"))) -> list[dict]:
+    with get_connection() as connection:
+        valuations = ValuationService(connection).get_valuation(tenant_id=tenant.tenant_id)
+    return [
+        {
+            "product_id": valuation.product_id,
+            "quantity": valuation.quantity,
+            "value": valuation.value,
+            "unvalued_quantity": valuation.unvalued_quantity,
+            "average_unit_cost": valuation.average_unit_cost,
+            "currency": "XOF",
+        }
+        for valuation in valuations
+    ]
+
+
+@router.get("/valuation/cost-of")
+def get_cost_of_reference(
+    reference: str, tenant: TenantContext = Depends(require_permission("warehouse.view_valuation"))
+) -> dict:
+    with get_connection() as connection:
+        return ValuationService(connection).cost_of_reference(tenant_id=tenant.tenant_id, reference=reference)
+
+
+@router.get("/valuation/{product_id}/layers")
+def list_cost_layers(
+    product_id: str,
+    include_closed: bool = False,
+    tenant: TenantContext = Depends(require_permission("warehouse.view_valuation")),
+) -> list[dict]:
+    with get_connection() as connection:
+        layers = ValuationService(connection).list_layers(
+            tenant_id=tenant.tenant_id, product_id=product_id, open_only=not include_closed
+        )
+    return [_layer_response(layer) for layer in layers]
