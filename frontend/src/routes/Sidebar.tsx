@@ -137,6 +137,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/hr/employees", labelKey: "nav.hrEmployees", icon: Users, permission: "hr.view_employees" },
       { to: "/hr/organisation", labelKey: "nav.hrOrganisation", icon: Building2 },
       { to: "/hr", labelKey: "nav.hrLegacy", icon: BriefcaseBusiness, exact: true },
+      { to: "/hr/schedules", labelKey: "nav.hrSchedules", icon: CalendarClock, permission: "hr.view_presence" },
     ],
   },
   {

@@ -29,6 +29,7 @@ import { HrPage } from "../features/hr/HrPage";
 import { EmployeesPage } from "../features/hr/EmployeesPage";
 import { EmployeeFilePage } from "../features/hr/employee/EmployeeFilePage";
 import { OrganisationPage } from "../features/hr/organisation/OrganisationPage";
+import { SchedulesPage } from "../features/hr/schedules/SchedulesPage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
 import { ProductsPage } from "../features/products/ProductsPage";
 import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
@@ -93,6 +94,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/hr/employees/:employeeId", element: <EmployeeFilePage /> },
   { path: "/hr/organisation", element: <OrganisationPage /> },
   { path: "/hr", element: <HrPage /> },
+  { path: "/hr/schedules", element: <SchedulesPage /> },
 ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
 
 export const router = createBrowserRouter([
