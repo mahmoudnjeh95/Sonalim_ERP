@@ -14,24 +14,31 @@ import datetime
 import random
 from dataclasses import dataclass
 from decimal import Decimal
+from pathlib import Path
 
 from ulid import ULID
 
 from core.auth import hash_password
-from core.domain.result import Err
+from core.domain.result import Err, Ok
 from core.permissions_registry import ensure_default_roles
+from modules.hr.api.clock_import_service import ClockImportService, ClockProfileService
 from modules.hr.api.contract_service import ContractService
 from modules.hr.api.dependant_service import DependantService
 from modules.hr.api.document_service import DocumentService
 from modules.hr.api.employee_service import EmployeeService
+from modules.hr.api.leave_service import LeaveBalanceService, LeaveRequestService, LeaveTypeService
 from modules.hr.api.organisation_service import DepartmentService, GradeService, PositionService
 from modules.hr.api.payment_method_service import PaymentMethodService
+from modules.hr.api.presence_month_service import PresenceMonthService
+from modules.hr.api.presence_service import PresenceService, employed_between
+from modules.hr.api.schedule_service import HolidayService, PresenceSettingsService, ScheduleService
 from modules.hr.api.settings_service import HrSettingsService
 from modules.hr.domain.contract import ContractComponent, ContractTerms
 from modules.hr.domain.dependant import Dependant
 from modules.hr.domain.document import EmployeeDocument
 from modules.hr.domain.employee import EmployeeFile
 from modules.hr.domain.payment import PaymentMethod
+from modules.hr.domain.presence import ManualEntry
 from scripts.seed_common import TENANT, actor_id, run
 
 TODAY = datetime.date.today()
@@ -41,6 +48,11 @@ RAISE_FROM = datetime.date(2026, 1, 1)
 LAST_MONTH_END = TODAY.replace(day=1) - datetime.timedelta(days=1)
 SELF_SERVICE_EMAIL = "employe.demo@sonalim-erp.local"
 SELF_SERVICE_EMPLOYEE = "HRP-006"
+
+# --- Phase 2: schedules, a month of presence, a clock import, leave (Task 14) -----------------
+SCRIPT_DIR = Path(__file__).resolve().parent
+PRESENCE_PERIOD = datetime.date(2026, 8, 1)
+CLOCK_SAMPLE_PATH = SCRIPT_DIR / "data" / "hr_clock_sample_2026-08.csv"
 
 DEPARTMENTS = [
     ("PROD", "Production"),
@@ -416,6 +428,179 @@ def _print_to_confirm() -> None:
     print("=============================================================================")
 
 
+def _seed_presence_and_leave(conn, actor: str) -> None:
+    """A month of presence (August 2026), a clock-import sample and leave data for the
+    demo tenant. Rerun-safe: skips outright if the month is already seeded. Draft settings,
+    the Mali public holiday and the leave accrual rate are DEMO values, printed under a
+    TO CONFIRM banner by `_print_to_confirm`."""
+    already_seeded = conn.execute(
+        "SELECT 1 FROM hr.presence_months WHERE tenant_id = %s AND period = %s", (TENANT, PRESENCE_PERIOD)
+    ).fetchone()
+    if already_seeded:
+        print("Phase 2 presence/leave already seeded for 2026-08; skipping (rerun-safe).")
+        return
+
+    schedules = ScheduleService(conn)
+    holidays = HolidayService(conn)
+    settings = PresenceSettingsService(conn)
+    presence = PresenceService(conn)
+    months = PresenceMonthService(conn)
+    leave_types = LeaveTypeService(conn)
+    leave_requests = LeaveRequestService(conn)
+    leave_balances = LeaveBalanceService(conn)
+
+    # Draft settings: HR confirms the real night-work window and clock tolerances.
+    settings.update(
+        tenant_id=TENANT, actor_id=actor, night_start_minute=21 * 60, night_end_minute=5 * 60,
+        punch_attach_minutes=240, punch_dedupe_seconds=60, late_grace_minutes=5,
+    )
+    day_shift = [{"weekday": w, "start_minute": 7 * 60, "end_minute": 15 * 60, "break_minutes": 0} for w in range(6)]
+    evening_shift = [{"weekday": w, "start_minute": 15 * 60, "end_minute": 23 * 60, "break_minutes": 0} for w in range(6)]
+    night_shift = [{"weekday": w, "start_minute": 23 * 60, "end_minute": 7 * 60, "break_minutes": 0} for w in range(6)]
+    day_result = schedules.create_schedule(tenant_id=TENANT, actor_id=actor, code="JOUR", name="Jour 07-15", is_night=False, days=day_shift)
+    evening_result = schedules.create_schedule(tenant_id=TENANT, actor_id=actor, code="SOIR", name="Soir 15-23", is_night=False, days=evening_shift)
+    night_result = schedules.create_schedule(tenant_id=TENANT, actor_id=actor, code="NUIT", name="Nuit 23-07", is_night=True, days=night_shift)
+
+    def schedule_id(result, code: str) -> str:
+        if isinstance(result, Ok):
+            return result.value["id"]
+        existing = next(s for s in schedules.list_schedules(tenant_id=TENANT) if s["code"] == code)
+        return existing["id"]
+
+    day_id = schedule_id(day_result, "JOUR")
+    evening_id = schedule_id(evening_result, "SOIR")
+    night_id = schedule_id(night_result, "NUIT")
+
+    # Mali public holidays, draft: the accountant confirms the exact dates each year.
+    for holiday_date, name in [(datetime.date(2026, 8, 22), "Fête de l'Indépendance")]:
+        holidays.create_holiday(tenant_id=TENANT, actor_id=actor, country_code="ML", holiday_date=holiday_date, name=name, paid=True, confirmed=False)
+
+    # Assign every tenant employee employed at some point in August to a schedule (month close
+    # scans the whole tenant, so anyone left unassigned - including employees of other dev/test
+    # runs on this shared demo tenant, not just this script's own HRP-* cohort - would show up
+    # as a "no_schedule" gap and block the close below). Filtered by hire/termination dates
+    # (`employed_between`), not by today's `status` field: a leaver terminated on 2026-08-31 or
+    # in September was still employed throughout August even though `status` now reads
+    # "terminated". The seed's own HRP-001/002/003 (deterministic by employee_no, not by this
+    # list's name ordering) carry the three shifts and the clock sample's badges; HRP-004/005
+    # get the leave requests; everyone else stays on JOUR. A pre-existing schedule assignment
+    # left by earlier manual/integration testing on this shared tenant can make the open-ended
+    # (Jan 2026 to open) assignment overlap and get refused (ASSIGNMENT_OVERLAP); retrying it
+    # bounded to just August is enough for this seed and doesn't touch that other assignment.
+    _period_first, _period_last = datetime.date(2026, 8, 1), datetime.date(2026, 8, 31)
+    all_employees = employed_between(conn, tenant_id=TENANT, date_from=_period_first, date_to=_period_last)
+    seeded_employees = sorted((e for e in all_employees if e["employee_no"].startswith("HRP-")), key=lambda e: e["employee_no"])
+    clock_employees = seeded_employees[:3]
+    clock_ids = {employee["id"] for employee in clock_employees}
+
+    def _assign(employee_id: str, target_schedule_id: str) -> None:
+        result = schedules.create_assignment(tenant_id=TENANT, actor_id=actor, employee_id=employee_id, valid_from=datetime.date(2026, 1, 1), schedule_id=target_schedule_id)
+        if isinstance(result, Err):
+            bounded = schedules.create_assignment(
+                tenant_id=TENANT, actor_id=actor, employee_id=employee_id, valid_from=_period_first, valid_to=_period_last, schedule_id=target_schedule_id
+            )
+            if isinstance(bounded, Err):
+                print(f"WARNING: could not assign a schedule to employee {employee_id}: {result}")
+
+    for employee in all_employees:
+        if employee["id"] in clock_ids:
+            continue
+        _assign(employee["id"], day_id)
+    for index, employee in enumerate(clock_employees):
+        target = [day_id, evening_id, night_id][index]
+        _assign(employee["id"], target)
+        conn.execute("UPDATE hr.employees SET badge_no = %s WHERE id = %s", (f"B-{index + 1:04d}", employee["id"]))
+
+    # Leave: one draft paid annual-leave type (Mali statutory rate to be confirmed), an
+    # opening balance, and one approved + one pending request so both screens show data. This
+    # runs BEFORE the bulk "present" fill below: `LeaveRequestService.approve` refuses a day
+    # already marked worked (LEAVE_OVERLAPS_WORK), so HRP-004's Aug 17-18 leave must be written
+    # first; the bulk fill then skips it via `day["record"] is None`, exactly like the clock
+    # employees' remaining-days fill already does.
+    annual = leave_types.create_type(
+        tenant_id=TENANT, actor_id=actor, code="ANNUEL", name_en="Annual leave", name_fr="Congé annuel",
+        paid=True, accrual_days_per_month=Decimal("2.5"), max_carry_over=None, counts_days="working",
+        requires_document=False, presence_status="leave", confirmed=False,
+    )
+    annual_id = annual.value["id"] if isinstance(annual, Ok) else next(t["id"] for t in leave_types.list_types(tenant_id=TENANT) if t["code"] == "ANNUEL")
+    if len(seeded_employees) > 3:
+        leave_balances.adjust(
+            tenant_id=TENANT, actor_id=actor, employee_id=seeded_employees[3]["id"], leave_type_id=annual_id,
+            year=2026, delta=Decimal("5"), reason="solde d'ouverture (démo)",
+        )
+        approved = leave_requests.create_request(
+            tenant_id=TENANT, actor_id=actor, employee_id=seeded_employees[3]["id"], leave_type_id=annual_id,
+            start_date=datetime.date(2026, 8, 17), end_date=datetime.date(2026, 8, 18), half_day=False, reason="Congé démo",
+        )
+        if isinstance(approved, Ok):
+            decided = leave_requests.approve(tenant_id=TENANT, actor_id=actor, request_id=approved.value["id"])
+            if isinstance(decided, Err):
+                print(f"WARNING: approving the demo leave request failed: {decided}")
+    if len(seeded_employees) > 4:
+        leave_requests.create_request(
+            tenant_id=TENANT, actor_id=actor, employee_id=seeded_employees[4]["id"], leave_type_id=annual_id,
+            start_date=datetime.date(2026, 9, 7), end_date=datetime.date(2026, 9, 8), half_day=False, reason="Demande démo en attente",
+        )
+
+    # A full month of "present" on every working day for everyone but the first three
+    # (whose days come from the clock import below). `day["employed"]` is required here: some
+    # of the 60 demo employees are hired mid-August or leave on its last day, and their
+    # pre-hire/post-termination days still resolve a schedule (default_status "present") even
+    # though they are not employed yet/anymore - `save_days` validates its whole batch
+    # atomically, so a single NOT_EMPLOYED day would otherwise silently discard every entry.
+    # `day["record"] is None` skips HRP-004's Aug 17-18 leave days written just above.
+    entries = []
+    for employee in all_employees:
+        if employee["id"] in clock_ids:
+            continue
+        month = presence.employee_month(tenant_id=TENANT, employee_id=employee["id"], period=PRESENCE_PERIOD)
+        if isinstance(month, Ok):
+            entries += [
+                ManualEntry(employee_id=employee["id"], work_date=datetime.date.fromisoformat(day["work_date"]), status="present")
+                for day in month.value["days"]
+                if day["default_status"] == "present" and day["employed"] and day["record"] is None
+            ]
+    if entries:
+        saved = presence.save_days(tenant_id=TENANT, actor_id=actor, entries=entries)
+        if isinstance(saved, Err):
+            print(f"WARNING: bulk presence save failed: {saved}")
+
+    # The clock sample: stage and commit it for the three badge-carrying employees.
+    profile = ClockProfileService(conn).create_profile(
+        tenant_id=TENANT, actor_id=actor, code="ZK-DEMO", name="Pointeuse démo", delimiter=";", has_header=True,
+        badge_column="Badge", timestamp_column="DateHeure", timestamp_format="%d/%m/%Y %H:%M",
+        direction_column="Etat", in_values=["Entrée"], out_values=["Sortie"],
+    )
+    clock_content = CLOCK_SAMPLE_PATH.read_text(encoding="utf-8")
+    imports = ClockImportService(conn)
+    staged = imports.stage(
+        tenant_id=TENANT, actor_id=actor, profile_id=profile.value["id"], file_name="hr_clock_sample_2026-08.csv",
+        content=clock_content, date_from=datetime.date(2026, 8, 3), date_to=datetime.date(2026, 8, 4),
+    )
+    if isinstance(staged, Ok):
+        committed = imports.commit(tenant_id=TENANT, actor_id=actor, import_id=staged.value["id"])
+        print(f"Clock sample committed: {committed.value if isinstance(committed, Ok) else committed}")
+
+    # The three clock employees' remaining August days (the ones the clock did not cover).
+    remaining_entries = []
+    for employee in seeded_employees[:3]:
+        month = presence.employee_month(tenant_id=TENANT, employee_id=employee["id"], period=PRESENCE_PERIOD)
+        if isinstance(month, Ok):
+            remaining_entries += [
+                ManualEntry(employee_id=employee["id"], work_date=datetime.date.fromisoformat(day["work_date"]), status="present")
+                for day in month.value["days"]
+                if day["default_status"] == "present" and day["employed"] and day["record"] is None
+            ]
+    if remaining_entries:
+        saved = presence.save_days(tenant_id=TENANT, actor_id=actor, entries=remaining_entries)
+        if isinstance(saved, Err):
+            print(f"WARNING: remaining presence save failed: {saved}")
+
+    closed = months.close(tenant_id=TENANT, actor_id=actor, period=PRESENCE_PERIOD)
+    print(f"August 2026 presence close: {closed.value if isinstance(closed, Ok) else closed}")
+    print("Presence settings, holidays and leave accrual rate are DRAFT seed values - confirm with HR/payroll before go-live.")
+
+
 def seed(conn, _args) -> int:
     actor = actor_id(conn)
     ensure_default_roles(conn, TENANT)  # the administrateur role picks up the new hr.* codes
@@ -434,6 +619,7 @@ def seed(conn, _args) -> int:
         created += 1
     print(f"hr seed: {created} employee(s) created, {skipped} already there; {len(DEPARTMENTS)} departments, {len(POSITIONS)} positions, {len(GRADES)} grades")
     print(f"self-service login: {SELF_SERVICE_EMAIL} / demo1234 -> {SELF_SERVICE_EMPLOYEE}")
+    _seed_presence_and_leave(conn, actor)
     _print_to_confirm()
     return 0
 
