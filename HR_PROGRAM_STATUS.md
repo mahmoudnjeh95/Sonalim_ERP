@@ -12,10 +12,10 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **STOPPED AT: phase 2, Task 8 — built and committed (`2952aba`), review not finished.**
+> **IN PROGRESS: phase 2, Task 9 — built and committed (`d47de69`), review in flight.**
 >
-> Next action: review Task 8's diff (`review-252dbd5..2952aba.diff` in the phase 2 SDD
-> workspace), then run Tasks 9–14.
+> Next action: when Task 9's review lands, resolve any findings, then run Tasks 10–14
+> (frontend).
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -31,13 +31,13 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 8 | 7 | **In progress** — Task 8 awaits review |
+| 2 — Presence & leave | 14 | 9 | 8 | **In progress** — Task 9 review in flight |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **23** | **22** | |
+| **Total** | **89** | **24** | **23** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -76,7 +76,7 @@ route can bypass the lifecycle rules; legacy free-text contract types lose their
 ## Phase 2 — Presence & leave (14 tasks) — in progress
 
 Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules/hr` suite was
-163 tests before this phase and is **287 passed, 0 skipped** now.
+163 tests before this phase and is **295 passed, 0 skipped** now.
 
 | # | Task | Commit | State |
 |---|---|---|---|
@@ -87,8 +87,8 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 5 | Clock CSV parsing with device profiles (pure domain) | `a95089d` | ✅ |
 | 6 | Clock imports — profiles, staging, review, commit into presence days | `f388ba9` | ✅ |
 | 7 | Leave domain — counted days, monthly accrual, balances with carry-over | `252dbd5` | ✅ |
-| 8 | Leave types, requests with approval, balances — tables, services, routes | `2952aba` | 🔨 **review unfinished** |
-| 9 | Month close and reopen, the payroll summary, the closed event and the payroll-lock consumers | — | ⬜ |
+| 8 | Leave types, requests with approval, balances — tables, services, routes | `2952aba` | ✅ (2 minors deferred) |
+| 9 | Month close and reopen, the payroll summary, the closed event and the payroll-lock consumers | `d47de69` | 🔨 **review in flight** |
 | 10 | Frontend foundation + `/hr/schedules` (schedules, rotations, assignments, holidays, settings) | — | ⬜ |
 | 11 | `/hr/presence` — day grid, week grid, employee month, month close | — | ⬜ |
 | 12 | `/hr/presence/imports` — device profiles, upload, staging review, commit | — | ⬜ |
@@ -98,9 +98,13 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 After Task 14: a whole-branch review, one round of fixes, then the client chooses how to
 integrate (merge locally, a PR, or keep the branch).
 
-**Deferred minor from Task 2**, to fix in the final round: in `schedule_service.py` the child-row
-DELETEs at lines 573 and 682 omit `tenant_id`. Not reachable across tenants, since the parent is
-resolved under the tenant first, but worth adding for defence in depth.
+**Deferred minors**, to fix in the final round:
+- Task 2: `schedule_service.py`'s child-row DELETEs (lines 573, 682) omit `tenant_id`. Not
+  reachable across tenants (the parent is resolved under the tenant first), but worth adding
+  for defence in depth.
+- Task 8: `leave_service.py:663` (`update_request`, approved-leave edit) recomputes the leave
+  plan twice — once in `update_request`, again inside `_apply`. No correctness impact; the
+  shape is plan-mandated, not an implementer choice.
 
 ## Phase 3a — Payroll engine (11 tasks) — planned
 
