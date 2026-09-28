@@ -12,11 +12,17 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **ALL 14 TASKS OF PHASE 2 ARE BUILT AND REVIEWED CLEAN.** The whole-branch review is now
-> running (`ad3bbcd`, base `d77c1a2`), on the most capable model.
+> **SESSION PAUSED 2026-09-28 at the user's request, with the whole-branch review still
+> running in the background.** All 14 tasks of phase 2 are built and reviewed clean; the
+> whole-branch review (`ad3bbcd`, base `d77c1a2`, 15 commits, on Opus) had not yet reported
+> when the session stopped.
 >
-> Next action: when the whole-branch review lands, one fix round if needed, then the client
-> chooses how to integrate (merge locally, a PR, or keep the branch).
+> Next action on resume: check for the reviewer's report first (it arrives as a background-agent
+> notification to the session that dispatched it — see the phase 2 SDD ledger's last entry,
+> `.superpowers/sdd/2026-09-25-hr-p2-presence-leave/progress.md`, for the exact resume note). If
+> clean, delete that plan's workspace and move to finishing the branch (merge/PR/keep is the
+> user's choice, never done without asking). If it has findings, one fix dispatch with the full
+> list, one scoped re-review, then hand any residual findings to the user.
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -96,9 +102,10 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 13 | `/hr/leave` — leave types, requests with approval, balances | `0d20b9b` | ✅ (1 minor deferred) |
 | 14 | Extend the dev seed with a month of presence, a clock sample and leave | `ad3bbcd` | ✅ (2 minors, non-issues) |
 
-All 14 tasks are built and reviewed clean. **Whole-branch review in flight** (base `d77c1a2`,
-head `ad3bbcd`, 15 commits). One round of fixes if it finds anything, then the client chooses
-how to integrate (merge locally, a PR, or keep the branch).
+All 14 tasks are built and reviewed clean. **Whole-branch review was in flight when the session
+paused** (base `d77c1a2`, head `ad3bbcd`, 15 commits, on Opus) — its verdict had not yet arrived.
+One round of fixes if it finds anything, then the client chooses how to integrate (merge
+locally, a PR, or keep the branch). Nothing of phase 2 is merged or pushed.
 
 **Deferred minors**, to fix in the final round:
 - Task 2: `schedule_service.py`'s child-row DELETEs (lines 573, 682) omit `tenant_id`. Not
