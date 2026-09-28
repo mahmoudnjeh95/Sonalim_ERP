@@ -21,19 +21,18 @@ ledger, those win — they move first.
 > quality_report_is_retired_too`, was already broken before `d77c1a2` — a stale test against a
 > column the QC-on-shift-reports migration dropped in September, unrelated to this work).
 >
-> **PUSHED and DEPLOYING.** `a58c298` pushed to `origin` (SmartToolsAgro/Erpsonalim, deploys) and
-> `personal` (mahmoudnjeh95/Sonalim_ERP) on 2026-09-28.
+> **Phases 1–2 PUSHED and DEPLOYING** (`a58c298`/`cfe5665`, 2026-09-28). **Phase 3a (payroll
+> engine) is now IN PROGRESS**, Task 1 of 11 building, in worktree
+> `.worktrees/hr-p3a-payroll-engine`.
 >
-> **Action required now, before the deploy is usable:**
+> **Action still required on the server, before the phase 1+2 deploy is usable:**
 > 1. Run phase 2's pending migrations on the server (0010–0014, `hr` module only — the warehouse
 >    migrations were already there): SQL is in `backend/pending-deploy-migrations.sql`, or
 >    regenerate on the server with `docker compose exec -T app python -m scripts.migration_sql`.
 > 2. Grant the new `hr.*` permission codes on production (`ensure_default_roles` for the
 >    production tenant, or the admin UI) — give `hr.view_sensitive` deliberately.
 > 3. Recommend a dev-DB reset + reseed before any HR walkthrough on non-production environments
->    (pre-existing test fixtures, not from this branch — see below).
->
-> Next: start phase 3a (payroll engine, 11 tasks) whenever the client is ready.
+>    (pre-existing test fixtures, not from earlier branches — see phase 2's section below).
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -50,7 +49,7 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
 | 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
-| 3a — Payroll engine | 11 | 0 | 0 | Planned |
+| 3a — Payroll engine | 11 | 0 | 0 | **In progress** — Task 1 building |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
@@ -212,15 +211,16 @@ the reviewer. The implementer added its own fix (`hr.leaveRequests.status.*`) ra
 stopping a second time; ruled deferred rather than reworked (see the Task 13 deferred minor
 above) since it's cosmetic.
 
-## Phase 3a — Payroll engine (11 tasks) — planned
+## Phase 3a — Payroll engine (11 tasks) — in progress
 
 New `payroll` module: configurable, effective-dated Mali rule tables and a pure calculation
 engine. Statutory values are seeded as **drafts**; a run cannot be approved until an accountant
-confirms them.
+confirms them. Backend-only — no `/payroll/*` screens until phase 3c. Worktree
+`.worktrees/hr-p3a-payroll-engine`, off `huge_production_migration` at `cfe5665`.
 
 | # | Task | State |
 |---|---|---|
-| 1 | Module skeleton, rule tables, permissions, wiring | ⬜ |
+| 1 | Module skeleton, rule tables, permissions, wiring | 🔨 building |
 | 2 | Money rounding, engine value objects, rule set, synthetic test rules | ⬜ |
 | 3 | Rule row validation and the confirmation gate | ⬜ |
 | 4 | Engine step 1 — earnings up to the gross | ⬜ |
