@@ -63,3 +63,21 @@ def test_clock_routes_and_their_permissions():
     }
     routes = _routes()
     assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_leave_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/leave-types"): "hr.view_leave",
+        ("POST", "/hr/leave-types"): "hr.manage_leave",
+        ("PATCH", "/hr/leave-types/{leave_type_id}"): "hr.admin_leave",
+        ("GET", "/hr/leave/requests"): "hr.view_leave",
+        ("POST", "/hr/leave/requests"): "hr.manage_leave",
+        ("PATCH", "/hr/leave/requests/{request_id}"): "hr.admin_leave",
+        ("POST", "/hr/leave/requests/{request_id}/approve"): "hr.manage_leave",
+        ("POST", "/hr/leave/requests/{request_id}/reject"): "hr.manage_leave",
+        ("POST", "/hr/leave/requests/{request_id}/cancel"): "hr.manage_leave",
+        ("GET", "/hr/leave/balances"): "hr.view_leave",
+        ("POST", "/hr/leave/balances/adjust"): "hr.admin_leave",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected

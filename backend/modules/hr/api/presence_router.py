@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 from typing import Callable, NoReturn
 
 import psycopg
@@ -12,6 +13,7 @@ from core.db import get_connection
 from core.domain.result import Err, Result, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.hr.api.clock_import_service import ClockImportService, ClockProfileService
+from modules.hr.api.leave_service import LeaveBalanceService, LeaveRequestService, LeaveTypeService
 from modules.hr.api.presence_service import PresenceService
 from modules.hr.api.schedule_service import HolidayService, PresenceSettingsService, ScheduleService
 from modules.hr.domain.presence import ManualEntry
@@ -356,3 +358,122 @@ def commit_clock_import(import_id: str, tenant: TenantContext = Depends(require_
 @router.post("/clock-imports/{import_id}/discard")
 def discard_clock_import(import_id: str, tenant: TenantContext = Depends(require_permission("hr.import_clock"))):
     return _write(lambda c: ClockImportService(c).discard(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, import_id=import_id))
+
+
+# ---- leave ---------------------------------------------------------------------------
+
+class LeaveTypeBody(BaseModel):
+    code: str
+    name_en: str
+    name_fr: str
+    paid: bool
+    accrual_days_per_month: Decimal
+    max_carry_over: Decimal | None = None
+    counts_days: str
+    requires_document: bool = False
+    presence_status: str
+    confirmed: bool = False
+
+
+class LeaveTypeUpdateBody(BaseModel):
+    name_en: str | None = None
+    name_fr: str | None = None
+    paid: bool | None = None
+    accrual_days_per_month: Decimal | None = None
+    max_carry_over: Decimal | None = None
+    clear_max_carry_over: bool = False
+    counts_days: str | None = None
+    requires_document: bool | None = None
+    presence_status: str | None = None
+    confirmed: bool | None = None
+    active: bool | None = None
+
+
+class LeaveRequestBody(BaseModel):
+    employee_id: str
+    leave_type_id: str
+    start_date: datetime.date
+    end_date: datetime.date
+    half_day: bool = False
+    reason: str | None = None
+    document_ref: str | None = None
+
+
+class LeaveRequestUpdateBody(BaseModel):
+    leave_type_id: str | None = None
+    start_date: datetime.date | None = None
+    end_date: datetime.date | None = None
+    half_day: bool | None = None
+    reason: str | None = None
+    document_ref: str | None = None
+
+
+class LeaveDecisionBody(BaseModel):
+    note: str | None = None
+
+
+class LeaveAdjustBody(BaseModel):
+    employee_id: str
+    leave_type_id: str
+    year: int
+    delta: Decimal
+    reason: str
+
+
+@router.get("/leave-types")
+def list_leave_types(tenant: TenantContext = Depends(require_permission("hr.view_leave"))):
+    return _read(lambda c: LeaveTypeService(c).list_types(tenant_id=tenant.tenant_id))
+
+
+@router.post("/leave-types", status_code=status.HTTP_201_CREATED)
+def create_leave_type(body: LeaveTypeBody, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
+    return _write(lambda c: LeaveTypeService(c).create_type(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+@router.patch("/leave-types/{leave_type_id}")
+def update_leave_type(leave_type_id: str, body: LeaveTypeUpdateBody, tenant: TenantContext = Depends(require_permission("hr.admin_leave"))):
+    return _write(lambda c: LeaveTypeService(c).update_type(
+        tenant_id=tenant.tenant_id, actor_id=tenant.user_id, leave_type_id=leave_type_id, **body.model_dump()
+    ))
+
+
+@router.get("/leave/requests")
+def list_leave_requests(status_filter: str | None = None, employee_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_leave"))):
+    return _read(lambda c: LeaveRequestService(c).list_requests(tenant_id=tenant.tenant_id, status=status_filter, employee_id=employee_id))
+
+
+@router.post("/leave/requests", status_code=status.HTTP_201_CREATED)
+def create_leave_request(body: LeaveRequestBody, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
+    return _write(lambda c: LeaveRequestService(c).create_request(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+@router.patch("/leave/requests/{request_id}")
+def update_leave_request(request_id: str, body: LeaveRequestUpdateBody, tenant: TenantContext = Depends(require_permission("hr.admin_leave"))):
+    return _write(lambda c: LeaveRequestService(c).update_request(
+        tenant_id=tenant.tenant_id, actor_id=tenant.user_id, request_id=request_id, **body.model_dump()
+    ))
+
+
+@router.post("/leave/requests/{request_id}/approve")
+def approve_leave_request(request_id: str, body: LeaveDecisionBody | None = None, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
+    return _write(lambda c: LeaveRequestService(c).approve(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, request_id=request_id, note=body.note if body else None))
+
+
+@router.post("/leave/requests/{request_id}/reject")
+def reject_leave_request(request_id: str, body: LeaveDecisionBody | None = None, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
+    return _write(lambda c: LeaveRequestService(c).reject(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, request_id=request_id, note=body.note if body else None))
+
+
+@router.post("/leave/requests/{request_id}/cancel")
+def cancel_leave_request(request_id: str, body: LeaveDecisionBody | None = None, tenant: TenantContext = Depends(require_permission("hr.manage_leave"))):
+    return _write(lambda c: LeaveRequestService(c).cancel(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, request_id=request_id, note=body.note if body else None))
+
+
+@router.get("/leave/balances")
+def list_leave_balances(year: int, employee_id: str | None = None, tenant: TenantContext = Depends(require_permission("hr.view_leave"))):
+    return _read(lambda c: LeaveBalanceService(c).balances(tenant_id=tenant.tenant_id, year=year, employee_id=employee_id))
+
+
+@router.post("/leave/balances/adjust")
+def adjust_leave_balance(body: LeaveAdjustBody, tenant: TenantContext = Depends(require_permission("hr.admin_leave"))):
+    return _write(lambda c: LeaveBalanceService(c).adjust(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
