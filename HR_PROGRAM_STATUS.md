@@ -21,9 +21,19 @@ ledger, those win — they move first.
 > quality_report_is_retired_too`, was already broken before `d77c1a2` — a stale test against a
 > column the QC-on-shift-reports migration dropped in September, unrelated to this work).
 >
-> **Not yet pushed.** Recommend a dev-DB reset + reseed before any HR walkthrough (pre-existing
-> test fixtures, not from this branch — see below). Next: start phase 3a (payroll engine, 11
-> tasks) once the client confirms the push.
+> **PUSHED and DEPLOYING.** `a58c298` pushed to `origin` (SmartToolsAgro/Erpsonalim, deploys) and
+> `personal` (mahmoudnjeh95/Sonalim_ERP) on 2026-09-28.
+>
+> **Action required now, before the deploy is usable:**
+> 1. Run phase 2's pending migrations on the server (0010–0014, `hr` module only — the warehouse
+>    migrations were already there): SQL is in `backend/pending-deploy-migrations.sql`, or
+>    regenerate on the server with `docker compose exec -T app python -m scripts.migration_sql`.
+> 2. Grant the new `hr.*` permission codes on production (`ensure_default_roles` for the
+>    production tenant, or the admin UI) — give `hr.view_sensitive` deliberately.
+> 3. Recommend a dev-DB reset + reseed before any HR walkthrough on non-production environments
+>    (pre-existing test fixtures, not from this branch — see below).
+>
+> Next: start phase 3a (payroll engine, 11 tasks) whenever the client is ready.
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -39,7 +49,7 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 14 | 14 | **Merged locally** (`81b6364`) — not yet pushed |
+| 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
@@ -81,7 +91,7 @@ without it nobody can create a contract.
 the status `active`; a future exit date marks someone "Left" straight away; the admin PATCH
 route can bypass the lifecycle rules; legacy free-text contract types lose their label.
 
-## Phase 2 — Presence & leave (14 tasks) — merged locally, not yet pushed
+## Phase 2 — Presence & leave (14 tasks) — shipped
 
 Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules/hr` suite was
 163 tests before this phase and is **299 passed, 0 skipped** now (after the whole-branch
@@ -163,8 +173,9 @@ its own behavioural tests (not just the classification check).
 The stray commit `02372b2` (see Task 7 history) is folded into the merge, content-identical to
 `252dbd5` — no action needed, it's just part of the history now.
 
-**Not yet pushed** — a push to `huge_production_migration` deploys to the live server. The phase's
-SDD workspace was deleted before the merge; this file plus `git log` on
+**Pushed** to `origin` and `personal` as `a58c298` on 2026-09-28 — this deploys to the live
+server (migrations still need running by hand there; see "Action required now" above). The
+phase's SDD workspace was deleted before the merge; this file plus `git log` on
 `huge_production_migration` is now the record.
 
 **Deferred minors**, to fix in the final round:
