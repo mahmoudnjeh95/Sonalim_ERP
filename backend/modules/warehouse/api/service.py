@@ -20,6 +20,7 @@ from modules.warehouse.domain.entities import (
     reserve,
     send_to_production,
 )
+from modules.warehouse.domain.reservation import validate_reservation_expiry
 
 
 class StockService:
@@ -113,10 +114,15 @@ class StockService:
         correlation_id: str,
         reference: str,
         actor_id: str | None = None,
+        expires_at: datetime.datetime | None = None,
     ) -> Result[StockLevel]:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        if expires_at is not None:
+            expiry = validate_reservation_expiry(expires_at=expires_at, now=datetime.datetime.now(datetime.timezone.utc))
+            if isinstance(expiry, Err):
+                return expiry
 
         row = self._connection.execute(
             """
@@ -155,6 +161,14 @@ class StockService:
             """,
             (str(ULID()), tenant_id, location_id, product_id, quantity, reference, actor_id),
         )
+        self._connection.execute(
+            """
+            INSERT INTO warehouse.stock_reservations
+                (id, tenant_id, product_id, location_id, reference, quantity, quantity_open, expires_at, created_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (str(ULID()), tenant_id, product_id, location_id, reference, quantity, quantity, expires_at, actor_id),
+        )
         publish_event(
             self._connection,
             event_type="warehouse.stock.reserved",
@@ -175,6 +189,60 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
     ) -> Result[StockLevel]:
+        """Gives `quantity` held under `reference` back to available stock, and
+        closes that much of the reference's ledger rows, oldest first. A
+        reservation made before the ledger existed has no row to close; the
+        counter is released regardless, so it still works."""
+        result = self.release_reserved_quantity(
+            tenant_id=tenant_id, product_id=product_id, location_id=location_id, quantity=quantity,
+            reference=reference, actor_id=actor_id,
+        )
+        if isinstance(result, Err):
+            return result
+
+        remaining = quantity
+        open_rows = self._connection.execute(
+            """
+            SELECT id, quantity_open FROM warehouse.stock_reservations
+            WHERE tenant_id = %s AND product_id = %s AND location_id = %s AND reference = %s AND status = 'active'
+            ORDER BY created_at, id
+            FOR UPDATE
+            """,
+            (tenant_id, product_id, location_id, reference),
+        ).fetchall()
+        for reservation_id, quantity_open in open_rows:
+            if remaining <= 0:
+                break
+            taken = min(float(quantity_open), remaining)
+            remaining -= taken
+            left = float(quantity_open) - taken
+            self._connection.execute(
+                """
+                UPDATE warehouse.stock_reservations
+                SET quantity_open = %s,
+                    status = CASE WHEN %s <= 0 THEN 'released' ELSE status END,
+                    closed_at = CASE WHEN %s <= 0 THEN NOW() ELSE closed_at END
+                WHERE id = %s
+                """,
+                (left, left, left, reservation_id),
+            )
+        return result
+
+    def release_reserved_quantity(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        location_id: str,
+        quantity: float,
+        reference: str,
+        actor_id: str | None = None,
+        move_type: str = "reservation_released",
+    ) -> Result[StockLevel]:
+        """The counter half of a release only: stock_items.quantity_reserved and
+        the move row, no ledger. ReservationService uses it to release one
+        specific ledger row (an expiry, a manual release) and closes that row
+        itself; everything else should call release_stock_reservation."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
@@ -212,9 +280,9 @@ class StockService:
         self._connection.execute(
             """
             INSERT INTO warehouse.stock_moves (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id)
-            VALUES (%s, %s, %s, %s, %s, 'reservation_released', %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (str(ULID()), tenant_id, location_id, product_id, quantity, reference, actor_id),
+            (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id),
         )
         return result
 

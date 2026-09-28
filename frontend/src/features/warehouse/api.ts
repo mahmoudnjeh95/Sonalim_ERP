@@ -142,7 +142,9 @@ export type StockMoveType =
   | "production_consumption"
   | "transfer_out"
   | "transfer_in"
-  | "admin_correction";
+  | "admin_correction"
+  | "shipment"
+  | "reservation_expired";
 
 export interface StockMove {
   id: string;

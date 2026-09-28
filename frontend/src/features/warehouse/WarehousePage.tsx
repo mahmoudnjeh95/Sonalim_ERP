@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChart3, Boxes, History as HistoryIcon, LayoutDashboard, ListTree, Package } from "lucide-react";
+import { BarChart3, Boxes, History as HistoryIcon, LayoutDashboard, ListTree, Lock, Package } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n } from "../../lib/i18n";
@@ -20,6 +20,7 @@ import { LocationsTab } from "./locations/LocationsTab";
 import { CycleCountsTab } from "./cycleCounts/CycleCountsTab";
 import { PutAwayTab } from "./putaway/PutAwayTab";
 import { FulfillmentTab } from "./fulfillment/FulfillmentTab";
+import { ReservationsTab } from "./reservations/ReservationsTab";
 
 const TABS = [
   { value: "overview", labelKey: "warehouse.tabs.overview", icon: LayoutDashboard, Component: WarehouseOverviewTab },
@@ -27,6 +28,7 @@ const TABS = [
   { value: "locations", labelKey: "warehouse.tabs.locations", icon: LocationTreeIcon, Component: LocationsTab },
   { value: "putaway", labelKey: "warehouse.tabs.putaway", icon: PutawayIcon, Component: PutAwayTab },
   { value: "fulfillment", labelKey: "warehouse.tabs.fulfillment", icon: ShipmentIcon, Component: FulfillmentTab },
+  { value: "reservations", labelKey: "warehouse.tabs.reservations", icon: Lock, Component: ReservationsTab },
   { value: "cycle-counts", labelKey: "warehouse.tabs.cycleCounts", icon: CountSheetIcon, Component: CycleCountsTab },
   { value: "analysis", labelKey: "warehouse.tabs.analysis", icon: BarChart3, Component: AnalysisTab },
   { value: "finished-goods-analysis", labelKey: "warehouse.tabs.finishedGoodsAnalysis", icon: Package, Component: FinishedGoodsAnalysisTab },

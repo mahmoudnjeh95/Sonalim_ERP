@@ -12,8 +12,9 @@ from dataclasses import dataclass
 # Movements that take stock *out of the plant's usable inventory*. A transfer
 # between two shelves and a reservation are not consumption -- the goods are
 # still here -- so they are deliberately excluded when measuring how fast a
-# product is used up.
-CONSUMPTION_MOVE_TYPES = frozenset({"issue", "production_consumption", "send_to_production"})
+# product is used up. A customer shipment is: it is exactly how finished goods
+# get used up.
+CONSUMPTION_MOVE_TYPES = frozenset({"issue", "production_consumption", "send_to_production", "shipment"})
 
 # Movements that bring stock in from outside the plant or out of production.
 INBOUND_MOVE_TYPES = frozenset({"receipt", "production"})
@@ -54,7 +55,7 @@ def signed_quantity(move_type: str, quantity: float) -> float:
         return -abs(quantity)
     if move_type in INBOUND_MOVE_TYPES or move_type == "transfer_in":
         return abs(quantity)
-    # reservation / reservation_released never touch on-hand.
+    # reservation / reservation_released / reservation_expired never touch on-hand.
     return 0.0
 
 

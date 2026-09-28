@@ -16,6 +16,7 @@ from modules.warehouse.api.fulfillment_service import FulfillmentService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.putaway_service import PutAwayService
+from modules.warehouse.api.reservation_service import ReservationService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
 from modules.warehouse.domain.barcode import ProductBarcode
@@ -24,6 +25,7 @@ from modules.warehouse.domain.entities import Location, Site
 from modules.warehouse.domain.fulfillment import PickList, PickListLine, Shipment
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
 from modules.warehouse.domain.putaway import PutawayRule
+from modules.warehouse.domain.reservation import StockReservation
 
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
 
@@ -34,6 +36,8 @@ class ReserveStockRequest(BaseModel):
     quantity: float
     reference: str
     correlation_id: str
+    # Optional hold expiry (timezone-aware); the worker releases it once lapsed.
+    expires_at: datetime.datetime | None = None
 
 
 class IssueStockRequest(BaseModel):
@@ -373,10 +377,12 @@ def reserve_stock(
             correlation_id=body.correlation_id,
             reference=body.reference,
             actor_id=tenant.user_id,
+            expires_at=body.expires_at,
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_409_CONFLICT, err_detail(result))
+            code = status.HTTP_400_BAD_REQUEST if result.code == "INVALID_EXPIRY" else status.HTTP_409_CONFLICT
+            raise HTTPException(code, err_detail(result))
         connection.commit()
     return {
         "location_id": result.value.location_id,
@@ -1298,3 +1304,82 @@ def delete_product_barcode(
             connection.rollback()
             raise HTTPException(_barcode_err_status(result.code), err_detail(result))
         connection.commit()
+
+
+# --- Reservations (ledger, TTL) -------------------------------------------------------------
+
+
+class UpdateReservationRequest(BaseModel):
+    expires_at: datetime.datetime | None = None
+    # Explicit, because "expires_at omitted" already means "leave unchanged".
+    clear_expiry: bool = False
+
+
+def _reservation_response(reservation: StockReservation) -> dict:
+    return {
+        "id": reservation.id,
+        "product_id": reservation.product_id,
+        "location_id": reservation.location_id,
+        "reference": reservation.reference,
+        "quantity": reservation.quantity,
+        "quantity_open": reservation.quantity_open,
+        "status": reservation.status,
+        "expires_at": reservation.expires_at,
+        "created_by": reservation.created_by,
+        "created_at": reservation.created_at,
+        "closed_at": reservation.closed_at,
+    }
+
+
+def _reservation_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    if code in ("INVALID_STATE", "INSUFFICIENT_STOCK"):
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+@router.get("/reservations")
+def list_reservations(
+    status_filter: str | None = Query(default=None, alias="status"),
+    tenant: TenantContext = Depends(require_permission("warehouse.view_moves")),
+) -> list[dict]:
+    with get_connection() as connection:
+        reservations = ReservationService(connection).list_reservations(tenant_id=tenant.tenant_id, status=status_filter)
+    return [_reservation_response(reservation) for reservation in reservations]
+
+
+@router.post("/reservations/{reservation_id}/release")
+def release_reservation(
+    reservation_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_stock"))
+) -> dict:
+    with get_connection() as connection:
+        result = ReservationService(connection).release_reservation(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, reservation_id=reservation_id
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_reservation_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _reservation_response(result.value)
+
+
+@router.patch("/reservations/{reservation_id}")
+def update_reservation(
+    reservation_id: str,
+    body: UpdateReservationRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.admin_reservations")),
+) -> dict:
+    with get_connection() as connection:
+        result = ReservationService(connection).update_reservation(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            reservation_id=reservation_id,
+            expires_at=body.expires_at,
+            clear_expiry=body.clear_expiry,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_reservation_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _reservation_response(result.value)
