@@ -12,11 +12,13 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **IN PROGRESS: phase 2, Task 14 (the LAST task) — extending the dev seed with a month of
-> presence, a clock sample and leave.**
+> **IN PROGRESS: phase 2, Task 14 (the LAST task) — built and committed (`ad3bbcd`), review in
+> flight.** Its implementer found and fixed three real logic bugs in the seed template (not just
+> renames) against this shared dev DB's actual, staggered data; flagged for the reviewer to
+> verify independently, along with unrelated pre-existing dev-DB fixture pollution.
 >
-> Next action: review Task 14 once committed, then the whole-branch review + one fix round, then
-> the client chooses how to integrate.
+> Next action: when Task 14's review lands, the whole-branch review + one fix round, then the
+> client chooses how to integrate.
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -32,13 +34,13 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 13 | 13 | **In progress** — Task 14 building (last task) |
+| 2 — Presence & leave | 14 | 14 | 13 | **In progress** — Task 14 review in flight (last task) |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **27** | **26** | |
+| **Total** | **89** | **28** | **27** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -94,7 +96,7 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 11 | `/hr/presence` — day grid, week grid, employee month, month close | `e1023be` | ✅ (2 minors, non-issues) |
 | 12 | `/hr/presence/imports` — device profiles, upload, staging review, commit | `311f6a9` | ✅ (2 minors, non-issues) |
 | 13 | `/hr/leave` — leave types, requests with approval, balances | `0d20b9b` | ✅ (1 minor deferred) |
-| 14 | Extend the dev seed with a month of presence, a clock sample and leave | — | 🔨 building |
+| 14 | Extend the dev seed with a month of presence, a clock sample and leave | `ad3bbcd` | 🔨 **review in flight** |
 
 After Task 14: a whole-branch review, one round of fixes, then the client chooses how to
 integrate (merge locally, a PR, or keep the branch).
