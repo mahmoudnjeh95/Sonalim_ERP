@@ -12,10 +12,11 @@ ledger, those win — they move first.
 
 ## Where we stopped
 
-> **IN PROGRESS: phase 2, Task 13 — building `/hr/leave` (last screen; only the seed, Task 14,
-> follows).**
+> **IN PROGRESS: phase 2, Task 13 — built and committed (`0d20b9b`), review in flight (a second
+> i18n collision was found and ruled on; the reviewer is also scrutinizing an unapproved fix the
+> implementer made on its own).**
 >
-> Next action: review Task 13 once committed, then run Task 14.
+> Next action: when Task 13's review lands, resolve any findings, then run Task 14 (last task).
 
 Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
 `huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
@@ -31,7 +32,7 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 | Phase | Tasks | Built | Reviewed | State |
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
-| 2 — Presence & leave | 14 | 12 | 12 | **In progress** — Task 13 building |
+| 2 — Presence & leave | 14 | 13 | 12 | **In progress** — Task 13 review in flight |
 | 3a — Payroll engine | 11 | 0 | 0 | Planned |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
@@ -92,7 +93,7 @@ Worktree `.worktrees/hr-p2-presence-leave`. Migrations 0010–0014. The `modules
 | 10 | Frontend foundation + `/hr/schedules` (schedules, rotations, assignments, holidays, settings) | `7f14a84` | ✅ (2 minors, non-issues) |
 | 11 | `/hr/presence` — day grid, week grid, employee month, month close | `e1023be` | ✅ (2 minors, non-issues) |
 | 12 | `/hr/presence/imports` — device profiles, upload, staging review, commit | `311f6a9` | ✅ (2 minors, non-issues) |
-| 13 | `/hr/leave` — leave types, requests with approval, balances | — | 🔨 building |
+| 13 | `/hr/leave` — leave types, requests with approval, balances | `0d20b9b` | 🔨 **review in flight** |
 | 14 | Extend the dev seed with a month of presence, a clock sample and leave | — | ⬜ |
 
 After Task 14: a whole-branch review, one round of fixes, then the client chooses how to
