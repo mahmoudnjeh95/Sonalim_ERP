@@ -6,7 +6,7 @@ import datetime
 from ulid import ULID
 
 from core.domain.result import Err, Ok
-from modules.hr.api.presence_testkit import AUG_3, DAY_SHIFT, TENANT, add_employee, presence_env  # noqa: F401
+from modules.hr.api.presence_testkit import AUG_1, AUG_3, DAY_SHIFT, TENANT, add_employee, close_month_directly, presence_env  # noqa: F401
 from modules.hr.api.schedule_service import HolidayService, PresenceSettingsService, ScheduleService
 
 EVENING_SHIFT = [{"weekday": w, "start_minute": 900, "end_minute": 1380, "break_minutes": 0} for w in range(6)]
@@ -93,6 +93,32 @@ def test_public_holidays_are_listed_by_year_unique_per_date_and_confirmable(db, 
     assert holidays.list_holidays(tenant_id=TENANT, year=2025) == []
     september = holidays.holiday_map(tenant_id=TENANT, date_from=datetime.date(2026, 9, 1), date_to=datetime.date(2026, 9, 30))
     assert september == {datetime.date(2026, 9, 22): True}
+
+
+def test_a_holiday_cannot_be_created_or_moved_into_a_closed_month(db, presence_env):
+    """month_summary is payroll's contract and must be final once a month is closed (CATALOG.md);
+    adding or moving a holiday into a closed month would silently change its figures at read time."""
+    holidays = HolidayService(db)
+    # An August holiday created before the month closes must still be movable in principle, but never
+    # into or out of a now-closed month: create it first, close August, then try to move it around.
+    existing = holidays.create_holiday(tenant_id=TENANT, actor_id=presence_env.actor, country_code="ML", holiday_date=AUG_3, name="Jour férié existant")
+    assert isinstance(existing, Ok)
+    open_holiday = holidays.create_holiday(tenant_id=TENANT, actor_id=presence_env.actor, country_code="ML", holiday_date=datetime.date(2026, 9, 22), name="Jour férié de septembre")
+    assert isinstance(open_holiday, Ok)
+
+    close_month_directly(db, AUG_1)
+
+    refused_create = holidays.create_holiday(tenant_id=TENANT, actor_id=presence_env.actor, country_code="ML", holiday_date=datetime.date(2026, 8, 10), name="Jour férié refusé")
+    assert isinstance(refused_create, Err) and refused_create.code == "PRESENCE_MONTH_CLOSED" and refused_create.message_fr
+
+    moved_into_closed = holidays.update_holiday(tenant_id=TENANT, actor_id=presence_env.actor, holiday_id=open_holiday.value["id"], holiday_date=AUG_3)
+    assert isinstance(moved_into_closed, Err) and moved_into_closed.code == "PRESENCE_MONTH_CLOSED" and moved_into_closed.message_fr
+
+    moved_out_of_closed = holidays.update_holiday(tenant_id=TENANT, actor_id=presence_env.actor, holiday_id=existing.value["id"], holiday_date=datetime.date(2026, 9, 23))
+    assert isinstance(moved_out_of_closed, Err) and moved_out_of_closed.code == "PRESENCE_MONTH_CLOSED" and moved_out_of_closed.message_fr
+
+    renamed_in_place = holidays.update_holiday(tenant_id=TENANT, actor_id=presence_env.actor, holiday_id=open_holiday.value["id"], name="Toujours en septembre")
+    assert isinstance(renamed_in_place, Ok) and renamed_in_place.value["name"] == "Toujours en septembre"
 
 
 def test_presence_settings_start_empty_and_a_change_clears_the_confirmation(db):

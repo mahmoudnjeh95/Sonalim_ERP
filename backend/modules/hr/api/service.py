@@ -34,8 +34,9 @@ class LeaveService:
 
     def review_request(self, *, tenant_id: str, actor_id: str, request_id: str, status: str) -> Result[dict]:
         if status not in {"approved", "rejected", "cancelled"}: return Err("INVALID_STATUS", "invalid leave decision", "décision de congé invalide")
-        row = self.connection.execute("SELECT employee_id, leave_type, start_date, end_date, reason, status FROM hr.leave_requests WHERE id=%s AND tenant_id=%s FOR UPDATE", (request_id,tenant_id)).fetchone()
+        row = self.connection.execute("SELECT employee_id, leave_type, start_date, end_date, reason, status, leave_type_id FROM hr.leave_requests WHERE id=%s AND tenant_id=%s FOR UPDATE", (request_id,tenant_id)).fetchone()
         if row is None: return Err("NOT_FOUND", "leave request not found", "demande de congé introuvable")
+        if row[6] is not None: return Err("LEAVE_TYPED_REQUEST", "this request was made on the new leave screen; decide it there", "cette demande a été faite sur le nouvel écran de congés ; décidez-la depuis là")
         if row[5] != "pending": return Err("INVALID_TRANSITION", "only pending leave can be reviewed", "seul un congé en attente peut être passé en revue")
         self.connection.execute("UPDATE hr.leave_requests SET status=%s, reviewed_by=%s WHERE id=%s AND tenant_id=%s", (status,actor_id,request_id,tenant_id))
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="leave_request.status_changed", entity_type="leave_request", entity_id=request_id, payload={"from_status":"pending","to_status":status})

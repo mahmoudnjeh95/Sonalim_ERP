@@ -129,7 +129,7 @@ class ScheduleService:
             ),
         )
         if days is not None:
-            self.connection.execute("DELETE FROM hr.work_schedule_days WHERE schedule_id = %s", (schedule_id,))
+            self.connection.execute("DELETE FROM hr.work_schedule_days WHERE schedule_id = %s AND tenant_id = %s", (schedule_id, tenant_id))
             self._write_days(tenant_id, schedule_id, schedule_days)
         changes = {k: v for k, v in {"code": code, "name": name, "is_night": is_night, "active": active, "days": days}.items() if v is not None}
         record_audit(
@@ -238,7 +238,7 @@ class ScheduleService:
             (new_code, new_name, new_anchor, active if active is not None else current["active"], rotation_id, tenant_id),
         )
         if schedule_ids is not None:
-            self.connection.execute("DELETE FROM hr.rotation_pattern_steps WHERE pattern_id = %s", (rotation_id,))
+            self.connection.execute("DELETE FROM hr.rotation_pattern_steps WHERE pattern_id = %s AND tenant_id = %s", (rotation_id, tenant_id))
             self._write_steps(tenant_id, rotation_id, schedule_ids)
         changes = {
             k: v
@@ -482,10 +482,15 @@ class HolidayService:
         paid: bool = True,
         confirmed: bool = False,
     ) -> Result[dict]:
+        from modules.hr.api.presence_service import closed_periods, month_closed_error
+
         country = country_code.strip().upper()
         validation = validate_holiday(country_code=country, name=name)
         if isinstance(validation, Err):
             return validation
+        closed = closed_periods(self.connection, tenant_id, [holiday_date])
+        if closed:
+            return month_closed_error(closed)
         if self._taken(tenant_id, country, holiday_date):
             return Err(
                 "DUPLICATE_HOLIDAY",
@@ -515,10 +520,16 @@ class HolidayService:
         paid: bool | None = None,
         confirmed: bool | None = None,
     ) -> Result[dict]:
+        from modules.hr.api.presence_service import closed_periods, month_closed_error
+
         current = self._holiday(tenant_id, holiday_id)
         if current is None:
             return HOLIDAY_NOT_FOUND
         new_date = holiday_date or datetime.date.fromisoformat(current["holiday_date"])
+        current_date = datetime.date.fromisoformat(current["holiday_date"])
+        closed = closed_periods(self.connection, tenant_id, {current_date, new_date})
+        if closed:
+            return month_closed_error(closed)
         new_name = name.strip() if name is not None else current["name"]
         validation = validate_holiday(country_code=current["country_code"], name=new_name)
         if isinstance(validation, Err):

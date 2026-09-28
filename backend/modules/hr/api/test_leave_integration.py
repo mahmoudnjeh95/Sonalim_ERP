@@ -15,6 +15,7 @@ from modules.hr.api.presence_testkit import (  # noqa: F401
     AUG_1, AUG_3, TENANT, add_employee, close_month_directly, insert_presence_row, presence_env, presence_row,
 )
 from modules.hr.api.schedule_service import HolidayService
+from modules.hr.api.service import LeaveService
 
 AUG_4 = datetime.date(2026, 8, 4)
 AUG_5 = datetime.date(2026, 8, 5)
@@ -108,6 +109,21 @@ def test_overlapping_requests_are_refused(db, presence_env, leave):
     assert isinstance(overlap, Err) and overlap.code == "LEAVE_OVERLAP" and overlap.message_fr
 
 
+def test_legacy_review_refuses_a_typed_request_instead_of_corrupting_its_balance(db, presence_env, leave):
+    """A request created on the new /hr/leave screen (has a leave_type_id) must not be decided through
+    the legacy /hr/leave-requests/{id}/review route: that route takes nothing from the balance, but a
+    later cancel on the new screen would still reverse a debit that was never made, inflating `available`."""
+    _give(db, presence_env, leave.annual, "5")
+    request = _request(db, presence_env, leave.annual, AUG_3, AUG_4).value
+    refused = LeaveService(db).review_request(
+        tenant_id=TENANT, actor_id=presence_env.actor, request_id=request["id"], status="approved",
+    )
+    assert isinstance(refused, Err) and refused.code == "LEAVE_TYPED_REQUEST" and refused.message_fr
+    unchanged = next(r for r in LeaveRequestService(db).list_requests(tenant_id=TENANT) if r["id"] == request["id"])
+    assert unchanged["status"] == "pending"
+    assert _balance(db, presence_env, leave.annual)["available"] == Decimal("5")
+
+
 def test_cancelling_approved_leave_gives_the_days_back_and_clears_the_leave_days(db, presence_env, leave):
     _give(db, presence_env, leave.annual, "5")
     request = _request(db, presence_env, leave.annual, AUG_3, AUG_4).value
@@ -180,3 +196,25 @@ def test_an_old_request_without_a_type_is_listed_and_must_get_one_before_approva
     assert (listed["leave_type_id"], listed["legacy_leave_type"], listed["days"]) == (None, "annual", None)
     refused = _approve(db, presence_env, old_id)
     assert isinstance(refused, Err) and refused.code == "INVALID_LEAVE"
+
+
+def test_flipping_paid_is_refused_once_the_type_has_leave_days_in_a_closed_month(db, presence_env, leave):
+    """month_summary reads the leave type's `paid` flag live (CATALOG.md promises the summary is
+    final once a month is closed), so flipping `paid` after the month closes must be refused when
+    the type already has leave days recorded in that closed month."""
+    _give(db, presence_env, leave.annual, "5")
+    request = _request(db, presence_env, leave.annual, AUG_3, AUG_4).value
+    assert isinstance(_approve(db, presence_env, request["id"]), Ok)
+    close_month_directly(db, AUG_1)
+    types = LeaveTypeService(db)
+    refused = types.update_type(tenant_id=TENANT, actor_id=presence_env.actor, leave_type_id=leave.annual, paid=False)
+    assert isinstance(refused, Err) and refused.code == "PRESENCE_MONTH_CLOSED" and refused.message_fr
+    unaffected = types.update_type(tenant_id=TENANT, actor_id=presence_env.actor, leave_type_id=leave.annual, name_en="Annual leave (renamed)")
+    assert isinstance(unaffected, Ok) and unaffected.value["name_en"] == "Annual leave (renamed)"
+
+
+def test_flipping_paid_still_succeeds_when_the_type_has_no_leave_days_in_a_closed_month(db, presence_env, leave):
+    close_month_directly(db, AUG_1)
+    types = LeaveTypeService(db)
+    allowed = types.update_type(tenant_id=TENANT, actor_id=presence_env.actor, leave_type_id=leave.unpaid, paid=True)
+    assert isinstance(allowed, Ok) and allowed.value["paid"] is True

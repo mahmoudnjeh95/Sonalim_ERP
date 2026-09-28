@@ -166,6 +166,19 @@ class LeaveTypeService:
         current = self.get_type(tenant_id=tenant_id, leave_type_id=leave_type_id)
         if current is None:
             return TYPE_NOT_FOUND
+        if paid is not None and paid != current["paid"]:
+            closed = self.connection.execute(
+                """
+                SELECT DISTINCT date_trunc('month', p.work_date)::date FROM hr.presence_days p
+                JOIN hr.leave_requests r ON r.id = p.leave_request_id
+                JOIN hr.presence_months m ON m.tenant_id = p.tenant_id AND m.period = date_trunc('month', p.work_date)::date
+                WHERE p.tenant_id = %s AND r.leave_type_id = %s AND m.status = 'closed'
+                ORDER BY 1
+                """,
+                (tenant_id, leave_type_id),
+            ).fetchall()
+            if closed:
+                return month_closed_error([row[0] for row in closed])
         changes = {
             key: value
             for key, value in {

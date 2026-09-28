@@ -425,6 +425,9 @@ def _print_to_confirm() -> None:
     print("            interns 40 000, apprentices 50 000; five raises of 10 000 from " + RAISE_FROM.isoformat())
     print("  alert horizons: contracts 30 days, trials 15 days (spec); documents 30 days (demo)")
     print("  NINA / INPS / AMO numbers, phones and bank accounts are fake.")
+    print("  presence settings: night window 21:00-05:00; punch-attach 240 min; punch dedupe 60 s; late grace 5 min")
+    print("  public holiday: \"Jour férié de démonstration\" on 2026-08-22 (ML, paid, unconfirmed)")
+    print("  leave type ANNUEL: accrual 2.5 working days/month; no carry-over cap")
     print("=============================================================================")
 
 
@@ -472,7 +475,7 @@ def _seed_presence_and_leave(conn, actor: str) -> None:
     night_id = schedule_id(night_result, "NUIT")
 
     # Mali public holidays, draft: the accountant confirms the exact dates each year.
-    for holiday_date, name in [(datetime.date(2026, 8, 22), "Fête de l'Indépendance")]:
+    for holiday_date, name in [(datetime.date(2026, 8, 22), "Jour férié de démonstration")]:
         holidays.create_holiday(tenant_id=TENANT, actor_id=actor, country_code="ML", holiday_date=holiday_date, name=name, paid=True, confirmed=False)
 
     # Assign every tenant employee employed at some point in August to a schedule (month close
