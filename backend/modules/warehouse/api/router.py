@@ -16,6 +16,7 @@ from modules.warehouse.api.fulfillment_service import FulfillmentService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.putaway_service import PutAwayService
+from modules.warehouse.api.replenishment_service import ReplenishmentService
 from modules.warehouse.api.reservation_service import ReservationService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
@@ -26,6 +27,7 @@ from modules.warehouse.domain.entities import Location, Site
 from modules.warehouse.domain.fulfillment import PickList, PickListLine, Shipment
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
 from modules.warehouse.domain.putaway import PutawayRule
+from modules.warehouse.domain.replenishment import ReorderRule, ReplenishmentProposal
 from modules.warehouse.domain.reservation import StockReservation
 from modules.warehouse.domain.valuation import CostLayer
 
@@ -1439,3 +1441,192 @@ def list_cost_layers(
             tenant_id=tenant.tenant_id, product_id=product_id, open_only=not include_closed
         )
     return [_layer_response(layer) for layer in layers]
+
+
+# --- Replenishment (reorder rules & proposals) ----------------------------------------------
+
+
+class CreateReorderRuleRequest(BaseModel):
+    product_id: str
+    reorder_point: float
+    order_up_to: float
+    site_id: str | None = None
+    min_order_quantity: float = 0
+    preferred_supplier_id: str | None = None
+
+
+class UpdateReorderRuleRequest(BaseModel):
+    reorder_point: float | None = None
+    order_up_to: float | None = None
+    min_order_quantity: float | None = None
+    preferred_supplier_id: str | None = None
+    is_active: bool | None = None
+
+
+class ApproveProposalRequest(BaseModel):
+    correlation_id: str
+    quantity: float | None = None
+    supplier_id: str | None = None
+
+
+def _reorder_rule_response(rule: ReorderRule) -> dict:
+    return {
+        "id": rule.id,
+        "product_id": rule.product_id,
+        "site_id": rule.site_id,
+        "reorder_point": rule.reorder_point,
+        "order_up_to": rule.order_up_to,
+        "min_order_quantity": rule.min_order_quantity,
+        "preferred_supplier_id": rule.preferred_supplier_id,
+        "is_active": rule.is_active,
+        "created_by": rule.created_by,
+        "created_at": rule.created_at,
+    }
+
+
+def _proposal_response(proposal: ReplenishmentProposal) -> dict:
+    return {
+        "id": proposal.id,
+        "rule_id": proposal.rule_id,
+        "product_id": proposal.product_id,
+        "site_id": proposal.site_id,
+        "available_at_proposal": proposal.available_at_proposal,
+        "quantity": proposal.quantity,
+        "supplier_id": proposal.supplier_id,
+        "status": proposal.status,
+        "created_at": proposal.created_at,
+        "decided_by": proposal.decided_by,
+        "decided_at": proposal.decided_at,
+        "closed_at": proposal.closed_at,
+    }
+
+
+def _replenishment_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    if code in ("INVALID_STATE", "DUPLICATE_RULE", "RULE_HAS_HISTORY"):
+        return status.HTTP_409_CONFLICT
+    return status.HTTP_400_BAD_REQUEST
+
+
+def _raise_replenishment(connection, result: Err) -> None:
+    connection.rollback()
+    raise HTTPException(_replenishment_err_status(result.code), err_detail(result))
+
+
+@router.get("/reorder-rules")
+def list_reorder_rules(tenant: TenantContext = Depends(require_permission("warehouse.view_replenishment"))) -> list[dict]:
+    with get_connection() as connection:
+        rules = ReplenishmentService(connection).list_rules(tenant_id=tenant.tenant_id)
+    return [_reorder_rule_response(rule) for rule in rules]
+
+
+@router.post("/reorder-rules", status_code=status.HTTP_201_CREATED)
+def create_reorder_rule(
+    body: CreateReorderRuleRequest, tenant: TenantContext = Depends(require_permission("warehouse.manage_replenishment"))
+) -> dict:
+    with get_connection() as connection:
+        result = ReplenishmentService(connection).create_rule(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            product_id=body.product_id,
+            reorder_point=body.reorder_point,
+            order_up_to=body.order_up_to,
+            site_id=body.site_id,
+            min_order_quantity=body.min_order_quantity,
+            preferred_supplier_id=body.preferred_supplier_id,
+        )
+        if isinstance(result, Err):
+            _raise_replenishment(connection, result)
+        connection.commit()
+    return _reorder_rule_response(result.value)
+
+
+@router.patch("/reorder-rules/{rule_id}")
+def update_reorder_rule(
+    rule_id: str,
+    body: UpdateReorderRuleRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.admin_reorder_rules")),
+) -> dict:
+    with get_connection() as connection:
+        result = ReplenishmentService(connection).update_rule(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            rule_id=rule_id,
+            reorder_point=body.reorder_point,
+            order_up_to=body.order_up_to,
+            min_order_quantity=body.min_order_quantity,
+            preferred_supplier_id=body.preferred_supplier_id,
+            is_active=body.is_active,
+        )
+        if isinstance(result, Err):
+            _raise_replenishment(connection, result)
+        connection.commit()
+    return _reorder_rule_response(result.value)
+
+
+@router.delete("/reorder-rules/{rule_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
+def delete_reorder_rule(
+    rule_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_replenishment"))
+) -> None:
+    with get_connection() as connection:
+        result = ReplenishmentService(connection).delete_rule(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, rule_id=rule_id)
+        if isinstance(result, Err):
+            _raise_replenishment(connection, result)
+        connection.commit()
+
+
+@router.get("/replenishment/proposals")
+def list_replenishment_proposals(
+    status_filter: str | None = Query(default=None, alias="status"),
+    tenant: TenantContext = Depends(require_permission("warehouse.view_replenishment")),
+) -> list[dict]:
+    with get_connection() as connection:
+        proposals = ReplenishmentService(connection).list_proposals(tenant_id=tenant.tenant_id, status=status_filter)
+    return [_proposal_response(proposal) for proposal in proposals]
+
+
+@router.post("/replenishment/evaluate")
+def evaluate_replenishment(tenant: TenantContext = Depends(require_permission("warehouse.manage_replenishment"))) -> dict:
+    with get_connection() as connection:
+        outcome = ReplenishmentService(connection).evaluate(tenant_id=tenant.tenant_id, actor_id=tenant.user_id)
+        connection.commit()
+    return {
+        "created": [_proposal_response(p) for p in outcome["created"]],
+        "fulfilled": [_proposal_response(p) for p in outcome["fulfilled"]],
+    }
+
+
+@router.post("/replenishment/proposals/{proposal_id}/approve")
+def approve_replenishment_proposal(
+    proposal_id: str,
+    body: ApproveProposalRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_replenishment")),
+) -> dict:
+    with get_connection() as connection:
+        result = ReplenishmentService(connection).approve_proposal(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            proposal_id=proposal_id,
+            correlation_id=body.correlation_id,
+            quantity=body.quantity,
+            supplier_id=body.supplier_id,
+        )
+        if isinstance(result, Err):
+            _raise_replenishment(connection, result)
+        connection.commit()
+    return _proposal_response(result.value)
+
+
+@router.post("/replenishment/proposals/{proposal_id}/dismiss")
+def dismiss_replenishment_proposal(
+    proposal_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_replenishment"))
+) -> dict:
+    with get_connection() as connection:
+        result = ReplenishmentService(connection).dismiss_proposal(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, proposal_id=proposal_id
+        )
+        if isinstance(result, Err):
+            _raise_replenishment(connection, result)
+        connection.commit()
+    return _proposal_response(result.value)

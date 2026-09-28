@@ -1,8 +1,8 @@
 {
   "name": "warehouse",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "depends": ["core"],
-  "optional_depends": ["sales"],
+  "optional_depends": ["sales", "procurement"],
   "provides_api": [
     "StockService",
     "LocationService",
@@ -14,7 +14,8 @@
     "FulfillmentService",
     "BarcodeService",
     "ReservationService",
-    "ValuationService"
+    "ValuationService",
+    "ReplenishmentService"
   ],
   "publishes_events": [
     "warehouse.stock.reserved",
@@ -24,7 +25,8 @@
     "warehouse.putaway.confirmed",
     "warehouse.pick_list.cancelled",
     "warehouse.shipment.shipped",
-    "warehouse.reservation.expired"
+    "warehouse.reservation.expired",
+    "warehouse.replenishment.approved"
   ],
   "subscribes_events": ["procurement.purchase_order_receipt.confirmed", "core.product.created", "sales.order.confirmed"],
   "migrations_path": "./migrations",
@@ -50,6 +52,9 @@
     "warehouse.manage_barcodes",
     "warehouse.admin_barcodes",
     "warehouse.admin_reservations",
-    "warehouse.view_valuation"
+    "warehouse.view_valuation",
+    "warehouse.view_replenishment",
+    "warehouse.manage_replenishment",
+    "warehouse.admin_reorder_rules"
   ]
 }

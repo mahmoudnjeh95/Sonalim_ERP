@@ -117,6 +117,7 @@ PURGE_TABLES = [
     "warehouse.stock_reservations",
     "warehouse.cost_layer_consumptions",
     "warehouse.cost_layers",
+    "warehouse.replenishment_proposals",
 ]
 
 # Tables that are edited in place rather than emptied (see purge()).
@@ -172,6 +173,7 @@ KEPT_TABLES = [
     "warehouse.sites",
     "warehouse.putaway_rules",
     "warehouse.product_barcodes",
+    "warehouse.reorder_rules",
 ]
 
 # Numbering counters restarted so the first real OF is OF-1, not OF-58.

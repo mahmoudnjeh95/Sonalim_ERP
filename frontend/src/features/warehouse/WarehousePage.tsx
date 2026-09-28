@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChart3, Boxes, Coins, History as HistoryIcon, LayoutDashboard, ListTree, Lock, Package } from "lucide-react";
+import { BarChart3, Boxes, Coins, History as HistoryIcon, LayoutDashboard, ListTree, Lock, Package, Repeat } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
@@ -23,6 +23,7 @@ import { PutAwayTab } from "./putaway/PutAwayTab";
 import { FulfillmentTab } from "./fulfillment/FulfillmentTab";
 import { ReservationsTab } from "./reservations/ReservationsTab";
 import { ValuationTab } from "./valuation/ValuationTab";
+import { ReplenishmentTab } from "./replenishment/ReplenishmentTab";
 
 // A tab with a `permission` is only shown to users who hold it -- stock value
 // is financial information, not something every warehouse user should see.
@@ -40,6 +41,7 @@ const TABS: readonly {
   { value: "fulfillment", labelKey: "warehouse.tabs.fulfillment", icon: ShipmentIcon, Component: FulfillmentTab },
   { value: "reservations", labelKey: "warehouse.tabs.reservations", icon: Lock, Component: ReservationsTab },
   { value: "cycle-counts", labelKey: "warehouse.tabs.cycleCounts", icon: CountSheetIcon, Component: CycleCountsTab },
+  { value: "replenishment", labelKey: "warehouse.tabs.replenishment", icon: Repeat, Component: ReplenishmentTab, permission: "warehouse.view_replenishment" },
   { value: "valuation", labelKey: "warehouse.tabs.valuation", icon: Coins, Component: ValuationTab, permission: "warehouse.view_valuation" },
   { value: "analysis", labelKey: "warehouse.tabs.analysis", icon: BarChart3, Component: AnalysisTab },
   { value: "finished-goods-analysis", labelKey: "warehouse.tabs.finishedGoodsAnalysis", icon: Package, Component: FinishedGoodsAnalysisTab },
