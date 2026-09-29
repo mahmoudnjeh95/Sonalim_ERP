@@ -1,6 +1,6 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-29 (phase 3a fully closed — review, fix, re-review all clean)**. Written
+Last updated: **2026-09-29 (phase 3a merged via PR #7 and deploying; phase 3b is next)**. Written
 for the client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
@@ -56,9 +56,16 @@ ledger, those win — they move first.
 > fully closed** — final commit `2758c11`, 12 commits ahead of `cfe5665` on `hr-p3a-payroll-engine`.
 > Its SDD workspace has been deleted; this file plus `git log` are the record now.
 >
-> **The next decision is the client's: how to integrate phase 3a** — merge locally, open a PR, or
-> keep it parked in its worktree — the same choice that has sat open for phases 1 and 2 since
-> their own reviews closed. Nothing in phase 3a has been merged or pushed.
+> **Phase 3a is MERGED and DEPLOYING** — the client opened PR #7 (`hr-p3a-payroll-engine` →
+> `huge_production_migration`) and merged it on GitHub on 2026-09-29 as `c3c3e08`. The local
+> branch pulled it in as `61ff920`; the worktree and local branch are removed. **Phase 3b
+> (payroll runs) is next.**
+>
+> **Deploys migrate the database again** (`9a57d12`, landed alongside): `AUTO_MIGRATE` now
+> defaults to true in `compose.yaml`, under an advisory lock, and a guard test refuses any
+> migration that inserts literal rows or references a demo tenant. So phase 3a's only migration,
+> `payroll/0001_payroll_rules.sql` (schema only, no rows), applies itself on this deploy — no
+> hand-run SQL. Still never seeds.
 >
 > **One real open item carried forward, not a defect to silently forget:** a worked **rest day**
 > (as opposed to a worked public holiday) is still double-paid for a daily-paid employee, because
@@ -67,23 +74,18 @@ ledger, those win — they move first.
 > how `OT_REST_HOLIDAY` overtime interacts with the daily base-pay count before daily-paid workers
 > go live on real presence data.
 >
-> **Action still required on the server, before the phase 1+2 deploy is usable:**
-> 1. Run phase 2's pending migrations on the server (0010–0014, `hr` module only — the warehouse
->    migrations were already there): SQL is in `backend/pending-deploy-migrations.sql`, or
->    regenerate on the server with `docker compose exec -T app python -m scripts.migration_sql`.
-> 2. Grant the new `hr.*` permission codes on production (`ensure_default_roles` for the
->    production tenant, or the admin UI) — give `hr.view_sensitive` deliberately.
+> **Action still required on the server:**
+> 1. Check the deploy applied the migrations: phase 2's `hr` 0010–0014 (if they were never run by
+>    hand) and phase 3a's `payroll` 0001 should all be in `core.module_migrations`. If the server
+>    `.env` sets `AUTO_MIGRATE=false`, run them by hand instead with
+>    `docker compose exec -T app python -m scripts.migration_sql`.
+> 2. Grant the new permission codes on production (`ensure_default_roles` for the production
+>    tenant, or the admin UI): phases 1–2's `hr.*` — give `hr.view_sensitive` deliberately — and
+>    phase 3a's `payroll.view_rules`, `payroll.manage_rules`, `payroll.confirm_rules`. The other
+>    eight `payroll.*` codes are declared already but gate nothing until phase 3b's routes exist.
+>    Give `payroll.confirm_rules` to the accountant only, since it lets a rule set drive real payslips.
 > 3. Recommend a dev-DB reset + reseed before any HR walkthrough on non-production environments
 >    (pre-existing test fixtures, not from earlier branches — see phase 2's section below).
-
-Branch `hr-p2-presence-leave` in the worktree `.worktrees/hr-p2-presence-leave`, off
-`huge_production_migration` at `d77c1a2`. Nothing of phase 2 is merged or pushed.
-
-**One decision waiting on the client:** commit `02372b2` sits on `huge_production_migration`
-in the main checkout by mistake — a helper committed there instead of in the worktree. It holds
-only the two leave-domain files, which are also on the HR branch as `252dbd5`. It is local, on
-no remote. It would deploy with the next push of that branch. To drop it, run
-`git reset --keep d77c1a2` in the main checkout.
 
 ## Progress
 
@@ -91,7 +93,7 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
 | 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
-| 3a — Payroll engine | 11 | 11 | 11 | **Shipped locally, whole-branch reviewed** (`2758c11`, not merged/pushed) |
+| 3a — Payroll engine | 11 | 11 | 11 | **Shipped** (PR #7, merged as `c3c3e08`, deploying) |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
@@ -253,7 +255,7 @@ the reviewer. The implementer added its own fix (`hr.leaveRequests.status.*`) ra
 stopping a second time; ruled deferred rather than reworked (see the Task 13 deferred minor
 above) since it's cosmetic.
 
-## Phase 3a — Payroll engine (11 tasks) — fully reviewed, shipped locally, not merged/pushed
+## Phase 3a — Payroll engine (11 tasks) — shipped
 
 New `payroll` module: configurable, effective-dated Mali rule tables and a pure calculation
 engine. Statutory values are seeded as **drafts**; a run cannot be approved until an accountant
@@ -261,7 +263,7 @@ confirms them. Backend-only — no `/payroll/*` screens until phase 3c. Worktree
 `.worktrees/hr-p3a-payroll-engine`, off `huge_production_migration` at `cfe5665`. All 11 tasks
 built and reviewed clean, then whole-branch reviewed and fixed; final commit `2758c11`.
 `modules/payroll` suite: **109 passed, 0 skipped**, against a real database throughout.
-The client's merge/PR/keep decision is the only thing left.
+Merged through PR #7 as `c3c3e08` on 2026-09-29; worktree and branch removed.
 
 **Whole-branch review (2026-09-29):** ready to merge with fixes — 0 Critical, 2 Important
 (both cross-task/cross-phase seams no single task's own review could see), 9 Minor (all
@@ -475,5 +477,6 @@ HR dashboard and read-only self-service (phase 5).
   to integrate.
 - Statutory Mali values are **never** written in code. They are database rows, seeded as
   drafts, which an accountant confirms before a payroll run can be approved.
-- A push to `huge_production_migration` deploys to the live server, and never runs migrations
-  or seeds there. Migrations are handed over as SQL to run by hand.
+- A push to `huge_production_migration` deploys to the live server. Since `9a57d12` the deploy
+  applies pending schema migrations itself (`AUTO_MIGRATE` defaults to true); it never seeds, and
+  a guard test keeps data inserts out of migrations.
