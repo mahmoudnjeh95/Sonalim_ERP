@@ -1,7 +1,7 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-29 (phase 3a final whole-branch review dispatched)**. Written for the
-client and for whoever picks this work up.
+Last updated: **2026-09-29 (phase 3a fully closed — review, fix, re-review all clean)**. Written
+for the client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
 were reviewed, and where work stopped. When it disagrees with `git log` or a phase's SDD
@@ -49,9 +49,23 @@ ledger, those win — they move first.
 >
 > Fix commit `2758c11` on `hr-p3a-payroll-engine`, 3 new tests (each confirmed to fail against the
 > pre-fix code and pass after, before being committed). `modules/payroll` suite: 109 passed, 0
-> skipped, real DB. A scoped re-review of just this fix commit is running now, per the skill's
-> one-fix-wave rule — the last step before the merge/PR/keep decision (same choice offered after
-> phases 1 and 2, still open for both).
+> skipped, real DB. **The scoped re-review of that fix commit came back clean**: both findings
+> independently hand-traced and confirmed ADDRESSED (not just re-read), including tracing the
+> new `NET_NEGATIVE` condition as a strict extension of the old one by boolean short-circuit, and
+> confirming the existing golden/domain tests are unaffected. No new breakage. **Phase 3a is now
+> fully closed** — final commit `2758c11`, 12 commits ahead of `cfe5665` on `hr-p3a-payroll-engine`.
+> Its SDD workspace has been deleted; this file plus `git log` are the record now.
+>
+> **The next decision is the client's: how to integrate phase 3a** — merge locally, open a PR, or
+> keep it parked in its worktree — the same choice that has sat open for phases 1 and 2 since
+> their own reviews closed. Nothing in phase 3a has been merged or pushed.
+>
+> **One real open item carried forward, not a defect to silently forget:** a worked **rest day**
+> (as opposed to a worked public holiday) is still double-paid for a daily-paid employee, because
+> hr's presence summary has no field distinguishing "worked rest day" from an ordinary worked day
+> within `worked_days`. Phase 3b (or a small hr addition) needs to either add that field or change
+> how `OT_REST_HOLIDAY` overtime interacts with the daily base-pay count before daily-paid workers
+> go live on real presence data.
 >
 > **Action still required on the server, before the phase 1+2 deploy is usable:**
 > 1. Run phase 2's pending migrations on the server (0010–0014, `hr` module only — the warehouse
@@ -77,7 +91,7 @@ no remote. It would deploy with the next push of that branch. To drop it, run
 |---|---|---|---|---|
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
 | 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
-| 3a — Payroll engine | 11 | 11 | 11 | **Shipped locally** (`814e90a`, not merged/pushed) |
+| 3a — Payroll engine | 11 | 11 | 11 | **Shipped locally, whole-branch reviewed** (`2758c11`, not merged/pushed) |
 | 3b — Payroll runs | 13 | 0 | 0 | Planned |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
@@ -239,15 +253,28 @@ the reviewer. The implementer added its own fix (`hr.leaveRequests.status.*`) ra
 stopping a second time; ruled deferred rather than reworked (see the Task 13 deferred minor
 above) since it's cosmetic.
 
-## Phase 3a — Payroll engine (11 tasks) — shipped locally, not merged/pushed
+## Phase 3a — Payroll engine (11 tasks) — fully reviewed, shipped locally, not merged/pushed
 
 New `payroll` module: configurable, effective-dated Mali rule tables and a pure calculation
 engine. Statutory values are seeded as **drafts**; a run cannot be approved until an accountant
 confirms them. Backend-only — no `/payroll/*` screens until phase 3c. Worktree
 `.worktrees/hr-p3a-payroll-engine`, off `huge_production_migration` at `cfe5665`. All 11 tasks
-built and reviewed clean; final commit `814e90a`. `modules/payroll` suite: **106 passed, 0
-skipped**, against a real database throughout. No whole-phase review has run yet — that,
-plus the merge, are the next decisions.
+built and reviewed clean, then whole-branch reviewed and fixed; final commit `2758c11`.
+`modules/payroll` suite: **109 passed, 0 skipped**, against a real database throughout.
+The client's merge/PR/keep decision is the only thing left.
+
+**Whole-branch review (2026-09-29):** ready to merge with fixes — 0 Critical, 2 Important
+(both cross-task/cross-phase seams no single task's own review could see), 9 Minor (all
+deferred, non-blocking). Both Important findings fixed in `2758c11`, verified by a scoped
+re-review that hand-traced each fix rather than re-reading the diff:
+1. A daily-paid worker was paid twice for a worked public holiday (hr's phase-2 presence
+   summary counts it in both `worked_days` and `holiday_days`). Fixed for the holiday case.
+   **Still open:** the same double-pay for a worked *rest* day — hr has no field to
+   distinguish it from an ordinary worked day, so this needs a phase 3b/hr decision before
+   daily-paid workers run on real presence data.
+2. A confirmed rule set could have the unpaid-absence row's tax/contribution flags not match
+   the base-salary row's (silently wrong tax), and a payslip's net could go negative with no
+   warning if nothing needed carrying. Both fixed.
 
 | # | Task | Commit | State |
 |---|---|---|---|
