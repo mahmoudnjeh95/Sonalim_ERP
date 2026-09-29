@@ -85,11 +85,12 @@ class InputService:
                    if component.kind in ("earning", "deduction") and component.formula_type in INPUT_FORMULAS
                    and component.code not in SYSTEM_COMPONENTS})
 
-    def _release(self, payslip_id: str | None) -> Err | None:
+    def _release(self, tenant_id: str, payslip_id: str | None) -> Err | None:
         """Frozen once an approved/paid run deducted it; a calculated run that took it goes back to draft."""
         if payslip_id is None:
             return None
-        run = fetch_one(self.connection, "SELECT r.id, r.status FROM payroll.payslips p JOIN payroll.runs r ON r.id = p.run_id WHERE p.id = %s", (payslip_id,))
+        run = fetch_one(self.connection, "SELECT r.id, r.status FROM payroll.payslips p JOIN payroll.runs r ON r.id = p.run_id "
+                           "WHERE p.id = %s AND p.tenant_id = %s", (payslip_id, tenant_id))
         if run is None:
             return None
         if run["status"] in ("approved", "paid"):
@@ -239,7 +240,7 @@ class InputService:
         unknown = sorted(set(changes) - {"amount", "requested_on", "deduct_period", "note"})
         if unknown:
             return _invalid(f"unknown fields: {', '.join(unknown)}", f"champs inconnus : {', '.join(unknown)}")
-        released = self._release(current["deducted_payslip_id"])
+        released = self._release(tenant_id, current["deducted_payslip_id"])
         if released is not None:
             return released
         merged = {key: current[key] for key in ("amount", "requested_on", "deduct_period", "note")} | changes
@@ -269,7 +270,7 @@ class InputService:
             return Err("NOT_FOUND", "advance not found", "avance introuvable")
         if current["status"] == "cancelled":
             return _invalid("this advance is already cancelled", "cette avance est déjà annulée")
-        released = self._release(current["deducted_payslip_id"])
+        released = self._release(tenant_id, current["deducted_payslip_id"])
         if released is not None:
             return released
         self.connection.execute("UPDATE payroll.advances SET status = 'cancelled', deducted_payslip_id = NULL WHERE id = %s", (advance_id,))
@@ -346,9 +347,9 @@ class InputService:
                      payload=jsonable({"employee_id": employee_id, "principal": principal, "instalment_count": instalment_count, "first_period": first_period}))
         return Ok(self.list_loans(tenant_id=tenant_id, loan_id=loan_id)[0])
 
-    def _release_instalments(self, loan_id: str) -> Err | None:
+    def _release_instalments(self, tenant_id: str, loan_id: str) -> Err | None:
         taken = fetch_all(self.connection, "SELECT r.id, r.status FROM payroll.loan_instalments i JOIN payroll.payslips p ON p.id = i.payslip_id "
-                                           "JOIN payroll.runs r ON r.id = p.run_id WHERE i.loan_id = %s", (loan_id,))
+                                           "JOIN payroll.runs r ON r.id = p.run_id WHERE i.loan_id = %s AND i.tenant_id = %s", (loan_id, tenant_id))
         if any(run["status"] in ("approved", "paid") for run in taken):
             return Err("RUN_LOCKED", "instalments were already deducted; cancel the loan and open a new one for the balance",
                        "des échéances ont déjà été retenues ; annulez le prêt et ouvrez-en un nouveau pour le solde")
@@ -369,7 +370,7 @@ class InputService:
         problem = self._loan_problem(merged["principal"], int(merged["instalment_count"]), merged["first_period"])
         if problem is not None:
             return problem
-        released = self._release_instalments(loan_id)
+        released = self._release_instalments(tenant_id, loan_id)
         if released is not None:
             return released
         self.connection.execute("DELETE FROM payroll.loan_instalments WHERE loan_id = %s", (loan_id,))
