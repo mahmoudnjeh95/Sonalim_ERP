@@ -27,6 +27,9 @@ import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
 import { EntriesPage } from "../features/finance/EntriesPage";
 import { AccountsPage } from "../features/finance/AccountsPage";
 import { PostingRulesPage } from "../features/finance/PostingRulesPage";
+import { TrialBalancePage } from "../features/finance/TrialBalancePage";
+import { GeneralLedgerPage } from "../features/finance/GeneralLedgerPage";
+import { PeriodsPage } from "../features/finance/PeriodsPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
 import { EmployeesPage } from "../features/hr/EmployeesPage";
@@ -95,6 +98,9 @@ const protectedChildren: RouteObject[] = [
   { path: "/finance/entries", element: <EntriesPage /> },
   { path: "/finance/accounts", element: <AccountsPage /> },
   { path: "/finance/posting-rules", element: <PostingRulesPage /> },
+  { path: "/finance/trial-balance", element: <TrialBalancePage /> },
+  { path: "/finance/ledger", element: <GeneralLedgerPage /> },
+  { path: "/finance/periods", element: <PeriodsPage /> },
   { path: "/admin/users", element: <UsersPage /> },
   { path: "/admin/roles", element: <RolesPage /> },
   { path: "/admin/activity-log", element: <ActivityLogPage /> },

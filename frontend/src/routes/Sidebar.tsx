@@ -44,6 +44,9 @@ import {
   Users,
   Wallet,
   Zap,
+  Scale,
+  BookText,
+  CalendarRange,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useI18n, type TranslationKey } from "../lib/i18n";
@@ -202,6 +205,9 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/finance/entries", labelKey: "nav.ledgerEntries", icon: BookOpen, permission: "finance.view_ledger" },
       { to: "/finance/accounts", labelKey: "nav.chartOfAccounts", icon: ListTree, permission: "finance.view_ledger" },
       { to: "/finance/posting-rules", labelKey: "nav.postingRules", icon: GitBranch, permission: "finance.view_ledger" },
+      { to: "/finance/trial-balance", labelKey: "nav.trialBalance", icon: Scale, permission: "finance.view_ledger" },
+      { to: "/finance/ledger", labelKey: "nav.generalLedger", icon: BookText, permission: "finance.view_ledger" },
+      { to: "/finance/periods", labelKey: "nav.accountingPeriods", icon: CalendarRange, permission: "finance.view_ledger" },
     ],
   },
   {
