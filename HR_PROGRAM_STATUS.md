@@ -1,6 +1,6 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-29 (phase 3a merged via PR #7 and deploying; phase 3b is next)**. Written
+Last updated: **2026-09-29 (phase 3a merged via PR #7 and deploying)**. Written
 for the client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
@@ -58,8 +58,9 @@ ledger, those win — they move first.
 >
 > **Phase 3a is MERGED and DEPLOYING** — the client opened PR #7 (`hr-p3a-payroll-engine` →
 > `huge_production_migration`) and merged it on GitHub on 2026-09-29 as `c3c3e08`. The local
-> branch pulled it in as `61ff920`; the worktree and local branch are removed. **Phase 3b
-> (payroll runs) is next.**
+> branch pulled it in as `61ff920`; the worktree and local branch are removed. **What comes next
+> is the client's call:** phase 3b (payroll runs), or sub-projects A and B first, as the
+> "Open scope" section's proposed order has it (payroll after them, with amended plans).
 >
 > **Deploys migrate the database again** (`9a57d12`, landed alongside): `AUTO_MIGRATE` now
 > defaults to true in `compose.yaml`, under an advisory lock, and a guard test refuses any
