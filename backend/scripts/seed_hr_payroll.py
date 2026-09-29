@@ -304,6 +304,29 @@ def _ensure_self_service_user(conn) -> str:
     return user_id
 
 
+PAYROLL_APPROVER_EMAIL = "payroll.approbateur@sonalim-erp.local"
+
+
+def _ensure_payroll_approver_user(conn) -> str:
+    """A second demo login, distinct from the main demo admin, holding only the approve/pay
+    permissions -- so the four-eyes rule (an approver can't be the same person who calculated the
+    run) can actually be exercised in the browser without inventing a real account."""
+    conn.execute(
+        "INSERT INTO core.users (id, tenant_id, email, password_hash, full_name) VALUES (%s, %s, %s, %s, %s) ON CONFLICT (email) DO NOTHING",
+        (str(ULID()), TENANT, PAYROLL_APPROVER_EMAIL, hash_password("demo1234"), "Approbateur Paie Démo"),
+    )
+    user_id = conn.execute("SELECT id FROM core.users WHERE email = %s", (PAYROLL_APPROVER_EMAIL,)).fetchone()[0]
+    for permission in (
+        "payroll.view_runs", "payroll.approve_runs", "payroll.pay_runs", "payroll.reverse_runs",
+        "payroll.view_rules", "payroll.view_declarations",
+    ):
+        conn.execute(
+            "INSERT INTO core.user_permissions (user_id, permission) VALUES (%s, %s) ON CONFLICT DO NOTHING", (user_id, permission)
+        )
+    print(f"Payroll: second demo login for four-eyes approval: {PAYROLL_APPROVER_EMAIL} / demo1234")
+    return user_id
+
+
 def _payment_methods(plan: Plan, rng: random.Random) -> list[PaymentMethod]:
     bank = PaymentMethod(
         method="bank", share_percent=Decimal("100"), is_primary=True, bank_name=rng.choice(BANKS),
@@ -634,6 +657,7 @@ def _seed_payroll(conn, actor: str) -> None:
             (actor, permission),
         )
     print("Payroll: every payroll.* permission granted to the demo user (demo@sonalim-erp.local).")
+    _ensure_payroll_approver_user(conn)
 
     rules = RuleSetService(conn)
     if rules.get_settings(tenant_id=TENANT) is None:
