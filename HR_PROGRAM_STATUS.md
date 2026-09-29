@@ -1,6 +1,6 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-29 (phase 3a merged via PR #7 and deploying)**. Written
+Last updated: **2026-09-29 (phase 3c built, not reviewed, not merged)**. Written
 for the client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
@@ -87,6 +87,18 @@ ledger, those win — they move first.
 >    Give `payroll.confirm_rules` to the accountant only, since it lets a rule set drive real payslips.
 > 3. Recommend a dev-DB reset + reseed before any HR walkthrough on non-production environments
 >    (pre-existing test fixtures, not from earlier branches — see phase 2's section below).
+>
+> **Phase 3b (payroll runs) is MERGED and DEPLOYING** — merged as `1b1ae95` on 2026-09-29 (see its
+> own section below for the whole-branch review and fix).
+>
+> **Phase 3c (payroll frontend & seed) is BUILT, not reviewed, not merged** — all 11 tasks done in
+> parallel waves on `hr-p3c-payroll-frontend`, final commit `feb663f` (Task 11: granted the demo
+> user every `payroll.*` permission in the seed and browser-verified every `/payroll/*` screen
+> against it). `npx tsc -b --force` clean; no frontend bugs found. One flow is unverified by
+> browser — approve → payouts → mark-paid → declarations — because completing it needs a second
+> demo account with `approve_runs`, which this task was told not to invent; the same-user-approval
+> refusal that stops it was confirmed working as designed. **Next step is the client's call** on
+> merge/PR, same as every phase before it.
 
 ## Progress
 
@@ -95,11 +107,11 @@ ledger, those win — they move first.
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
 | 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
 | 3a — Payroll engine | 11 | 11 | 11 | **Shipped** (PR #7, merged as `c3c3e08`, deploying) |
-| 3b — Payroll runs | 13 | 13 | 0 | **Built** on `hr-p3b-payroll-runs` (no review, by request; not merged) |
-| 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
+| 3b — Payroll runs | 13 | 13 | whole-branch only | **Shipped** (merged as `1b1ae95`, pushed 2026-09-29, deploying) |
+| 3c — Payroll frontend & seed | 11 | 11 | 0 | **Built**, not reviewed, not merged (branch `hr-p3c-payroll-frontend`, final commit `feb663f`) |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **53** | **40** | |
+| **Total** | **89** | **64** | **40** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -352,7 +364,7 @@ not silently skipped. **1 Minor, non-blocking:** no shipped test directly exerci
 route reaching `copy_rule_set` (`confirm` has that coverage, `copy` doesn't) — a coverage gap,
 verified not to be a live bug.
 
-## Phase 3b — Payroll runs (13 tasks) — built, not reviewed (by request), not merged
+## Phase 3b — Payroll runs (13 tasks) — shipped (merged `1b1ae95`, pushed and deploying)
 
 **Run differently from every earlier phase, at the client's request, this phase only:**
 implementers run **in parallel and without per-task review**. Each parallel task gets its own
@@ -380,8 +392,21 @@ the go-live reset script not yet listing phase 3b's 12 new payroll tables, fixed
 11 purged, `payroll.bank_file_templates` kept. The fourth is the old unrelated
 `test_a_team_used_by_a_quality_report_is_retired_too`. Payroll migrations 0002–0004 are on the
 shared dev DB and are schema-only, so a deploy applies them by itself.
-**Not done, by request:** per-task reviews and the whole-branch review. **Next:** the client
-chooses merge / PR / keep.
+**Rest-day parameter (`49dc6f4`), at the client's request:** a daily-paid worker's worked rest
+day used to draw its day rate and its full rest/holiday overtime. hr's month summary now
+carries `rest_days_worked`, and each rule set has `daily_rest_day_pay`: `overtime_only` (the
+default, like a monthly worker) or `day_rate_and_overtime`. Migration 0005 adds it. This closes
+the gap carried over from phase 3a.
+**Whole-branch review (Haiku, the cheapest model, at the client's request):** ready to merge.
+No Critical findings. 1 Important, fixed in `521f28d`: two advance/loan release lookups weren't
+scoped by tenant. They weren't reachable across tenants, but every payroll query must filter by
+tenant. 1 Minor declined: it asked for an index on `payslips.run_id`, but `UNIQUE (run_id,
+employee_id)` already provides one. There were no per-task reviews.
+**Merged and pushed 2026-09-29** as `1b1ae95` to `origin` (deploys) and `personal`. Payroll
+migrations 0002–0005 are schema-only and apply automatically on deploy. On the server, grant
+the `payroll.*` codes the new routes use (runs, inputs, payouts, declarations,
+admin_payslips). Keep `payroll.approve_runs` separate from `payroll.calculate_runs`, because
+approval is refused to the user who calculated.
 
 State 🟦 = built and integrated on the phase branch with the payroll suite green; no review, by
 request.
@@ -402,25 +427,64 @@ request.
 | 12 | Declarations and the annual recap | 🟦 `1f53770` |
 | 13 | Contract services — `PayrollPostingService` and `PayrollReportService` | 🟦 `4105d86` (shapes checked against the interfaces contract) |
 
-## Phase 3c — Payroll frontend & seed (11 tasks) — planned
+## Phase 3c — Payroll frontend & seed (11 tasks) — built (parallel, no review, by request)
+
+Run like 3b: parallel implementers, no per-task review. Phase branch `hr-p3c-payroll-frontend`
+(worktree `.worktrees/hr-p3c-payroll-frontend`) is cut from `hr-p3b-payroll-runs` at `49dc6f4`,
+because 3c calls 3b's routes and 3b is not merged yet. Each task gets `.worktrees/p3c-tN` (branch `p3c-tN`),
+with `frontend/node_modules` linked in as a junction. `.git/info/attributes` sets `merge=union` on `i18n.tsx` and
+`router.tsx`, where tasks only add lines, so cherry-picks combine without conflicts.
+Waves: 1 → Tasks 1, 9 · 2 → 2, 3, 4, 10 · 3 → 5, 6, 7, 8 · 4 → 11. The per-task manual browser checks
+are all done in Task 11.
+
+State 🟦 = built and integrated on the phase branch; no review, by request.
 
 | # | Task | State |
 |---|---|---|
-| 1 | `api.ts`, `format.ts`, `PayrollTable`, `PayrollStatusBadge` | ⬜ |
-| 2 | `DraftRuleSetBanner` and the Rules screens | ⬜ |
-| 3 | Runs list and create dialog | ⬜ |
-| 4 | Run detail page — lifecycle actions, payslips panel, settlements panel | ⬜ |
-| 5 | Variance panel, and the Inputs page (monthly inputs, advances, loans) | ⬜ |
-| 6 | Payouts panel, bank templates dialog, declarations panel | ⬜ |
-| 7 | Payslip detail page and edit dialog | ⬜ |
-| 8 | Print pages — payslip, run, cash sheet, declaration | ⬜ |
-| 9 | Mali draft rule-set values (`payroll_mali_rules.py`) | ⬜ |
-| 10 | Extend `seed_hr_payroll.py` — rule set, monthly inputs, advances/loans, one calculated run | ⬜ |
-| 11 | Grant demo permissions and browser-verify every `/payroll/*` screen against the seed | ⬜ |
+| 1 | `api.ts`, `format.ts`, `PayrollTable`, `PayrollStatusBadge` | 🟦 `52f5a6e` |
+| 2 | `DraftRuleSetBanner` and the Rules screens | 🟦 `ef720e6` |
+| 3 | Runs list and create dialog | 🟦 `e7458a6` |
+| 4 | Run detail page — lifecycle actions, payslips panel, settlements panel | 🟦 `dd37280` |
+| 5 | Variance panel, and the Inputs page (monthly inputs, advances, loans) | 🟦 `6c65ab2` |
+| 6 | Payouts panel, bank templates dialog, declarations panel | 🟦 `abf27fb` |
+| 7 | Payslip detail page and edit dialog | 🟦 `860f37c` |
+| 8 | Print pages — payslip, run, cash sheet, declaration | 🟦 `4dd1986` |
+| 9 | Mali draft rule-set values (`payroll_mali_rules.py`) | 🟦 `a087a07` |
+| 10 | Extend `seed_hr_payroll.py` — rule set, monthly inputs, advances/loans, one calculated run | 🟦 `f072034` |
+| 11 | Grant demo permissions and browser-verify every `/payroll/*` screen against the seed | 🟦 `feb663f` |
 
 **Printing payroll** is Task 8: one payslip, a whole run in one print view ("print all"), the
 cash sheet with its note-and-coin breakdown, and the declarations. As planned today this is
 **browser printing, with no server-generated PDF** — see the open scope question below.
+
+**Built 2026-09-29, no review by request, in parallel waves like 3b.** The branch is 11 commits
+ahead of `49dc6f4` on `hr-p3c-payroll-frontend`, not merged. Task 11 (this task) ran last: granted
+the demo user all 11 `payroll.*` permissions in the seed script (`feb663f`), re-ran the seed
+against the local dev DB (idempotent — re-run twice, no error, no duplicate rows: 11 permission
+rows, `ON CONFLICT DO NOTHING` on `(user_id, permission)`), and walked the running app as
+`demo@sonalim-erp.local`. Verified working, browser-checked against the seed: `/payroll/rules`
+(ML draft rule set, all 7 rule-row tabs with their seeded rows, country ML); `/payroll/runs`
+(the August 2026 run: Calculated, Draft-rules badge, 64 payslips, gross 10 308 744 F CFA, net
+9 571 520 F CFA — exact seed figures); the run page's draft-rule-set banner, all 5 tabs
+(Payslips, Variance — correctly "no previous approved run", Final settlements — correctly the
+off-cycle-only empty state, Payouts and Declarations — correctly empty pre-approval); all 3
+Inputs tabs (the seeded `BONUS` run input, the approved advance, the active 6-instalment loan
+with non-zero remaining); a payslip's lines grouped and ordered correctly with the loan
+instalment deduction and the draft-rule-set warning; the payslip print page and the run print
+page (64 payslip tables, one per employee), both correctly hiding the sidebar/header/print
+button under `@media print`; the language toggle switching Rules, Runs, Run detail and Inputs
+correctly between fr/en (the one place French text remains under English is the rule set's own
+name, "Mali (brouillon, à confirmer)" — free-text data, not a UI string, so that's correct, not
+a bug). Also confirmed Review Focus #2 firing exactly as designed: approving the run you
+calculated is refused with a visible inline alert and toast (`SAME_USER_APPROVAL`), not silently
+blocked. **Could not verify:** the approve → generate payouts → bank template → mark-paid →
+declarations-populate flow (Step 3 items 7–8), because completing it needs a second
+demo account holding `approve_runs` to get past the four-eyes refusal, which the plan explicitly
+says not to invent for this check — stopped there once the refusal was confirmed working. No
+frontend bugs found; `npx tsc -b --force` clean. **What's left:** the duplicate-i18n-key note
+between Tasks 7/8 (if any — not separately reconciled this task), and the payout/mark-paid/
+declarations flow above is unverified by browser (though built and unit-covered by earlier
+tasks per their own reports). **Next step is the client's merge/PR choice**, same as 3b.
 
 ## Phase 4 — Finance ledger (15 tasks) — planned
 
