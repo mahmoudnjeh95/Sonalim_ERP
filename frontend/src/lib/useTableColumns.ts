@@ -16,6 +16,8 @@ export interface ColumnDef<Row> {
   cell: (row: Row) => ReactNode;
   /** Starting column width in px. Falls back to DEFAULT_WIDTH. */
   defaultWidth?: number;
+  /** Floor this column may shrink to before others give up their space instead. Falls back to MIN_WIDTH (72). */
+  minWidth?: number;
   /** Actions/buttons columns that must always stay visible. */
   alwaysVisible?: boolean;
   headerClassName?: string;
@@ -111,7 +113,7 @@ export function useTableColumns<Row>(tableKey: string, columns: ColumnDef<Row>[]
   );
 
   const colWidths = useMemo(
-    () => visibleColumns.map((column) => preferenceFor(column).width),
+    () => visibleColumns.map((column) => ({ width: preferenceFor(column).width, minWidth: column.minWidth ?? MIN_WIDTH })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [visibleColumns, overrides],
   );
