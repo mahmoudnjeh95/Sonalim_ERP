@@ -1,6 +1,9 @@
 """Seeds the HR employee core for the demo tenant: departments, positions, the pay grid and 60
 employees of a Malian pasta plant with contracts, amendments, dependants, payment methods,
-documents, two exits and the alert horizons. Dev-only; idempotent (codes and employee numbers).
+documents, two exits and the alert horizons; then a closed August 2026 presence month (phase 2) and
+payroll on it (phase 3): the Mali DRAFT rule set, a demo bonus, advance and loan, and the August
+regular run calculated but not approved. Dev-only; idempotent (codes, employee numbers, one ML
+rule set, one regular run per month).
 
     .venv/Scripts/python -m scripts.seed_hr_payroll [--dry-run]
 
@@ -39,6 +42,12 @@ from modules.hr.domain.document import EmployeeDocument
 from modules.hr.domain.employee import EmployeeFile
 from modules.hr.domain.payment import PaymentMethod
 from modules.hr.domain.presence import ManualEntry
+from modules.payroll.api.input_service import InputService
+from modules.payroll.api.rule_set_service import RuleSetService
+from modules.payroll.api.run_service import RunService
+from modules.payroll.domain.earnings import period_end
+from scripts.payroll_mali_rules import create_mali_rule_set
+from scripts.payroll_mali_rules import print_to_confirm as print_mali_to_confirm
 from scripts.seed_common import TENANT, actor_id, run
 
 TODAY = datetime.date.today()
@@ -53,6 +62,10 @@ SELF_SERVICE_EMPLOYEE = "HRP-006"
 SCRIPT_DIR = Path(__file__).resolve().parent
 PRESENCE_PERIOD = datetime.date(2026, 8, 1)
 CLOCK_SAMPLE_PATH = SCRIPT_DIR / "data" / "hr_clock_sample_2026-08.csv"
+
+# --- Phase 3: Mali draft rule set, monthly inputs, advances/loans, one calculated run ---------
+PAYROLL_PERIOD = PRESENCE_PERIOD  # same month phase 2 closed presence for: calculation needs it closed
+PAYROLL_COUNTRY = "ML"
 
 DEPARTMENTS = [
     ("PROD", "Production"),
@@ -604,6 +617,72 @@ def _seed_presence_and_leave(conn, actor: str) -> None:
     print("Presence settings, holidays and leave accrual rate are DRAFT seed values - confirm with HR/payroll before go-live.")
 
 
+def _seed_payroll(conn, actor: str) -> None:
+    """The Mali DRAFT rule set (`scripts.payroll_mali_rules`), one demo bonus, one approved advance
+    and one loan, and the August 2026 regular run calculated on them -- left CALCULATED, never
+    approved (approval needs a confirmed rule set and a second person). Rerun-safe: the rule set
+    is skipped once an ML set exists; the bonus, advance and loan once the month's regular run
+    exists. A run still in draft (its calculation failed, or a later edit sent it back) is
+    calculated again, so rerunning after fixing the cause finishes the job."""
+    rules = RuleSetService(conn)
+    if rules.get_settings(tenant_id=TENANT) is None:
+        _ok(rules.save_settings(tenant_id=TENANT, actor_id=actor, country=PAYROLL_COUNTRY))
+    if conn.execute("SELECT 1 FROM payroll.rule_sets WHERE tenant_id = %s AND country = %s", (TENANT, PAYROLL_COUNTRY)).fetchone():
+        print("Payroll: Mali rule set already seeded; skipping (rerun-safe).")
+    else:
+        rule_set = create_mali_rule_set(rules, tenant_id=TENANT, actor_id=actor)
+        print(f"Payroll: Mali rule set seeded as DRAFT ({rule_set['id']}), valid from {rule_set['valid_from']}.")
+        print_mali_to_confirm()
+
+    runs = RunService(conn)
+    existing = conn.execute(
+        "SELECT id, status FROM payroll.runs WHERE tenant_id = %s AND period = %s AND run_type = 'regular'", (TENANT, PAYROLL_PERIOD)
+    ).fetchone()
+    if existing and existing[1] != "draft":
+        print(f"Payroll: August 2026 run already seeded ({existing[1]}); skipping (rerun-safe).")
+        return
+    if existing:
+        run_id = existing[0]
+        print("Payroll: August 2026 run found in draft; calculating it again.")
+    else:
+        run_id = _ok(runs.create_run(tenant_id=TENANT, actor_id=actor, period=PAYROLL_PERIOD, run_type="regular"))["id"]
+        # One demo bonus, one approved advance and one loan so the Inputs screens show data. Same
+        # HRP-* cohort phase 2 works on (employed in August, by employee number).
+        employed = employed_between(conn, tenant_id=TENANT, date_from=PAYROLL_PERIOD, date_to=period_end(PAYROLL_PERIOD))
+        seeded_employees = sorted((e for e in employed if e["employee_no"].startswith("HRP-")), key=lambda e: e["employee_no"])
+        inputs = InputService(conn)
+        bonus_target = seeded_employees[5] if len(seeded_employees) > 5 else seeded_employees[0]
+        _ok(inputs.add_run_input(
+            tenant_id=TENANT, actor_id=actor, run_id=run_id, employee_id=bonus_target["id"],
+            component_code="BONUS", amount=Decimal(25_000), note="Prime démo",
+        ))
+        advance_target = seeded_employees[6] if len(seeded_employees) > 6 else seeded_employees[0]
+        advance = _ok(inputs.create_advance(
+            tenant_id=TENANT, actor_id=actor, employee_id=advance_target["id"], amount=Decimal(30_000),
+            requested_on=PAYROLL_PERIOD, deduct_period=PAYROLL_PERIOD, note="Avance démo",
+        ))
+        _ok(inputs.approve_advance(tenant_id=TENANT, actor_id=actor, advance_id=advance["id"]))
+        loan_target = seeded_employees[7] if len(seeded_employees) > 7 else seeded_employees[0]
+        _ok(inputs.create_loan(
+            tenant_id=TENANT, actor_id=actor, employee_id=loan_target["id"], principal=Decimal(150_000),
+            instalment_count=6, first_period=PAYROLL_PERIOD, note="Prêt démo",
+        ))
+        print(f"Payroll: demo bonus {_fcfa(25_000)} ({bonus_target['employee_no']}), approved advance {_fcfa(30_000)} "
+              f"({advance_target['employee_no']}), loan {_fcfa(150_000)} in 6 instalments ({loan_target['employee_no']}).")
+
+    calculated = runs.calculate(tenant_id=TENANT, actor_id=actor, run_id=run_id)
+    if isinstance(calculated, Err):
+        # PRESENCE_NOT_CLOSED here means phase 2's month close did not succeed in this pass. The run
+        # stays in draft with its inputs; the next pass calculates it again (see above).
+        print(f"Payroll: could not calculate the August 2026 run ({calculated.code}: {calculated.message}); "
+              "fix that, then run scripts.seed_hr_payroll again.")
+        return
+    totals = calculated.value
+    print(f"Payroll: August 2026 run calculated ({totals['payslip_count']} payslips, gross {_fcfa(totals['gross'])}, "
+          f"net {_fcfa(totals['net'])}); left as CALCULATED, not approved.")
+    print("Payroll rule set, inputs, advances/loans and the run are DEMO seed data -- see the TO CONFIRM banner.")
+
+
 def seed(conn, _args) -> int:
     actor = actor_id(conn)
     ensure_default_roles(conn, TENANT)  # the administrateur role picks up the new hr.* codes
@@ -623,6 +702,7 @@ def seed(conn, _args) -> int:
     print(f"hr seed: {created} employee(s) created, {skipped} already there; {len(DEPARTMENTS)} departments, {len(POSITIONS)} positions, {len(GRADES)} grades")
     print(f"self-service login: {SELF_SERVICE_EMAIL} / demo1234 -> {SELF_SERVICE_EMPLOYEE}")
     _seed_presence_and_leave(conn, actor)
+    _seed_payroll(conn, actor)
     _print_to_confirm()
     return 0
 
