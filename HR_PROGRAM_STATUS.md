@@ -1,6 +1,8 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-29 (phase 3c merged; phase 4 Tasks 1–13 merged, Tasks 14–15 remain)**.
+Last updated: **2026-09-29 (phase 3c merged; phase 4 Tasks 1–13 merged, Tasks 14–15
+remain; a new, separate "HR UI friendliness Stage 1" branch is also complete, not
+merged)**.
 Written for the client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
@@ -105,6 +107,27 @@ ledger, those win — they move first.
 > **Phase 4 (finance ledger), Tasks 1–13 of 15, is also MERGED** into `huge_production_migration`
 > as `d57485c` on 2026-09-29, right after 3c — see its own section below for what's built and
 > what's left (Tasks 14–15).
+>
+> **A new, separate piece of work started 2026-09-29: "HR UI friendliness Stage 1."** Not part
+> of the 89-task programme above — a follow-on polish pass the client asked for after using the
+> shipped screens: per-column shrink floors on tables, unifying `HrTable`/`HrListTable`, tuned
+> column widths and hidden-by-default columns on `EmployeesPage`, and inline field-level dialog
+> errors (with a set-level fallback where an error isn't about one field) on the department and
+> work-schedule dialogs. Worktree `.worktrees/hr-ui-friendliness-stage1`, branch
+> `hr-ui-friendliness-stage1`, cut from `huge_production_migration` at `6d05037` (right after
+> phase 3b/3c merged). Plan:
+> `docs/superpowers/plans/2026-09-29-hr-ui-friendliness-stage1.md`. All 6 tasks built (5 feature
+> tasks committed directly, `5b35a95`..`2ca00fe`, plus Task 6's whole-stage verification, done
+> 2026-09-29): `tsc -b --force` clean, the frontend's first-ever `vitest` suite green (4/4,
+> `table.test.tsx`), no stray `HrTable` references, and a full browser walkthrough of
+> `/hr/employees`, `/hr/organisation?tab=departments` and `/hr/schedules` against the shared dev
+> DB (run on a throwaway Vite/backend pair on ports 5199/8001, since 5173/8000/the shared
+> Playwright browser were already held by other sessions) — confirmed the tuned employee table,
+> the department dialog's duplicate-code inline error plus its happy-path save (a smoke-test row
+> was created and then deleted via direct SQL, since departments have no delete API), and the
+> schedule dialog's day-grid hint plus its set-level fallback error when no day is checked. Not
+> yet reviewed. **Next step is the client's merge choice**, same as every prior phase/stage — this
+> branch is independent of phase 4's remaining Tasks 14–15 and can merge in either order.
 
 ## Progress
 
