@@ -96,7 +96,10 @@ class ScanSessionService:
         match = next((s for s in shifts if s["shift"].strip().lower() == wanted), None)
         if match is None:
             return None
-        shift = reports.get_shift(tenant_id=tenant_id, shift_report_id=match["id"]).value
+        found = reports.get_shift(tenant_id=tenant_id, shift_report_id=match["id"])
+        if isinstance(found, Err):
+            return None
+        shift = found.value
         keys = ("id", "status", "team", "conducteur", "agent_fabrication", "machiniste", "aide_machiniste", "default_lot_number")
         return {
             **{key: shift[key] for key in keys},

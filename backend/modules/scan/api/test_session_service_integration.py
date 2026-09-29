@@ -106,3 +106,32 @@ def test_audit_rows_for_session_changes(db, world):
     ok(service.add_pages(tenant_id=TENANT, actor_id=world["actor"], session_id=session_id, files=[JPEG]))
     actions = {r[0] for r in db.execute("SELECT action FROM core.audit_log WHERE tenant_id = %s", (TENANT,)).fetchall()}
     assert {"scan_session.created", "scan_session.pages_added"} <= actions
+
+
+def test_shift_state_is_absent_when_the_production_service_refuses(db, world, monkeypatch):
+    reports = ShiftReportService(db)
+    ok(reports.open_shift(tenant_id=TENANT, actor_id=world["actor"], work_center_id=world["work_center"], report_date=world["day"], shift="Matin"))
+    monkeypatch.setattr(ShiftReportService, "get_shift", lambda self, **kwargs: Err("NOT_FOUND", "x", "x"))
+    session = _session(db, world)
+    detail = ok(ScanSessionService(db).get_session(tenant_id=TENANT, session_id=session["id"]))
+    assert detail["shift"] is None
+
+
+def test_shift_pages_lists_only_the_applied_sessions_pages(db, world):
+    service = ScanSessionService(db)
+    session = _session(db, world)
+    [page] = ok(service.add_pages(tenant_id=TENANT, actor_id=world["actor"], session_id=session["id"], files=[JPEG]))
+    shift_report_id = "some-shift-report-id"
+    db.execute(
+        "UPDATE scan.scan_sessions SET status = 'applied', shift_report_id = %s WHERE id = %s",
+        (shift_report_id, session["id"]),
+    )
+    [listed] = service.shift_pages(tenant_id=TENANT, shift_report_id=shift_report_id)
+    assert listed["id"] == page["id"] and "form_type" in listed
+    assert service.shift_pages(tenant_id="another-tenant", shift_report_id=shift_report_id) == []
+    other_session = _session(db, world, shift="Soir")
+    db.execute(
+        "UPDATE scan.scan_sessions SET shift_report_id = %s WHERE id = %s",
+        (shift_report_id, other_session["id"]),
+    )
+    assert service.shift_pages(tenant_id=TENANT, shift_report_id=shift_report_id) == [listed]
