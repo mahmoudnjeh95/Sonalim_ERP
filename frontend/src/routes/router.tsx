@@ -34,6 +34,7 @@ import { PresencePage } from "../features/hr/presence/PresencePage";
 import { ClockImportsPage } from "../features/hr/presence/ClockImportsPage";
 import { LeavePage } from "../features/hr/leave/LeavePage";
 import { RunPage } from "../features/payroll/runs/RunPage";
+import { RulesPage } from "../features/payroll/rules/RulesPage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
 import { ProductsPage } from "../features/products/ProductsPage";
 import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
@@ -105,6 +106,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/hr/leave", element: <LeavePage /> },
   { path: "/payroll/runs", element: <RunsPage /> },
   { path: "/payroll/runs/:runId", element: <RunPage /> },
+  { path: "/payroll/rules", element: <RulesPage /> },
 ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
 
 export const router = createBrowserRouter([

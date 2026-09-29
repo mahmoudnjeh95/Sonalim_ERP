@@ -25,11 +25,13 @@ import {
   KeyRound,
   LayoutDashboard,
   LineChart,
+  ListChecks,
   BriefcaseBusiness,
   LogOut,
   PackageSearch,
   Recycle,
   Settings as SettingsIcon,
+  Settings2,
   ShieldCheck,
   ShoppingCart,
   Sparkles,
@@ -143,6 +145,14 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/hr/presence/imports", labelKey: "nav.hrClockImports", icon: Fingerprint, permission: "hr.view_presence" },
       { to: "/hr/leave", labelKey: "nav.hrLeave", icon: CalendarDays, permission: "hr.view_leave" },
       { to: "/hr/schedules", labelKey: "nav.hrSchedules", icon: CalendarClock, permission: "hr.view_presence" },
+    ],
+  },
+  {
+    labelKey: "nav.payroll",
+    items: [
+      { to: "/payroll/runs", labelKey: "payroll.tabs.runs", icon: Wallet, permission: "payroll.view_runs" },
+      { to: "/payroll/inputs", labelKey: "payroll.tabs.inputs", icon: ListChecks, permission: "payroll.view_runs" },
+      { to: "/payroll/rules", labelKey: "payroll.tabs.rules", icon: Settings2, permission: "payroll.view_rules" },
     ],
   },
   {
