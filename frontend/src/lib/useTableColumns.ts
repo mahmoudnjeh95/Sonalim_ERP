@@ -20,6 +20,8 @@ export interface ColumnDef<Row> {
   minWidth?: number;
   /** Actions/buttons columns that must always stay visible. */
   alwaysVisible?: boolean;
+  /** Hidden until the user opts in via the column menu, for lower-priority columns on wide tables. */
+  hiddenByDefault?: boolean;
   headerClassName?: string;
   cellClassName?: string;
   /** For tables with a <ColumnFilterRow> — the per-column filter control, if any. */
@@ -64,7 +66,7 @@ export function useTableColumns<Row>(tableKey: string, columns: ColumnDef<Row>[]
   });
 
   function defaultsFor(column: ColumnDef<Row>): StoredColumnPreference {
-    return { visible: true, width: column.defaultWidth ?? DEFAULT_WIDTH };
+    return { visible: !column.hiddenByDefault, width: column.defaultWidth ?? DEFAULT_WIDTH };
   }
 
   function preferenceFor(column: ColumnDef<Row>): StoredColumnPreference {
