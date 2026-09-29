@@ -300,6 +300,7 @@ export function SalesOrdersPage() {
                 { value: "all", label: t("common.all") },
                 { value: "draft", label: t("status.draft") },
                 { value: "confirmed", label: t("status.confirmed") },
+                { value: "shipped", label: t("status.shipped") },
               ]}
             />
             {columnFilters.isActive && (

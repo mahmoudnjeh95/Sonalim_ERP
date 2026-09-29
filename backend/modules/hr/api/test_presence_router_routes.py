@@ -1,0 +1,95 @@
+"""Every phase-2 route exists and is guarded by the permission the plan names. No database."""
+from __future__ import annotations
+
+from modules.hr.api.presence_router import router
+
+
+def _permission_of(route) -> str | None:
+    # require_permission(code) returns a closure over `code`; read it back from the dependency.
+    for dependency in route.dependant.dependencies:
+        for cell in getattr(dependency.call, "__closure__", None) or ():
+            value = cell.cell_contents
+            if isinstance(value, str) and value.startswith("hr."):
+                return value
+    return None
+
+
+def _routes() -> dict[tuple[str, str], str | None]:
+    return {(method, route.path): _permission_of(route) for route in router.routes for method in route.methods}
+
+
+def test_schedule_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/schedules"): "hr.view_presence",
+        ("POST", "/hr/schedules"): "hr.manage_presence",
+        ("PATCH", "/hr/schedules/{schedule_id}"): "hr.admin_presence",
+        ("GET", "/hr/rotation-patterns"): "hr.view_presence",
+        ("POST", "/hr/rotation-patterns"): "hr.manage_presence",
+        ("PATCH", "/hr/rotation-patterns/{rotation_id}"): "hr.admin_presence",
+        ("GET", "/hr/schedule-assignments"): "hr.view_presence",
+        ("POST", "/hr/schedule-assignments"): "hr.manage_presence",
+        ("PATCH", "/hr/schedule-assignments/{assignment_id}"): "hr.admin_presence",
+        ("GET", "/hr/public-holidays"): "hr.view_presence",
+        ("POST", "/hr/public-holidays"): "hr.manage_presence",
+        ("PATCH", "/hr/public-holidays/{holiday_id}"): "hr.admin_presence",
+        ("GET", "/hr/presence/settings"): "hr.view_presence",
+        ("PUT", "/hr/presence/settings"): "hr.admin_presence",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_presence_grid_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/presence/grid"): "hr.view_presence",
+        ("GET", "/hr/presence/week"): "hr.view_presence",
+        ("PUT", "/hr/presence/days"): "hr.manage_presence",
+        ("GET", "/hr/presence/employee-month"): "hr.view_presence",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_clock_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/clock-profiles"): "hr.view_presence",
+        ("POST", "/hr/clock-profiles"): "hr.import_clock",
+        ("PATCH", "/hr/clock-profiles/{profile_id}"): "hr.admin_presence",
+        ("GET", "/hr/clock-imports"): "hr.view_presence",
+        ("POST", "/hr/clock-imports"): "hr.import_clock",
+        ("GET", "/hr/clock-imports/{import_id}"): "hr.view_presence",
+        ("POST", "/hr/clock-imports/{import_id}/commit"): "hr.import_clock",
+        ("POST", "/hr/clock-imports/{import_id}/discard"): "hr.import_clock",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_leave_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/leave-types"): "hr.view_leave",
+        ("POST", "/hr/leave-types"): "hr.manage_leave",
+        ("PATCH", "/hr/leave-types/{leave_type_id}"): "hr.admin_leave",
+        ("GET", "/hr/leave/requests"): "hr.view_leave",
+        ("POST", "/hr/leave/requests"): "hr.manage_leave",
+        ("PATCH", "/hr/leave/requests/{request_id}"): "hr.admin_leave",
+        ("POST", "/hr/leave/requests/{request_id}/approve"): "hr.manage_leave",
+        ("POST", "/hr/leave/requests/{request_id}/reject"): "hr.manage_leave",
+        ("POST", "/hr/leave/requests/{request_id}/cancel"): "hr.manage_leave",
+        ("GET", "/hr/leave/balances"): "hr.view_leave",
+        ("POST", "/hr/leave/balances/adjust"): "hr.admin_leave",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected
+
+
+def test_month_routes_and_their_permissions():
+    expected = {
+        ("GET", "/hr/presence/months"): "hr.view_presence",
+        ("GET", "/hr/presence/months/{period}/gaps"): "hr.view_presence",
+        ("GET", "/hr/presence/months/{period}/summary"): "hr.view_presence",
+        ("POST", "/hr/presence/months/{period}/close"): "hr.close_presence",
+        ("POST", "/hr/presence/months/{period}/reopen"): "hr.admin_presence",
+    }
+    routes = _routes()
+    assert {key: routes.get(key) for key in expected} == expected

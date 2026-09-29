@@ -5,6 +5,7 @@ import {
   AlertOctagon,
   Boxes,
   Building2,
+  CalendarCheck,
   CalendarClock,
   CalendarDays,
   ChevronDown,
@@ -16,6 +17,7 @@ import {
   Factory,
   FileSpreadsheet,
   FileText,
+  Fingerprint,
   FlaskConical,
   Gauge,
   HeartPulse,
@@ -133,7 +135,15 @@ const QUALITY_TABS: NavChild[] = [
 const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.hr",
-    items: [{ to: "/hr", labelKey: "nav.hr", icon: BriefcaseBusiness }],
+    items: [
+      { to: "/hr/employees", labelKey: "nav.hrEmployees", icon: Users, permission: "hr.view_employees" },
+      { to: "/hr/organisation", labelKey: "nav.hrOrganisation", icon: Building2 },
+      { to: "/hr", labelKey: "nav.hrLegacy", icon: BriefcaseBusiness, exact: true },
+      { to: "/hr/presence", labelKey: "nav.hrPresence", icon: CalendarCheck, exact: true, permission: "hr.view_presence" },
+      { to: "/hr/presence/imports", labelKey: "nav.hrClockImports", icon: Fingerprint, permission: "hr.view_presence" },
+      { to: "/hr/leave", labelKey: "nav.hrLeave", icon: CalendarDays, permission: "hr.view_leave" },
+      { to: "/hr/schedules", labelKey: "nav.hrSchedules", icon: CalendarClock, permission: "hr.view_presence" },
+    ],
   },
   {
     labelKey: "nav.crm",
