@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Coins, Layers } from "lucide-react";
 import { useAuth } from "../../../lib/auth";
 import { currentLocale, useI18n } from "../../../lib/i18n";
+import { formatXof } from "../../../lib/currency";
 import { useColumnFilters } from "../../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import { formatMoveReference, useReferenceKindLabels } from "../../../lib/stockMoveTypes";
@@ -17,10 +18,6 @@ import { EmptyState } from "../../../components/patterns/EmptyState";
 import { StatCard } from "../../../components/patterns/StatCard";
 import { useProductCatalog } from "../../products/catalog";
 import { costLayersQueryKey, getValuation, listCostLayers, VALUATION_QUERY_KEY, type ProductValuation } from "./api";
-
-function formatMoney(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
-}
 
 function formatNumber(value: number) {
   return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 3 }).format(value);
@@ -67,9 +64,9 @@ function LayersDialog({ productId, productName, onClose }: { productId: string |
                     {formatNumber(layer.quantity_remaining)}
                     <span className="text-muted-foreground"> / {formatNumber(layer.quantity_in)}</span>
                   </TableCell>
-                  <TableCell>{layer.unit_cost !== null ? `${formatMoney(layer.unit_cost)} F CFA` : t("warehouse.valuation.unvalued")}</TableCell>
+                  <TableCell>{layer.unit_cost !== null ? `${formatXof(layer.unit_cost)} F CFA` : t("warehouse.valuation.unvalued")}</TableCell>
                   <TableCell>
-                    {layer.unit_cost !== null ? `${formatMoney(layer.unit_cost * layer.quantity_remaining)} F CFA` : "—"}
+                    {layer.unit_cost !== null ? `${formatXof(layer.unit_cost * layer.quantity_remaining)} F CFA` : "—"}
                   </TableCell>
                 </TableRow>
               );
@@ -102,39 +99,26 @@ export function ValuationTab() {
     { key: "value", kind: "range", getValue: (row) => row.value },
     { key: "unvalued", kind: "range", getValue: (row) => row.unvalued_quantity },
   ]);
-  const rangeFilter = (key: string) => ({
-    type: "range" as const,
-    min: columnFilters.range[key]?.min ?? "",
-    max: columnFilters.range[key]?.max ?? "",
-    onMinChange: (v: string) => columnFilters.setRangeValue(key, "min", v),
-    onMaxChange: (v: string) => columnFilters.setRangeValue(key, "max", v),
-  });
-
   const columns: ColumnDef<ProductValuation>[] = [
     {
       key: "product",
       header: t("warehouse.valuation.column.product"),
       cell: (row) => productName(row.product_id),
-      filterCell: {
-        type: "text",
-        placeholder: t("warehouse.valuation.column.product"),
-        value: columnFilters.text.product ?? "",
-        onChange: (v) => columnFilters.setTextValue("product", v),
-      },
+      filterCell: columnFilters.textCell("product", t("warehouse.valuation.column.product")),
     },
-    { key: "quantity", header: t("warehouse.valuation.column.quantity"), cell: (row) => formatNumber(row.quantity), filterCell: rangeFilter("quantity") },
+    { key: "quantity", header: t("warehouse.valuation.column.quantity"), cell: (row) => formatNumber(row.quantity), filterCell: columnFilters.rangeCell("quantity") },
     {
       key: "unitCost",
       header: t("warehouse.valuation.column.unitCost"),
-      cell: (row) => (row.average_unit_cost !== null ? `${formatMoney(row.average_unit_cost)} F CFA` : "—"),
-      filterCell: rangeFilter("unitCost"),
+      cell: (row) => (row.average_unit_cost !== null ? `${formatXof(row.average_unit_cost)} F CFA` : "—"),
+      filterCell: columnFilters.rangeCell("unitCost"),
     },
-    { key: "value", header: t("warehouse.valuation.column.value"), cell: (row) => `${formatMoney(row.value)} F CFA`, filterCell: rangeFilter("value") },
+    { key: "value", header: t("warehouse.valuation.column.value"), cell: (row) => `${formatXof(row.value)} F CFA`, filterCell: columnFilters.rangeCell("value") },
     {
       key: "unvalued",
       header: t("warehouse.valuation.column.unvalued"),
       cell: (row) => (row.unvalued_quantity > 0 ? <Badge variant="warning">{formatNumber(row.unvalued_quantity)}</Badge> : "—"),
-      filterCell: rangeFilter("unvalued"),
+      filterCell: columnFilters.rangeCell("unvalued"),
     },
     {
       key: "actions",

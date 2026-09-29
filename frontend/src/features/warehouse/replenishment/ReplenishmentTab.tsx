@@ -16,8 +16,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../../components/ui/dialog";
 import { FilterTabs } from "../../../components/patterns/FilterTabs";
-import { ColumnFilterRow, type FilterCell } from "../../../components/patterns/ColumnFilterRow";
+import { ColumnFilterRow } from "../../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
+import { EmptyState } from "../../../components/patterns/EmptyState";
 import { ProductSelect } from "../../../components/patterns/ProductSelect";
 import { useProductCatalog } from "../../products/catalog";
 import { listPartners } from "../../partners/api";
@@ -265,20 +266,6 @@ function ProposalsCard() {
     { key: "quantity", kind: "range", getValue: (row) => row.quantity },
     { key: "supplier", kind: "text", getValue: (row) => supplierName(row.supplier_id) },
   ]);
-  const text = (key: string, placeholder: string): FilterCell => ({
-    type: "text",
-    placeholder,
-    value: columnFilters.text[key] ?? "",
-    onChange: (v) => columnFilters.setTextValue(key, v),
-  });
-  const range = (key: string): FilterCell => ({
-    type: "range",
-    min: columnFilters.range[key]?.min ?? "",
-    max: columnFilters.range[key]?.max ?? "",
-    onMinChange: (v) => columnFilters.setRangeValue(key, "min", v),
-    onMaxChange: (v) => columnFilters.setRangeValue(key, "max", v),
-  });
-
   const columns: ColumnDef<ReplenishmentProposal>[] = [
     {
       key: "product",
@@ -289,15 +276,15 @@ function ProposalsCard() {
           {row.site_id && <span className="text-muted-foreground"> · {siteName(row.site_id)}</span>}
         </span>
       ),
-      filterCell: text("product", t("warehouse.replenishment.column.product")),
+      filterCell: columnFilters.textCell("product", t("warehouse.replenishment.column.product")),
     },
-    { key: "available", header: t("warehouse.replenishment.column.available"), cell: (row) => row.available_at_proposal, filterCell: range("available") },
-    { key: "quantity", header: t("warehouse.replenishment.column.quantity"), cell: (row) => row.quantity, filterCell: range("quantity") },
+    { key: "available", header: t("warehouse.replenishment.column.available"), cell: (row) => row.available_at_proposal, filterCell: columnFilters.rangeCell("available") },
+    { key: "quantity", header: t("warehouse.replenishment.column.quantity"), cell: (row) => row.quantity, filterCell: columnFilters.rangeCell("quantity") },
     {
       key: "supplier",
       header: t("warehouse.replenishment.column.supplier"),
       cell: (row) => supplierName(row.supplier_id),
-      filterCell: text("supplier", t("warehouse.replenishment.column.supplier")),
+      filterCell: columnFilters.textCell("supplier", t("warehouse.replenishment.column.supplier")),
     },
     {
       key: "status",
@@ -364,7 +351,7 @@ function ProposalsCard() {
           )}
         </div>
         {rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">{t("warehouse.replenishment.proposals.empty")}</p>
+          <EmptyState icon={<RefreshCw className="h-5 w-5" />} title={t("warehouse.replenishment.proposals.empty")} description={t("warehouse.replenishment.proposals.emptyDescription")} />
         ) : (
           <Table colWidths={colWidths}>
             <TableHeader>
@@ -427,35 +414,21 @@ function RulesCard() {
     { key: "orderUpTo", kind: "range", getValue: (row) => row.order_up_to },
     { key: "supplier", kind: "text", getValue: (row) => supplierName(row.preferred_supplier_id) },
   ]);
-  const text = (key: string, placeholder: string): FilterCell => ({
-    type: "text",
-    placeholder,
-    value: columnFilters.text[key] ?? "",
-    onChange: (v) => columnFilters.setTextValue(key, v),
-  });
-  const range = (key: string): FilterCell => ({
-    type: "range",
-    min: columnFilters.range[key]?.min ?? "",
-    max: columnFilters.range[key]?.max ?? "",
-    onMinChange: (v) => columnFilters.setRangeValue(key, "min", v),
-    onMaxChange: (v) => columnFilters.setRangeValue(key, "max", v),
-  });
-
   const columns: ColumnDef<ReorderRule>[] = [
-    { key: "product", header: t("warehouse.replenishment.column.product"), cell: (row) => productName(row.product_id), filterCell: text("product", t("warehouse.replenishment.column.product")) },
+    { key: "product", header: t("warehouse.replenishment.column.product"), cell: (row) => productName(row.product_id), filterCell: columnFilters.textCell("product", t("warehouse.replenishment.column.product")) },
     {
       key: "scope",
       header: t("warehouse.replenishment.column.scope"),
       cell: (row) => siteName(row.site_id) ?? t("warehouse.replenishment.scope.allSites"),
-      filterCell: text("scope", t("warehouse.replenishment.column.scope")),
+      filterCell: columnFilters.textCell("scope", t("warehouse.replenishment.column.scope")),
     },
-    { key: "reorderPoint", header: t("warehouse.replenishment.column.reorderPoint"), cell: (row) => row.reorder_point, filterCell: range("reorderPoint") },
-    { key: "orderUpTo", header: t("warehouse.replenishment.column.orderUpTo"), cell: (row) => row.order_up_to, filterCell: range("orderUpTo") },
+    { key: "reorderPoint", header: t("warehouse.replenishment.column.reorderPoint"), cell: (row) => row.reorder_point, filterCell: columnFilters.rangeCell("reorderPoint") },
+    { key: "orderUpTo", header: t("warehouse.replenishment.column.orderUpTo"), cell: (row) => row.order_up_to, filterCell: columnFilters.rangeCell("orderUpTo") },
     {
       key: "supplier",
       header: t("warehouse.replenishment.column.supplier"),
       cell: (row) => supplierName(row.preferred_supplier_id),
-      filterCell: text("supplier", t("warehouse.replenishment.column.supplier")),
+      filterCell: columnFilters.textCell("supplier", t("warehouse.replenishment.column.supplier")),
     },
     {
       key: "active",
@@ -549,7 +522,7 @@ function RulesCard() {
           )}
         </div>
         {rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">{t("warehouse.replenishment.rules.empty")}</p>
+          <EmptyState icon={<Plus className="h-5 w-5" />} title={t("warehouse.replenishment.rules.empty")} description={t("warehouse.replenishment.rules.emptyDescription")} />
         ) : (
           <Table colWidths={colWidths}>
             <TableHeader>

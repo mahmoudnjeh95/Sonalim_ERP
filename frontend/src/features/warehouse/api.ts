@@ -1,4 +1,4 @@
-import { apiFetch } from "../../lib/api";
+import { apiErrorFromResponse, apiFetch, networkError } from "../../lib/api";
 
 export type LocationType = "zone" | "aisle" | "rack" | "bin";
 
@@ -55,6 +55,9 @@ export interface ReserveStockInput {
   location_id: string;
   quantity: number;
   reference: string;
+  // Optional hold expiry (ISO instant); the worker releases it once lapsed.
+  // Omitted for a reservation meant to last until released by hand.
+  expires_at?: string;
 }
 
 export function listStock(token: string) {
@@ -442,4 +445,23 @@ export function getWarehouseOverview(
   if (params.dormant_after_days) query.set("dormant_after_days", String(params.dormant_after_days));
   const suffix = query.size > 0 ? `?${query}` : "";
   return apiFetch<WarehouseOverview>(`/warehouse/analytics/overview${suffix}`, { token });
+}
+
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+
+/** The stock table as an .xlsx workbook (per location, then per product; FIFO
+ * value columns only with warehouse.view_valuation) -- bypasses apiFetch,
+ * which always parses JSON. */
+export async function exportStock(token: string, siteId?: string): Promise<Blob> {
+  const suffix = siteId ? `?${new URLSearchParams({ site_id: siteId })}` : "";
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/warehouse/stock/export${suffix}`, { headers: { Authorization: `Bearer ${token}` } });
+  } catch {
+    throw networkError();
+  }
+  if (!response.ok) {
+    throw await apiErrorFromResponse(response);
+  }
+  return response.blob();
 }

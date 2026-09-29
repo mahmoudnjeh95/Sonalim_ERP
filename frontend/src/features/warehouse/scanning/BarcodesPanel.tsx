@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Pencil, Plus, Trash2 } from "lucide-react";
+import { Barcode, Pencil, Plus, Trash2 } from "lucide-react";
 import { useAuth } from "../../../lib/auth";
 import { useI18n } from "../../../lib/i18n";
 import { ApiError } from "../../../lib/api";
@@ -17,6 +17,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } f
 import { FilterTabs } from "../../../components/patterns/FilterTabs";
 import { ColumnFilterRow } from "../../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibilityMenu";
+import { EmptyState } from "../../../components/patterns/EmptyState";
 import { ProductSelect } from "../../../components/patterns/ProductSelect";
 import { useProductCatalog } from "../../products/catalog";
 import {
@@ -152,25 +153,18 @@ export function BarcodesPanel() {
     { key: "unitsPerScan", kind: "range", getValue: (row) => row.units_per_scan },
     { key: "label", kind: "text", getValue: (row) => row.label ?? "" },
   ]);
-  const textFilter = (key: string, placeholder: string) => ({
-    type: "text" as const,
-    placeholder,
-    value: columnFilters.text[key] ?? "",
-    onChange: (v: string) => columnFilters.setTextValue(key, v),
-  });
-
   const columns: ColumnDef<ProductBarcode>[] = [
     {
       key: "product",
       header: t("warehouse.barcodes.column.product"),
       cell: (row) => productName(row.product_id),
-      filterCell: textFilter("product", t("warehouse.barcodes.column.product")),
+      filterCell: columnFilters.textCell("product", t("warehouse.barcodes.column.product")),
     },
     {
       key: "barcode",
       header: t("warehouse.barcodes.column.barcode"),
       cell: (row) => <span className="font-mono text-xs">{row.barcode}</span>,
-      filterCell: textFilter("barcode", t("warehouse.barcodes.column.barcode")),
+      filterCell: columnFilters.textCell("barcode", t("warehouse.barcodes.column.barcode")),
     },
     {
       key: "type",
@@ -182,19 +176,13 @@ export function BarcodesPanel() {
       key: "unitsPerScan",
       header: t("warehouse.barcodes.column.unitsPerScan"),
       cell: (row) => row.units_per_scan,
-      filterCell: {
-        type: "range",
-        min: columnFilters.range.unitsPerScan?.min ?? "",
-        max: columnFilters.range.unitsPerScan?.max ?? "",
-        onMinChange: (v) => columnFilters.setRangeValue("unitsPerScan", "min", v),
-        onMaxChange: (v) => columnFilters.setRangeValue("unitsPerScan", "max", v),
-      },
+      filterCell: columnFilters.rangeCell("unitsPerScan"),
     },
     {
       key: "label",
       header: t("warehouse.barcodes.column.label"),
       cell: (row) => row.label ?? "—",
-      filterCell: textFilter("label", t("warehouse.barcodes.column.label")),
+      filterCell: columnFilters.textCell("label", t("warehouse.barcodes.column.label")),
     },
     {
       key: "actions",
@@ -266,7 +254,7 @@ export function BarcodesPanel() {
           )}
         </div>
         {rows.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">{t("warehouse.barcodes.empty")}</p>
+          <EmptyState icon={<Barcode className="h-5 w-5" />} title={t("warehouse.barcodes.empty")} description={t("warehouse.barcodes.emptyDescription")} />
         ) : (
           <Table colWidths={colWidths}>
             <TableHeader>

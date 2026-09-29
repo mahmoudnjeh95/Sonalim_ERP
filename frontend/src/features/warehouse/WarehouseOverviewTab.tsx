@@ -15,6 +15,7 @@ import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "rec
 import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
+import { formatXof } from "../../lib/currency";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHeader, TableRow, ResizableTableHead } from "../../components/ui/table";
@@ -132,10 +133,6 @@ function daysAgo(days: number) {
 
 function formatQty(amount: number) {
   return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 1 }).format(amount);
-}
-
-function formatMoney(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
 }
 
 function formatDate(iso: string) {
@@ -424,7 +421,7 @@ export function WarehouseOverviewTab() {
         </span>
       ),
       defaultWidth: 140,
-      cell: (row) => (row.value === null ? <span className="text-muted-foreground">—</span> : <span className="tabular-nums">{formatMoney(row.value)}</span>),
+      cell: (row) => (row.value === null ? <span className="text-muted-foreground">—</span> : <span className="tabular-nums">{formatXof(row.value)}</span>),
       sortValue: (row) => row.value ?? -1,
     },
   ];

@@ -37,6 +37,7 @@ from modules.sales.api.router import router as sales_router
 from modules.warehouse.api.router import router as warehouse_router
 from modules.hr.api.router import router as hr_router
 from modules.hr.api.presence_router import router as hr_presence_router
+from modules.payroll.api.router import router as payroll_router
 from modules.procurement.api.router import router as procurement_router
 from modules.qc.api.router import router as qc_router
 
@@ -81,6 +82,7 @@ app.include_router(sales_router)
 app.include_router(finance_router)
 app.include_router(hr_router)
 app.include_router(hr_presence_router)
+app.include_router(payroll_router)
 app.include_router(procurement_router)
 app.include_router(qc_router)
 app.include_router(maintenance_router)

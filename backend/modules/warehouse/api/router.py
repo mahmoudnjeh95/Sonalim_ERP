@@ -3,12 +3,13 @@ from __future__ import annotations
 import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from pydantic import BaseModel
 
+from core.api.service import CoreService
 from core.db import get_connection
 from core.domain.result import Err, err_detail
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
 from modules.warehouse.api.barcode_service import BarcodeService
 from modules.warehouse.api.cycle_count_service import CycleCountService
@@ -20,6 +21,7 @@ from modules.warehouse.api.replenishment_service import ReplenishmentService
 from modules.warehouse.api.reservation_service import ReservationService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
+from modules.warehouse.api.stock_export import ProductValue, StockExportLine, build_stock_workbook
 from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.domain.barcode import ProductBarcode
 from modules.warehouse.domain.cycle_count import CycleCount, CycleCountLine
@@ -1630,3 +1632,59 @@ def dismiss_replenishment_proposal(
             _raise_replenishment(connection, result)
         connection.commit()
     return _proposal_response(result.value)
+
+
+# --- Stock export -----------------------------------------------------------------------------
+
+
+@router.get("/stock/export")
+def export_stock(
+    site_id: str | None = None, tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))
+) -> Response:
+    """The stock table as .xlsx. FIFO value columns are included only for a user
+    who holds warehouse.view_valuation -- the same gate as the Valuation tab."""
+    with get_connection() as connection:
+        levels = StockService(connection).list_stock_items(tenant.tenant_id, site_id=site_id)
+        locations = {loc.id: loc for loc in LocationService(connection).list_locations(tenant_id=tenant.tenant_id)}
+        sites = {site.id: site for site in SiteService(connection).list_sites(tenant_id=tenant.tenant_id)}
+        core_service = CoreService(connection)
+        products = {product.id: product for product in core_service.list_products(tenant.tenant_id)}
+        uoms = {uom.id: uom for uom in core_service.list_uoms(tenant.tenant_id)}
+        values_by_sku = None
+        if user_has_permission(connection, user_id=tenant.user_id, permission="warehouse.view_valuation"):
+            values_by_sku = {
+                products[v.product_id].sku: ProductValue(
+                    value=v.value, unvalued_quantity=v.unvalued_quantity, average_unit_cost=v.average_unit_cost
+                )
+                for v in ValuationService(connection).get_valuation(tenant_id=tenant.tenant_id)
+                if v.product_id in products
+            }
+
+    lines = []
+    for level in levels:
+        location = locations.get(level.location_id)
+        product = products.get(level.product_id)
+        uom = uoms.get(product.uom_id) if product else None
+        site = sites.get(location.site_id) if location else None
+        lines.append(
+            StockExportLine(
+                site=site.name if site else (location.site_id if location else ""),
+                location_code=location.code if location else level.location_id,
+                location=location.name if location else level.location_id,
+                blocked=bool(location and location.is_blocked),
+                sku=product.sku if product else level.product_id,
+                product=product.name if product else level.product_id,
+                unit=uom.display if uom else "",
+                on_hand=level.quantity_on_hand,
+                reserved=level.quantity_reserved,
+                in_production=level.quantity_in_production,
+            )
+        )
+    now = datetime.datetime.now()
+    site_label = sites[site_id].name if site_id and site_id in sites else "Tous les sites"
+    content = build_stock_workbook(lines, as_of=now, site_label=site_label, values_by_sku=values_by_sku)
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="stock-{now:%Y-%m-%d}.xlsx"'},
+    )
