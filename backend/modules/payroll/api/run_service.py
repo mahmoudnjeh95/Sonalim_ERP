@@ -6,18 +6,27 @@ hr is reached only through its api services (contract), injected so tests pass f
 from __future__ import annotations
 
 import datetime
+from dataclasses import asdict
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.hr.api.payroll_snapshot_service import PayrollSnapshotService
 from modules.hr.api.presence_service import PresenceService
+from modules.payroll.api.input_service import InputService
 from modules.payroll.api.rows import fetch_all, fetch_one, jsonable
 from modules.payroll.api.rule_set_service import RuleSetService
 from modules.payroll.api.run_state import EDITABLE, invalidate, lock_run, locked, not_found
+from modules.payroll.domain.earnings import monthly_equivalent, period_end
+from modules.payroll.domain.engine import PayslipResult, calculate_payslip
+from modules.payroll.domain.inputs import EmployeeInput, OneOffInput, SettlementInput
+from modules.payroll.domain.rules import RuleSet
+from modules.payroll.domain.settlement import reference_salary, years_of_service
+from modules.payroll.domain.snapshot_mapping import employee_input, presence_input
 
 RUN_TYPES = ("regular", "off_cycle")
 RUN_SELECT = """
@@ -128,3 +137,149 @@ class RunService:
                      entity_type="payroll_run", entity_id=run_id,
                      payload={"period": run["period"].isoformat(), "run_type": run["run_type"], "status": run["status"]})
         return Ok({"id": run_id})
+
+    # -- calculation -----------------------------------------------------------------------------
+    def calculate(self, *, tenant_id: str, actor_id: str, run_id: str) -> Result[dict[str, Any]]:
+        run = lock_run(self.connection, tenant_id, run_id)
+        if run is None:
+            return not_found()
+        if run["status"] not in EDITABLE:
+            return locked(run["status"])
+        period = run["period"]
+        regular = run["run_type"] == "regular"
+        if regular and not self.presence.is_month_closed(tenant_id=tenant_id, period=period):
+            return Err("PRESENCE_NOT_CLOSED", f"presence for {period:%Y-%m} is not closed; close the month in HR first",
+                       f"la présence de {period:%m/%Y} n'est pas clôturée ; clôturez d'abord le mois dans RH")
+        rule_sets = RuleSetService(self.connection)
+        in_force = rule_sets.in_force(tenant_id=tenant_id, period=period)
+        if isinstance(in_force, Err):
+            return in_force
+        rules = rule_sets.load(tenant_id=tenant_id, rule_set_id=in_force.value["id"])
+
+        settlements = self._settlements(tenant_id, run_id)
+        scope = None if regular else sorted(set(run["employee_ids"] or []) | set(settlements))
+        if scope == []:
+            return Err("RUN_EMPTY", "choose at least one employee for an off-cycle run", "choisissez au moins un employé pour une paie hors cycle")
+        snapshots = self.snapshots.employees_for_period(tenant_id=tenant_id, period=period, employee_ids=scope)
+        if regular:
+            settled = self._settled_elsewhere(tenant_id, period, run_id)
+            snapshots = [item for item in snapshots if item["employee_id"] not in settled]
+        ids = [item["employee_id"] for item in snapshots]
+        summaries = ({row["employee_id"]: row for row in self.presence.month_summary(tenant_id=tenant_id, period=period, employee_ids=ids)}
+                     if ids else {})
+
+        self.connection.execute("DELETE FROM payroll.payslips WHERE run_id = %s", (run_id,))
+        inputs = InputService(self.connection, snapshots=self.snapshots)
+        typed = inputs.run_inputs_by_employee(tenant_id=tenant_id, run_id=run_id)
+        salaried = set(ids) if regular else set(settlements) & set(ids)
+        deductions = inputs.due_deductions(tenant_id=tenant_id, period=period, employee_ids=sorted(salaried), settle_ids=set(settlements))
+
+        written = 0
+        for item in snapshots:
+            employee_id = item["employee_id"]
+            one_offs = typed.get(employee_id, []) + deductions.get(employee_id, [])
+            include_salary = employee_id in salaried
+            if not include_salary and not one_offs:
+                continue
+            employee = employee_input(item)
+            settlement = self._settlement_input(tenant_id, rules, employee, settlements.get(employee_id), period)
+            result = calculate_payslip(employee=employee, presence=presence_input(summaries.get(employee_id)), rules=rules,
+                                       period=period, inputs=one_offs, settlement=settlement, include_salary=include_salary)
+            if isinstance(result, Err):
+                return Err(result.code, f"{item['full_name']}: {result.message}", f"{item['full_name']} : {result.message_fr}")
+            self._write_payslip(tenant_id, run_id, rules, item, summaries.get(employee_id), one_offs, settlement, result.value)
+            written += 1
+
+        self.connection.execute(
+            "UPDATE payroll.runs SET status = 'calculated', rule_set_id = %s, calculated_by = %s, calculated_at = clock_timestamp() WHERE id = %s",
+            (rules.id, actor_id, run_id),
+        )
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="payroll_run.calculated",
+                     entity_type="payroll_run", entity_id=run_id,
+                     payload={"from_status": run["status"], "to_status": "calculated", "rule_set_id": rules.id,
+                              "rule_set_status": rules.status, "payslips": written})
+        return Ok(self.get_run(tenant_id=tenant_id, run_id=run_id))
+
+    def _write_payslip(self, tenant_id: str, run_id: str, rules: RuleSet, employee: dict[str, Any], summary: dict[str, Any] | None,
+                       one_offs: list[OneOffInput], settlement: SettlementInput | None, result: PayslipResult) -> str:
+        payslip_id = str(ULID())
+        totals = result.totals
+        document = {
+            "employee": jsonable({key: value for key, value in employee.items() if key != "payment_methods"}),
+            "presence": jsonable(summary or {}),
+            "inputs": [jsonable(asdict(item)) for item in one_offs],
+            "settlement": None if settlement is None else jsonable(asdict(settlement)),
+            "payment_methods": jsonable(employee.get("payment_methods") or []),
+            "rule_set": {"id": rules.id, "status": rules.status, "valid_from": rules.valid_from.isoformat()},
+        }
+        self.connection.execute(
+            """
+            INSERT INTO payroll.payslips (id, tenant_id, run_id, employee_id, employee_no, full_name, department_id, rule_set_id,
+                rule_set_status, snapshot, gross, contributable, taxable, employee_contrib, employer_contrib, employer_charges,
+                its, deductions, net, employer_cost, warnings)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (payslip_id, tenant_id, run_id, employee["employee_id"], employee["employee_no"], employee["full_name"],
+             employee.get("department_id"), rules.id, rules.status, Jsonb(document), totals.gross, totals.contributable,
+             totals.taxable, totals.employee_contrib, totals.employer_contrib, totals.employer_charges, totals.tax,
+             totals.deductions, totals.net, totals.employer_cost, Jsonb(list(result.warnings))),
+        )
+        for number, line in enumerate(result.lines, start=1):
+            self.connection.execute(
+                """
+                INSERT INTO payroll.payslip_lines (id, tenant_id, payslip_id, line_no, section, code, name_en, name_fr, base, qty,
+                    rate, amount, taxable, contributable, declaration_code, source_kind, source_id)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (str(ULID()), tenant_id, payslip_id, number, line.section, line.code, line.name_en, line.name_fr, line.base,
+                 line.qty, line.rate, line.amount, line.taxable, line.contributable, line.declaration_code, line.source_kind, line.source_id),
+            )
+        for carry in result.carry_forwards:
+            self.connection.execute(
+                "INSERT INTO payroll.carry_forwards (id, tenant_id, employee_id, component_code, amount, source_kind, source_id, source_payslip_id) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                (str(ULID()), tenant_id, employee["employee_id"], carry.component_code, carry.amount, carry.source_kind, carry.source_id, payslip_id),
+            )
+        # Every advance / instalment / carried amount offered to the engine is settled by this payslip:
+        # deducted in full, cut with the rest carried, or carried whole (the new carry row holds what is owed).
+        marks = {"advance": "UPDATE payroll.advances SET deducted_payslip_id = %s WHERE id = %s",
+                 "loan_instalment": "UPDATE payroll.loan_instalments SET payslip_id = %s WHERE id = %s",
+                 "carry_forward": "UPDATE payroll.carry_forwards SET consumed_by_payslip_id = %s WHERE id = %s"}
+        for item in one_offs:
+            if item.source_kind in marks and item.source_id:
+                self.connection.execute(marks[item.source_kind], (payslip_id, item.source_id))
+        return payslip_id
+
+    def _settlements(self, tenant_id: str, run_id: str) -> dict[str, dict[str, Any]]:
+        rows = fetch_all(self.connection,
+                         "SELECT id, employee_id, employee_no, full_name, unused_leave_days, notice_months FROM payroll.final_settlements "
+                         "WHERE tenant_id = %s AND run_id = %s", (tenant_id, run_id))
+        return {row["employee_id"]: row for row in rows}
+
+    def _settled_elsewhere(self, tenant_id: str, period: datetime.date, run_id: str) -> set[str]:
+        rows = self.connection.execute(
+            """
+            SELECT fs.employee_id FROM payroll.final_settlements fs JOIN payroll.runs r ON r.id = fs.run_id
+            WHERE r.tenant_id = %s AND r.period = %s AND r.status <> 'reversed' AND r.id <> %s
+            """,
+            (tenant_id, period, run_id),
+        ).fetchall()
+        return {row[0] for row in rows}
+
+    def _settlement_input(self, tenant_id: str, rules: RuleSet, employee: EmployeeInput, row: dict[str, Any] | None,
+                          period: datetime.date) -> SettlementInput | None:
+        if row is None:
+            return None
+        history = self.connection.execute(
+            """
+            SELECT p.gross FROM payroll.payslips p JOIN payroll.runs r ON r.id = p.run_id
+            WHERE p.tenant_id = %s AND p.employee_id = %s AND r.run_type = 'regular' AND r.status IN ('approved', 'paid') AND r.period < %s
+            ORDER BY r.period DESC LIMIT %s
+            """,
+            (tenant_id, employee.employee_id, period, rules.settlement_reference_months),
+        ).fetchall()
+        reference = reference_salary([gross for (gross,) in history], months=rules.settlement_reference_months,
+                                     fallback=monthly_equivalent(employee, rules))
+        end = employee.termination_date or period_end(period)
+        return SettlementInput(reference_salary=reference, years_of_service=years_of_service(employee.hire_date, end),
+                               unused_leave_days=row["unused_leave_days"], notice_months=row["notice_months"])
