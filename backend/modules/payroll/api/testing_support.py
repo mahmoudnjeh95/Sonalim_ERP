@@ -17,6 +17,29 @@ from modules.payroll.domain.synthetic import synthetic_rule_set
 TEST_COUNTRY = "ZZ"  # ISO "user-assigned" code: never a real payroll country
 
 
+class WrappedConnection:
+    """The `db` fixture's connection for router tests: the routes' commit/rollback become no-ops so
+    the fixture's final rollback still undoes everything."""
+
+    def __init__(self, connection) -> None:
+        self._connection = connection
+
+    def __getattr__(self, name: str):
+        return getattr(self._connection, name)
+
+    def commit(self) -> None:
+        pass
+
+    def rollback(self) -> None:
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> bool:
+        return False
+
+
 def make_user(connection, tenant_id: str) -> str:
     user_id = str(ULID())
     connection.execute(
