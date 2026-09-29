@@ -128,6 +128,13 @@ def confirm_rule_set(rule_set_id: str, tenant: TenantContext = Depends(require_p
         return http.finish(connection, result)
 
 
+@router.post("/rule-sets/{rule_set_id}/reopen")
+def reopen_rule_set(rule_set_id: str, tenant: TenantContext = Depends(require_permission("payroll.confirm_rules"))):
+    with http.get_connection() as connection:
+        result = RuleSetService(connection).reopen_rule_set(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, rule_set_id=rule_set_id)
+        return http.finish(connection, result)
+
+
 # Generic rule-table routes stay LAST: "/rule-sets/{id}/{kind}" would otherwise swallow copy/confirm/reopen.
 @router.get("/rule-sets/{rule_set_id}/{kind}")
 def list_rule_rows(rule_set_id: str, kind: str, tenant: TenantContext = Depends(require_permission("payroll.view_rules"))):

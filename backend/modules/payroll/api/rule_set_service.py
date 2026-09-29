@@ -272,6 +272,26 @@ class RuleSetService:
                      entity_type="rule_set", entity_id=rule_set_id, payload={"from_status": "draft", "to_status": "confirmed"})
         return Ok(self.get_rule_set(tenant_id=tenant_id, rule_set_id=rule_set_id))
 
+    def reopen_rule_set(self, *, tenant_id: str, actor_id: str, rule_set_id: str) -> Result[dict[str, Any]]:
+        header = self._header(tenant_id, rule_set_id, lock=True)
+        if header is None:
+            return _not_found("rule set", "jeu de règles")
+        if header["status"] != "confirmed":
+            return Err("RULE_INVALID", "this rule set is already a draft", "ce jeu de règles est déjà un brouillon")
+        used = fetch_one(
+            self.connection,
+            "SELECT period FROM payroll.runs WHERE rule_set_id = %s AND status IN ('approved', 'paid') ORDER BY period LIMIT 1",
+            (rule_set_id,),
+        )
+        if used is not None:
+            return Err("RULESET_IN_USE", f"the {used['period']:%Y-%m} run was approved with this rule set; copy it to a new draft instead",
+                       f"la paie de {used['period']:%m/%Y} a été approuvée avec ce jeu de règles ; copiez-le plutôt en brouillon")
+        self.connection.execute(
+            "UPDATE payroll.rule_sets SET status = 'draft', confirmed_by = NULL, confirmed_at = NULL WHERE id = %s", (rule_set_id,))
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="rule_set.reopened",
+                     entity_type="rule_set", entity_id=rule_set_id, payload={"from_status": "confirmed", "to_status": "draft"})
+        return Ok(self.get_rule_set(tenant_id=tenant_id, rule_set_id=rule_set_id))
+
     # -- rule rows --------------------------------------------------------------------------------
     def list_children(self, *, tenant_id: str, rule_set_id: str, kind: str) -> list[dict[str, Any]]:
         spec = CHILD_KINDS[kind]
