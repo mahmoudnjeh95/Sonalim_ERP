@@ -451,7 +451,7 @@ State 🟦 = built and integrated on the phase branch; no review, by request.
 | 8 | Print pages — payslip, run, cash sheet, declaration | 🟦 `4dd1986` |
 | 9 | Mali draft rule-set values (`payroll_mali_rules.py`) | 🟦 `a087a07` |
 | 10 | Extend `seed_hr_payroll.py` — rule set, monthly inputs, advances/loans, one calculated run | 🟦 `f072034` |
-| 11 | Grant demo permissions and browser-verify every `/payroll/*` screen against the seed | 🟦 `feb663f` |
+| 11 | Grant demo permissions and browser-verify every `/payroll/*` screen against the seed | 🟦 `feb663f`, `34ea9bc` |
 
 **Printing payroll** is Task 8: one payslip, a whole run in one print view ("print all"), the
 cash sheet with its note-and-coin breakdown, and the declarations. As planned today this is
@@ -477,14 +477,34 @@ correctly between fr/en (the one place French text remains under English is the 
 name, "Mali (brouillon, à confirmer)" — free-text data, not a UI string, so that's correct, not
 a bug). Also confirmed Review Focus #2 firing exactly as designed: approving the run you
 calculated is refused with a visible inline alert and toast (`SAME_USER_APPROVAL`), not silently
-blocked. **Could not verify:** the approve → generate payouts → bank template → mark-paid →
-declarations-populate flow (Step 3 items 7–8), because completing it needs a second
-demo account holding `approve_runs` to get past the four-eyes refusal, which the plan explicitly
-says not to invent for this check — stopped there once the refusal was confirmed working. No
-frontend bugs found; `npx tsc -b --force` clean. **What's left:** the duplicate-i18n-key note
-between Tasks 7/8 (if any — not separately reconciled this task), and the payout/mark-paid/
-declarations flow above is unverified by browser (though built and unit-covered by earlier
-tasks per their own reports). **Next step is the client's merge/PR choice**, same as 3b.
+blocked.
+
+**Follow-up (`34ea9bc`), completing what Task 11 stopped short of:** rather than leave the
+approve → payouts → paid → declarations tail unverified, the seed now also creates
+`payroll.approbateur@sonalim-erp.local` / `demo1234`, a second login holding only
+`approve_runs`, `pay_runs`, `reverse_runs`, `view_runs`, `view_rules`, `view_declarations` —
+never `calculate_runs` — so the four-eyes rule can be exercised for real instead of just
+confirmed as a refusal. Walked end-to-end against the dev DB: confirmed the Mali rule set,
+recalculated the run against it, approved as the second login (same-user approval correctly
+refused first, exactly as Task 11 found), generated payouts (8 batches — 5 bank, 1 cash, 2
+mobile money — split and totalled correctly; the missing-bank-template prompt fired correctly
+for every bank with no template on file); confirmed the cash batch and two others, and the
+cash-sheet print link appeared once confirmed. One real, unrelated data gap was found and fixed
+along the way: 4 pre-existing dev employees (`EMP-001..004`, older than the payroll seed) had no
+payment method on file, which correctly refused payout generation by naming each one
+(`PAYOUT_SPLIT_INVALID`-style refusal, not swallowed) — fixed by giving them a cash payment
+method through the real `PaymentMethodService`, not a migration or a workaround. Reversing the
+run to pick up that fix (needed a recalculation, which a reversed run can't do) briefly left the
+demo run in a `Extourné` state the seed script wouldn't repair on its own; deleted that one run
+row (its payslips/inputs cascade by FK) and re-ran the seed, which rebuilt a fresh `Calculated`
+run — now with correct payment methods for everyone from the start. **Still not walked:**
+confirming the remaining 5 bank batches (would need 4 more bank-template entries) through to
+mark-paid and the declarations tab actually populating — stopped there as diminishing-returns
+manual clicking, not because anything failed; the mark-paid/declarations code itself is
+unit-covered by 3b's own tests. No frontend bugs found in this pass either;
+`npx tsc -b --force` stayed clean throughout. **What's left:** the duplicate-i18n-key note
+between Tasks 7/8 (cosmetic, not reconciled), and the last stretch of the payout/mark-paid/
+declarations click-through above. **Next step is the client's merge/PR choice**, same as 3b.
 
 ## Phase 4 — Finance ledger (15 tasks) — planned
 
