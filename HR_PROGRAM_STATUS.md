@@ -506,26 +506,34 @@ unit-covered by 3b's own tests. No frontend bugs found in this pass either;
 between Tasks 7/8 (cosmetic, not reconciled), and the last stretch of the payout/mark-paid/
 declarations click-through above. **Next step is the client's merge/PR choice**, same as 3b.
 
-## Phase 4 — Finance ledger (15 tasks) — planned
+## Phase 4 — Finance ledger (15 tasks) — in progress (mostly sequential, no review, by request)
 
-A SYSCOHADA general ledger in `finance`, which payroll and invoices post into by event.
+A SYSCOHADA general ledger in `finance`, which payroll and invoices post into by event. Started
+2026-09-29, right after phase 3c (built, not merged). Phase branch `hr-p4-finance-ledger`
+(worktree `.worktrees/hr-p4-finance-ledger`), cut from `huge_production_migration` at `5a829af`
+— phase 4 only needs phases 1–3b (merged), not 3c's frontend, so it does not wait on 3c.
+Unlike 3b/3c, most of this plan is a **tight sequential chain** (each backend task's migration
+numbering, module.json and service imports build on the one before), so tasks run one at a time
+in `.worktrees/p4-tN` (branch `p4-tN`) off the phase branch's latest commit, cherry-picked back
+after each one lands; only truly independent pairs (e.g. two pure-domain files, or two frontend
+screens once routes exist) run in parallel.
 
 | # | Task | State |
 |---|---|---|
-| 1 | Balanced-entry builder (pure domain) | ⬜ |
-| 2 | Posting rules and source mappings (pure domain) | ⬜ |
-| 3 | Ledger master data — chart seed, journals, fiscal years, periods | ⬜ |
-| 4 | Journal entries, triggers and the single posting path | ⬜ |
-| 5 | Payroll events into the ledger (approved, paid, reversed) with dead-letter reasons and retry | ⬜ |
-| 6 | Invoice events into the ledger (VTE / BNQ) | ⬜ |
-| 7 | Editing the chart of accounts and the posting rules | ⬜ |
-| 8 | Manual OD entries and the ledger's read side | ⬜ |
-| 9 | Reports — trial balance, general ledger, 42x/43x/44x balances | ⬜ |
-| 10 | Ledger HTTP routes | ⬜ |
-| 11 | Frontend foundations, Chart of accounts and Posting rules screens | ⬜ |
-| 12 | Journal entries screen (journal listing, manual OD entries, refused postings) | ⬜ |
-| 13 | Trial balance (with 42x/43x/44x balances), General ledger and Periods screens | ⬜ |
-| 14 | Posted / not posted on the payroll run page | ⬜ |
+| 1 | Balanced-entry builder (pure domain) | 🟦 `1fa6066` |
+| 2 | Posting rules and source mappings (pure domain) | 🟦 `be24cc9` |
+| 3 | Ledger master data — chart seed, journals, fiscal years, periods | 🟦 `a7332bf` (migration renumbered 0003, not 0002 — 0001/0002 pre-existed) |
+| 4 | Journal entries, triggers and the single posting path | 🟦 `8bcfb95` (migration 0004; immutability + deferred balance triggers, 11 tests green against real DB) |
+| 5 | Payroll events into the ledger (approved, paid, reversed) with dead-letter reasons and retry | 🟦 `c6bbd72` (Review Focus 1/2/3/5 all green, 12 new integration tests) |
+| 6 | Invoice events into the ledger (VTE / BNQ) | 🟦 `8435573` (7/7 tests, incl. real `InvoiceService` event end-to-end) |
+| 7 | Editing the chart of accounts and the posting rules | 🟦 `31bda75` (6/6 tests) |
+| 8 | Manual OD entries and the ledger's read side | 🟦 `0de6a33` (Review Focus 4 green: closed period, draft untouched, works after reopen) |
+| 9 | Reports — trial balance, general ledger, 42x/43x/44x balances | 🟦 `7603628` (4/4 tests; 90/90 finance suite green) |
+| 10 | Ledger HTTP routes | 🟦 `cc8ff6f` (24 routes, 6/6 tests; 97/97 finance suite green — backend spine complete) |
+| 11 | Frontend foundations, Chart of accounts and Posting rules screens | 🟦 `bf71916` (`tsc -b --force` clean; not browser-checked, left to Task 15) |
+| 12 | Journal entries screen (journal listing, manual OD entries, refused postings) | 🟦 `fed3f96` (`tsc -b --force` clean) |
+| 13 | Trial balance (with 42x/43x/44x balances), General ledger and Periods screens | 🟦 `918fa2a` (merged with Task 12 cleanly; full frontend `tsc -b --force` clean) |
+| 14 | Posted / not posted on the payroll run page | ⚠️ blocked: needs phase 3c's `RunPage.tsx`, which isn't on this branch (3c unmerged, cut separately from `hr-p3b-payroll-runs`) |
 | 15 | Seed the demo ledger and post the seeded payroll run | ⬜ |
 
 ## Phase 5 — Analytics & self-service (10 tasks) — planned
