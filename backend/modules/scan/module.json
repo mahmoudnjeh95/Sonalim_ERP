@@ -1,0 +1,11 @@
+{
+  "name": "scan",
+  "version": "0.1.0",
+  "depends": ["core", "production"],
+  "optional_depends": ["maintenance", "qc"],
+  "provides_api": ["ScanSessionService", "ScanAliasService"],
+  "publishes_events": [],
+  "subscribes_events": [],
+  "migrations_path": "./migrations",
+  "permissions": ["scan.use_scanner", "scan.view_scans", "scan.admin_aliases"]
+}
