@@ -39,6 +39,7 @@ import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
 import { ProductsPage } from "../features/products/ProductsPage";
 import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
 import { RunsPage } from "../features/payroll/runs/RunsPage";
+import { PayslipPage } from "../features/payroll/payslips/PayslipPage";
 
 // Lazy-loaded: pulls in recharts, which is the single largest dependency in
 // the bundle — keeping it out of the main chunk means pages that never touch
@@ -107,6 +108,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/payroll/runs", element: <RunsPage /> },
   { path: "/payroll/runs/:runId", element: <RunPage /> },
   { path: "/payroll/rules", element: <RulesPage /> },
+  { path: "/payroll/payslips/:payslipId", element: <PayslipPage /> },
 ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
 
 export const router = createBrowserRouter([
