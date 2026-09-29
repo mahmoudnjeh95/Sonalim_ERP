@@ -26,6 +26,7 @@ import { Button } from "../../../components/ui/button";
 import { Tabs, TabsList, TabsTrigger } from "../../../components/ui/tabs";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
+import { LedgerPostingStatus } from "../../finance/LedgerPostingStatus";
 import { useApproveRun, useCalculateRun, useMarkPaid, useRuleSet, useRun } from "../api";
 import { DraftRuleSetBanner } from "../DraftRuleSetBanner";
 import { formatPeriod, formatXof } from "../format";
@@ -225,6 +226,8 @@ export function RunPage() {
           </div>
         ))}
       </dl>
+
+      <LedgerPostingStatus runId={run.id} runStatus={run.status} />
 
       {(refusal || draftRuleSet || presenceOpen || ownCalculation || run.status === "reversed") && (
         <div className="space-y-2">

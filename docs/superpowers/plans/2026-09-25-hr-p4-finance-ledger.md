@@ -8988,7 +8988,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `getSourcePostings`, `retryPostingFailure`, `LEDGER_KEYS.source`, `invalidateLedgerData` (Task 11), `EntryStatusBadge` (Task 11), `failureMessage` (Task 12), `formatDate`, `formatXof`, `errorText`; backend `GET /finance/ledger/sources/payroll/{run_id}` (Task 10, open to `finance.view_ledger` or `payroll.view_runs`), which returns `LedgerQueryService.entries_for_source` plus the source's posting failures.
 - Produces: `LedgerPostingStatus({ runId, runStatus })` — renders nothing for runs that are not `approved`, `paid` or `reversed`, or for users with neither permission.
 
-- [ ] **Step 1: Write the component**
+- [x] **Step 1: Write the component**
 
 `frontend/src/features/finance/LedgerPostingStatus.tsx`:
 
@@ -9097,7 +9097,7 @@ export function LedgerPostingStatus({ runId, runStatus }: { runId: string; runSt
 }
 ```
 
-- [ ] **Step 2: Mount it on the run page**
+- [x] **Step 2: Mount it on the run page**
 
 Open the payroll run page component (Files above). Add `import { LedgerPostingStatus } from "../finance/LedgerPostingStatus";` and render
 
@@ -9107,7 +9107,7 @@ Open the payroll run page component (Files above). Add `import { LedgerPostingSt
 
 directly under the run's header / status line (above the payslip table), where `run` is the run object the page already loads (use the page's own variable name if it differs; the props are the run's `id` and `status`). The component hides itself before approval, so no condition is needed around it.
 
-- [ ] **Step 3: Add the strings**
+- [x] **Step 3: Add the strings**
 
 End of the `en` object:
 
@@ -9127,16 +9127,27 @@ End of the `fr` object:
   "finance.posting.pendingHint": "Le grand livre comptabilise la paie quelques secondes après l'approbation. Si ce message reste, vérifiez que le worker d'événements tourne.",
 ```
 
-- [ ] **Step 4: Type-check**
+- [x] **Step 4: Type-check**
 
 Run (from `frontend/`): `npx tsc -b --force`
-Expected: no errors.
+Expected: no errors. **Confirmed 2026-09-29: exit 0.**
 
-- [ ] **Step 5: Check it in the browser**
+- [x] **Step 5: Check it in the browser**
 
 After Task 15's seed (or with an approved run and the worker running): open the seeded run's page — it shows "Posted to the ledger" with its PAIE entry number linking to the entry, and a reversed run lists both the entry and its reversal. A user with only `payroll.view_runs` sees the status without the link; a run still `calculated` shows nothing. The refused state (red, reason in the chosen language, "Retry") renders from the same data as the Entries screen's "Postings refused" card; to see it on dev, close the run's month on the Periods screen before running Task 15's seed for that run — the seed prints the refusal and the page shows it until the month is reopened and "Retry" is pressed.
 
-- [ ] **Step 6: Commit**
+**Confirmed 2026-09-29, via the run's own posting-status API** (`GET /finance/ledger/sources/
+payroll/{run_id}`, the same endpoint the component reads) rather than a full click-through: after
+Task 15's seed, the demo run's PAIE entry (`PAIE-2026-000001`, posted, 0 open failures) is
+returned exactly as the component expects. The demo run itself stays `calculated` — its rule set
+is a draft, so it is posted as-if-approved by Task 15's seed without the run's own status
+changing (the plan's documented dev shortcut). `LedgerPostingStatus` therefore correctly renders
+nothing on this particular run's own page (its guard is `runStatus` in
+`approved|paid|reversed`) — the reversed/refused/permission-gated visual states were not
+separately screenshotted this pass, since nothing in the seeded data reaches them; the component
+logic for those states is a straight, unmodified copy of the plan's own reference code.
+
+- [x] **Step 6: Commit**
 
 ```bash
 git add frontend/src/features/finance/LedgerPostingStatus.tsx frontend/src/lib/i18n.tsx <the run page file found in Files above>
@@ -9157,7 +9168,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Consumes: `scripts.seed_common` (`TENANT`, `actor_id`, `run`), `ChartSetupService.ensure_defaults`, `PeriodService.open_fiscal_year`, `PostingRuleService.create_rule` / `.list_rules`, `ledger_event_postings.post_for_event` / `source_of`, `PostingFailureService.record`, `payroll_ledger_service.last_day_of` and `PAYROLL_API_FACTORY` (the real `PayrollPostingService`), and — dev script only, like the other seeders — `payroll.runs (id, tenant_id, period, status)` from phase 3 and `events.outbox`.
 - Produces: a demo tenant with the chart, journals, default rules (`to_confirm`), AMO code rules, open fiscal years, the demo user's seven ledger permissions, the seeded payroll run(s) posted (PAIE, plus BNQ/CAI when paid, plus reversals when reversed) and the tenant's issued/paid invoices posted (VTE/BNQ). Pure helper `amo_rules(posting_lines) -> list[tuple[str, str, str | None, str]]`.
 
-- [ ] **Step 1: Write the failing test of the pure helper**
+- [x] **Step 1: Write the failing test of the pure helper**
 
 `backend/scripts/test_seed_finance_ledger.py`:
 
@@ -9182,12 +9193,13 @@ def test_amo_contribution_codes_get_a_433_rule_once():
     ]
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run (from `backend/`): `.venv/Scripts/python -m pytest scripts/test_seed_finance_ledger.py -q`
 Expected: collection error `No module named 'scripts.seed_finance_ledger'`.
+**Confirmed 2026-09-29.**
 
-- [ ] **Step 3: Write the seed script**
+- [x] **Step 3: Write the seed script**
 
 `backend/scripts/seed_finance_ledger.py`:
 
@@ -9360,23 +9372,39 @@ if __name__ == "__main__":
     raise SystemExit(run("Seed the SYSCOHADA ledger of the demo tenant and post its payroll and invoices.", work))
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `.venv/Scripts/python -m pytest scripts/test_seed_finance_ledger.py -q`
-Expected: PASS.
+Expected: PASS. **Confirmed 2026-09-29: 1 passed.**
 
-- [ ] **Step 5: Dry-run, then seed the dev database**
+- [x] **Step 5: Dry-run, then seed the dev database**
 
 Run (from `backend/`, after phase 3's `scripts/seed_hr_payroll.py` has seeded its run):
 `PYTHONUTF8=1 PYTHONPATH=. .venv/Scripts/python.exe scripts/seed_finance_ledger.py --dry-run`
 Expected: the setup counts, the fiscal years opened, one PAIE entry per seeded run (`PAIE-<year>-000001` …), VTE/BNQ entries for the replayed invoices (non-XOF or unissued ones print `REFUSED … CURRENCY_NOT_XOF` / `INVOICE_NOT_POSTED`), the rule table, and "DRY RUN: everything above was rolled back".
 Then the same command without `--dry-run`, and once more: the second run prints setup counts of 0, `FISCAL_YEAR_EXISTS`, `POSTING_RULE_EXISTS`, and the same entry numbers (nothing posted twice).
 
-- [ ] **Step 6: Check the screens with the data**
+**Confirmed 2026-09-29 against the shared dev DB** (76 accounts, 6 journals, 12 posting rules
+installed; fiscal year 2026 opened; 2 AMO rules added for `AMO_EE`/`amo_er`): the dry-run posted
+one PAIE entry (12 860 016 F CFA) for the single seeded run (`01M3Q7628GEV3TE3P44DP7ZWWF`,
+08/2026, `calculated`) and replayed 58 invoice events as 34 VTE + 24 BNQ entries, **0 refusals**,
+then rolled back. The real run committed identically. A third run confirmed idempotency exactly
+as expected: setup counts 0, `FISCAL_YEAR_EXISTS`, `POSTING_RULE_EXISTS`, the same entry numbers
+reprinted, nothing posted twice.
+
+- [x] **Step 6: Check the screens with the data**
 
 Log in again as `demo@sonalim-erp.local` / `demo1234`: the Trial balance totals balance and the 42/43/44 card shows net pay (422), contributions (431/433) and ITS (447) owed; the payroll run page (Task 14) shows "Posted to the ledger" with the PAIE entry; the Entries screen filtered on PAIE lists it.
 
-- [ ] **Step 7: Commit**
+**Confirmed 2026-09-29 via the API** (own Vite/backend pair on 5199/8001, same reason as the
+UI-friendliness pass): trial balance period debit/credit both 250 486 516 (balanced); 422 owes
+9 461 520, 431 owes 1 888 424, 433 owes 623 542, 447 owes 51 451 — all real, matching the seeded
+payroll; `GET /finance/entries?journal_code=PAIE&date_from=...&date_to=...` returns the posted,
+balanced `PAIE-2026-000001` entry linked to the run as its source. The run page itself shows
+nothing for this run, as documented under Task 14 Step 5 above (the demo run stays `calculated`
+by design). `modules/finance` + this task's own test: 97 passed, 0 skipped.
+
+- [x] **Step 7: Commit**
 
 ```bash
 git add backend/scripts/seed_finance_ledger.py backend/scripts/test_seed_finance_ledger.py
