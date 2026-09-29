@@ -468,3 +468,24 @@ class RunService:
                      entity_type="payroll_run", entity_id=run_id,
                      payload={"from_status": run["status"], "to_status": "reversed", "reason": reason.strip()})
         return Ok(self.get_run(tenant_id=tenant_id, run_id=run_id))
+
+    # -- payouts -----------------------------------------------------------------------------------
+    def mark_paid(self, *, tenant_id: str, actor_id: str, run_id: str) -> Result[dict[str, Any]]:
+        run = lock_run(self.connection, tenant_id, run_id)
+        if run is None:
+            return not_found()
+        if run["status"] in ("paid", "reversed"):
+            return locked(run["status"])
+        if run["status"] != "approved":
+            return Err("RUN_NOT_APPROVED", "only an approved run can be marked paid", "seule une paie approuvée peut être marquée payée")
+        batches = fetch_all(self.connection, "SELECT status, total FROM payroll.payout_batches WHERE run_id = %s", (run_id,))
+        payable = self.connection.execute("SELECT COALESCE(SUM(net), 0) FROM payroll.payslips WHERE run_id = %s AND net > 0", (run_id,)).fetchone()[0]
+        complete = all(batch["status"] == "confirmed" for batch in batches) and sum(batch["total"] for batch in batches) == payable
+        if not complete or (payable > 0 and not batches):
+            return Err("PAYOUT_INCOMPLETE", "generate and confirm every payout batch before marking the run paid",
+                       "générez et confirmez tous les lots de paiement avant de marquer la paie payée")
+        self.connection.execute("UPDATE payroll.runs SET status = 'paid', paid_by = %s, paid_at = clock_timestamp() WHERE id = %s", (actor_id, run_id))
+        self._publish(tenant_id, "payroll.run.paid", run_id, {"run_id": run_id, "period": run["period"].isoformat()})
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="payroll_run.paid", entity_type="payroll_run",
+                     entity_id=run_id, payload={"from_status": "approved", "to_status": "paid", "total": int(payable)})
+        return Ok(self.get_run(tenant_id=tenant_id, run_id=run_id))

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import NoReturn, TypeVar
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException, Response, status
 
 from core.db import get_connection as get_connection  # noqa: PLC0414 - re-exported patch point
 from core.domain.result import Err, Result, err_detail
@@ -46,3 +46,9 @@ def found(value: T | None, what_en: str, what_fr: str) -> T:
     if value is None:
         fail(Err("NOT_FOUND", f"{what_en} not found", f"{what_fr} introuvable"))
     return value
+
+
+def csv_response(file_name: str, text: str) -> Response:
+    """CSV as a download; the byte-order mark makes Excel read the accents as UTF-8."""
+    return Response(content="﻿" + text, media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": f'attachment; filename="{file_name}"'})

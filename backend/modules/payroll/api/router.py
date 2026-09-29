@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from modules.payroll.api.routes_payouts import router as payouts_router
 from modules.payroll.api.routes_rules import router as rules_router
 
 router = APIRouter(prefix="/payroll", tags=["payroll"])
 router.include_router(rules_router)
+router.include_router(payouts_router)
