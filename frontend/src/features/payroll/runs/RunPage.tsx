@@ -29,6 +29,7 @@ import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { useApproveRun, useCalculateRun, useMarkPaid, useRuleSet, useRun } from "../api";
 import { DraftRuleSetBanner } from "../DraftRuleSetBanner";
 import { formatPeriod, formatXof } from "../format";
+import { VariancePanel } from "./run/VariancePanel";
 import { PayrollStatusBadge } from "../PayrollStatusBadge";
 import { PayslipsPanel } from "./run/PayslipsPanel";
 import { ReverseDialog } from "./run/ReverseDialog";
@@ -284,7 +285,7 @@ export function RunPage() {
       </StickyTabBar>
 
       {tab === "payslips" && <PayslipsPanel runId={run.id} />}
-      {tab === "variance" && <div data-task="5-wires-VariancePanel-here" />}
+      {tab === "variance" && <VariancePanel runId={run.id} />}
       {/* Final settlements belong to off-cycle runs; on a regular run the panel says so. */}
       {tab === "settlements" && (
         <SettlementsPanel run={run} canEdit={hasPermission("payroll.calculate_runs")} />
