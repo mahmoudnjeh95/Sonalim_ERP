@@ -2,11 +2,13 @@ import type { ReactNode } from "react";
 import { Table, TableBody, TableCell, TableHeader, TableRow, ResizableTableHead } from "../../components/ui/table";
 import { Button } from "../../components/ui/button";
 import { Skeleton } from "../../components/ui/skeleton";
+import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { useI18n } from "../../lib/i18n";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
+import { cn } from "../../lib/utils";
 
 interface HrListTableProps<Row> {
   tableKey: string;
@@ -14,6 +16,8 @@ interface HrListTableProps<Row> {
   rows: Row[];
   rowKey: (row: Row) => string;
   loading: boolean;
+  /** "loader" only for the one table that is the whole screen; tabs and sub-blocks use skeletons. */
+  loadingVariant?: "loader" | "skeleton";
   emptyIcon: ReactNode;
   emptyTitle: string;
   emptyDescription: string;
@@ -22,15 +26,19 @@ interface HrListTableProps<Row> {
   filtersActive?: boolean;
   onClearFilters?: () => void;
   rowClassName?: (row: Row) => string | undefined;
+  onRowClick?: (row: Row) => void;
+  /** Wrap the table in a bordered card shell. Default true; pass false for a table already inside a Card. */
+  bordered?: boolean;
 }
 
 /**
- * The phase-2 HR list table: columns as data (resize, hide and sort, saved per user through
- * useTableColumns), the per-column filter row under the headers, skeleton rows while loading
- * (the page shows the branded loader once), an empty state.
+ * The HR list table: columns as data (resize, hide and sort, saved per user through
+ * useTableColumns), the per-column filter row under the headers, skeleton or branded-loader
+ * rows while loading, an empty state.
  */
 export function HrListTable<Row>({
-  tableKey, columns, rows, rowKey, loading, emptyIcon, emptyTitle, emptyDescription, toolbar, filtersActive, onClearFilters, rowClassName,
+  tableKey, columns, rows, rowKey, loading, loadingVariant = "skeleton", emptyIcon, emptyTitle, emptyDescription,
+  toolbar, filtersActive, onClearFilters, rowClassName, onRowClick, bordered = true,
 }: HrListTableProps<Row>) {
   const { t } = useI18n();
   const table = useTableColumns(tableKey, columns);
@@ -49,7 +57,7 @@ export function HrListTable<Row>({
           <ColumnVisibilityMenu columns={columns} isVisible={table.isVisible} onToggle={table.toggleVisible} onReset={table.resetAll} />
         </div>
       </div>
-      <div className="rounded-lg border border-border">
+      <div className={bordered ? "rounded-lg border border-border" : undefined}>
         <Table colWidths={table.colWidths}>
           <TableHeader>
             <TableRow>
@@ -69,7 +77,9 @@ export function HrListTable<Row>({
             <ColumnFilterRow cells={table.visibleColumns.map((column) => column.filterCell ?? { type: "blank" })} />
           </TableHeader>
           <TableBody>
+            {loading && loadingVariant === "loader" && <TableLoadingRow colSpan={span} />}
             {loading &&
+              loadingVariant === "skeleton" &&
               [0, 1, 2].map((index) => (
                 <TableRow key={`skeleton-${index}`}>
                   <TableCell colSpan={span}>
@@ -86,7 +96,11 @@ export function HrListTable<Row>({
             )}
             {!loading &&
               sorted.map((row) => (
-                <TableRow key={rowKey(row)} className={rowClassName?.(row)}>
+                <TableRow
+                  key={rowKey(row)}
+                  className={cn(onRowClick && "cursor-pointer", rowClassName?.(row))}
+                  onClick={onRowClick ? () => onRowClick(row) : undefined}
+                >
                   {table.visibleColumns.map((column) => (
                     <TableCell key={column.key} className={column.cellClassName}>
                       {column.cell(row)}

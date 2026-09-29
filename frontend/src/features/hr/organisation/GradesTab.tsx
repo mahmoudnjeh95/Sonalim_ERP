@@ -14,7 +14,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { createGrade, hrKeys, listGrades, updateGrade, type Grade, type GradeInput } from "../api";
 import { formatDate, formatXof, todayIso } from "../employeeFormat";
 import { FormField } from "../FormField";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 
 export function GradesTab() {
   const { session, hasPermission } = useAuth();
@@ -80,14 +80,17 @@ export function GradesTab() {
         )}
       </CardHeader>
       <CardContent>
-        <HrTable
+        <HrListTable
           tableKey="hr.organisation.grades"
           columns={columns}
           rows={filters.apply(grades)}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
+          loading={isLoading}
           loadingVariant="loader"
-          empty={{ icon: <Layers className="h-5 w-5" />, title: t("hr.org.grade.empty.title"), description: t("hr.org.grade.empty.description") }}
+          bordered={false}
+          emptyIcon={<Layers className="h-5 w-5" />}
+          emptyTitle={t("hr.org.grade.empty.title")}
+          emptyDescription={t("hr.org.grade.empty.description")}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}
         />

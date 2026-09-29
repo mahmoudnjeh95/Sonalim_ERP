@@ -30,7 +30,7 @@ import {
 import { DEPENDANT_KIND_LABEL } from "../employeeLabels";
 import { emptyToNull, formatDate, todayIso } from "../employeeFormat";
 import { FormField } from "../FormField";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 
 type KindFilter = "all" | DependantKind;
 
@@ -104,13 +104,16 @@ export function FamilyTab({ employee }: { employee: EmployeeRecord }) {
         )}
       </CardHeader>
       <CardContent>
-        <HrTable
+        <HrListTable
           tableKey="hr.employee.dependants"
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
-          empty={{ icon: <Users className="h-5 w-5" />, title: t("hr.family.empty.title"), description: t("hr.family.empty.description") }}
+          loading={isLoading}
+          bordered={false}
+          emptyIcon={<Users className="h-5 w-5" />}
+          emptyTitle={t("hr.family.empty.title")}
+          emptyDescription={t("hr.family.empty.description")}
           toolbar={<FilterTabs value={kind} onChange={setKind} options={kindOptions} />}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}

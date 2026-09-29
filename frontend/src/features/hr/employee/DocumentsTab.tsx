@@ -29,7 +29,7 @@ import {
 import { DOCUMENT_KIND_LABEL, DOCUMENT_STATE_LABEL, DOCUMENT_STATE_VARIANT } from "../employeeLabels";
 import { emptyToNull, formatDate } from "../employeeFormat";
 import { FormField } from "../FormField";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 
 type StateFilter = "all" | DocumentState | "none";
 
@@ -117,13 +117,16 @@ export function DocumentsTab({ employee }: { employee: EmployeeRecord }) {
         )}
       </CardHeader>
       <CardContent>
-        <HrTable
+        <HrListTable
           tableKey="hr.employee.documents"
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
-          empty={{ icon: <FileStack className="h-5 w-5" />, title: t("hr.documents.empty.title"), description: t("hr.documents.empty.description") }}
+          loading={isLoading}
+          bordered={false}
+          emptyIcon={<FileStack className="h-5 w-5" />}
+          emptyTitle={t("hr.documents.empty.title")}
+          emptyDescription={t("hr.documents.empty.description")}
           toolbar={<FilterTabs value={state} onChange={setState} options={stateOptions} />}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}
