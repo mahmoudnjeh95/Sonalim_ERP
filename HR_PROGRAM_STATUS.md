@@ -34,11 +34,24 @@ ledger, those win — they move first.
 > both the controller and the reviewer. Nothing here is taken on faith without a second, concrete
 > pass — every pinned risk in this phase was hand-verified, not just read.
 >
-> **2026-09-29: the phase 3a whole-branch review is running now** — dispatched on the most
-> capable model against the full `cfe5665..814e90a` diff (11 commits), per this file's own
-> "How this work runs" section (same step phases 1 and 2 went through before their finishing
-> decision). Not merged or pushed yet; that stays the next decision once the review — and its one
-> permitted fix wave, if it finds anything — clears.
+> **2026-09-29: the phase 3a whole-branch review ran and came back "ready to merge with fixes"**
+> — zero Critical, 2 Important, 9 Minor (all deferred). Both Important findings were cross-task/
+> cross-phase, invisible to any single task's own review:
+> 1. A daily-paid worker was paid twice for a worked public holiday — hr's presence summary
+>    (phase 2) counts a worked holiday in both `worked_days` and `holiday_days`, so the daily-pay
+>    formula drew a full day rate for that day twice, on top of its overtime line. **Fixed** for
+>    the worked-*holiday* case. A worked **rest day** has the same bug but no hr field currently
+>    distinguishes it within `worked_days` — that half is a genuine, open cross-module gap, left
+>    for phase 3b/hr to resolve, not silently dropped.
+> 2. A rule set could be confirmed with the unpaid-absence row's tax/contribution flags not
+>    matching the base salary row's, silently producing a wrong ITS; and a payslip's net going
+>    negative before any deduction was even applied raised no warning. **Both fixed.**
+>
+> Fix commit `2758c11` on `hr-p3a-payroll-engine`, 3 new tests (each confirmed to fail against the
+> pre-fix code and pass after, before being committed). `modules/payroll` suite: 109 passed, 0
+> skipped, real DB. A scoped re-review of just this fix commit is running now, per the skill's
+> one-fix-wave rule — the last step before the merge/PR/keep decision (same choice offered after
+> phases 1 and 2, still open for both).
 >
 > **Action still required on the server, before the phase 1+2 deploy is usable:**
 > 1. Run phase 2's pending migrations on the server (0010–0014, `hr` module only — the warehouse
