@@ -33,6 +33,8 @@ import { PayrollStatusBadge } from "../PayrollStatusBadge";
 import { PayslipsPanel } from "./run/PayslipsPanel";
 import { ReverseDialog } from "./run/ReverseDialog";
 import { SettlementsPanel } from "./run/SettlementsPanel";
+import { PayoutsPanel } from "./run/PayoutsPanel";
+import { DeclarationsPanel } from "./run/DeclarationsPanel";
 
 type Tab = "payslips" | "variance" | "settlements" | "payouts" | "declarations";
 
@@ -287,8 +289,8 @@ export function RunPage() {
       {tab === "settlements" && (
         <SettlementsPanel run={run} canEdit={hasPermission("payroll.calculate_runs")} />
       )}
-      {tab === "payouts" && <div data-task="6-wires-PayoutsPanel-here" />}
-      {tab === "declarations" && <div data-task="6-wires-DeclarationsPanel-here" />}
+      {tab === "payouts" && <PayoutsPanel run={run} />}
+      {tab === "declarations" && <DeclarationsPanel run={run} />}
 
       <ReverseDialog open={reverseOpen} onOpenChange={setReverseOpen} runId={run.id} />
     </div>
