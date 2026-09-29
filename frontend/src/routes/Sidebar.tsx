@@ -20,6 +20,8 @@ import {
   Fingerprint,
   FlaskConical,
   Gauge,
+  GitBranch,
+  ListTree,
   HeartPulse,
   History,
   KeyRound,
@@ -190,7 +192,14 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.commerce",
     items: [
       { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart },
-      { to: "/finance", labelKey: "nav.finance", icon: Wallet },
+      { to: "/finance", labelKey: "nav.finance", icon: Wallet, exact: true },
+    ],
+  },
+  {
+    labelKey: "nav.accounting",
+    items: [
+      { to: "/finance/accounts", labelKey: "nav.chartOfAccounts", icon: ListTree, permission: "finance.view_ledger" },
+      { to: "/finance/posting-rules", labelKey: "nav.postingRules", icon: GitBranch, permission: "finance.view_ledger" },
     ],
   },
   {

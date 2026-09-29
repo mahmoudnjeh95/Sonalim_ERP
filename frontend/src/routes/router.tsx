@@ -24,6 +24,8 @@ import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPag
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
 import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
+import { AccountsPage } from "../features/finance/AccountsPage";
+import { PostingRulesPage } from "../features/finance/PostingRulesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
 import { EmployeesPage } from "../features/hr/EmployeesPage";
@@ -89,6 +91,8 @@ const protectedChildren: RouteObject[] = [
   { path: "/procurement", element: <PurchaseOrdersPage /> },
   { path: "/sales", element: <SalesOrdersPage /> },
   { path: "/finance", element: <FinanceInvoicesPage /> },
+  { path: "/finance/accounts", element: <AccountsPage /> },
+  { path: "/finance/posting-rules", element: <PostingRulesPage /> },
   { path: "/admin/users", element: <UsersPage /> },
   { path: "/admin/roles", element: <RolesPage /> },
   { path: "/admin/activity-log", element: <ActivityLogPage /> },
