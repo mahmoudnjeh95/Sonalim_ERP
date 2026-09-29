@@ -16,6 +16,7 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from core.events.outbox import publish_event
 from modules.hr.api.payroll_snapshot_service import PayrollSnapshotService
 from modules.hr.api.presence_service import PresenceService
 from modules.payroll.api.input_service import InputService
@@ -388,3 +389,82 @@ class RunService:
         end = employee.termination_date or period_end(period)
         return SettlementInput(reference_salary=reference, years_of_service=years_of_service(employee.hire_date, end),
                                unused_leave_days=row["unused_leave_days"], notice_months=row["notice_months"])
+
+    # -- approval and reversal ------------------------------------------------------------------
+    def _publish(self, tenant_id: str, event_type: str, run_id: str, payload: dict[str, Any]) -> None:
+        publish_event(self.connection, event_type=event_type, producer="payroll", tenant_id=tenant_id,
+                      correlation_id=run_id, payload=payload)
+
+    def approve(self, *, tenant_id: str, actor_id: str, run_id: str) -> Result[dict[str, Any]]:
+        run = lock_run(self.connection, tenant_id, run_id)
+        if run is None:
+            return not_found()
+        if run["status"] in ("approved", "paid", "reversed"):
+            return locked(run["status"])
+        if run["status"] != "calculated":
+            return Err("RUN_NOT_CALCULATED", "calculate the run before approving it", "calculez la paie avant de l'approuver")
+        if run["calculated_by"] == actor_id:
+            return Err("SAME_USER_APPROVAL", "the person who calculated the run cannot approve it",
+                       "la personne qui a calculé la paie ne peut pas l'approuver")
+        rule_set = fetch_one(self.connection, "SELECT status, confirmed_at FROM payroll.rule_sets WHERE id = %s", (run["rule_set_id"],))
+        if rule_set["status"] != "confirmed":
+            return Err("RULESET_NOT_CONFIRMED", "the rule set used is a draft; the accountant confirms it, then recalculate and approve",
+                       "le jeu de règles utilisé est un brouillon ; le comptable le confirme, puis recalculez et approuvez")
+        if rule_set["confirmed_at"] > run["calculated_at"]:
+            return Err("RULESET_NOT_CONFIRMED", "the rule set was confirmed after this calculation; recalculate before approving",
+                       "le jeu de règles a été confirmé après ce calcul ; recalculez avant d'approuver")
+        in_force = RuleSetService(self.connection).in_force(tenant_id=tenant_id, period=run["period"])
+        if isinstance(in_force, Err) or in_force.value["id"] != run["rule_set_id"]:
+            return Err("RULESET_NOT_CONFIRMED", "another rule set now applies to this month; recalculate before approving",
+                       "un autre jeu de règles s'applique désormais à ce mois ; recalculez avant d'approuver")
+        if run["run_type"] == "regular" and not self.presence.is_month_closed(tenant_id=tenant_id, period=run["period"]):
+            return Err("PRESENCE_NOT_CLOSED", "presence was reopened after the calculation; close it again, recalculate, then approve",
+                       "la présence a été rouverte après le calcul ; clôturez-la de nouveau, recalculez, puis approuvez")
+        self.connection.execute("UPDATE payroll.runs SET status = 'approved', approved_by = %s, approved_at = clock_timestamp() WHERE id = %s",
+                                (actor_id, run_id))
+        self._publish(tenant_id, "payroll.run.approved", run_id,
+                      {"run_id": run_id, "period": run["period"].isoformat(), "run_type": run["run_type"]})
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="payroll_run.approved",
+                     entity_type="payroll_run", entity_id=run_id, payload={"from_status": "calculated", "to_status": "approved"})
+        return Ok(self.get_run(tenant_id=tenant_id, run_id=run_id))
+
+    def reverse(self, *, tenant_id: str, actor_id: str, run_id: str, reason: str) -> Result[dict[str, Any]]:
+        if not (reason or "").strip():
+            return Err("RUN_INVALID", "give the reason for the reversal", "indiquez le motif de l'extourne")
+        run = lock_run(self.connection, tenant_id, run_id)
+        if run is None:
+            return not_found()
+        if run["status"] not in ("approved", "paid"):
+            return Err("RUN_NOT_REVERSIBLE", "only an approved or paid run can be reversed", "seule une paie approuvée ou payée peut être extournée")
+        takers = fetch_all(
+            self.connection,
+            """
+            SELECT DISTINCT later.id, later.period, later.status
+            FROM payroll.carry_forwards cf
+            JOIN payroll.payslips source ON source.id = cf.source_payslip_id
+            JOIN payroll.payslips taker ON taker.id = cf.consumed_by_payslip_id
+            JOIN payroll.runs later ON later.id = taker.run_id
+            WHERE source.run_id = %s
+            """,
+            (run_id,),
+        )
+        final = [taker for taker in takers if taker["status"] in ("approved", "paid")]
+        if final:
+            periods = ", ".join(sorted({f"{taker['period']:%m/%Y}" for taker in final}))
+            return Err("RUN_LOCKED", f"a later approved run ({periods}) already deducted amounts carried from this run; reverse it first",
+                       f"une paie approuvée plus récente ({periods}) a déjà retenu des montants reportés de cette paie ; extournez-la d'abord")
+        for taker in takers:
+            invalidate(self.connection, taker["id"])
+        own = "SELECT id FROM payroll.payslips WHERE run_id = %s"
+        self.connection.execute(f"UPDATE payroll.advances SET deducted_payslip_id = NULL WHERE deducted_payslip_id IN ({own})", (run_id,))
+        self.connection.execute(f"UPDATE payroll.loan_instalments SET payslip_id = NULL WHERE payslip_id IN ({own})", (run_id,))
+        self.connection.execute(f"UPDATE payroll.carry_forwards SET consumed_by_payslip_id = NULL WHERE consumed_by_payslip_id IN ({own})", (run_id,))
+        self.connection.execute(f"DELETE FROM payroll.carry_forwards WHERE source_payslip_id IN ({own})", (run_id,))
+        self.connection.execute(
+            "UPDATE payroll.runs SET status = 'reversed', reversed_by = %s, reversed_at = clock_timestamp(), reversal_reason = %s WHERE id = %s",
+            (actor_id, reason.strip(), run_id))
+        self._publish(tenant_id, "payroll.run.reversed", run_id, {"run_id": run_id, "period": run["period"].isoformat()})
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="payroll_run.reversed",
+                     entity_type="payroll_run", entity_id=run_id,
+                     payload={"from_status": run["status"], "to_status": "reversed", "reason": reason.strip()})
+        return Ok(self.get_run(tenant_id=tenant_id, run_id=run_id))

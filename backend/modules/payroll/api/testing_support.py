@@ -127,6 +127,20 @@ def snapshot(employee_id: str, *, employee_no: str, full_name: str, base_salary:
     }
 
 
+def approved_run(connection, *, tenant_id: str, calculator: str, approver: str, period: datetime.date,
+                 snapshots: Any, presence: Any) -> str:
+    """A regular run calculated by one user and approved by another (four-eyes)."""
+    from modules.payroll.api.run_service import RunService
+
+    runs = RunService(connection, snapshots=snapshots, presence=presence)
+    run_id = runs.create_run(tenant_id=tenant_id, actor_id=calculator, period=period, run_type="regular").value["id"]
+    calculated = runs.calculate(tenant_id=tenant_id, actor_id=calculator, run_id=run_id)
+    assert isinstance(calculated, Ok), calculated
+    approved = runs.approve(tenant_id=tenant_id, actor_id=approver, run_id=run_id)
+    assert isinstance(approved, Ok), approved
+    return run_id
+
+
 def insert_run(connection, *, tenant_id: str, actor_id: str, period: datetime.date, status: str = "draft",
                run_type: str = "regular", rule_set_id: str | None = None) -> str:
     """A run row in any status, for tests that need history without calculating it."""
