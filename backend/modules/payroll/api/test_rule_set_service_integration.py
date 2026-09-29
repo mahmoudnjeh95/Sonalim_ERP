@@ -35,6 +35,17 @@ def test_a_new_rule_set_is_an_empty_draft(db, actor):
     assert (created.value["working_hours_per_month"], created.value["settlement_reference_months"]) == (160, 12)
 
 
+def test_the_rest_day_pay_mode_is_stored_edited_while_draft_and_loaded(db, actor):
+    service = RuleSetService(db)
+    created = _create(db, actor)
+    assert created.value["daily_rest_day_pay"] == "overtime_only"
+    rule_set_id = created.value["id"]
+    edited = service.update_rule_set(tenant_id=TENANT, actor_id=actor, rule_set_id=rule_set_id,
+                                     changes={"daily_rest_day_pay": "day_rate_and_overtime"})
+    assert isinstance(edited, Ok) and edited.value["daily_rest_day_pay"] == "day_rate_and_overtime"
+    assert service.load(tenant_id=TENANT, rule_set_id=rule_set_id).daily_rest_day_pay == "day_rate_and_overtime"
+
+
 def test_two_rule_sets_cannot_start_the_same_month_in_one_country(db, actor):
     _create(db, actor)
     again = _create(db, actor)

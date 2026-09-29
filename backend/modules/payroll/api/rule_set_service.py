@@ -85,7 +85,7 @@ CHILD_KINDS: dict[str, ChildSpec] = {
 
 HEADER_COLUMNS = (
     "country", "name", "valid_from", "round_to", "round_mode", "tax_round_to", "tax_round_mode",
-    "working_days_per_month", "working_hours_per_month", "settlement_reference_months", "notes",
+    "working_days_per_month", "working_hours_per_month", "settlement_reference_months", "daily_rest_day_pay", "notes",
 )
 _HEADER_SELECT = (
     f"SELECT id, status, confirmed_by, confirmed_at, created_by, created_at, {', '.join(HEADER_COLUMNS)} "
@@ -166,12 +166,13 @@ class RuleSetService:
     def create_rule_set(self, *, tenant_id: str, actor_id: str, country: str, name: str, valid_from: datetime.date,
                         working_days_per_month, working_hours_per_month, round_to: int = 1, round_mode: str = "half_up",
                         tax_round_to: int = 1, tax_round_mode: str = "half_up", settlement_reference_months: int = 12,
-                        notes: str | None = None) -> Result[dict[str, Any]]:
+                        daily_rest_day_pay: str = "overtime_only", notes: str | None = None) -> Result[dict[str, Any]]:
         checked = validate_rule_set_header({
             "country": country, "name": name, "valid_from": valid_from, "round_to": round_to, "round_mode": round_mode,
             "tax_round_to": tax_round_to, "tax_round_mode": tax_round_mode,
             "working_days_per_month": working_days_per_month, "working_hours_per_month": working_hours_per_month,
-            "settlement_reference_months": settlement_reference_months, "notes": notes,
+            "settlement_reference_months": settlement_reference_months, "daily_rest_day_pay": daily_rest_day_pay,
+            "notes": notes,
         })
         if isinstance(checked, Err):
             return checked
@@ -270,6 +271,26 @@ class RuleSetService:
         )
         record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="rule_set.confirmed",
                      entity_type="rule_set", entity_id=rule_set_id, payload={"from_status": "draft", "to_status": "confirmed"})
+        return Ok(self.get_rule_set(tenant_id=tenant_id, rule_set_id=rule_set_id))
+
+    def reopen_rule_set(self, *, tenant_id: str, actor_id: str, rule_set_id: str) -> Result[dict[str, Any]]:
+        header = self._header(tenant_id, rule_set_id, lock=True)
+        if header is None:
+            return _not_found("rule set", "jeu de règles")
+        if header["status"] != "confirmed":
+            return Err("RULE_INVALID", "this rule set is already a draft", "ce jeu de règles est déjà un brouillon")
+        used = fetch_one(
+            self.connection,
+            "SELECT period FROM payroll.runs WHERE rule_set_id = %s AND status IN ('approved', 'paid') ORDER BY period LIMIT 1",
+            (rule_set_id,),
+        )
+        if used is not None:
+            return Err("RULESET_IN_USE", f"the {used['period']:%Y-%m} run was approved with this rule set; copy it to a new draft instead",
+                       f"la paie de {used['period']:%m/%Y} a été approuvée avec ce jeu de règles ; copiez-le plutôt en brouillon")
+        self.connection.execute(
+            "UPDATE payroll.rule_sets SET status = 'draft', confirmed_by = NULL, confirmed_at = NULL WHERE id = %s", (rule_set_id,))
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="rule_set.reopened",
+                     entity_type="rule_set", entity_id=rule_set_id, payload={"from_status": "confirmed", "to_status": "draft"})
         return Ok(self.get_rule_set(tenant_id=tenant_id, rule_set_id=rule_set_id))
 
     # -- rule rows --------------------------------------------------------------------------------
@@ -384,6 +405,7 @@ class RuleSetService:
             working_days_per_month=header["working_days_per_month"],
             working_hours_per_month=header["working_hours_per_month"],
             settlement_reference_months=header["settlement_reference_months"],
+            daily_rest_day_pay=header["daily_rest_day_pay"],
             components=tuple(ComponentRule(**row) for row in rows["components"]),
             contributions=tuple(ContributionRule(**row) for row in rows["contributions"]),
             tax_brackets=tuple(TaxBracket(tax_code=row["tax_code"], lower=row["lower_bound"], upper=row["upper_bound"],

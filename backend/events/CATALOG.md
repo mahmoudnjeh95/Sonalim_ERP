@@ -28,5 +28,8 @@
 | `qc.non_conformity.raised` | 1.0 | qc | — | `non_conformity_id`, `of_id`, `product_id`, `quantity`, `location_id` |
 | `qc.non_conformity.dispositioned` | 1.0 | qc | production | `non_conformity_id`, `of_id`, `product_id`, `lines` (`component`, `disposition`, `quantity`) |
 | `hr.presence_month.closed` | 1.0 | hr | payroll (phase 3) | `period` (ISO date, first day of the month) — every presence day of the month is locked and complete; `PresenceService.month_summary` for it is final until the month is reopened. |
+| `payroll.run.approved` | 1.0 | payroll | finance | `run_id`, `period`, `run_type` — a run's payslips are final (four-eyes, confirmed rule set, closed presence); finance posts the PAIE entry from `PayrollPostingService.posting_lines` |
+| `payroll.run.paid` | 1.0 | payroll | finance | `run_id`, `period` — every payout batch of the run is confirmed; finance clears 422 from `PayrollPostingService.payment_lines` |
+| `payroll.run.reversed` | 1.0 | payroll | finance | `run_id`, `period` — an approved or paid run was cancelled; its deductions are released; finance posts the mirror entry |
 
 Every event uses the standard envelope defined in `.claude/skills/erp-platform-architecture/SKILL.md`. Add a row here before merging any new publishing code.

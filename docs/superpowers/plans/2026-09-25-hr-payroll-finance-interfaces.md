@@ -62,8 +62,12 @@ class PresenceService:
     def is_month_closed(self, *, tenant_id: str, period: datetime.date) -> bool: ...
 ```
 `month_summary` dict: `employee_id, scheduled_days, worked_days, unpaid_absence_days,
-paid_leave_days, sick_days, holiday_days, holidays_worked_days, ot_minutes_day,
+paid_leave_days, sick_days, holiday_days, holidays_worked_days, rest_days_worked, ot_minutes_day,
 ot_minutes_night, ot_minutes_rest_holiday, night_minutes, late_minutes` (all int).
+`rest_days_worked` (added 2026-09-29): worked days whose minutes are rest/holiday overtime and
+that are not paid holidays; they are also in `worked_days`. Payroll's rule-set parameter
+`daily_rest_day_pay` (`overtime_only` default | `day_rate_and_overtime`) decides whether a
+daily-paid worker's such day also draws its day rate.
 Overtime bands stored in presence: `day`, `night`, `rest_holiday` — phase 3 maps them to
 rate multipliers through `payroll.overtime_rates.band_code` with the same three codes.
 Event published by phase 2 on close: `hr.presence_month.closed` payload `{period}`.
