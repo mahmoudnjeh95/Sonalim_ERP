@@ -624,6 +624,17 @@ def _seed_payroll(conn, actor: str) -> None:
     is skipped once an ML set exists; the bonus, advance and loan once the month's regular run
     exists. A run still in draft (its calculation failed, or a later edit sent it back) is
     calculated again, so rerunning after fixing the cause finishes the job."""
+    for permission in (
+        "payroll.view_runs", "payroll.calculate_runs", "payroll.approve_runs", "payroll.pay_runs",
+        "payroll.reverse_runs", "payroll.manage_inputs", "payroll.view_rules", "payroll.manage_rules",
+        "payroll.confirm_rules", "payroll.view_declarations", "payroll.admin_payslips",
+    ):
+        conn.execute(
+            "INSERT INTO core.user_permissions (user_id, permission) VALUES (%s, %s) ON CONFLICT DO NOTHING",
+            (actor, permission),
+        )
+    print("Payroll: every payroll.* permission granted to the demo user (demo@sonalim-erp.local).")
+
     rules = RuleSetService(conn)
     if rules.get_settings(tenant_id=TENANT) is None:
         _ok(rules.save_settings(tenant_id=TENANT, actor_id=actor, country=PAYROLL_COUNTRY))
