@@ -19,7 +19,7 @@ AUG_5 = datetime.date(2026, 8, 5)
 AUG_31 = datetime.date(2026, 8, 31)
 CONTRACT_KEYS = {
     "employee_id", "scheduled_days", "worked_days", "unpaid_absence_days", "paid_leave_days", "sick_days", "holiday_days",
-    "holidays_worked_days", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday", "night_minutes", "late_minutes",
+    "holidays_worked_days", "rest_days_worked", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday", "night_minutes", "late_minutes",
 }
 
 

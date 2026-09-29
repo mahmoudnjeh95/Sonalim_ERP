@@ -34,6 +34,7 @@ class RuleSetBody(BaseModel):
     tax_round_to: int = 1
     tax_round_mode: str = "half_up"
     settlement_reference_months: int = 12
+    daily_rest_day_pay: str = "overtime_only"
     notes: str | None = None
 
 
@@ -48,6 +49,7 @@ class RuleSetPatch(BaseModel):
     tax_round_to: int | None = None
     tax_round_mode: str | None = None
     settlement_reference_months: int | None = None
+    daily_rest_day_pay: str | None = None
     notes: str | None = None
 
 

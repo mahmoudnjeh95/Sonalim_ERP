@@ -73,6 +73,7 @@ def store_rule_set(connection, *, tenant_id: str, actor_id: str, valid_from: dat
         working_days_per_month=rules.working_days_per_month, working_hours_per_month=rules.working_hours_per_month,
         round_to=rules.round_to, round_mode=rules.round_mode, tax_round_to=rules.tax_round_to,
         tax_round_mode=rules.tax_round_mode, settlement_reference_months=rules.settlement_reference_months,
+        daily_rest_day_pay=rules.daily_rest_day_pay,
     )
     assert isinstance(created, Ok), created
     rule_set_id = created.value["id"]
@@ -104,7 +105,8 @@ class FakeSnapshots:
 
 PRESENCE_KEYS = (
     "scheduled_days", "worked_days", "unpaid_absence_days", "paid_leave_days", "sick_days", "holiday_days",
-    "holidays_worked_days", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday", "night_minutes", "late_minutes",
+    "holidays_worked_days", "rest_days_worked", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday",
+    "night_minutes", "late_minutes",
 )
 
 

@@ -12,6 +12,8 @@ Pure: no database. The month summary is the only presence input payroll reads
 * sick_days: rows marked sick.
 * holiday_days: paid public holidays the person was off for (status holiday) or worked;
   holidays_worked_days: the worked ones among them. An unpaid holiday counts in neither.
+* rest_days_worked: worked days whose minutes are rest/holiday overtime and that are not
+  paid holidays (a rest day, or an unpaid holiday); also counted in worked_days.
 * minute fields: straight sums of the stored columns.
 """
 from __future__ import annotations
@@ -30,7 +32,8 @@ REQUEST_ONLY_STATUSES = frozenset({"leave"})
 PROTECTED_SOURCES = frozenset({"manual", "leave"})
 SUMMARY_FIELDS = (
     "scheduled_days", "worked_days", "unpaid_absence_days", "paid_leave_days", "sick_days", "holiday_days",
-    "holidays_worked_days", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday", "night_minutes", "late_minutes",
+    "holidays_worked_days", "rest_days_worked", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday",
+    "night_minutes", "late_minutes",
 )
 _SUMMED_MINUTES = ("ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday", "night_minutes", "late_minutes")
 
@@ -164,6 +167,8 @@ def summarize_month(employee_ids: list[str], rows: list[SummaryRow], paid_holida
                 total["holidays_worked_days"] += 1
             elif row.status == "holiday":
                 total["holiday_days"] += 1
+        elif row.worked_minutes > 0 and row.ot_minutes_rest_holiday > 0:
+            total["rest_days_worked"] += 1
         for field in _SUMMED_MINUTES:
             total[field] += getattr(row, field)
     known = set(requested)

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import date
 from decimal import Decimal
 
@@ -72,6 +73,22 @@ def test_a_worked_holiday_draws_one_day_rate_not_two():
     daily = synthetic_employee(base_salary=D(10000), pay_frequency="daily")
     presence = PresenceInput(worked_days=19, holiday_days=1, holidays_worked_days=1)
     assert amounts(base_salary_lines(daily, presence, RULES, SEPT)) == {"BASE": D(190000)}
+
+
+def test_a_worked_rest_day_draws_only_its_overtime_by_default():
+    # hr counts a worked rest day in worked_days and pays all its minutes as rest_holiday
+    # overtime; like a monthly worker, the daily worker gets the overtime, not a day rate too.
+    daily = synthetic_employee(base_salary=D(10000), pay_frequency="daily")
+    presence = PresenceInput(worked_days=20, rest_days_worked=2)
+    assert RULES.daily_rest_day_pay == "overtime_only"
+    assert amounts(base_salary_lines(daily, presence, RULES, SEPT)) == {"BASE": D(180000)}
+
+
+def test_a_rule_set_can_pay_a_worked_rest_day_its_day_rate_as_well():
+    daily = synthetic_employee(base_salary=D(10000), pay_frequency="daily")
+    presence = PresenceInput(worked_days=20, rest_days_worked=2)
+    rules = replace(RULES, daily_rest_day_pay="day_rate_and_overtime")
+    assert amounts(base_salary_lines(daily, presence, rules, SEPT)) == {"BASE": D(200000)}
 
 
 def test_seniority_uses_the_highest_step_reached_by_the_end_of_the_month():

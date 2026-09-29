@@ -125,6 +125,7 @@ def test_the_month_summary_counts_each_kind_of_day():
         "sick_days": 1,
         "holiday_days": 2,  # 11 not worked, 12 worked
         "holidays_worked_days": 1,
+        "rest_days_worked": 0,  # 12 is worked off-schedule, but it is a paid holiday
         "ot_minutes_day": 30,
         "ot_minutes_night": 0,
         "ot_minutes_rest_holiday": 420,
@@ -132,6 +133,17 @@ def test_the_month_summary_counts_each_kind_of_day():
         "late_minutes": 30,
     }
     assert summary[1] == {"employee_id": "e2", **{field: 0 for field in SUMMARY_FIELDS}}
+
+
+def test_rest_days_worked_counts_days_paid_as_rest_overtime_that_are_not_paid_holidays():
+    rows = [
+        _row(3, "present", worked_minutes=480),
+        _row(9, "present", scheduled_minutes=0, worked_minutes=360, ot_minutes_rest_holiday=360),  # rest day
+        _row(11, "present", scheduled_minutes=0, worked_minutes=420, ot_minutes_rest_holiday=420),  # paid holiday
+        _row(15, "present", scheduled_minutes=0, worked_minutes=300, ot_minutes_rest_holiday=300),  # unpaid holiday
+    ]
+    summary = summarize_month(["e1"], rows, paid_holidays={dt.date(2026, 8, 11)})[0]
+    assert (summary["worked_days"], summary["holidays_worked_days"], summary["rest_days_worked"]) == (4, 1, 2)
 
 
 def test_a_leave_day_without_a_type_is_paid_and_an_unpaid_holiday_is_no_holiday_day():

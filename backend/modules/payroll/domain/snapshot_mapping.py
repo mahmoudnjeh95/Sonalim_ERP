@@ -9,7 +9,7 @@ from modules.payroll.domain.inputs import ContractComponent, EmployeeInput, Pres
 
 PRESENCE_FIELDS = (
     "scheduled_days", "worked_days", "unpaid_absence_days", "paid_leave_days", "sick_days", "holiday_days",
-    "holidays_worked_days", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday",
+    "holidays_worked_days", "rest_days_worked", "ot_minutes_day", "ot_minutes_night", "ot_minutes_rest_holiday",
 )
 
 

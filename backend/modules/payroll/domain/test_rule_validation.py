@@ -33,7 +33,15 @@ def test_a_header_gets_its_defaults():
     assert result.value["country"] == "ML"
     assert (result.value["round_to"], result.value["round_mode"]) == (1, "half_up")
     assert result.value["settlement_reference_months"] == 12
+    assert result.value["daily_rest_day_pay"] == "overtime_only"
     assert result.value["working_hours_per_month"] == D("173.33")
+
+
+def test_a_header_refuses_an_unknown_rest_day_pay_mode_in_both_languages():
+    result = validate_rule_set_header({"country": "ML", "name": "x", "valid_from": datetime.date(2026, 1, 1),
+                                       "working_days_per_month": 26, "working_hours_per_month": 173,
+                                       "daily_rest_day_pay": "double"})
+    assert isinstance(result, Err) and result.code == "RULE_INVALID" and result.message_fr
 
 
 def test_a_header_starting_mid_month_is_refused_in_both_languages():

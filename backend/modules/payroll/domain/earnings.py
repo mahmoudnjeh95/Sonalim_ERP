@@ -71,6 +71,10 @@ def base_salary_lines(employee: EmployeeInput, presence: PresenceInput, rules: R
         # month_summary, see presence.py) -- subtract it once so a worked holiday draws
         # one day rate, not two. Its hours are paid separately as rest_holiday overtime.
         paid_days = presence.worked_days + presence.paid_leave_days + presence.holiday_days - presence.holidays_worked_days
+        # A worked rest day is in worked_days too, with all its minutes as rest_holiday overtime;
+        # the rule set decides whether it also draws its day rate.
+        if rules.daily_rest_day_pay == "overtime_only":
+            paid_days -= presence.rest_days_worked
         return [earning_line(base_rule, rules.round(employee.base_salary * paid_days), base=employee.base_salary, qty=Decimal(paid_days))]
 
     factor = coverage_factor(employee, presence, rules, period)

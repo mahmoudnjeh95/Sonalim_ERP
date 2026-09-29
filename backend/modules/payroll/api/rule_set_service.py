@@ -85,7 +85,7 @@ CHILD_KINDS: dict[str, ChildSpec] = {
 
 HEADER_COLUMNS = (
     "country", "name", "valid_from", "round_to", "round_mode", "tax_round_to", "tax_round_mode",
-    "working_days_per_month", "working_hours_per_month", "settlement_reference_months", "notes",
+    "working_days_per_month", "working_hours_per_month", "settlement_reference_months", "daily_rest_day_pay", "notes",
 )
 _HEADER_SELECT = (
     f"SELECT id, status, confirmed_by, confirmed_at, created_by, created_at, {', '.join(HEADER_COLUMNS)} "
@@ -166,12 +166,13 @@ class RuleSetService:
     def create_rule_set(self, *, tenant_id: str, actor_id: str, country: str, name: str, valid_from: datetime.date,
                         working_days_per_month, working_hours_per_month, round_to: int = 1, round_mode: str = "half_up",
                         tax_round_to: int = 1, tax_round_mode: str = "half_up", settlement_reference_months: int = 12,
-                        notes: str | None = None) -> Result[dict[str, Any]]:
+                        daily_rest_day_pay: str = "overtime_only", notes: str | None = None) -> Result[dict[str, Any]]:
         checked = validate_rule_set_header({
             "country": country, "name": name, "valid_from": valid_from, "round_to": round_to, "round_mode": round_mode,
             "tax_round_to": tax_round_to, "tax_round_mode": tax_round_mode,
             "working_days_per_month": working_days_per_month, "working_hours_per_month": working_hours_per_month,
-            "settlement_reference_months": settlement_reference_months, "notes": notes,
+            "settlement_reference_months": settlement_reference_months, "daily_rest_day_pay": daily_rest_day_pay,
+            "notes": notes,
         })
         if isinstance(checked, Err):
             return checked
@@ -404,6 +405,7 @@ class RuleSetService:
             working_days_per_month=header["working_days_per_month"],
             working_hours_per_month=header["working_hours_per_month"],
             settlement_reference_months=header["settlement_reference_months"],
+            daily_rest_day_pay=header["daily_rest_day_pay"],
             components=tuple(ComponentRule(**row) for row in rows["components"]),
             contributions=tuple(ContributionRule(**row) for row in rows["contributions"]),
             tax_brackets=tuple(TaxBracket(tax_code=row["tax_code"], lower=row["lower_bound"], upper=row["upper_bound"],

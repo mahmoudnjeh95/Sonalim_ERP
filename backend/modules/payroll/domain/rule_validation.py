@@ -14,6 +14,7 @@ from core.domain.result import Err, Ok, Result
 from modules.payroll.domain.money import ROUND_MODES
 from modules.payroll.domain.rules import (
     BASE,
+    DAILY_REST_DAY_PAY_MODES,
     OVERTIME_BANDS,
     SYSTEM_COMPONENTS,
     UNPAID_ABSENCE,
@@ -156,6 +157,7 @@ def validate_rule_set_header(values: dict[str, Any]) -> Result[dict[str, Any]]:
             "working_days_per_month": _decimal(values, "working_days_per_month", minimum=Decimal(1), maximum=Decimal(31)),
             "working_hours_per_month": _decimal(values, "working_hours_per_month", minimum=Decimal(1), maximum=Decimal(744)),
             "settlement_reference_months": _integer(values, "settlement_reference_months", minimum=1, default=12),
+            "daily_rest_day_pay": _choice(values, "daily_rest_day_pay", DAILY_REST_DAY_PAY_MODES, default="overtime_only"),
             "notes": _text(values, "notes", required=False),
         })
     except _Invalid as problem:
