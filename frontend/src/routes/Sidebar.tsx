@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertOctagon,
+  BookOpen,
   Boxes,
   Building2,
   CalendarCheck,
@@ -198,6 +199,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.accounting",
     items: [
+      { to: "/finance/entries", labelKey: "nav.ledgerEntries", icon: BookOpen, permission: "finance.view_ledger" },
       { to: "/finance/accounts", labelKey: "nav.chartOfAccounts", icon: ListTree, permission: "finance.view_ledger" },
       { to: "/finance/posting-rules", labelKey: "nav.postingRules", icon: GitBranch, permission: "finance.view_ledger" },
     ],
