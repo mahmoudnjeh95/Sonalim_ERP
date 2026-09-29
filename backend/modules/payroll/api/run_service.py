@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import datetime
 from dataclasses import asdict
+from decimal import Decimal
 from typing import Any
 
 import psycopg
@@ -137,6 +138,110 @@ class RunService:
                      entity_type="payroll_run", entity_id=run_id,
                      payload={"period": run["period"].isoformat(), "run_type": run["run_type"], "status": run["status"]})
         return Ok({"id": run_id})
+
+    # -- final settlements ---------------------------------------------------------------------
+    _SETTLEMENT_COLUMNS = "id, run_id, employee_id, employee_no, full_name, unused_leave_days, notice_months, created_by, created_at"
+
+    def list_final_settlements(self, *, tenant_id: str, run_id: str) -> list[dict[str, Any]]:
+        return jsonable(fetch_all(self.connection,
+                                  f"SELECT {self._SETTLEMENT_COLUMNS} FROM payroll.final_settlements WHERE tenant_id = %s AND run_id = %s ORDER BY full_name",
+                                  (tenant_id, run_id)))
+
+    def _settlement(self, tenant_id: str, run_id: str, settlement_id: str) -> dict[str, Any] | None:
+        return fetch_one(self.connection,
+                         f"SELECT {self._SETTLEMENT_COLUMNS} FROM payroll.final_settlements WHERE tenant_id = %s AND run_id = %s AND id = %s",
+                         (tenant_id, run_id, settlement_id))
+
+    @staticmethod
+    def _settlement_problem(unused_leave_days: Decimal, notice_months: Decimal) -> Err | None:
+        if unused_leave_days is None or notice_months is None or unused_leave_days < 0 or notice_months < 0:
+            return Err("SETTLEMENT_INVALID", "leave days and notice months are zero or more",
+                       "les jours de congé et les mois de préavis sont positifs ou nuls")
+        return None
+
+    def _open_off_cycle(self, tenant_id: str, run_id: str) -> Result[dict[str, Any]]:
+        run = lock_run(self.connection, tenant_id, run_id)
+        if run is None:
+            return not_found()
+        if run["status"] not in EDITABLE:
+            return locked(run["status"])
+        if run["run_type"] != "off_cycle":
+            return Err("SETTLEMENT_INVALID", "a final settlement goes on an off-cycle run", "un solde de tout compte se fait sur une paie hors cycle")
+        return Ok(run)
+
+    def add_final_settlement(self, *, tenant_id: str, actor_id: str, run_id: str, employee_id: str,
+                             unused_leave_days: Decimal = Decimal(0), notice_months: Decimal = Decimal(0)) -> Result[dict[str, Any]]:
+        opened = self._open_off_cycle(tenant_id, run_id)
+        if isinstance(opened, Err):
+            return opened
+        run = opened.value
+        problem = self._settlement_problem(unused_leave_days, notice_months)
+        if problem is not None:
+            return problem
+        period = run["period"]
+        found = self.snapshots.employees_for_period(tenant_id=tenant_id, period=period, employee_ids=[employee_id])
+        if not found:
+            return Err("NOT_FOUND", f"this employee has no contract in {period:%Y-%m}", f"cet employé n'a pas de contrat en {period:%m/%Y}")
+        employee = found[0]
+        termination = employee.get("termination_date")
+        if termination is None or not period <= termination <= period_end(period):
+            return Err("SETTLEMENT_INVALID",
+                       f"{employee['full_name']} has no exit date in {period:%Y-%m}; record the termination in HR first",
+                       f"{employee['full_name']} n'a pas de date de sortie en {period:%m/%Y} ; enregistrez d'abord la sortie dans RH")
+        settlement_id = str(ULID())
+        try:
+            with self.connection.transaction():
+                self.connection.execute(
+                    "INSERT INTO payroll.final_settlements (id, tenant_id, run_id, employee_id, employee_no, full_name, unused_leave_days, notice_months, created_by) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (settlement_id, tenant_id, run_id, employee_id, employee["employee_no"], employee["full_name"], unused_leave_days, notice_months, actor_id),
+                )
+        except psycopg.errors.UniqueViolation:
+            return Err("DUPLICATE_SETTLEMENT", "this employee is already settled in this run", "cet employé a déjà un solde dans cette paie")
+        self.connection.execute("UPDATE payroll.runs SET employee_ids = %s WHERE id = %s",
+                                (sorted(set(run["employee_ids"] or []) | {employee_id}), run_id))
+        invalidate(self.connection, run_id)
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="final_settlement.created",
+                     entity_type="final_settlement", entity_id=settlement_id,
+                     payload=jsonable({"run_id": run_id, "employee_id": employee_id, "unused_leave_days": unused_leave_days,
+                                       "notice_months": notice_months, "termination_date": termination}))
+        return Ok(jsonable(self._settlement(tenant_id, run_id, settlement_id)))
+
+    def update_final_settlement(self, *, tenant_id: str, actor_id: str, run_id: str, settlement_id: str,
+                                changes: dict[str, Any]) -> Result[dict[str, Any]]:
+        opened = self._open_off_cycle(tenant_id, run_id)
+        if isinstance(opened, Err):
+            return opened
+        current = self._settlement(tenant_id, run_id, settlement_id)
+        if current is None:
+            return Err("NOT_FOUND", "final settlement not found", "solde de tout compte introuvable")
+        unknown = sorted(set(changes) - {"unused_leave_days", "notice_months"})
+        if unknown:
+            return Err("SETTLEMENT_INVALID", f"unknown fields: {', '.join(unknown)}", f"champs inconnus : {', '.join(unknown)}")
+        merged = {key: current[key] for key in ("unused_leave_days", "notice_months")} | changes
+        problem = self._settlement_problem(merged["unused_leave_days"], merged["notice_months"])
+        if problem is not None:
+            return problem
+        self.connection.execute("UPDATE payroll.final_settlements SET unused_leave_days = %s, notice_months = %s WHERE id = %s",
+                                (merged["unused_leave_days"], merged["notice_months"], settlement_id))
+        invalidate(self.connection, run_id)
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="final_settlement.updated",
+                     entity_type="final_settlement", entity_id=settlement_id, payload={"changes": jsonable(changes)})
+        return Ok(jsonable(self._settlement(tenant_id, run_id, settlement_id)))
+
+    def remove_final_settlement(self, *, tenant_id: str, actor_id: str, run_id: str, settlement_id: str) -> Result[dict[str, Any]]:
+        opened = self._open_off_cycle(tenant_id, run_id)
+        if isinstance(opened, Err):
+            return opened
+        current = self._settlement(tenant_id, run_id, settlement_id)
+        if current is None:
+            return Err("NOT_FOUND", "final settlement not found", "solde de tout compte introuvable")
+        self.connection.execute("DELETE FROM payroll.final_settlements WHERE id = %s", (settlement_id,))
+        invalidate(self.connection, run_id)
+        record_audit(self.connection, tenant_id=tenant_id, actor_id=actor_id, action="final_settlement.deleted",
+                     entity_type="final_settlement", entity_id=settlement_id,
+                     payload=jsonable({key: current[key] for key in ("run_id", "employee_id", "unused_leave_days", "notice_months")}))
+        return Ok({"id": settlement_id})
 
     # -- calculation -----------------------------------------------------------------------------
     def calculate(self, *, tenant_id: str, actor_id: str, run_id: str) -> Result[dict[str, Any]]:
