@@ -1,8 +1,8 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-29 (phase 3c merged; phase 4 Tasks 1–13 merged, Tasks 14–15
-remain; a new, separate "HR UI friendliness Stage 1" branch is also complete, not
-merged)**.
+Last updated: **2026-09-29 (phase 3c merged; phase 4 now fully built, all 15 tasks,
+not yet merged; a new, separate "HR UI friendliness Stage 1" branch is also complete,
+not merged)**.
 Written for the client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
@@ -108,6 +108,35 @@ ledger, those win — they move first.
 > as `d57485c` on 2026-09-29, right after 3c — see its own section below for what's built and
 > what's left (Tasks 14–15).
 >
+> **Phase 4 is now fully built, 2026-09-29: Tasks 14 and 15 are done.** Worktree
+> `.worktrees/hr-p4-finance-ledger`, branch `hr-p4-finance-ledger`, fast-forwarded onto
+> `huge_production_migration` at `ebbcab4` first (its Tasks 1–13 tip, `918fa2a`, was already an
+> ancestor of trunk, so this was a clean fast-forward, not a merge) — this picked up 3c's
+> `RunPage.tsx` and the split `i18n.en.ts`/`i18n.fr.ts`, which Task 14 needs. Task 14
+> (`abdfd89`): `LedgerPostingStatus.tsx` mounted on the payroll run page, right under the summary
+> tiles — shows "Posted to the ledger" with the PAIE entry number linking to the Entries screen,
+> the refused state with a "Retry" button, or nothing for a run not yet approved; `tsc -b
+> --force` clean. Task 15 (`29c740d`): `scripts/seed_finance_ledger.py` — installs the chart,
+> journals and default `to_confirm` posting rules, opens the fiscal year(s), adds `to_confirm`
+> AMO→433 rules for the codes the seeded run actually uses, then posts the seeded payroll run and
+> replays every invoice event through the same path the worker uses. Its one pure decision
+> (`amo_rules`) has a dedicated domain test. **Run against the shared dev DB**: dry-run then a
+> real run posted cleanly with **0 refusals** — one PAIE entry (12 860 016 F CFA, balanced) for
+> the seeded August run, plus 58 invoice events replayed as 34 VTE and 24 BNQ entries. A third
+> run confirmed idempotency (`FISCAL_YEAR_EXISTS`, `POSTING_RULE_EXISTS`, the same entry numbers,
+> nothing posted twice). Verified against the running app (own Vite/backend pair on 5199/8001,
+> for the same reason as the UI-friendliness pass below): the trial balance balances
+> (250 486 516 = 250 486 516 for the period); 422 owes 9 461 520, 431 owes 1 888 424, 433 owes
+> 623 542, 447 owes 51 451 — all real, non-zero figures matching the seeded payroll; the run page
+> API (`GET /finance/ledger/sources/payroll/{run_id}`) returns the posted PAIE entry with zero
+> open failures — the demo run itself stays `calculated` (never approved, since its rule set is a
+> draft — this is the plan's documented dev shortcut, not a gap: `LedgerPostingStatus` correctly
+> shows nothing on a `calculated` run's own page, and the proof lives on the Entries screen
+> instead, confirmed via its API with the same date-range params the UI sends).
+> `modules/finance` + the new seed test: **97 passed, 0 skipped**. **Phase 4 (all 15 tasks) is
+> now fully built** — 2 commits ahead of `huge_production_migration`
+> (`abdfd89`, `29c740d`), not yet merged, reviewed or pushed.
+>
 > **A new, separate piece of work started 2026-09-29: "HR UI friendliness Stage 1."** Not part
 > of the 89-task programme above — a follow-on polish pass the client asked for after using the
 > shipped screens: per-column shrink floors on tables, unifying `HrTable`/`HrListTable`, tuned
@@ -138,9 +167,9 @@ ledger, those win — they move first.
 | 3a — Payroll engine | 11 | 11 | 11 | **Shipped** (PR #7, merged as `c3c3e08`, deploying) |
 | 3b — Payroll runs | 13 | 13 | whole-branch only | **Shipped** (merged as `1b1ae95`, pushed 2026-09-29, deploying) |
 | 3c — Payroll frontend & seed | 11 | 11 | 0 | **Shipped** (merged as `d426035`, not reviewed, not deployed) |
-| 4 — Finance ledger | 15 | 13 | 0 | **In progress** — Tasks 1–13 merged as `d57485c`; Tasks 14–15 remain |
+| 4 — Finance ledger | 15 | 15 | 0 | **Shipped** — Tasks 1–13 merged as `d57485c`; Tasks 14–15 built on `hr-p4-finance-ledger`, not merged |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **77** | **40** | |
+| **Total** | **89** | **79** | **40** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -535,13 +564,14 @@ unit-covered by 3b's own tests. No frontend bugs found in this pass either;
 between Tasks 7/8 (cosmetic, not reconciled), and the last stretch of the payout/mark-paid/
 declarations click-through above. **Next step is the client's merge/PR choice**, same as 3b.
 
-## Phase 4 — Finance ledger (15 tasks) — Tasks 1–13 merged, no review, by request
+## Phase 4 — Finance ledger (15 tasks) — fully built, Tasks 1–13 merged, 14–15 not yet
 
 Tasks 1–13 merged into `huge_production_migration` as `d57485c` on 2026-09-29, right after
-phase 3c. **Task 14** (posted/not-posted on the payroll run page) is unblocked now that 3c's
-`RunPage.tsx` is on main — the `LedgerPostingStatus.tsx` component itself has no dependency on
-3c and could be built standalone, but wiring it into the run page needs 3c merged, which it now
-is. **Task 15** (seed script) is fully independent of 3c, not yet started. Both remain.
+phase 3c. **Task 14 and Task 15 are now built** (2026-09-29) on `hr-p4-finance-ledger`, which was
+fast-forwarded onto trunk first to pick up 3c's `RunPage.tsx` (needed for Task 14) — see the
+"Where we stopped" note above for the full detail: `LedgerPostingStatus.tsx` mounted on the run
+page (`abdfd89`), and `scripts/seed_finance_ledger.py` (`29c740d`) run against the shared dev DB
+with 0 refusals and confirmed idempotent. Not merged, reviewed or pushed.
 
 
 A SYSCOHADA general ledger in `finance`, which payroll and invoices post into by event. Started
@@ -569,8 +599,8 @@ screens once routes exist) run in parallel.
 | 11 | Frontend foundations, Chart of accounts and Posting rules screens | 🟦 `bf71916` (`tsc -b --force` clean; not browser-checked, left to Task 15) |
 | 12 | Journal entries screen (journal listing, manual OD entries, refused postings) | 🟦 `fed3f96` (`tsc -b --force` clean) |
 | 13 | Trial balance (with 42x/43x/44x balances), General ledger and Periods screens | 🟦 `918fa2a` (merged with Task 12 cleanly; full frontend `tsc -b --force` clean) |
-| 14 | Posted / not posted on the payroll run page | ⬜ unblocked now that 3c's `RunPage.tsx` is merged into main |
-| 15 | Seed the demo ledger and post the seeded payroll run | ⬜ |
+| 14 | Posted / not posted on the payroll run page | 🟦 `abdfd89` (`tsc -b --force` clean; verified via the run's own posting-status API, 0 open failures) |
+| 15 | Seed the demo ledger and post the seeded payroll run | 🟦 `29c740d` (0 refusals against the shared dev DB, idempotent on a third run; `modules/finance` + seed test 97/97) |
 
 ## Phase 5 — Analytics & self-service (10 tasks) — planned
 
