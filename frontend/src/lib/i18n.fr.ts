@@ -5223,4 +5223,8 @@ export const fr = {
   "finance.periods.status.closed": "Clôturé",
   "finance.periods.emptyTitle": "Aucun exercice",
   "finance.periods.emptyDescription": "Ouvrez l'exercice en cours pour commencer à comptabiliser.",
+  "finance.posting.state.posted": "Comptabilisée au grand livre",
+  "finance.posting.state.pending": "Pas encore comptabilisée",
+  "finance.posting.state.refused": "Non comptabilisée : refusée par le grand livre",
+  "finance.posting.pendingHint": "Le grand livre comptabilise la paie quelques secondes après l'approbation. Si ce message reste, vérifiez que le worker d'événements tourne.",
 };

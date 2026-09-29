@@ -5223,4 +5223,8 @@ export const en = {
   "finance.periods.status.closed": "Closed",
   "finance.periods.emptyTitle": "No fiscal year yet",
   "finance.periods.emptyDescription": "Open the current fiscal year to start posting.",
+  "finance.posting.state.posted": "Posted to the ledger",
+  "finance.posting.state.pending": "Not posted yet",
+  "finance.posting.state.refused": "Not posted: the ledger refused it",
+  "finance.posting.pendingHint": "The ledger posts the run a few seconds after approval. If this stays, check that the event worker is running.",
 } as const;
