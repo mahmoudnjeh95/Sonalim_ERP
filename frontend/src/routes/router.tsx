@@ -33,9 +33,18 @@ import { SchedulesPage } from "../features/hr/schedules/SchedulesPage";
 import { PresencePage } from "../features/hr/presence/PresencePage";
 import { ClockImportsPage } from "../features/hr/presence/ClockImportsPage";
 import { LeavePage } from "../features/hr/leave/LeavePage";
+import { RunPage } from "../features/payroll/runs/RunPage";
+import { RulesPage } from "../features/payroll/rules/RulesPage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
 import { ProductsPage } from "../features/products/ProductsPage";
 import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
+import { RunsPage } from "../features/payroll/runs/RunsPage";
+import { PayslipPage } from "../features/payroll/payslips/PayslipPage";
+import { PayslipPrintPage } from "../features/payroll/print/PayslipPrintPage";
+import { RunPrintPage } from "../features/payroll/print/RunPrintPage";
+import { CashSheetPrintPage } from "../features/payroll/print/CashSheetPrintPage";
+import { DeclarationPrintPage } from "../features/payroll/print/DeclarationPrintPage";
+import { InputsPage } from "../features/payroll/inputs/InputsPage";
 
 // Lazy-loaded: pulls in recharts, which is the single largest dependency in
 // the bundle — keeping it out of the main chunk means pages that never touch
@@ -101,6 +110,15 @@ const protectedChildren: RouteObject[] = [
   { path: "/hr/presence", element: <PresencePage /> },
   { path: "/hr/presence/imports", element: <ClockImportsPage /> },
   { path: "/hr/leave", element: <LeavePage /> },
+  { path: "/payroll/runs", element: <RunsPage /> },
+  { path: "/payroll/runs/:runId", element: <RunPage /> },
+  { path: "/payroll/rules", element: <RulesPage /> },
+  { path: "/payroll/payslips/:payslipId", element: <PayslipPage /> },
+  { path: "/payroll/payslips/:payslipId/print", element: <PayslipPrintPage /> },
+  { path: "/payroll/runs/:runId/print", element: <RunPrintPage /> },
+  { path: "/payroll/payout-batches/:batchId/cash-sheet/print", element: <CashSheetPrintPage /> },
+  { path: "/payroll/declarations/print", element: <DeclarationPrintPage /> },
+  { path: "/payroll/inputs", element: <InputsPage /> },
 ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
 
 export const router = createBrowserRouter([

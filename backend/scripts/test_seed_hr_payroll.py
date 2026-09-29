@@ -57,3 +57,8 @@ def test_add_years_falls_back_to_28_february_instead_of_raising():
     assert _add_years(born_on_leap_day, 1) == datetime.date(2025, 2, 28)  # 2025 is not a leap year
     assert _add_years(born_on_leap_day, 4) == datetime.date(2028, 2, 29)  # 2028 is a leap year: stays 29 Feb
     assert _add_years(datetime.date(2023, 6, 15), 25) == datetime.date(2048, 6, 15)  # ordinary date: unaffected
+
+
+def test_the_seed_names_a_payroll_period_matching_phase_twos_presence_month():
+    from scripts.seed_hr_payroll import PAYROLL_PERIOD, PRESENCE_PERIOD
+    assert PAYROLL_PERIOD == PRESENCE_PERIOD  # the seeded run is calculated for the same month presence closed
