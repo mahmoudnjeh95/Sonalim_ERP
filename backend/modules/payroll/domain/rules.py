@@ -25,6 +25,8 @@ NOTICE_INDEMNITY = "NOTICE_INDEMNITY"
 SEVERANCE = "SEVERANCE"
 
 OVERTIME_BANDS = ("day", "night", "rest_holiday")
+# How a daily-paid worker's worked rest day is paid (see earnings.base_salary_lines).
+DAILY_REST_DAY_PAY_MODES = ("overtime_only", "day_rate_and_overtime")
 OVERTIME_CODES = {"day": OT_DAY, "night": OT_NIGHT, "rest_holiday": OT_REST_HOLIDAY}
 
 # Components the engine computes itself: code -> (kind, formula_type). A rule set must hold all
@@ -155,6 +157,7 @@ class RuleSet:
     working_days_per_month: Decimal
     working_hours_per_month: Decimal
     settlement_reference_months: int = 12
+    daily_rest_day_pay: str = "overtime_only"
     components: tuple[ComponentRule, ...] = ()
     contributions: tuple[ContributionRule, ...] = ()
     tax_brackets: tuple[TaxBracket, ...] = ()

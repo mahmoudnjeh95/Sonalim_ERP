@@ -15,7 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../../components/ui
 import { activateContract, CONTRACT_STATUSES, hrKeys, listContracts, type Contract, type ContractStatus, type EmployeeRecord } from "../api";
 import { CONTRACT_STATUS_LABEL, CONTRACT_STATUS_VARIANT, CONTRACT_TYPE_LABEL, END_REASON_LABEL, PAY_FREQUENCY_LABEL } from "../employeeLabels";
 import { formatDate, formatMoney, formatXof } from "../employeeFormat";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 import { Masked } from "../Masked";
 import { ContractFormDialog, type ContractDialogMode } from "./ContractFormDialog";
 import { EndContractDialog } from "./EndContractDialog";
@@ -167,13 +167,16 @@ export function ContractsTab({ employee }: { employee: EmployeeRecord }) {
         )}
       </CardHeader>
       <CardContent>
-        <HrTable
+        <HrListTable
           tableKey="hr.employee.contracts"
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
-          empty={{ icon: <FileText className="h-5 w-5" />, title: t("hr.contracts.empty.title"), description: t("hr.contracts.empty.description") }}
+          loading={isLoading}
+          bordered={false}
+          emptyIcon={<FileText className="h-5 w-5" />}
+          emptyTitle={t("hr.contracts.empty.title")}
+          emptyDescription={t("hr.contracts.empty.description")}
           toolbar={<FilterTabs value={status} onChange={setStatus} options={statusOptions} />}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}

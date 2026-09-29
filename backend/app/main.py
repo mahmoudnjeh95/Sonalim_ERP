@@ -30,6 +30,7 @@ from core.products import uoms_router as core_uoms_router
 from core.table_preferences import router as core_table_preferences_router
 from core.users import router as core_users_router
 from modules.crm.api.router import router as crm_router
+from modules.finance.api.ledger_router import router as finance_ledger_router
 from modules.finance.api.router import router as finance_router
 from modules.maintenance.api.router import router as maintenance_router
 from modules.production.api.router import router as production_router
@@ -80,6 +81,7 @@ app.include_router(production_router)
 app.include_router(crm_router)
 app.include_router(sales_router)
 app.include_router(finance_router)
+app.include_router(finance_ledger_router)
 app.include_router(hr_router)
 app.include_router(hr_presence_router)
 app.include_router(payroll_router)

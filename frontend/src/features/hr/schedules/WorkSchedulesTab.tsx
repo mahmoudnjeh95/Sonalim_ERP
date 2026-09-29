@@ -6,7 +6,6 @@ import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
-import { Label } from "../../../components/ui/label";
 import { Checkbox } from "../../../components/ui/checkbox";
 import { Badge } from "../../../components/ui/badge";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
@@ -14,6 +13,7 @@ import { FilterTabs } from "../../../components/patterns/FilterTabs";
 import { useColumnFilters, type FilterField } from "../../../lib/useColumnFilters";
 import type { ColumnDef } from "../../../lib/useTableColumns";
 import { HrListTable } from "../HrListTable";
+import { FormField } from "../FormField";
 import { HR_KEYS, createSchedule, listSchedules, updateSchedule, type ScheduleDay, type WorkSchedule } from "../presenceApi";
 import { clockToMinutes, errorText, formatDuration, minutesToClock, spanMinutes } from "../presenceFormat";
 import { WEEKDAY_KEYS, WEEKDAY_SHORT_KEYS } from "../presence/PresenceStatusBadge";
@@ -76,6 +76,8 @@ export function WorkSchedulesTab() {
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<ScheduleDraft>(emptyDraft);
   const [formError, setFormError] = useState<string | null>(null);
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [nameError, setNameError] = useState<string | null>(null);
   const canEdit = hasPermission("hr.admin_presence");
 
   const refresh = () => {
@@ -104,14 +106,25 @@ export function WorkSchedulesTab() {
     setEditing(schedule);
     setDraft(schedule ? toDraft(schedule) : emptyDraft());
     setFormError(null);
+    setCodeError(null);
+    setNameError(null);
     setOpen(true);
   }
   function submit() {
+    setCodeError(null);
+    setNameError(null);
+    setFormError(null);
     const days = toDays(draft);
-    if (!draft.code.trim() || !draft.name.trim()) {
-      setFormError(t("hr.schedules.error.codeName"));
-      return;
+    let hasFieldError = false;
+    if (!draft.code.trim()) {
+      setCodeError(t("hr.schedules.error.codeRequired"));
+      hasFieldError = true;
     }
+    if (!draft.name.trim()) {
+      setNameError(t("hr.schedules.error.nameRequired"));
+      hasFieldError = true;
+    }
+    if (hasFieldError) return;
     if (days === null || days.length === 0) {
       setFormError(t("hr.schedules.error.times"));
       return;
@@ -131,27 +144,27 @@ export function WorkSchedulesTab() {
 
   const columns: ColumnDef<WorkSchedule>[] = [
     {
-      key: "code", header: t("hr.schedules.code"), defaultWidth: 110, sortValue: (s) => s.code,
+      key: "code", header: t("hr.schedules.code"), defaultWidth: 100, minWidth: 80, sortValue: (s) => s.code,
       cell: (s) => <span className="font-medium">{s.code}</span>,
       filterCell: { type: "text", placeholder: t("hr.schedules.code"), value: filters.text.code ?? "", onChange: (v) => filters.setTextValue("code", v) },
     },
     {
-      key: "name", header: t("hr.schedules.name"), defaultWidth: 200, sortValue: (s) => s.name, cell: (s) => s.name,
+      key: "name", header: t("hr.schedules.name"), defaultWidth: 220, minWidth: 140, alwaysVisible: true, sortValue: (s) => s.name, cell: (s) => s.name,
       filterCell: { type: "text", placeholder: t("hr.schedules.name"), value: filters.text.name ?? "", onChange: (v) => filters.setTextValue("name", v) },
     },
-    { key: "days", header: t("hr.schedules.days"), defaultWidth: 280, cell: (s) => weekSummary(s, t) },
+    { key: "days", header: t("hr.schedules.days"), defaultWidth: 280, minWidth: 160, cell: (s) => weekSummary(s, t) },
     {
-      key: "weekly", header: t("hr.schedules.weeklyHours"), defaultWidth: 130, cellClassName: "tabular-nums",
+      key: "weekly", header: t("hr.schedules.weeklyHours"), defaultWidth: 120, minWidth: 90, cellClassName: "tabular-nums",
       sortValue: (s) => weeklyMinutes(s), cell: (s) => formatDuration(weeklyMinutes(s)),
       filterCell: {
         type: "range", min: filters.range.weekly?.min ?? "", max: filters.range.weekly?.max ?? "",
         onMinChange: (v) => filters.setRangeValue("weekly", "min", v), onMaxChange: (v) => filters.setRangeValue("weekly", "max", v),
       },
     },
-    { key: "night", header: t("hr.schedules.night"), defaultWidth: 90, cell: (s) => (s.is_night ? <Badge variant="accent">{t("hr.schedules.night")}</Badge> : null) },
-    { key: "active", header: t("hr.common.active"), defaultWidth: 90, cell: (s) => (s.active ? t("common.yes") : t("common.no")) },
+    { key: "night", header: t("hr.schedules.night"), defaultWidth: 90, minWidth: 72, cell: (s) => (s.is_night ? <Badge variant="accent">{t("hr.schedules.night")}</Badge> : null) },
+    { key: "active", header: t("hr.common.active"), defaultWidth: 90, minWidth: 72, cell: (s) => (s.active ? t("common.yes") : t("common.no")) },
     {
-      key: "actions", header: "", defaultWidth: 200, alwaysVisible: true,
+      key: "actions", header: "", defaultWidth: 200, minWidth: 160, alwaysVisible: true,
       cell: (s) =>
         canEdit ? (
           <div className="flex justify-end gap-2">
@@ -207,20 +220,19 @@ export function WorkSchedulesTab() {
             <DialogDescription>{t("hr.schedules.dialogHelp")}</DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1.5">
-              <Label htmlFor="schedule-code">{t("hr.schedules.code")}</Label>
-              <Input id="schedule-code" value={draft.code} onChange={(e) => setDraft({ ...draft, code: e.target.value })} />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="schedule-name">{t("hr.schedules.name")}</Label>
-              <Input id="schedule-name" value={draft.name} onChange={(e) => setDraft({ ...draft, name: e.target.value })} />
-            </div>
+            <FormField id="schedule-code" label={t("hr.schedules.code")} error={codeError ?? undefined}>
+              <Input id="schedule-code" value={draft.code} onChange={(e) => { setDraft({ ...draft, code: e.target.value }); setCodeError(null); }} />
+            </FormField>
+            <FormField id="schedule-name" label={t("hr.schedules.name")} error={nameError ?? undefined}>
+              <Input id="schedule-name" value={draft.name} onChange={(e) => { setDraft({ ...draft, name: e.target.value }); setNameError(null); }} />
+            </FormField>
           </div>
           <label className="flex items-center gap-2 text-sm">
             <Checkbox checked={draft.isNight} onCheckedChange={(value) => setDraft({ ...draft, isNight: value === true })} />
             {t("hr.schedules.isNight")}
           </label>
           <div className="space-y-2">
+            <p className="text-xs text-muted-foreground">{t("hr.schedules.dayGridHint")}</p>
             <div className="grid grid-cols-[130px_1fr_1fr_1fr] gap-2 text-xs text-muted-foreground">
               <span />
               <span>{t("hr.schedules.start")}</span>

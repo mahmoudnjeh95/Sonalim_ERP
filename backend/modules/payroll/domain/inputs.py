@@ -54,6 +54,7 @@ class PresenceInput:
     sick_days: int = 0
     holiday_days: int = 0
     holidays_worked_days: int = 0
+    rest_days_worked: int = 0
     ot_minutes_day: int = 0
     ot_minutes_night: int = 0
     ot_minutes_rest_holiday: int = 0

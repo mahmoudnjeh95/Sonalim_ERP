@@ -34,6 +34,7 @@ class RuleSetBody(BaseModel):
     tax_round_to: int = 1
     tax_round_mode: str = "half_up"
     settlement_reference_months: int = 12
+    daily_rest_day_pay: str = "overtime_only"
     notes: str | None = None
 
 
@@ -48,6 +49,7 @@ class RuleSetPatch(BaseModel):
     tax_round_to: int | None = None
     tax_round_mode: str | None = None
     settlement_reference_months: int | None = None
+    daily_rest_day_pay: str | None = None
     notes: str | None = None
 
 
@@ -125,6 +127,13 @@ def copy_rule_set(rule_set_id: str, body: CopyBody, tenant: TenantContext = Depe
 def confirm_rule_set(rule_set_id: str, tenant: TenantContext = Depends(require_permission("payroll.confirm_rules"))):
     with http.get_connection() as connection:
         result = RuleSetService(connection).confirm_rule_set(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, rule_set_id=rule_set_id)
+        return http.finish(connection, result)
+
+
+@router.post("/rule-sets/{rule_set_id}/reopen")
+def reopen_rule_set(rule_set_id: str, tenant: TenantContext = Depends(require_permission("payroll.confirm_rules"))):
+    with http.get_connection() as connection:
+        result = RuleSetService(connection).reopen_rule_set(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, rule_set_id=rule_set_id)
         return http.finish(connection, result)
 
 

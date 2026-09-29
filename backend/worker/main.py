@@ -17,6 +17,7 @@ from modules.warehouse.api.reservation_service import ReservationService
 
 # Imported for the side effect of registering their event handlers with core.events.consumers.
 from modules.finance.events import consumers as _finance_consumers  # noqa: F401
+from modules.finance.events import ledger_consumers as _finance_ledger_consumers  # noqa: F401
 from modules.hr.events import consumers as _hr_consumers  # noqa: F401
 from modules.procurement.events import consumers as _procurement_consumers  # noqa: F401
 from modules.production.events import consumers as _production_consumers  # noqa: F401

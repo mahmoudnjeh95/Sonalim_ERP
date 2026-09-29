@@ -14,7 +14,7 @@ import { Select } from "../../../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { createPosition, hrKeys, listDepartments, listPositions, updatePosition, type Position, type PositionInput } from "../api";
 import { FormField } from "../FormField";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 
 export function PositionsTab() {
   const { session, hasPermission } = useAuth();
@@ -80,14 +80,17 @@ export function PositionsTab() {
         )}
       </CardHeader>
       <CardContent>
-        <HrTable
+        <HrListTable
           tableKey="hr.organisation.positions"
           columns={columns}
           rows={filters.apply(positions)}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
+          loading={isLoading}
           loadingVariant="loader"
-          empty={{ icon: <Tag className="h-5 w-5" />, title: t("hr.org.position.empty.title"), description: t("hr.org.position.empty.description") }}
+          bordered={false}
+          emptyIcon={<Tag className="h-5 w-5" />}
+          emptyTitle={t("hr.org.position.empty.title")}
+          emptyDescription={t("hr.org.position.empty.description")}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}
         />

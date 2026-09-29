@@ -14,7 +14,7 @@ import { Select } from "../../../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { createDepartment, hrKeys, listDepartments, listEmployees, updateDepartment, type Department, type DepartmentInput } from "../api";
 import { FormField } from "../FormField";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 
 export function DepartmentsTab() {
   const { session, hasPermission } = useAuth();
@@ -79,14 +79,17 @@ export function DepartmentsTab() {
         )}
       </CardHeader>
       <CardContent>
-        <HrTable
+        <HrListTable
           tableKey="hr.organisation.departments"
           columns={columns}
           rows={filters.apply(departments)}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
+          loading={isLoading}
           loadingVariant="loader"
-          empty={{ icon: <Building2 className="h-5 w-5" />, title: t("hr.org.department.empty.title"), description: t("hr.org.department.empty.description") }}
+          bordered={false}
+          emptyIcon={<Building2 className="h-5 w-5" />}
+          emptyTitle={t("hr.org.department.empty.title")}
+          emptyDescription={t("hr.org.department.empty.description")}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}
         />
@@ -101,10 +104,14 @@ function DepartmentDialog({ open, department, onOpenChange }: { open: boolean; d
   const { t } = useI18n();
   const queryClient = useQueryClient();
   const [form, setForm] = useState({ code: "", name: "", manager_employee_id: "" });
+  const [fieldError, setFieldError] = useState<string | null>(null);
   const employees = useQuery({ queryKey: hrKeys.employees, queryFn: () => listEmployees(session!.token), enabled: open && hasPermission("hr.view_employees") });
 
   useEffect(() => {
-    if (open) setForm({ code: department?.code ?? "", name: department?.name ?? "", manager_employee_id: department?.manager_employee_id ?? "" });
+    if (open) {
+      setForm({ code: department?.code ?? "", name: department?.name ?? "", manager_employee_id: department?.manager_employee_id ?? "" });
+      setFieldError(null);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, department?.id]);
 
@@ -118,7 +125,11 @@ function DepartmentDialog({ open, department, onOpenChange }: { open: boolean; d
       toast.success(t("hr.org.saved"));
       onOpenChange(false);
     },
-    onError: (error) => toast.error(t("hr.org.error"), { description: error instanceof ApiError ? error.message : undefined }),
+    onError: (error) => {
+      const message = error instanceof ApiError ? error.message : t("hr.org.error");
+      setFieldError(message);
+      toast.error(t("hr.org.error"));
+    },
   });
 
   return (
@@ -128,8 +139,8 @@ function DepartmentDialog({ open, department, onOpenChange }: { open: boolean; d
           <DialogTitle>{t(department ? "hr.org.department.editTitle" : "hr.org.department.createTitle")}</DialogTitle>
         </DialogHeader>
         <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); mutation.mutate(); }}>
-          <FormField id="department-code" label={t("hr.org.code")}>
-            <Input id="department-code" required value={form.code} onChange={(event) => setForm({ ...form, code: event.target.value })} />
+          <FormField id="department-code" label={t("hr.org.code")} hint={t("hr.org.department.codeHint")} error={fieldError ?? undefined}>
+            <Input id="department-code" required value={form.code} onChange={(event) => { setForm({ ...form, code: event.target.value }); setFieldError(null); }} />
           </FormField>
           <FormField id="department-name" label={t("hr.org.name")}>
             <Input id="department-name" required value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} />

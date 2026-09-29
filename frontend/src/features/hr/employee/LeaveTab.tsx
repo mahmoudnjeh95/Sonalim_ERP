@@ -12,7 +12,7 @@ import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
 import { hrKeys, listLeaveRequests, type EmployeeRecord, type LeaveRequest } from "../api";
 import { formatDate } from "../employeeFormat";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 
 type LeaveStatus = LeaveRequest["status"];
 const LEAVE_STATUSES: LeaveStatus[] = ["pending", "approved", "rejected", "cancelled"];
@@ -68,13 +68,16 @@ export function LeaveTab({ employee }: { employee: EmployeeRecord }) {
             <Link to="/hr">{t("hr.file.leave.open")}</Link>
           </Button>
         </div>
-        <HrTable
+        <HrListTable
           tableKey="hr.employee.leave"
           columns={columns}
           rows={rows}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
-          empty={{ icon: <CalendarDays className="h-5 w-5" />, title: t("hr.file.leave.empty.title"), description: t("hr.file.leave.empty.description") }}
+          loading={isLoading}
+          bordered={false}
+          emptyIcon={<CalendarDays className="h-5 w-5" />}
+          emptyTitle={t("hr.file.leave.empty.title")}
+          emptyDescription={t("hr.file.leave.empty.description")}
           toolbar={<FilterTabs value={status} onChange={setStatus} options={statusOptions} />}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}
