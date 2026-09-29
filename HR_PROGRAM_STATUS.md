@@ -1,7 +1,7 @@
 # HR / Payroll / Finance ledger — what is built, what is next
 
-Last updated: **2026-09-29 (phase 3c built, not reviewed, not merged)**. Written
-for the client and for whoever picks this work up.
+Last updated: **2026-09-29 (phase 3c merged; phase 4 Tasks 1–13 merged, Tasks 14–15 remain)**.
+Written for the client and for whoever picks this work up.
 
 This is the running record of the HR programme: the 89 planned tasks, which are built, which
 were reviewed, and where work stopped. When it disagrees with `git log` or a phase's SDD
@@ -91,14 +91,20 @@ ledger, those win — they move first.
 > **Phase 3b (payroll runs) is MERGED and DEPLOYING** — merged as `1b1ae95` on 2026-09-29 (see its
 > own section below for the whole-branch review and fix).
 >
-> **Phase 3c (payroll frontend & seed) is BUILT, not reviewed, not merged** — all 11 tasks done in
-> parallel waves on `hr-p3c-payroll-frontend`, final commit `feb663f` (Task 11: granted the demo
-> user every `payroll.*` permission in the seed and browser-verified every `/payroll/*` screen
-> against it). `npx tsc -b --force` clean; no frontend bugs found. One flow is unverified by
-> browser — approve → payouts → mark-paid → declarations — because completing it needs a second
-> demo account with `approve_runs`, which this task was told not to invent; the same-user-approval
-> refusal that stops it was confirmed working as designed. **Next step is the client's call** on
-> merge/PR, same as every phase before it.
+> **Phase 3c (payroll frontend & seed) is MERGED** into `huge_production_migration` as `d426035`
+> on 2026-09-29 — all 11 tasks, browser-verified against the seed including the full
+> approve → payouts → mark-paid four-eyes flow (via a second demo login, `payroll.approbateur@
+> sonalim-erp.local`, added for exactly this). The merge needed manual reconciliation: main had
+> gained an `i18n.tsx` split (single file → `i18n.tsx` provider + `i18n.en.ts`/`i18n.fr.ts`
+> dictionaries) after 3c branched, so 3c's 541 new `payroll.*`/`nav.payroll` keys were extracted
+> from the conflicted re-inflated `i18n.tsx` and moved into the split files (verified: no key
+> lost or duplicated, en/fr counts equal). `npx tsc -b --force` clean; 759/760 backend tests
+> pass (the one failure, `test_a_team_used_by_a_quality_report_is_retired_too`, is the
+> pre-existing unrelated `qc.quality_reports` schema issue flagged since phase 3b).
+>
+> **Phase 4 (finance ledger), Tasks 1–13 of 15, is also MERGED** into `huge_production_migration`
+> as `d57485c` on 2026-09-29, right after 3c — see its own section below for what's built and
+> what's left (Tasks 14–15).
 
 ## Progress
 
@@ -108,10 +114,10 @@ ledger, those win — they move first.
 | 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
 | 3a — Payroll engine | 11 | 11 | 11 | **Shipped** (PR #7, merged as `c3c3e08`, deploying) |
 | 3b — Payroll runs | 13 | 13 | whole-branch only | **Shipped** (merged as `1b1ae95`, pushed 2026-09-29, deploying) |
-| 3c — Payroll frontend & seed | 11 | 11 | 0 | **Built**, not reviewed, not merged (branch `hr-p3c-payroll-frontend`, final commit `feb663f`) |
-| 4 — Finance ledger | 15 | 0 | 0 | Planned |
+| 3c — Payroll frontend & seed | 11 | 11 | 0 | **Shipped** (merged as `d426035`, not reviewed, not deployed) |
+| 4 — Finance ledger | 15 | 13 | 0 | **In progress** — Tasks 1–13 merged as `d57485c`; Tasks 14–15 remain |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **64** | **40** | |
+| **Total** | **89** | **77** | **40** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -427,7 +433,7 @@ request.
 | 12 | Declarations and the annual recap | 🟦 `1f53770` |
 | 13 | Contract services — `PayrollPostingService` and `PayrollReportService` | 🟦 `4105d86` (shapes checked against the interfaces contract) |
 
-## Phase 3c — Payroll frontend & seed (11 tasks) — built (parallel, no review, by request)
+## Phase 3c — Payroll frontend & seed (11 tasks) — merged (parallel, no review, by request)
 
 Run like 3b: parallel implementers, no per-task review. Phase branch `hr-p3c-payroll-frontend`
 (worktree `.worktrees/hr-p3c-payroll-frontend`) is cut from `hr-p3b-payroll-runs` at `49dc6f4`,
@@ -506,7 +512,14 @@ unit-covered by 3b's own tests. No frontend bugs found in this pass either;
 between Tasks 7/8 (cosmetic, not reconciled), and the last stretch of the payout/mark-paid/
 declarations click-through above. **Next step is the client's merge/PR choice**, same as 3b.
 
-## Phase 4 — Finance ledger (15 tasks) — in progress (mostly sequential, no review, by request)
+## Phase 4 — Finance ledger (15 tasks) — Tasks 1–13 merged, no review, by request
+
+Tasks 1–13 merged into `huge_production_migration` as `d57485c` on 2026-09-29, right after
+phase 3c. **Task 14** (posted/not-posted on the payroll run page) is unblocked now that 3c's
+`RunPage.tsx` is on main — the `LedgerPostingStatus.tsx` component itself has no dependency on
+3c and could be built standalone, but wiring it into the run page needs 3c merged, which it now
+is. **Task 15** (seed script) is fully independent of 3c, not yet started. Both remain.
+
 
 A SYSCOHADA general ledger in `finance`, which payroll and invoices post into by event. Started
 2026-09-29, right after phase 3c (built, not merged). Phase branch `hr-p4-finance-ledger`
@@ -533,7 +546,7 @@ screens once routes exist) run in parallel.
 | 11 | Frontend foundations, Chart of accounts and Posting rules screens | 🟦 `bf71916` (`tsc -b --force` clean; not browser-checked, left to Task 15) |
 | 12 | Journal entries screen (journal listing, manual OD entries, refused postings) | 🟦 `fed3f96` (`tsc -b --force` clean) |
 | 13 | Trial balance (with 42x/43x/44x balances), General ledger and Periods screens | 🟦 `918fa2a` (merged with Task 12 cleanly; full frontend `tsc -b --force` clean) |
-| 14 | Posted / not posted on the payroll run page | ⚠️ blocked: needs phase 3c's `RunPage.tsx`, which isn't on this branch (3c unmerged, cut separately from `hr-p3b-payroll-runs`) |
+| 14 | Posted / not posted on the payroll run page | ⬜ unblocked now that 3c's `RunPage.tsx` is merged into main |
 | 15 | Seed the demo ledger and post the seeded payroll run | ⬜ |
 
 ## Phase 5 — Analytics & self-service (10 tasks) — planned
