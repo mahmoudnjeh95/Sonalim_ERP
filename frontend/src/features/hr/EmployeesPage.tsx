@@ -16,7 +16,7 @@ import { Card, CardContent } from "../../components/ui/card";
 import { EMPLOYEE_STATUSES, hrKeys, listEmployees, type EmployeeListItem, type EmployeeStatus } from "./api";
 import { CONTRACT_TYPE_LABEL, EMPLOYEE_STATUS_LABEL, EMPLOYEE_STATUS_VARIANT } from "./employeeLabels";
 import { formatDate } from "./employeeFormat";
-import { HrTable } from "./HrTable";
+import { HrListTable } from "./HrListTable";
 import { EmployeeFormDialog } from "./EmployeeFormDialog";
 import { ExpiryAlertsCard } from "./ExpiryAlertsCard";
 
@@ -116,14 +116,17 @@ export function EmployeesPage() {
 
       <Card>
         <CardContent className="pt-6">
-          <HrTable
+          <HrListTable
             tableKey="hr.employees.list"
             columns={columns}
             rows={rows}
             rowKey={(row) => row.id}
-            isLoading={isLoading}
+            loading={isLoading}
             loadingVariant="loader"
-            empty={{ icon: <Users className="h-5 w-5" />, title: t("hr.list.empty.title"), description: t("hr.list.empty.description") }}
+            bordered={false}
+            emptyIcon={<Users className="h-5 w-5" />}
+            emptyTitle={t("hr.list.empty.title")}
+            emptyDescription={t("hr.list.empty.description")}
             toolbar={<FilterTabs value={status} onChange={setStatus} options={statusOptions} />}
             filtersActive={filters.isActive}
             onClearFilters={filters.reset}

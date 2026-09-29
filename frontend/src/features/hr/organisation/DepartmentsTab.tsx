@@ -14,7 +14,7 @@ import { Select } from "../../../components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { createDepartment, hrKeys, listDepartments, listEmployees, updateDepartment, type Department, type DepartmentInput } from "../api";
 import { FormField } from "../FormField";
-import { HrTable } from "../HrTable";
+import { HrListTable } from "../HrListTable";
 
 export function DepartmentsTab() {
   const { session, hasPermission } = useAuth();
@@ -79,14 +79,17 @@ export function DepartmentsTab() {
         )}
       </CardHeader>
       <CardContent>
-        <HrTable
+        <HrListTable
           tableKey="hr.organisation.departments"
           columns={columns}
           rows={filters.apply(departments)}
           rowKey={(row) => row.id}
-          isLoading={isLoading}
+          loading={isLoading}
           loadingVariant="loader"
-          empty={{ icon: <Building2 className="h-5 w-5" />, title: t("hr.org.department.empty.title"), description: t("hr.org.department.empty.description") }}
+          bordered={false}
+          emptyIcon={<Building2 className="h-5 w-5" />}
+          emptyTitle={t("hr.org.department.empty.title")}
+          emptyDescription={t("hr.org.department.empty.description")}
           filtersActive={filters.isActive}
           onClearFilters={filters.reset}
         />
