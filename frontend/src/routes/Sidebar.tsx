@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertOctagon,
+  BookOpen,
   Boxes,
   Building2,
   CalendarCheck,
@@ -20,6 +21,8 @@ import {
   Fingerprint,
   FlaskConical,
   Gauge,
+  GitBranch,
+  ListTree,
   HeartPulse,
   History,
   KeyRound,
@@ -43,6 +46,9 @@ import {
   Users,
   Wallet,
   Zap,
+  Scale,
+  BookText,
+  CalendarRange,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useI18n, type TranslationKey } from "../lib/i18n";
@@ -200,7 +206,18 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.commerce",
     items: [
       { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart },
-      { to: "/finance", labelKey: "nav.finance", icon: Wallet },
+      { to: "/finance", labelKey: "nav.finance", icon: Wallet, exact: true },
+    ],
+  },
+  {
+    labelKey: "nav.accounting",
+    items: [
+      { to: "/finance/entries", labelKey: "nav.ledgerEntries", icon: BookOpen, permission: "finance.view_ledger" },
+      { to: "/finance/accounts", labelKey: "nav.chartOfAccounts", icon: ListTree, permission: "finance.view_ledger" },
+      { to: "/finance/posting-rules", labelKey: "nav.postingRules", icon: GitBranch, permission: "finance.view_ledger" },
+      { to: "/finance/trial-balance", labelKey: "nav.trialBalance", icon: Scale, permission: "finance.view_ledger" },
+      { to: "/finance/ledger", labelKey: "nav.generalLedger", icon: BookText, permission: "finance.view_ledger" },
+      { to: "/finance/periods", labelKey: "nav.accountingPeriods", icon: CalendarRange, permission: "finance.view_ledger" },
     ],
   },
   {

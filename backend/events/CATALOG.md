@@ -20,8 +20,9 @@
 | `crm.opportunity.won` | 1.1 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount`, `sales_order_id` — a draft sales order is created synchronously in the same transaction as the win, so `sales_order_id` is always populated |
 | `crm.opportunity.lost` | 1.0 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount` |
 | `sales.order.confirmed` | 1.1 | sales | finance, warehouse | `order_id`, `partner_id`, `total_amount`, `currency`, `location_id`, `reservation_reference`, `lines` (`product_id`, `quantity`) — 1.1 added the last three (additive) so warehouse can open a pick list against the reservation confirm already made; warehouse skips 1.0 events, which lack them |
-| `finance.invoice.issued` | 1.0 | finance | — | `invoice_id`, `partner_id`, `amount`, `currency` |
-| `finance.invoice.paid` | 1.0 | finance | — | `invoice_id`, `partner_id`, `amount`, `currency` |
+| `finance.invoice.issued` | 1.0 | finance | finance | `invoice_id`, `partner_id`, `amount`, `currency` |
+| `finance.invoice.paid` | 1.0 | finance | finance | `invoice_id`, `partner_id`, `amount`, `currency` |
+| `finance.journal_entry.posted` | 1.0 | finance | — | `entry_id`, `journal_code`, `source_module`, `source_id` — an entry was posted to the ledger (manual entries have null source fields); fires once per entry, reversals included |
 | `procurement.purchase_order.status_changed` | 1.0 | procurement | — | `purchase_order_id`, `from_status`, `to_status` |
 | `procurement.purchase_order_receipt.confirmed` | 1.0 | procurement | warehouse | `purchase_order_receipt_id`, `purchase_order_id`, `location_id`, `lines` (`product_id`, `quantity`, `uom_id`, `lot_number`) |
 | `qc.quality_report.validated` | 1.0 | qc | — | `quality_report_id`, `is_conforming` |
