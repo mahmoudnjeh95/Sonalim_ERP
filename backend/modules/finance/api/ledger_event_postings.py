@@ -15,6 +15,8 @@ SOURCES: dict[str, tuple[str, str, str]] = {
     "payroll.run.approved": ("payroll", "run_id", "payroll_run"),
     "payroll.run.paid": ("payroll", "run_id", "payroll_payment"),
     "payroll.run.reversed": ("payroll", "run_id", "payroll_reversal"),
+    "finance.invoice.issued": ("finance", "invoice_id", "invoice_issued"),
+    "finance.invoice.paid": ("finance", "invoice_id", "invoice_paid"),
 }
 
 
@@ -63,6 +65,22 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
             correlation_id=correlation_id,
             causation_id=causation_id,
         )
+    if event_type in ("finance.invoice.issued", "finance.invoice.paid"):
+        from modules.finance.api.invoice_ledger_service import InvoiceLedgerService
+
+        invoices = InvoiceLedgerService(connection)
+        common = {
+            "tenant_id": tenant_id,
+            "invoice_id": str(payload["invoice_id"]),
+            "partner_id": str(payload["partner_id"]),
+            "amount": payload["amount"],
+            "currency": str(payload["currency"]),
+            "correlation_id": correlation_id,
+            "causation_id": causation_id,
+        }
+        if event_type == "finance.invoice.issued":
+            return invoices.post_issued(issued_on=occurred_on(envelope), **common)
+        return invoices.post_paid(paid_on=occurred_on(envelope), **common)
     raise ValueError(f"the ledger has no posting for {event_type}")
 
 
