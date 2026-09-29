@@ -349,8 +349,10 @@ Entry points: Production → shift reports list "Scanner des fiches"; a shift re
    shows the shift's state: "aucun rapport", or its status and each section's state (vide /
    brouillon / soumis / rien à signaler / renvoyé). A **validated** shift stops here: "Ce shift
    est validé ; le stock est passé. Il doit être renvoyé avant toute modification."
-2. **Photos**: add several photos (file picker with `accept="image/*"` and `capture` for the
-   phone camera). The browser applies EXIF rotation and downscales to 2400 px on the long side,
+2. **Photos**, two ways in: **scan with the camera** — a live camera view in the page (phone
+   rear camera or PC webcam), several shots in a row sent together, falling back to the phone's
+   camera app when the browser cannot open the camera — or **import photos** from the device
+   (several at once). The browser applies EXIF rotation and downscales to 2400 px on the long side,
    JPEG. Thumbnails with per-page status (en file, lecture…, Fabrication, Conditionnement,
    Bobines, non reconnue → "Choisir le type de fiche", autre shift, échec → "Relire"). More
    photos can be added and pages removed at any time.

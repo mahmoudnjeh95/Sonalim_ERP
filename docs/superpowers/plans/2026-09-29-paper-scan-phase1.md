@@ -5737,6 +5737,15 @@ export const S = {
     "Ce que l'usine écrit sur ses fiches, et la valeur correspondante — appris des corrections faites en vérifiant les scans.",
   ),
   importFromPhotos: L("Import from photos", "Importer depuis des photos"),
+  camera: L("Scan with the camera", "Scanner avec la caméra"),
+  snap: L("Take the photo", "Prendre la photo"),
+  shotsTaken: L("photos taken", "photos prises"),
+  useShots: L("Use these photos", "Utiliser ces photos"),
+  cameraUnavailable: L(
+    "The camera cannot be opened here (permission refused, no camera, or the page is not secure).",
+    "La caméra ne peut pas s'ouvrir ici (autorisation refusée, pas de caméra, ou page non sécurisée).",
+  ),
+  phoneCamera: L("Use the phone's camera app", "Utiliser l'appareil photo du téléphone"),
   paperPages: L("Paper fiches", "Fiches papier"),
   all: L("All", "Tous"),
   clearFilters: L("Clear filters", "Effacer les filtres"),
@@ -6601,11 +6610,144 @@ git commit -m "feat(scan): Scanner tab — start a scan for a line, date, shift 
 ### Task 21: The scan workspace and the photos panel
 
 **Files:**
-- Create: `frontend/src/features/scan/ScanWorkspace.tsx`, `frontend/src/features/scan/PhotosPanel.tsx`, `frontend/src/features/scan/PageImage.tsx`
+- Create: `frontend/src/features/scan/ScanWorkspace.tsx`, `frontend/src/features/scan/PhotosPanel.tsx`, `frontend/src/features/scan/PageImage.tsx`, `frontend/src/features/scan/CameraDialog.tsx`
 
 **Interfaces:**
 - Consumes: Tasks 17–18; `AppLoader`, `Skeleton`.
-- Produces: `ScanWorkspace({ sessionId, onBack })`; `PhotosPanel({ session, disabled, included, onInclude })`; `usePageImage(pageId)`, `useUpright(url, rotation) -> string | null`, `PageImage({ pageId, rotation, className, alt })`. The workspace owns the `ReviewState` (single owner, debounced autosave) and hands `review` / `updateReview` to the review panel (Task 22).
+- Produces: `ScanWorkspace({ sessionId, onBack })`; `PhotosPanel({ session, disabled, included, onInclude })`; `usePageImage(pageId)`, `useUpright(url, rotation) -> string | null`, `PageImage({ pageId, rotation, className, alt })`; `CameraDialog({ open, onOpenChange, onShots, onFallback })`. The workspace owns the `ReviewState` (single owner, debounced autosave) and hands `review` / `updateReview` to the review panel (Task 22).
+
+Two ways in, as the user asked (2026-09-29): **scan with the camera** — a live camera view in the page (phone rear camera or PC webcam), several shots in a row, sent together — and **import photos** from the device (several at once). When the browser cannot open the camera (permission refused, no camera, page not served over HTTPS), the dialog says so and offers the phone's own camera app (`<input capture>`), and the import button always works.
+
+- [ ] **Step 0: Write `CameraDialog.tsx`**
+
+```tsx
+// frontend/src/features/scan/CameraDialog.tsx
+import { useEffect, useRef, useState } from "react";
+import { Camera, X } from "lucide-react";
+import { Button } from "../../components/ui/button";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog";
+import { useLabel } from "../production/shift/shiftText";
+import { S } from "./scanText";
+
+/** A live camera view: take the fiches one after the other, then send them together. */
+export function CameraDialog({
+  open, onOpenChange, onShots, onFallback,
+}: { open: boolean; onOpenChange: (open: boolean) => void; onShots: (files: File[]) => void; onFallback: () => void }) {
+  const label = useLabel();
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [shots, setShots] = useState<{ file: File; url: string }[]>([]);
+
+  useEffect(() => {
+    if (!open) return;
+    let stream: MediaStream | null = null;
+    let cancelled = false;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setFailed(true);
+      return;
+    }
+    navigator.mediaDevices
+      .getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 2400 } }, audio: false })
+      .then((media) => {
+        if (cancelled) {
+          media.getTracks().forEach((track) => track.stop());
+          return;
+        }
+        stream = media;
+        if (videoRef.current) {
+          videoRef.current.srcObject = media;
+          void videoRef.current.play();
+        }
+        setReady(true);
+      })
+      .catch(() => setFailed(true));
+    return () => {
+      cancelled = true;
+      stream?.getTracks().forEach((track) => track.stop());
+      setReady(false);
+      setFailed(false);
+      setShots((current) => {
+        current.forEach((shot) => URL.revokeObjectURL(shot.url));
+        return [];
+      });
+    };
+  }, [open]);
+
+  const snap = () => {
+    const video = videoRef.current;
+    if (!video || !video.videoWidth) return;
+    const canvas = document.createElement("canvas");
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    canvas.getContext("2d")!.drawImage(video, 0, 0);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      setShots((current) => [
+        ...current,
+        { file: new File([blob], `camera-${current.length + 1}.jpg`, { type: "image/jpeg" }), url: URL.createObjectURL(blob) },
+      ]);
+    }, "image/jpeg", 0.9);
+  };
+  const drop = (index: number) =>
+    setShots((current) => {
+      URL.revokeObjectURL(current[index].url);
+      return current.filter((_, i) => i !== index);
+    });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{label(S.camera)}</DialogTitle>
+        </DialogHeader>
+        {failed ? (
+          <div className="space-y-3">
+            <p className="text-sm text-warning">{label(S.cameraUnavailable)}</p>
+            <Button variant="outline" onClick={() => { onOpenChange(false); onFallback(); }}>
+              <Camera className="h-4 w-4" />
+              {label(S.phoneCamera)}
+            </Button>
+          </div>
+        ) : (
+          <div className="space-y-3">
+            <video ref={videoRef} playsInline muted className="max-h-[60vh] w-full rounded-md bg-black object-contain" />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button onClick={snap} disabled={!ready}>
+                <Camera className="h-4 w-4" />
+                {label(S.snap)}
+              </Button>
+              <span className="text-sm text-muted-foreground">{`${shots.length} ${label(S.shotsTaken)}`}</span>
+              <Button className="ml-auto" variant="outline" disabled={shots.length === 0} onClick={() => { onShots(shots.map((s) => s.file)); onOpenChange(false); }}>
+                {label(S.useShots)}
+              </Button>
+            </div>
+            {shots.length > 0 && (
+              <div className="flex gap-2 overflow-x-auto">
+                {shots.map((shot, index) => (
+                  <div key={shot.url} className="relative shrink-0">
+                    <img src={shot.url} alt={label(S.photo)} className="h-20 rounded border border-border" />
+                    <button
+                      type="button"
+                      onClick={() => drop(index)}
+                      aria-label={label(S.remove)}
+                      className="absolute right-0.5 top-0.5 rounded bg-background/80 p-0.5"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
+  );
+}
+```
+
+`onShots` hands the files to the same upload path as imported photos (`prepareImage` downscales them to 2400 px). Note that `onShots(...)` runs before `onOpenChange(false)`, whose cleanup revokes the preview URLs — the `File` objects themselves stay valid.
 
 - [ ] **Step 1: Write `PageImage.tsx`**
 
@@ -6677,6 +6819,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Checkbox } from "../../components/ui/checkbox";
 import { Select } from "../../components/ui/select";
 import { useLabel } from "../production/shift/shiftText";
+import { CameraDialog } from "./CameraDialog";
 import { prepareImage } from "./imagePrep";
 import { PageImage } from "./PageImage";
 import {
@@ -6697,6 +6840,7 @@ export function PhotosPanel({
   const pickRef = useRef<HTMLInputElement>(null);
   const cameraRef = useRef<HTMLInputElement>(null);
   const [preparing, setPreparing] = useState(0);
+  const [cameraOpen, setCameraOpen] = useState(false);
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: scanSessionKey(session.id) });
     queryClient.invalidateQueries({ queryKey: scanProposalPrefix(session.id) });
@@ -6740,9 +6884,9 @@ export function PhotosPanel({
             <div className="flex gap-2">
               <input ref={pickRef} type="file" accept="image/*" multiple hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
               <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
-              <Button variant="outline" onClick={() => cameraRef.current?.click()} disabled={upload.isPending}>
+              <Button variant="outline" onClick={() => setCameraOpen(true)} disabled={upload.isPending}>
                 <Camera className="h-4 w-4" />
-                {label(S.takePhoto)}
+                {label(S.camera)}
               </Button>
               <Button onClick={() => pickRef.current?.click()} disabled={upload.isPending}>
                 <ImagePlus className="h-4 w-4" />
@@ -6752,6 +6896,12 @@ export function PhotosPanel({
           )}
         </div>
         {serviceDown && <p className="text-sm text-warning">{label(S.serviceDown)}</p>}
+        <CameraDialog
+          open={cameraOpen}
+          onOpenChange={setCameraOpen}
+          onShots={(files) => upload.mutate(files)}
+          onFallback={() => cameraRef.current?.click()}
+        />
       </CardHeader>
       <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {session.pages.map((page) => (
@@ -7794,7 +7944,7 @@ Run the OCR container (`docker run --rm -d -p 8100:8100 --memory=1536m --cpus=2 
 
 In a private headless Chrome (never the shared Playwright session — see the "Shared worktree" memory):
 1. Production → Scanner → pick line PC, 2026-09-07, the morning shift, an open OF → Commencer le scan.
-2. Add the three photos. Within ~1–2 min: fabrication and conditionnement pages `Lue`, the bobines page `Autre shift — autres heures` with "Fiche reconnue — pas encore importée".
+2. Add the three photos with *Ajouter des photos*; also open *Scanner avec la caméra*, take two shots (webcam, or a fake device via Chrome's `--use-fake-device-for-media-stream --use-fake-ui-for-media-stream`), remove one, send the other, then delete that page. Within ~1–2 min: fabrication and conditionnement pages `Lue`, the bobines page `Autre shift — autres heures` with "Fiche reconnue — pas encore importée".
 3. The review shows the sections; the run lot is yellow ("La date du lot n'est pas celle du shift (2026-09-06)"); clicking it shows the photo zoomed on the lot; "La valeur est correcte" clears it.
 4. The unknown `B05I` versement is yellow; pick a raw material; the finished-product loss 75,25 appears under "Mis de côté" in Déchets conditionnement.
 5. Enregistrer → the dialog lists the sections and blocks while a waste category is empty (red); fill it; save.
