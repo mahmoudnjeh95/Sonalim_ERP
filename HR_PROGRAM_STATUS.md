@@ -95,11 +95,11 @@ ledger, those win — they move first.
 | 1 — Employee core | 15 | 15 | 15 | **Shipped** (merged as `d77c1a2`, deployed) |
 | 2 — Presence & leave | 14 | 14 | 14 | **Shipped** (`a58c298`, pushed, deploying) |
 | 3a — Payroll engine | 11 | 11 | 11 | **Shipped** (PR #7, merged as `c3c3e08`, deploying) |
-| 3b — Payroll runs | 13 | 0 | 0 | Planned |
+| 3b — Payroll runs | 13 | 13 | 0 | **Built** on `hr-p3b-payroll-runs` (no review, by request; not merged) |
 | 3c — Payroll frontend & seed | 11 | 0 | 0 | Planned |
 | 4 — Finance ledger | 15 | 0 | 0 | Planned |
 | 5 — Analytics & self-service | 10 | 0 | 0 | Planned |
-| **Total** | **89** | **40** | **40** | |
+| **Total** | **89** | **53** | **40** | |
 
 Legend: ✅ built and reviewed clean · 🔨 built, review not finished · ⬜ not started
 
@@ -352,23 +352,55 @@ not silently skipped. **1 Minor, non-blocking:** no shipped test directly exerci
 route reaching `copy_rule_set` (`confirm` has that coverage, `copy` doesn't) — a coverage gap,
 verified not to be a live bug.
 
-## Phase 3b — Payroll runs (13 tasks) — planned
+## Phase 3b — Payroll runs (13 tasks) — built, not reviewed (by request), not merged
+
+**Run differently from every earlier phase, at the client's request, this phase only:**
+implementers run **in parallel and without per-task review**. Each parallel task gets its own
+worktree (`.worktrees/p3b-tN`, branch `p3b-tN`) off the phase branch `hr-p3b-payroll-runs`
+(worktree `.worktrees/hr-p3b-payroll-runs`, off `huge_production_migration` at `5db82f2`). After
+each wave the controller cherry-picks the tasks onto the phase branch and runs the payroll suite.
+That run checks the tasks integrate, it does not review them.
+Baseline: `modules/payroll` + bilingual guard 109 passed, 0 skipped.
+
+Waves (worked out from each task's files and imports):
+1 → Tasks 1, 2, 3, 4 · 2 → 5 · 3 → 6 · 4 → 7, 8 · 5 → 9 · 6 → 10, 12, 13 · 7 → 11.
+(Task 12 was first put with 9, but it uses Task 9's `http.csv_response`, so it moved to wave 6.)
+Tasks 7 and 8 both added methods to `run_service.py`. Each was given a different place to insert
+them, so their commits combined without conflict. After wave 4: 338 passed, 0 skipped.
+Wave 6's three implementers all hit the session usage limit before committing, with every file
+already written. The controller ran each task's tests (7, 6 and 5 new tests, matching the plan's
+counts, 0 skipped), committed each one, and checked Task 13's return shapes against the
+interfaces contract itself, since that agent never reported on them. After wave 6: 362 passed,
+0 skipped.
+
+**All 13 tasks built, 2026-09-29.** Phase branch `hr-p3b-payroll-runs` is 14 commits ahead of
+`5db82f2`, not merged or pushed. `modules/payroll` plus the guards give 367 passed, 0 skipped.
+Full backend suite on the branch: 2069 passed, 1 skipped, 4 failed. Three of the failures were
+the go-live reset script not yet listing phase 3b's 12 new payroll tables, fixed in `795d0e2`:
+11 purged, `payroll.bank_file_templates` kept. The fourth is the old unrelated
+`test_a_team_used_by_a_quality_report_is_retired_too`. Payroll migrations 0002–0004 are on the
+shared dev DB and are schema-only, so a deploy applies them by itself.
+**Not done, by request:** per-task reviews and the whole-branch review. **Next:** the client
+chooses merge / PR / keep.
+
+State 🟦 = built and integrated on the phase branch with the payroll suite green; no review, by
+request.
 
 | # | Task | State |
 |---|---|---|
-| 1 | Loan schedule and hr snapshot mapping (pure) | ⬜ |
-| 2 | Payout arithmetic and files (pure) | ⬜ |
-| 3 | Month-on-month variance and declarations (pure) | ⬜ |
-| 4 | Runs table, `RunService` basics, reopening a rule set, test fakes for hr | ⬜ |
-| 5 | Monthly inputs, advances and loans | ⬜ |
-| 6 | Calculating a run | ⬜ |
-| 7 | Final settlements on off-cycle runs | ⬜ |
-| 8 | Approving and reversing runs, with outbox events | ⬜ |
-| 9 | Payouts — bank files, mobile money, cash sheet, marking a run paid | ⬜ |
-| 10 | Payslip reads, print data, work certificate, admin edit, variance | ⬜ |
-| 11 | HTTP routes for runs, payslips, inputs, advances and loans | ⬜ |
-| 12 | Declarations and the annual recap | ⬜ |
-| 13 | Contract services — `PayrollPostingService` and `PayrollReportService` | ⬜ |
+| 1 | Loan schedule and hr snapshot mapping (pure) | 🟦 `f2da6ad` |
+| 2 | Payout arithmetic and files (pure) | 🟦 `3e7ffce` |
+| 3 | Month-on-month variance and declarations (pure) | 🟦 `1f25850` |
+| 4 | Runs table, `RunService` basics, reopening a rule set, test fakes for hr | 🟦 `c140762` (migration 0002 on dev DB) |
+| 5 | Monthly inputs, advances and loans | 🟦 `5dc522a` (migration 0003 on dev DB) |
+| 6 | Calculating a run | 🟦 `b1dd745` (hr contract shapes matched the plan exactly) |
+| 7 | Final settlements on off-cycle runs | 🟦 `a4d2a61` |
+| 8 | Approving and reversing runs, with outbox events | 🟦 `659993f` (Review Focus #1–#3 tests each failed first, then passed) |
+| 9 | Payouts — bank files, mobile money, cash sheet, marking a run paid | 🟦 `e424cfd` (migration 0004 on dev DB) |
+| 10 | Payslip reads, print data, work certificate, admin edit, variance | 🟦 `76b1f38` |
+| 11 | HTTP routes for runs, payslips, inputs, advances and loans | 🟦 `af4c3a9` |
+| 12 | Declarations and the annual recap | 🟦 `1f53770` |
+| 13 | Contract services — `PayrollPostingService` and `PayrollReportService` | 🟦 `4105d86` (shapes checked against the interfaces contract) |
 
 ## Phase 3c — Payroll frontend & seed (11 tasks) — planned
 
