@@ -109,6 +109,19 @@ def test_audit_rows_for_session_changes(db, world):
     assert {"scan_session.created", "scan_session.pages_added"} <= actions
 
 
+def test_create_session_refuses_a_validated_shift(db, world):
+    reports = ShiftReportService(db)
+    shift_id = ok(reports.open_shift(
+        tenant_id=TENANT, actor_id=world["actor"], work_center_id=world["work_center"], report_date=world["day"], shift="Matin",
+    ))["id"]
+    db.execute("UPDATE production.shift_reports SET status = 'validated' WHERE id = %s", (shift_id,))
+    refused = ScanSessionService(db).create_session(
+        tenant_id=TENANT, actor_id=world["actor"], kind="shift", work_center_id=world["work_center"],
+        report_date=world["day"], shift="Matin", default_of_id=world["of"],
+    )
+    assert isinstance(refused, Err) and refused.code == "SHIFT_VALIDATED"
+
+
 def test_shift_state_is_absent_when_the_production_service_refuses(db, world, monkeypatch):
     reports = ShiftReportService(db)
     ok(reports.open_shift(tenant_id=TENANT, actor_id=world["actor"], work_center_id=world["work_center"], report_date=world["day"], shift="Matin"))

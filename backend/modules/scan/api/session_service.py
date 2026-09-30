@@ -276,6 +276,12 @@ class ScanSessionService:
             return Err("NOT_SUPPORTED_YET", "only shift fiches can be scanned for now", "seules les fiches de shift peuvent être scannées pour l'instant")
         if self._window(tenant_id, shift or "") is None:
             return Err("UNKNOWN_SHIFT", f"{shift!r} is not one of the plant's shifts", f"{shift!r} ne fait pas partie des shifts de l'usine")
+        existing_shift = self._shift_state(
+            tenant_id, {"shift": shift, "report_date": report_date.isoformat(), "work_center_id": work_center_id}
+        )
+        if existing_shift is not None and existing_shift["status"] == "validated":
+            return Err("SHIFT_VALIDATED", "this shift is validated and its stock posted; it must be returned before it can be scanned",
+                       "ce shift est validé et son stock passé ; il doit être renvoyé avant qu'il puisse être scanné")
         session_id = str(ULID())
         self._connection.execute(
             """

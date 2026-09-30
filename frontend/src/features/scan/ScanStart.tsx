@@ -57,6 +57,9 @@ export function ScanStart({ onCreated }: { onCreated: (sessionId: string) => voi
   const report = reports.data?.find((s) => s.shift.trim().toLowerCase() === shift.trim().toLowerCase());
   const validated = report?.status === "validated";
   const filled = report?.sections.filter((s) => DONE.has(s.status)).length ?? 0;
+  // Until the lookup resolves we don't know whether this shift is validated, so neither the
+  // "no report yet" line nor the start button may assume "no report".
+  const lookupPending = !!line && (reports.isLoading || reports.isFetching);
 
   const create = useMutation({
     mutationFn: () => createSession(token, { work_center_id: line, report_date: date, shift, default_of_id: ofId || null }),
@@ -108,9 +111,9 @@ export function ScanStart({ onCreated }: { onCreated: (sessionId: string) => voi
             <Badge variant={validated ? "destructive" : "primary"}>{label(SHIFT_STATUS[report.status])}</Badge>
             <span className="text-muted-foreground">{`${filled}/${report.sections.length} ${label(S.sectionsFilled)}`}</span>
           </div>
-        ) : (
+        ) : !lookupPending ? (
           <p className="text-sm text-muted-foreground">{label(S.noReport)}</p>
-        )}
+        ) : null}
         {validated && (
           <p className="flex items-start gap-2 rounded-md bg-destructive-soft px-3 py-2 text-sm text-destructive">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
@@ -118,7 +121,7 @@ export function ScanStart({ onCreated }: { onCreated: (sessionId: string) => voi
           </p>
         )}
 
-        <Button onClick={() => create.mutate()} disabled={!line || !shift || validated || create.isPending}>
+        <Button onClick={() => create.mutate()} disabled={!line || !shift || validated || lookupPending || create.isPending}>
           <ScanLine className="h-4 w-4" />
           {label(S.start)}
         </Button>
