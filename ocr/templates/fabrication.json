@@ -1,0 +1,47 @@
+{
+  "form_type": "fabrication",
+  "titles": ["fiche fabrication par equipe", "fiche fabrication"],
+  "markers": ["pates non conforme", "lavage des moules", "presence personnel", "arret de la production"],
+  "boundaries": ["pates non conforme", "etat de silo", "elabore par", "valide par"],
+  "header": [
+    {"key": "date", "anchors": ["date"], "exclude": ["creation", "mise a jour"]},
+    {"key": "team_hours", "anchors": ["equipe"], "exclude": ["fiche"]},
+    {"key": "line_pc", "anchors": ["pc"], "kind": "checkbox"},
+    {"key": "line_pl", "anchors": ["pl"], "kind": "checkbox"},
+    {"key": "conducteur", "anchors": ["conducteur ligne", "conducteur"]},
+    {"key": "agent_fabrication", "anchors": ["agent de fabrication"]}
+  ],
+  "blocks": [
+    {"key": "production", "anchors": ["production"], "exclude": ["arret de la production", "debut production", "fin production", "demarrage", "fiche"], "columns": [
+      {"key": "lot", "headers": ["n lot", "nlot"], "x": 0.05}, {"key": "product", "headers": ["produit"], "x": 0.136},
+      {"key": "start", "headers": ["hd prod", "hd"], "x": 0.202}, {"key": "end", "headers": ["hf prod", "hf"], "x": 0.255},
+      {"key": "sem_origin", "headers": ["origine"], "x": 0.317}, {"key": "sem_lot", "headers": ["lot"], "x": 0.379},
+      {"key": "sem_bags", "headers": ["qte sac"], "x": 0.438}, {"key": "sem_tonnes", "headers": ["qte t"], "x": 0.507},
+      {"key": "broy_lot", "headers": ["lot"], "x": 0.595}, {"key": "broy_percent", "headers": ["%"], "x": 0.674},
+      {"key": "broy_bags", "headers": ["qte sac"], "x": 0.738}, {"key": "broy_kg", "headers": ["qte kg"], "x": 0.815},
+      {"key": "water", "headers": ["eau"], "x": 0.887}, {"key": "humidity", "headers": ["humidite"], "x": 0.96}]},
+    {"key": "waste_petrin", "anchors": ["dechet petrin"], "x_range": [0.0, 0.66], "columns": [
+      {"key": "time", "headers": ["heure"], "x": 0.055}, {"key": "format", "headers": ["format"], "x": 0.185},
+      {"key": "lot", "headers": ["n lot", "lot"], "x": 0.329}, {"key": "quantity", "headers": ["qte kg", "qte"], "x": 0.449},
+      {"key": "cause", "headers": ["cause"], "x": 0.739}]},
+    {"key": "waste_finished", "anchors": ["produit fini"], "x_range": [0.0, 0.66], "columns": [
+      {"key": "time", "headers": ["heure"], "x": 0.055}, {"key": "format", "headers": ["format"], "x": 0.185},
+      {"key": "lot", "headers": ["n lot", "lot"], "x": 0.329}, {"key": "quantity", "headers": ["qte kg", "qte"], "x": 0.449},
+      {"key": "cause", "headers": ["cause"], "x": 0.739}]},
+    {"key": "mold_washes", "anchors": ["lavage des moules"], "x_range": [0.66, 1.0], "columns": [
+      {"key": "mold", "headers": ["n moule"], "x": 0.102}, {"key": "time", "headers": ["heure"], "x": 0.402},
+      {"key": "state", "headers": ["etat"], "x": 0.767}]},
+    {"key": "staffing", "anchors": ["presence personnel"], "layout": "labels", "x_range": [0.66, 1.0], "columns": [
+      {"key": "control_room", "headers": ["salle de controle"]}, {"key": "petrin", "headers": ["petrin"]},
+      {"key": "semoule", "headers": ["semoule"]}, {"key": "broyage", "headers": ["broyage"]}]},
+    {"key": "stops", "anchors": ["arret de la production", "arret delaproduction", "arretdelaproduction"], "columns": [
+      {"key": "panne", "headers": ["panne"], "x": 0.186}, {"key": "start", "headers": ["heure d"], "x": 0.422},
+      {"key": "end", "headers": ["heure f"], "x": 0.516}, {"key": "action", "headers": ["action corrective"], "x": 0.778}]},
+    {"key": "silo_start", "anchors": ["debut production"], "columns": [
+      {"key": "format", "headers": ["format"], "x": 0.109}, {"key": "lot", "headers": ["n du lot", "lot"], "x": 0.298},
+      {"key": "level", "headers": ["quantite"], "x": 0.533}, {"key": "line_state", "headers": ["etat de la ligne"], "x": 0.841}]},
+    {"key": "silo_end", "anchors": ["fin production"], "columns": [
+      {"key": "format", "headers": ["format"], "x": 0.109}, {"key": "lot", "headers": ["n du lot", "lot"], "x": 0.298},
+      {"key": "level", "headers": ["quantite"], "x": 0.533}, {"key": "line_state", "headers": ["etat de la ligne"], "x": 0.841}]}
+  ]
+}

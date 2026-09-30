@@ -22,6 +22,7 @@ MODULE_LABELS = {
     "procurement": "Achats",
     "production": "Production",
     "qc": "Qualité",
+    "scan": "Numérisation",
     "sales": "Ventes",
     "warehouse": "Entrepôt",
 }

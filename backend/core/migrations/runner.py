@@ -24,6 +24,7 @@ MODULE_MIGRATION_DIRS: dict[str, Path] = {
     "procurement": REPO_ROOT / "modules" / "procurement" / "migrations",
     "qc": REPO_ROOT / "modules" / "qc" / "migrations",
     "maintenance": REPO_ROOT / "modules" / "maintenance" / "migrations",
+    "scan": REPO_ROOT / "modules" / "scan" / "migrations",
 }
 
 # core runs first (procurement's tables FK into core.products/partners/currencies/uoms);
@@ -35,7 +36,9 @@ MODULE_MIGRATION_DIRS: dict[str, Path] = {
 # migrations (which create that table) to have already run.
 # payroll runs right after hr: its rows carry hr employee ids as opaque text (no foreign key)
 # and it reads hr only through hr's api services, so hr's schema must exist first.
-MODULE_ORDER = ["core", "warehouse", "production", "crm", "sales", "finance", "hr", "payroll", "procurement", "qc", "maintenance"]
+# scan runs last: it holds no foreign key into another module and reads them only
+# through their api services.
+MODULE_ORDER = ["core", "warehouse", "production", "crm", "sales", "finance", "hr", "payroll", "procurement", "qc", "maintenance", "scan"]
 
 
 def _ensure_tracking_table(connection: psycopg.Connection) -> None:

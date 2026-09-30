@@ -2089,6 +2089,7 @@ export const fr = {
   "production.dailyReports.shiftLength.apply": "Utiliser",
   "production.tabs.daySheet": "Fiche & récap",
   "production.tabs.shiftReport": "Fiche de shift",
+  "production.tabs.scan": "Scanner les fiches",
   "production.daySheet.date": "Date",
   "production.daySheet.mode.day": "Fiche du jour",
   "production.daySheet.mode.month": "Récap du mois",
