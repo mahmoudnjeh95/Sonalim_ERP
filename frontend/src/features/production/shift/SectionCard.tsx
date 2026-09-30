@@ -368,7 +368,7 @@ export function Part({
                 key={column.key}
                 title={decor?.title}
                 onFocusCapture={onCellFocus ? () => onCellFocus(value as Row, column.key) : undefined}
-                className={cn("space-y-1 rounded-md p-1", decor && DECOR_CLASS[decor.tone])}
+                className={cn("space-y-1", decor && cn("rounded-md p-1", DECOR_CLASS[decor.tone]))}
               >
                 <FieldLabel htmlFor={`${idPrefix}-${column.key}`} className="text-xs text-muted-foreground">
                   {label(column.label)}
