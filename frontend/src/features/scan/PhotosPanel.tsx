@@ -61,7 +61,9 @@ export function PhotosPanel({
   const pick = (files: FileList | null) => {
     if (files && files.length) upload.mutate(Array.from(files));
   };
-  const serviceDown = session.pages.some((p) => p.status === "queued" && p.attempts > 0);
+  // Attempts no longer grow while the OCR service is down (the reader refunds them), so the
+  // banner is keyed on a queued page still carrying the error from its last failed pickup.
+  const serviceDown = session.pages.some((p) => p.status === "queued" && !!p.error);
 
   return (
     <Card>

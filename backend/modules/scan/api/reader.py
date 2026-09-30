@@ -2,8 +2,11 @@
 
 A page is taken with FOR UPDATE SKIP LOCKED and marked `reading` in its own committed
 transaction before the (slow) OCR call, so two workers never read the same photo and
-a crash mid-read leaves a page the next start puts back in the queue. A failed call
-puts the page back; its third failed pickup marks it `failed` for the user to retry.
+a crash mid-read leaves a page the next start puts back in the queue. The OCR service
+itself being unreachable (`OcrUnavailable`) does not spend an attempt: the page is put
+back to `queued` and the attempt counter is refunded, so an outage of any length is
+retried forever instead of failing the page. Any other error puts the page back and
+counts it; its third failed pickup marks it `failed` for the user to retry.
 These are system transitions, not a user's action, so they are not audited.
 """
 from __future__ import annotations
@@ -12,6 +15,8 @@ from typing import Callable
 
 import psycopg
 from psycopg.types.json import Jsonb
+
+from modules.scan.api.ocr_client import OcrUnavailable
 
 MAX_ATTEMPTS = 3
 
@@ -35,7 +40,14 @@ def read_next_page(connection: psycopg.Connection, read: Callable[[bytes, str | 
     connection.commit()
     try:
         result = read(bytes(image), form_hint)
-    except Exception as error:  # the container's failure is the page's retry, never the loop's end
+    except OcrUnavailable as error:  # the service itself is down: wait for it, don't spend an attempt
+        connection.execute(
+            "UPDATE scan.scan_pages SET status = 'queued', attempts = attempts - 1, error = %s WHERE id = %s",
+            (str(error)[:500], page_id),
+        )
+        connection.commit()
+        return page_id, "retry"
+    except Exception as error:  # any other failure is the page's retry, never the loop's end
         attempts = connection.execute("SELECT attempts FROM scan.scan_pages WHERE id = %s", (page_id,)).fetchone()[0]
         outcome = "failed" if attempts >= MAX_ATTEMPTS else "retry"
         connection.execute(

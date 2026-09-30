@@ -64,13 +64,24 @@ def test_an_unrecognized_page_does_not_stop_the_queue(db, page):
     assert _state(db, page)[0] == "unrecognized"
 
 
-def test_ocr_down_requeues_then_fails_after_three(db, page):
+def test_ocr_down_requeues_forever_without_spending_attempts(db, page):
     def down(image, hint):
         raise OcrUnavailable("connection refused")
 
-    outcomes = [read_next_page(_Connection(db), down)[1] for _ in range(3)]
+    outcomes = [read_next_page(_Connection(db), down)[1] for _ in range(5)]
+    assert outcomes == ["retry", "retry", "retry", "retry", "retry"]
+    status, attempts, form_type, error = _state(db, page)
+    assert (status, attempts, form_type) == ("queued", 0, None)
+    assert error == "connection refused"
+
+
+def test_a_non_ocr_error_still_fails_after_three_attempts(db, page):
+    def broken(image, hint):
+        raise ValueError("bad image")
+
+    outcomes = [read_next_page(_Connection(db), broken)[1] for _ in range(3)]
     assert outcomes == ["retry", "retry", "failed"]
-    assert _state(db, page) == ("failed", 3, None, "connection refused")
+    assert _state(db, page) == ("failed", 3, None, "bad image")
 
 
 def test_requeue_stale_reads(db, page):
