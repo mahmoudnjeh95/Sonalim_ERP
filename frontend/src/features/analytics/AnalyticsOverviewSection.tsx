@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
+import { CURRENCY_CODE } from "../../lib/currency";
 import { cn } from "../../lib/utils";
 import { FINISHED_GOODS_LOT_SOURCE, listLots } from "../warehouse/api";
 import { AnalyticsEmptyState, AnalyticsErrorState, AnalyticsLoadingState } from "./AnalyticsStates";
@@ -242,7 +243,7 @@ export function AnalyticsOverviewSection() {
                 icon={CostIcon}
                 label={t("analytics.kpi.cost")}
                 value={costUnavailable ? null : (cost?.costPerTonne ?? null)}
-                format={(value) => `${formatNumber(value, 0)} CFA`}
+                format={(value) => `${formatNumber(value, 0)} ${CURRENCY_CODE}`}
                 comparison={costComparison}
                 deltaText={deltaText(costComparison)}
                 previousText={

@@ -4,6 +4,7 @@ import { ChevronDown, Trophy, TrendingUp } from "lucide-react";
 import { CartesianGrid, Line, LineChart, Tooltip, XAxis, YAxis } from "recharts";
 import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
+import { CURRENCY_CODE } from "../../lib/currency";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../../components/ui/card";
 import { Badge } from "../../components/ui/badge";
@@ -107,7 +108,7 @@ function priceHistoryColumns(t: TFn, leadHeader: string, getLead: (point: Histor
         if (point.unit_price_cfa == null) return "—";
         return (
           <span className={isBest ? "font-bold text-green-600 dark:text-green-400" : ""}>
-            {formatQuantity(point.unit_price_cfa)} CFA
+            {formatQuantity(point.unit_price_cfa)} {CURRENCY_CODE}
             {isBest && " ⭐"}
           </span>
         );
@@ -664,7 +665,7 @@ function ProductPriceSection({
             </div>
             <div className="text-right">
               <p className="text-xs text-muted-foreground">{t("analytics.priceHistory.bestSupplier.price")}</p>
-              <p className="text-lg font-bold text-success">{formatQuantity(bestSupplier.unit_price_cfa)} CFA</p>
+              <p className="text-lg font-bold text-success">{formatQuantity(bestSupplier.unit_price_cfa)} {CURRENCY_CODE}</p>
               {bestSupplier.order_date && <p className="text-xs text-muted-foreground">{bestSupplier.order_date}</p>}
             </div>
           </CardContent>
@@ -749,7 +750,7 @@ function PriceLineChart({ data, minPrice, colorIdx, t }: { data: PriceHistoryPoi
             if (typeof value === "number") {
               const isBest = props.payload.isBest;
               const label = isBest ? t("analytics.priceHistory.chart.tooltip.bestPrice") : t("analytics.priceHistory.chart.tooltip.price");
-              return [`${formatQuantity(value)} CFA${isBest ? " ⭐" : ""}`, label];
+              return [`${formatQuantity(value)} ${CURRENCY_CODE}${isBest ? " ⭐" : ""}`, label];
             }
             return value;
           }}
