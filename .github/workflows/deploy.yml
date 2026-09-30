@@ -15,6 +15,7 @@ env:
   IMAGE_OWNER: smarttoolsagro
   BACKEND_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-backend
   FRONTEND_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-frontend
+  OCR_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-ocr
 
 jobs:
   build:
@@ -51,6 +52,15 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
+      - name: Build and push OCR image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./ocr
+          push: true
+          tags: |
+            ${{ env.OCR_IMAGE }}:latest
+            ${{ env.OCR_IMAGE }}:${{ github.sha }}
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -79,6 +89,6 @@ jobs:
             set -e
             cd /home/debian/Sonalim_erp/Erpsonalim
             echo "${{ secrets.SECRET_SONALIM }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
-            docker compose pull app worker web
-            docker compose up -d app worker web
+            docker compose pull app worker web ocr
+            docker compose up -d app worker web ocr
             docker image prune -f

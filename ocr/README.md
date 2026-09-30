@@ -1,3 +1,119 @@
+# Sonalim OCR service
+
+Reads photos of the paper shift fiches (fabrication, conditionnement, changement bobines) with
+local OCR -- RapidOCR on ONNX Runtime, CPU only -- in its own stateless, capped container. No
+database, no tenant, no secret.
+
+- `POST /read?form_hint=<form_type>` -- raw image bytes as the body; returns
+  `{form_type, form_confidence, rotation, accept_score, header, blocks}`. Every `box` is
+  `[x0, y0, x1, y1]` as fractions of the **upright** image. Table rows are `{"cells": {...}}`.
+- `GET /health` -- `{"status": "ok"}`.
+- One photo at a time (a lock), `mem_limit: 1536m`, `cpus: 2` in `compose.yaml`; the backend
+  reaches it at `OCR_URL` (default `http://ocr:8100`).
+
+## How a photo is read (`app/pipeline.py`)
+
+1. **Orientation.** On a copy shrunk to 960 px, the engine reads the page at 0/90/180/270 and
+   keeps the rotation with the most printed landmarks (titles, markers, band titles) read as
+   lines **wider than tall**. Stops at 0 when 3 are read there. The width test matters: RapidOCR
+   turns a tall text box before reading it, so a sideways page reads its titles at 0 too.
+2. **Detection + recognition** on the upright image, **without** the angle classifier (the page
+   is already upright; the classifier would read upside-down lines and hide a wrong rotation).
+3. **Classify and locate** (`app/locate.py`, the templates in `templates/`).
+4. **Per-cell re-read.** Each table row's column regions (the column span x the row's height,
+   padded 2 px, clipped to the image) are read again, recognition only. A non-blank re-read
+   replaces that cell (text, its score, the region as box); a blank one keeps detection's text.
+
+## Engine calls (`app/engine.py`, rapidocr 3.9.2 -- PP-OCRv6 small det/rec, bundled in the wheel)
+
+```python
+engine = RapidOCR(params={"Global.text_score": 0.0, "Global.log_level": "warning"})
+engine(image, use_det=True, use_cls=False, use_rec=True)   # page: .boxes / .txts / .scores
+engine(crop,  use_det=False, use_cls=False, use_rec=True)  # one cell: TextRecOutput .txts[0] / .scores[0]
+```
+
+The `use_*` arguments **stick** on the RapidOCR object (`update_params` sets attributes and skips
+`None`), so every call passes all three. Detection size is RapidOCR's default
+(`Det.limit_side_len: 736`, `limit_type: min`); see the calibration sweep below.
+
+## Running the tests
+
+```
+python -m pip install -r requirements.txt -r requirements-dev.txt   # plus httpx for TestClient
+$env:PYTHONUTF8="1"; $env:OCR_FIXTURES_DIR="$env:USERPROFILE\sonalim-ocr-fixtures"
+python -m pytest tests -q -s
+```
+
+`tests/test_photos.py` skips its photo tests without `OCR_FIXTURES_DIR` (the photos show workers'
+names and never enter the repo); its fake-engine test of the re-read always runs.
+
+## Calibration on the example photos (2026-09-30)
+
+The three examples are ~700 px screenshots, not phone photos. Result with the committed templates:
+fabrication -> `fabrication` 0 deg, conditionnement -> `conditionnement` 0 deg, bobines ->
+`bobines` 90 deg (all three form/orientation tests pass).
+
+**Key-cell report** (`test_key_cells_accuracy_report`, 8 cells):
+
+| | fabrication (5) | conditionnement (3) | total |
+|---|---|---|---|
+| Task 15 templates, before the per-cell re-read (first run, classifier on) | 1 | 1 | 2/8 |
+| Task 15 templates, with the re-read (first run, classifier on) | 1 | 1 | 2/8 |
+| calibrated templates, before the per-cell re-read | 1 | 1 | **2/8** |
+| calibrated templates, with the re-read (committed) | 1 | 1 | **2/8** |
+
+The re-read changes *which* cells come out, not how many: it recovers `stops.start = 12h18`
+(detection had glued it into "12h18 12h37 Po0uctions112 GB" in the next column) and cleans
+`silo_end.level` ("29%·" -> "29%") and `packing.lot` ("" -> "D621495v"), but it loses
+`production.water`: detection read "28,9 9,83" as one box, while the re-read of the water
+region reads "9,83" (the printed "% Eau Humidité" headers come out as **one** box, which pins
+the water column on the humidity side). Most misses are the digits themselves on these small
+screenshots ("3,.5" for 3,25, "75,25Kg" for 75,28Kg) -- the per-cell crop should gain most on
+real phone photos, where it reads the full-resolution image while detection works on a
+~736 px copy.
+
+**Detection size sweep** (calibrated templates, key cells with / without the re-read, seconds per
+photo with the re-read for fabrication / conditionnement / bobines):
+
+| `Det.limit_side_len` | without | with | seconds | blocks not found |
+|---|---|---|---|---|
+| 736 (default, kept) | 2/8 | 2/8 | 5.5 / 4.1 / 9.9 | fabrication `silo_end` ("Fin production" unread) |
+| 1024 | 2/8 | 2/8 | 8.0 / 6.1 / 14.0 | conditionnement `packet_checks` (band unread) |
+| 1400 | 3/8 | 3/8 | 9.7 / 7.6 / 18.3 | fabrication `mold_washes`, conditionnement `waste` |
+
+**Seconds per photo** (Windows dev laptop, one process, engine already loaded, default size):
+fabrication 5.5 s, conditionnement 4.1 s, bobines 9.9 s (sideways: four orientation passes).
+Without the re-read: 5.1 / 3.7 / 8.9 s.
+
+**Template changes made** (templates only; see the task report for the full list):
+- Column `x` now places the **midpoint between neighbouring columns on the printed ruling**
+  (measured on the photos), since that midpoint is where `locate` splits columns -- so an `x`
+  is not always the visual centre of its column. Fabrication's silo tables are laid out
+  differently from conditionnement's and got their own values.
+- Band titles printed in wide-spaced capitals are read without spaces: conditionnement anchors
+  gained `etatdepaquet`, `dechetpatesouintrants`, `arretmachine`; fabrication `stops` gained
+  `arret delaproduction`, `arretdelaproduction`.
+- Fabrication production headers gained `nlot`, `hd`, `hf` ("NLOT", "HD." / "Prod." read apart).
+
+To redo with the blank fiches: run the photo tests with `-s`, measure each table's rulings,
+and set `x` the same way.
+
+## Container
+
+`Dockerfile`: `python:3.12-slim-trixie` + `libglib2.0-0t64` (trixie's name for libglib2.0-0) and
+`libgomp1`. rapidocr depends on `opencv-python` (GUI build, needs libGL), which lands in the
+same `cv2` folder as the pinned `opencv-python-headless`; the build removes it and reinstalls the
+headless wheel. The last `RUN` loads the engine and templates, so a broken install fails the
+build. All pins resolve to cp312 manylinux wheels (checked with `pip install --dry-run
+--platform manylinux2014_x86_64 --python-version 3.12`).
+
+**The image was not built locally** (no Docker on the dev machine): it is first built by CI
+(`.github/workflows/deploy.yml`, "Build and push OCR image"). Memory under the 1536 MB cap and
+seconds per photo inside the container are still to be measured on the first deploy
+(`docker stats`, and a `POST /read` of an example photo).
+
+---
+
 # RapidOCR probe — findings (Task 14, throwaway probe)
 
 Decision-gate probe run on 2026-09-30 against the three example fiche photos
