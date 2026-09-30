@@ -28,6 +28,7 @@ import { listPackagingTolerances, listProducts, listRegrindDefaults, setPackagin
 import { listFollowUpPolicies, setFollowUpPolicy } from "../qc/api";
 import { DOWNTIME_OPTION_KIND } from "./downtimeOptions";
 import { DashboardSettingsCard } from "./DashboardSettingsCard";
+import { ShiftRolePositionsCard } from "./ShiftRolePositionsCard";
 import { WasteTypesCard } from "./WasteTypesCard";
 import { AppLoader } from "../../components/patterns/AppLoader";
 
@@ -79,6 +80,7 @@ export function ProductionSettingsTab() {
           />
         ))}
       </div>
+      <ShiftRolePositionsCard />
       <DashboardSettingsCard />
     </div>
   );

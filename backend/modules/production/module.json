@@ -2,7 +2,7 @@
   "name": "production",
   "version": "0.15.0",
   "depends": ["core"],
-  "optional_depends": ["warehouse", "qc", "maintenance", "procurement"],
+  "optional_depends": ["warehouse", "qc", "maintenance", "procurement", "hr"],
   "provides_api": [
     "WorkOrderService",
     "ProductClassificationService",
@@ -25,7 +25,8 @@
     "WasteTypeService",
     "DaySheetService",
     "LotSuggestionService",
-    "ShiftReportService"
+    "ShiftReportService",
+    "ShiftRoleService"
   ],
   "publishes_events": [
     "production.work_order.closed",

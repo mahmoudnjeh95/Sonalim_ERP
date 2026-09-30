@@ -30,3 +30,25 @@ export function evaluateQuantity(text: string): number | null {
 export function isSum(text: string): boolean {
   return /\d\s*[+\-−–]\s*[\d.,]/.test(text);
 }
+
+/**
+ * Whether a quantity box should be rewritten to show `value`, when the box currently
+ * says `text`.
+ *
+ * The box follows the form -- a draft loading in, a reset -- but must not rewrite what
+ * somebody is in the middle of typing. `100,5` and `100.5` are the same figure, so
+ * replacing the first with the second only moves the caret and eats the comma a French
+ * keyboard just typed; that is what made `100,5 kg` of film impossible to enter. A text
+ * that is not yet a figure (`100,`) is mid-typing too, and an emptied box is a 0 the
+ * person means, not a 0 to write back.
+ */
+export function shouldSyncText(text: string, value: number): boolean {
+  if (!Number.isFinite(value)) return false;
+  const typed = text.trim();
+  // An emptied box already reads as 0 to the form; writing "0" back into it is noise.
+  if (typed === "") return value !== 0;
+  const current = evaluateQuantity(typed);
+  // Still being typed: leave it be until it is a figure again.
+  if (current === null) return false;
+  return current !== value;
+}

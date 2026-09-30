@@ -48,6 +48,7 @@ from modules.production.api.dashboard_lines_service import DashboardLinesService
 from modules.production.api.dashboard_live_service import DashboardLiveService
 from modules.production.api.stock_release_service import StockReleaseService
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.shift_role_service import ShiftRoleService
 from modules.production.api.waste_type_service import WasteTypeService
 from modules.production.domain.dashboard import ShiftWindow
 from modules.production.api.packaging_variance_service import (
@@ -2623,6 +2624,41 @@ def replace_store_roles(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, entries=[i.model_dump() for i in body.items]
         )
         return _settings_result(connection, result)
+
+
+@router.get("/shift-roles/people")
+def list_shift_role_people(
+    tenant: TenantContext = Depends(require_permission("production.shift.view")),
+) -> dict:
+    """Who the fiche de shift's four person fields may name, and the positions each maps to."""
+    with get_connection() as connection:
+        service = ShiftRoleService(connection)
+        return {
+            "people": service.list_role_people(tenant_id=tenant.tenant_id),
+            "positions": service.get_role_positions(tenant_id=tenant.tenant_id),
+        }
+
+
+class ReplaceShiftRolePositionsRequest(BaseModel):
+    position_ids: list[str] = []
+
+
+@router.put("/shift-roles/{role}/positions")
+def replace_shift_role_positions(
+    role: str,
+    body: ReplaceShiftRolePositionsRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> dict:
+    """Map one of the four person fields to the HR positions whose holders may be named in it."""
+    with get_connection() as connection:
+        result = ShiftRoleService(connection).set_role_positions(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, role=role, position_ids=body.position_ids
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
+        connection.commit()
+        return {"role": role, "position_ids": result.value}
 
 
 @router.get("/dashboard/lines")

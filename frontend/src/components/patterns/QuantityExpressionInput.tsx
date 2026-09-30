@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { useI18n } from "../../lib/i18n";
-import { evaluateQuantity, isSum } from "../../lib/quantityExpression";
+import { evaluateQuantity, isSum, shouldSyncText } from "../../lib/quantityExpression";
 import { formatQuantity } from "../../lib/units";
 import { Input } from "../ui/input";
 
@@ -28,14 +28,10 @@ export function QuantityExpressionInput({
   const [text, setText] = useState(() => (Number.isFinite(value) ? String(value) : ""));
 
   // The form can change the value under the box -- a draft loading in, a reset. Follow
-  // it unless the box already says that number, so a sum being typed is not overwritten
-  // by its own partial result.
+  // it only when the box does not already say that figure, so neither a sum being typed
+  // nor a comma just typed (`100,5`) is overwritten by its own result.
   useEffect(() => {
-    if (!Number.isFinite(value)) return;
-    // A number still mid-typing ("100.") is not yet a valid expression -- its evaluateQuantity
-    // is null, which is never `=== value`. Don't clobber it with the last good value.
-    if (text.trim() !== "" && evaluateQuantity(text) === null) return;
-    if (evaluateQuantity(text) !== value && !(text.trim() === "" && value === 0)) setText(String(value));
+    if (shouldSyncText(text, value)) setText(String(value));
     // Only when the form's value moves, not on every keystroke.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value]);
