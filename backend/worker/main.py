@@ -102,10 +102,13 @@ def run_scan_reader(ocr_url: str) -> None:
     so a slow page never holds up the event consumers."""
     client = OcrClient(ocr_url)
     print("Scan reader started", flush=True)
-    with get_connection() as db_connection:
-        requeued = requeue_stale_reads(db_connection)
-    if requeued:
-        print(f"Scan reader: put {requeued} interrupted page(s) back in the queue", flush=True)
+    try:
+        with get_connection() as db_connection:
+            requeued = requeue_stale_reads(db_connection)
+        if requeued:
+            print(f"Scan reader: put {requeued} interrupted page(s) back in the queue", flush=True)
+    except Exception as error:  # a startup DB hiccup must not silently kill the reader thread
+        print(f"Scan reader: requeue of stale reads failed at startup: {error}", flush=True)
     while True:
         try:
             with get_connection() as db_connection:

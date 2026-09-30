@@ -15,7 +15,7 @@ import { prepareImage } from "./imagePrep";
 import { PageImage } from "./PageImage";
 import {
   deletePage, rereadPage, scanProposalPrefix, scanSessionKey, uploadPages,
-  type FormType, type PageUpload, type ScanPage, type SessionDetail,
+  type FormType, type ScanPage, type SessionDetail,
 } from "./scanApi";
 import { FORM_LABELS, PAGE_STATUS, S, VERDICT_REASONS } from "./scanText";
 

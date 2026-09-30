@@ -50,6 +50,8 @@ function Workspace({ session, onBack }: { session: SessionDetail; onBack: () => 
   const reference = useShiftReferenceData(true);
   const [review, setReview] = useState<ReviewState>(() => session.review_state ?? {});
   const dirty = useRef(false);
+  const latest = useRef({ token, sessionId: session.id, status: session.status, review });
+  latest.current = { token, sessionId: session.id, status: session.status, review };
 
   const updateReview = useCallback((change: (current: ReviewState) => ReviewState) => {
     dirty.current = true;
@@ -62,6 +64,14 @@ function Workspace({ session, onBack }: { session: SessionDetail; onBack: () => 
     return () => window.clearTimeout(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [review]);
+  // Leaving the workspace before the debounce fires must not drop the last edit: flush it
+  // fire-and-forget on unmount using the ref so this only reads on teardown, not every render.
+  useEffect(() => () => {
+    const current = latest.current;
+    if (dirty.current && current.status === "open") {
+      saveReview(current.token, current.sessionId, current.review).catch(() => {});
+    }
+  }, []);
 
   const included = new Set(review.include_pages ?? []);
   const setIncluded = async (pageId: string, on: boolean) => {
