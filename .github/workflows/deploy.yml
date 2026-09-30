@@ -89,6 +89,7 @@ jobs:
             set -e
             cd /home/debian/Sonalim_erp/Erpsonalim
             echo "${{ secrets.SECRET_SONALIM }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
-            docker compose pull app worker web ocr
-            docker compose up -d app worker web ocr
+            docker compose pull app worker web
+            docker compose up -d app worker web
+            docker compose pull ocr && docker compose up -d ocr || echo "::warning::OCR image not pulled or started; scanned photos stay queued"
             docker image prune -f
