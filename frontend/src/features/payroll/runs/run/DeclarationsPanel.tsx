@@ -26,7 +26,7 @@ import { PayrollTable } from "../../PayrollTable";
 
 type DeclarationRow = Declaration["rows"][number];
 
-/** Columns that are not amounts; every other declaration column is F CFA. */
+/** Columns that are not amounts; every other declaration column is XOF. */
 const TEXT_COLUMNS = new Set(["employee_no", "full_name", "identifier", "months"]);
 
 function errorText(error: unknown): string | undefined {

@@ -1,13 +1,13 @@
 import { currentLocale } from "../../lib/i18n";
 
-/** Whole F CFA in the app's language ("150 000 F CFA"); "—" when the value is hidden or absent. */
+/** Whole XOF in the app's language ("150 000 XOF"); "—" when the value is hidden or absent. */
 export function formatXof(amount: number | null | undefined): string {
   if (amount == null) return "—";
   return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
 }
 
 /** An amount in whatever currency it is actually recorded in (a legacy non-XOF contract keeps
- * its own currency rather than being relabelled F CFA); "—" when the value is hidden or absent. */
+ * its own currency rather than being relabelled XOF); "—" when the value is hidden or absent. */
 export function formatMoney(amount: number | null | undefined, currency: string): string {
   if (amount == null) return "—";
   if (currency === "XOF") return formatXof(amount);

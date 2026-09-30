@@ -1,10 +1,10 @@
 import { currentLocale } from "../../lib/i18n";
 
-// Money is whole F CFA (XOF has no minor unit): integers in JSON, shown with the literal
-// "F CFA" suffix rather than Intl's own "XOF" currency symbol.
+// Money is whole XOF (has no minor unit): integers in JSON, shown with the literal
+// "XOF" suffix.
 export function formatXof(amount: number | null | undefined, locale: string = currentLocale()): string {
   if (amount === null || amount === undefined) return "—";
-  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(amount)} F CFA`;
+  return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(amount)} XOF`;
 }
 
 // A payroll period is the first day of its month, "YYYY-MM-01".

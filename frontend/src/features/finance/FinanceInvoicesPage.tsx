@@ -247,7 +247,7 @@ export function FinanceInvoicesPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label={t("finance.stat.total")} value={invoices.length} icon={<Receipt className="h-5 w-5" />} />
         <StatCard label={t("finance.stat.outstanding")} value={outstandingCount} icon={<CircleDollarSign className="h-5 w-5" />} accent="warning" />
-        <StatCard label={t("finance.stat.paid")} value={Math.round(paidTotal)} icon={<BadgeDollarSign className="h-5 w-5" />} accent="success" unit="F CFA" />
+        <StatCard label={t("finance.stat.paid")} value={Math.round(paidTotal)} icon={<BadgeDollarSign className="h-5 w-5" />} accent="success" unit="XOF" />
       </div>
 
       <Card>
