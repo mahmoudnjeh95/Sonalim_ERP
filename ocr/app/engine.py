@@ -10,12 +10,19 @@ from app.locate import TextBox
 # RapidOCR's own default text_score: the engine's cut for accepting a reading. The engine
 # runs with no cut so the backend sees weak readings too, and flags those under this one.
 ACCEPT_SCORE = 0.5
+# compose.yaml gives the container 2 CPUs.
+_THREADS = 2
 
 
 class Engine:
     def __init__(self) -> None:
         # RapidOCR 3.9.2 defaults (PP-OCRv6 small det/rec, bundled in the wheel); see README.md.
-        self._ocr = RapidOCR(params={"Global.text_score": 0.0, "Global.log_level": "warning"})
+        # ONNX Runtime threads capped to the container's `cpus: 2` (its default is every core).
+        self._ocr = RapidOCR(params={
+            "Global.text_score": 0.0,
+            "Global.log_level": "warning",
+            "EngineConfig.onnxruntime.intra_op_num_threads": _THREADS,
+        })
 
     def detect(self, image: np.ndarray) -> list[TextBox]:
         # The use_* flags stick on the RapidOCR object between calls, so every call sets all three.

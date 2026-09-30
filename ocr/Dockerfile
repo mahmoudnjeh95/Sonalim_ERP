@@ -1,8 +1,8 @@
 FROM python:3.12-slim-trixie
 
+# OMP_NUM_THREADS is set in compose.yaml, next to the service's `cpus: 2`.
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    OMP_NUM_THREADS=2
+    PYTHONUNBUFFERED=1
 
 # trixie renamed libglib2.0-0 to libglib2.0-0t64 (64-bit time_t transition).
 RUN apt-get update \

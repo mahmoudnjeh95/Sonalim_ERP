@@ -15,6 +15,10 @@ EXPECTED_TEXT = {
                     ("stops", "start", "12h18"), ("silo_end", "level", "29")],
     "conditionnement": [("packing", "lot", "D6249SNL"), ("waste", "quantity", "75,28"), ("silo_end", "level", "29")],
 }
+# Key cells read on the example photos when this floor was set (2026-09-30, templates with column
+# centres, per-cell re-read on): fabrication 1/5 (stops.start), conditionnement 1/3 (silo_end.level).
+# Raise these as the reading improves; a drop below them is a regression.
+MIN_KEY_CELLS = {"fabrication": 1, "conditionnement": 1}
 
 
 @pytest.fixture(scope="module")
@@ -38,7 +42,7 @@ def test_form_type_and_orientation(reader, name):
 
 @photos
 @pytest.mark.parametrize("name", ["fabrication", "conditionnement"])
-def test_key_cells_accuracy_report(reader, name, capsys):
+def test_key_cells_accuracy_report(reader, name):
     result = reader((Path(FIXTURES) / f"{name}.png").read_bytes())
     blocks = {b["key"]: b for b in result["blocks"]}
     hits = 0
@@ -48,6 +52,7 @@ def test_key_cells_accuracy_report(reader, name, capsys):
         hits += found
         print(f"{name}.{block}.{cell}: expected {expected!r}, read {texts!r} -> {'OK' if found else 'MISS'}")
     print(f"{name}: {hits}/{len(EXPECTED_TEXT[name])} key cells read")
+    assert hits >= MIN_KEY_CELLS[name]
 
 
 class _FakeEngine:
