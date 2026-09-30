@@ -1,8 +1,6 @@
-import { apiErrorFromResponse, apiFetch, networkError } from "../../lib/api";
+import { BASE_URL, apiErrorFromResponse, apiFetch, networkError } from "../../lib/api";
 import type { GridRow } from "../production/shift/ShiftGrid";
 import type { Row, SectionKey, SectionPayload, SectionStatus, ShiftStatus } from "../production/shift/shiftApi";
-
-const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 export type PageStatus = "queued" | "reading" | "read" | "unrecognized" | "failed";
 export type FormType = "fabrication" | "conditionnement" | "bobines";
