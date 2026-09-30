@@ -159,10 +159,15 @@ export function ReviewPanel({
               decorate={(part, row, key) => {
                 const column = part.columns.find((c) => c.key === key);
                 const path = fieldPath(def.key, part.payloadKey, part.shape === "rows" ? rowRef(row) : "-", key);
+                if (isDoubt(path, row[key])) {
+                  const requiredSuffix = column?.required && isEmpty(row[key])
+                    ? ` · ${label(isBlocking(def.key, part.payloadKey, key) ? S.requiredBlocking : S.requiredLater)}`
+                    : "";
+                  return { tone: "doubt", title: `${reasons(path)}${requiredSuffix}` };
+                }
                 if (column?.required && isEmpty(row[key])) {
                   return { tone: "required", title: label(isBlocking(def.key, part.payloadKey, key) ? S.requiredBlocking : S.requiredLater) };
                 }
-                if (isDoubt(path, row[key])) return { tone: "doubt", title: reasons(path) };
                 return undefined;
               }}
               onFocus={(part, row, key) => setActive(fieldPath(def.key, part.payloadKey, part.shape === "rows" ? rowRef(row) : "-", key))}
