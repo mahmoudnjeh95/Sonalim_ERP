@@ -103,6 +103,10 @@ export const S = {
   updated: L("Updated", "Modifié"),
   edit: L("Edit", "Modifier"),
   delete: L("Delete", "Supprimer"),
+  deleteConfirm: L(
+    "Delete this dictionary entry? The next scans will no longer recognise this writing.",
+    "Supprimer cette entrée du dictionnaire ? Les prochains scans ne reconnaîtront plus cette écriture.",
+  ),
   save: L("Save", "Enregistrer"),
   cancel: L("Cancel", "Annuler"),
   noAliases: L("The dictionary fills itself as you correct scans.", "Le dictionnaire se remplit au fil des corrections."),

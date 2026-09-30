@@ -81,7 +81,7 @@ export function AliasesTable() {
               <Pencil className="h-3.5 w-3.5" />
               {label(S.edit)}
             </Button>
-            <Button size="sm" variant="ghost" onClick={() => remove.mutate(a.id)} aria-label={label(S.delete)}>
+            <Button size="sm" variant="ghost" onClick={() => window.confirm(label(S.deleteConfirm)) && remove.mutate(a.id)} aria-label={label(S.delete)}>
               <Trash2 className="h-3.5 w-3.5" />
             </Button>
           </div>
