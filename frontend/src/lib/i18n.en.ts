@@ -295,6 +295,7 @@ export const en = {
   "nav.activityLog": "Activity Log",
   "nav.settings": "Settings",
   "nav.soon": "Soon",
+  "nav.menu": "Menu",
   "nav.signedIn": "Signed in",
   "nav.signOut": "Sign out",
   "nav.collapseSidebar": "Collapse",

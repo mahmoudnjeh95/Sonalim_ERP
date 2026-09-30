@@ -295,6 +295,7 @@ export const fr = {
   "nav.activityLog": "Journal d'activité",
   "nav.settings": "Paramètres",
   "nav.soon": "Bientôt",
+  "nav.menu": "Menu",
   "nav.signedIn": "Connecté",
   "nav.signOut": "Déconnexion",
   "nav.collapseSidebar": "Réduire",

@@ -225,8 +225,8 @@ const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.administration",
     items: [
-      { to: "/admin/users", labelKey: "nav.users", icon: ShieldCheck },
-      { to: "/admin/roles", labelKey: "nav.roles", icon: KeyRound },
+      { to: "/admin/users", labelKey: "nav.users", icon: ShieldCheck, permission: "core.manage_permissions" },
+      { to: "/admin/roles", labelKey: "nav.roles", icon: KeyRound, permission: "core.manage_permissions" },
       { to: "/admin/activity-log", labelKey: "nav.activityLog", icon: History, permission: "core.view_audit_log" },
     ],
   },
@@ -236,12 +236,15 @@ function isItemActive(item: NavItem, pathname: string): boolean {
   return item.exact ? pathname === item.to : pathname.startsWith(item.to);
 }
 
-export function Sidebar() {
+export function Sidebar({ isMobile = false, onNavigate }: { isMobile?: boolean; onNavigate?: () => void } = {}) {
   const { session, logout, hasPermission } = useAuth();
   const { t, language, setLanguage } = useI18n();
   const location = useLocation();
   const reduceMotion = useReducedMotion();
-  const [collapsed, setCollapsed] = useState(() => readStoredCollapsed());
+  const [desktopCollapsed, setCollapsed] = useState(() => readStoredCollapsed());
+  // The drawer is always the full menu: the desktop collapse preference is kept
+  // (so it is still there when the window widens) but not applied on mobile.
+  const collapsed = isMobile ? false : desktopCollapsed;
   // Which expandable items the person opened or closed by hand; an item on the
   // current page is open unless they closed it, and closes again on leaving.
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
@@ -249,11 +252,13 @@ export function Sidebar() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+      // The desktop preference, not the mobile-forced value -- otherwise opening
+      // the drawer on a phone would silently un-collapse the desktop sidebar.
+      localStorage.setItem(COLLAPSED_STORAGE_KEY, desktopCollapsed ? "1" : "0");
     } catch {
       // private browsing / storage blocked — collapsed state just won't persist
     }
-  }, [collapsed]);
+  }, [desktopCollapsed]);
 
   useEffect(() => {
     setToggled({});
@@ -269,8 +274,11 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "flex h-full shrink-0 flex-col border-r border-border bg-background transition-[width] duration-200",
-        collapsed ? "w-16" : "w-64",
+        "flex h-full shrink-0 flex-col border-r border-border bg-background",
+        // In the mobile drawer the width is the drawer's, and the desktop
+        // collapse preference is deliberately not applied -- a 64px rail is not
+        // a useful phone menu.
+        isMobile ? "w-full" : cn("transition-[width] duration-200", collapsed ? "w-16" : "w-64"),
       )}
     >
       <div className={cn("flex items-center gap-2.5 py-5", collapsed ? "justify-center px-2" : "px-5")}>
@@ -309,7 +317,7 @@ export function Sidebar() {
                   return (
                     <div key={item.to}>
                       <div className="relative flex items-center">
-                        <NavLink to={item.to} title={collapsed ? t(item.labelKey) : undefined} className={cn(linkClass(active), "min-w-0 flex-1")}>
+                        <NavLink to={item.to} onClick={onNavigate} title={collapsed ? t(item.labelKey) : undefined} className={cn(linkClass(active), "min-w-0 flex-1")}>
                           {active && (
                             <motion.span
                               layoutId="sidebar-active"
@@ -355,6 +363,7 @@ export function Sidebar() {
                                 <li key={child.tab} className="py-px">
                                   <NavLink
                                     to={`${item.to}?tab=${child.tab}`}
+                                    onClick={onNavigate}
                                     className={cn(
                                       "relative flex items-center gap-2 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground",
                                       childActive && "font-medium text-primary",
@@ -386,7 +395,7 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-border p-3">
-        <NavLink to="/settings" title={collapsed ? t("nav.settings") : undefined} className={cn(linkClass(location.pathname.startsWith("/settings")), "mb-1")}>
+        <NavLink to="/settings" onClick={onNavigate} title={collapsed ? t("nav.settings") : undefined} className={cn(linkClass(location.pathname.startsWith("/settings")), "mb-1")}>
           {location.pathname.startsWith("/settings") && (
             <motion.span
               layoutId="sidebar-active"
@@ -416,6 +425,7 @@ export function Sidebar() {
           </button>
         </div>
 
+        {!isMobile && (
         <button
           onClick={() => setCollapsed((prev) => !prev)}
           aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
@@ -428,6 +438,7 @@ export function Sidebar() {
           {collapsed ? <ChevronsRight className="h-4 w-4 shrink-0" /> : <ChevronsLeft className="h-4 w-4 shrink-0" />}
           {!collapsed && <span>{t("nav.collapseSidebar")}</span>}
         </button>
+        )}
       </div>
     </aside>
   );
