@@ -29,7 +29,8 @@ def test_create_and_read_a_session(db, world):
     session = _session(db, world)
     assert (session["status"], session["shift"], session["default_of_id"]) == ("open", "Matin", world["of"])
     detail = ok(ScanSessionService(db).get_session(tenant_id=TENANT, session_id=session["id"]))
-    assert detail["pages"] == [] and detail["shift"] is None and detail["window"] == {"start": "07:00", "end": "15:00"}
+    assert detail["pages"] == [] and detail["shift_report"] is None and detail["window"] == {"start": "07:00", "end": "15:00"}
+    assert detail["shift"] == "Matin"
     [listed] = ScanSessionService(db).list_sessions(tenant_id=TENANT)
     assert listed["page_count"] == 0 and "review_state" not in listed
 
@@ -94,7 +95,7 @@ def test_the_shift_state_shows_existing_sections(db, world):
     ok(reports.save_section(tenant_id=TENANT, actor_id=world["actor"], shift_report_id=shift_id, section_key="stops",
                             payload={"stops": [{"started_at": "2030-03-04T08:00", "note": "x"}]}))
     session = _session(db, world)
-    shift = ok(ScanSessionService(db).get_session(tenant_id=TENANT, session_id=session["id"]))["shift"]
+    shift = ok(ScanSessionService(db).get_session(tenant_id=TENANT, session_id=session["id"]))["shift_report"]
     assert shift["id"] == shift_id
     assert (shift["sections"]["stops"]["status"], shift["sections"]["stops"]["rows"]) == ("draft", 1)
     assert shift["sections"]["runs"]["rows"] == 0 and len(shift["sections"]["stops"]["fingerprint"]) == 16
@@ -114,7 +115,7 @@ def test_shift_state_is_absent_when_the_production_service_refuses(db, world, mo
     monkeypatch.setattr(ShiftReportService, "get_shift", lambda self, **kwargs: Err("NOT_FOUND", "x", "x"))
     session = _session(db, world)
     detail = ok(ScanSessionService(db).get_session(tenant_id=TENANT, session_id=session["id"]))
-    assert detail["shift"] is None
+    assert detail["shift_report"] is None
 
 
 def test_shift_pages_lists_only_the_applied_sessions_pages(db, world):

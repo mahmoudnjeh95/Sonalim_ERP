@@ -162,7 +162,7 @@ class ScanSessionService:
         return Ok({
             **session,
             "pages": [self._page_summary(p, selection) for p in self._pages(tenant_id, session_id)],
-            "shift": self._shift_state(tenant_id, session),
+            "shift_report": self._shift_state(tenant_id, session),
             "window": {"start": window.start.strftime("%H:%M"), "end": window.end.strftime("%H:%M")} if window else None,
         })
 

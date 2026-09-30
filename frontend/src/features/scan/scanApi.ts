@@ -81,12 +81,12 @@ export interface ScanSession {
   page_count?: number;
 }
 
-export type SessionDetail = Omit<ScanSession, "shift"> & {
+export interface SessionDetail extends ScanSession {
   review_state: ReviewState;
   pages: ScanPage[];
-  shift: ShiftState | null;
+  shift_report: ShiftState | null;
   window: { start: string; end: string } | null;
-};
+}
 
 export interface FlagEntry {
   reason: string;
