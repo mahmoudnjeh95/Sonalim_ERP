@@ -41,15 +41,14 @@ export function PhotosPanel({
 
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
-      const prepared: PageUpload[] = [];
       for (const [index, file] of files.entries()) {
         setPreparing(index + 1);
-        prepared.push(await prepareImage(file));
+        const prepared = await prepareImage(file);
+        await uploadPages(token, session.id, [prepared]);
+        refresh();
       }
-      return uploadPages(token, session.id, prepared);
     },
     onSettled: () => setPreparing(0),
-    onSuccess: refresh,
     onError: (error) => fail(error, S.uploadFailed),
   });
   const remove = useMutation({ mutationFn: (pageId: string) => deletePage(token, session.id, pageId), onSuccess: refresh, onError: (e) => fail(e) });
