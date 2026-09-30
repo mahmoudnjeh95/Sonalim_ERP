@@ -65,7 +65,6 @@ body {
   border-radius: 14px;
   padding: 28px 30px 32px;
   margin-bottom: 40px;
-  page-break-inside: avoid;
 }
 .tache > .numero {
   display: inline-block;
@@ -124,7 +123,12 @@ footer { color: var(--gris); font-size: 16px; text-align: center; padding: 30px 
   .couverture { background: #fff !important; color: var(--encre) !important; border-bottom: 3px solid var(--bleu); padding-top: 0; }
   .couverture h1 { font-size: 30pt; }
   .tache { border: 1px solid #bbb; box-shadow: none; }
-  .capture { break-inside: avoid; }
+  /* An image, a step list and a coloured box each stay whole; the task itself
+     may flow onto the next sheet, because several tasks are taller than A4. */
+  .capture { break-inside: avoid; page-break-inside: avoid; }
+  .etapes li { break-inside: avoid; page-break-inside: avoid; }
+  .boite { break-inside: avoid; page-break-inside: avoid; }
+  .tache h2 { break-after: avoid; page-break-after: avoid; }
   a { color: inherit; }
 }
 </style>
