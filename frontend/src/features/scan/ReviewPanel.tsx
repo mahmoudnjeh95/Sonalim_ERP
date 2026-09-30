@@ -103,7 +103,7 @@ export function ReviewPanel({
 
   return (
     <div className="space-y-4">
-      <div className="sticky top-14 z-10 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-background/95 px-4 py-3 shadow-soft backdrop-blur">
+      <div className="sticky top-24 z-10 flex flex-wrap items-center gap-3 rounded-lg border border-border bg-background/95 px-4 py-3 shadow-soft backdrop-blur">
         <div>
           <h3 className="font-semibold">{label(S.review)}</h3>
           <p className="text-xs text-muted-foreground">{label(S.reviewHint)}</p>
@@ -170,7 +170,7 @@ export function ReviewPanel({
           ))}
         </div>
 
-        <div className="lg:sticky lg:top-36 lg:self-start">
+        <div className="lg:sticky lg:top-[184px] lg:self-start">
           <PhotoViewer
             page={activePage}
             source={activeSource}
