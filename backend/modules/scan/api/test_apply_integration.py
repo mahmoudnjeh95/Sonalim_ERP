@@ -67,6 +67,7 @@ def test_a_section_the_save_refuses_names_itself(db, world):
     sections["waste_production"]["waste_lines"][0]["category"] = None
     refused = _apply(service, world, session_id, header, sections, fingerprints)
     assert refused.code == "INVALID_VALUE" and refused.message.startswith("waste_production:")
+    assert refused.message_fr.startswith("waste_production :")
 
 
 def test_apply_refuses_a_section_changed_since_review(db, world):
@@ -109,3 +110,25 @@ def test_nothing_to_apply(db, world):
     service, session_id, header, _, _ = _reviewed(db, world)
     assert _apply(service, world, session_id, header, {}, {}).code == "NOTHING_TO_APPLY"
     assert _apply(service, world, session_id, header, {"energy": {}}, {}).code == "INVALID_SECTION"
+
+
+def test_outcomes_are_recorded_only_for_written_sections(db, world):
+    service, session_id, header, sections, fingerprints = _reviewed(db, world)
+    ok(_apply(service, world, session_id, header, {"stops": sections["stops"]}, fingerprints))
+    assert db.execute(
+        "SELECT count(*) FROM scan.scan_field_outcomes WHERE session_id = %s AND field_path LIKE 'runs/%%'", (session_id,)
+    ).fetchone()[0] == 0
+    assert db.execute(
+        "SELECT count(*) FROM scan.scan_field_outcomes WHERE session_id = %s AND field_path LIKE 'stops/%%'", (session_id,)
+    ).fetchone()[0] > 0
+    payload = db.execute(
+        "SELECT payload FROM core.audit_log WHERE tenant_id = %s AND action = 'scan_session.applied' AND entity_id = %s",
+        (TENANT, session_id),
+    ).fetchone()[0]
+    assert "runs" in payload["sections_kept"]
+
+
+def test_apply_refuses_a_second_time(db, world):
+    service, session_id, header, sections, fingerprints = _reviewed(db, world)
+    ok(_apply(service, world, session_id, header, sections, fingerprints))
+    assert _apply(service, world, session_id, header, sections, fingerprints).code == "SESSION_CLOSED"

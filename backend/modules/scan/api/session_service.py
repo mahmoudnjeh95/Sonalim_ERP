@@ -77,6 +77,19 @@ class ScanSessionService:
             return _SESSION_CLOSED
         return Ok(session)
 
+    def _open_session_locked(self, tenant_id: str, session_id: str) -> Result[dict]:
+        """Like `_open_session`, but locks the row so a concurrent apply can't also pass the check."""
+        row = self._connection.execute(
+            f"SELECT {', '.join(_SESSION_NAMES)} FROM scan.scan_sessions WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (session_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return _SESSION_NOT_FOUND
+        session = {name: _iso(value) for name, value in zip(_SESSION_NAMES, row)}
+        if session["status"] != "open":
+            return _SESSION_CLOSED
+        return Ok(session)
+
     def _window(self, tenant_id: str, shift: str):
         wanted = shift.strip().lower()
         windows = DashboardSettingsService(self._connection).list_shift_windows(tenant_id=tenant_id)
@@ -363,7 +376,7 @@ class ScanSessionService:
         The caller commits on Ok and rolls back on Err, so a section save_section refuses
         leaves nothing written.
         """
-        found = self._open_session(tenant_id, session_id)
+        found = self._open_session_locked(tenant_id, session_id)
         if isinstance(found, Err):
             return found
         session = found.value
@@ -422,6 +435,9 @@ class ScanSessionService:
         for kind, read_text, value in aliases_to_learn(built.value["coded"], finals):
             aliases.learn(tenant_id=tenant_id, actor_id=actor_id, kind=kind, read_text=read_text, target_value=value)
         for row in outcomes(built.value, finals):
+            first_segment = row["field_path"].split("/", 1)[0]
+            if first_segment != "header" and first_segment not in sections:
+                continue
             self._connection.execute(
                 """
                 INSERT INTO scan.scan_field_outcomes
@@ -433,9 +449,12 @@ class ScanSessionService:
             )
         self._connection.execute(
             "UPDATE scan.scan_sessions SET status = 'applied', shift_report_id = %s, applied_by = %s, applied_at = NOW(), "
-            "updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+            "updated_at = NOW() WHERE id = %s AND tenant_id = %s AND status = 'open'",
             (shift_id, actor_id, session_id, tenant_id),
         )
+        sections_kept = sorted(k for k in built.value["sections"] if k not in sections)
+        pages_read = sum(1 for p in self._pages(tenant_id, session_id) if p["status"] == "read")
         self._audit(tenant_id, actor_id, "scan_session.applied", session_id,
-                    {"shift_report_id": shift_id, "sections_written": written, "header": sorted(header_fields)})
+                    {"shift_report_id": shift_id, "sections_written": written, "sections_kept": sections_kept,
+                     "pages": pages_read, "header": sorted(header_fields)})
         return Ok({"shift_report_id": shift_id, "sections_written": written})
