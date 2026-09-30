@@ -80,7 +80,7 @@ export function LoginPage() {
         transition={{ duration: 0.5, ease: EASE }}
         className="relative z-10 w-full max-w-5xl overflow-hidden rounded-[32px] border border-white/40 bg-white/75 shadow-[0_35px_90px_rgba(7,31,67,0.18)] backdrop-blur-xl"
       >
-        <div className="grid md:grid-cols-[1.1fr_0.9fr]">
+        <div className="grid grid-cols-1 md:grid-cols-[1.1fr_0.9fr]">
           {/* Brand panel */}
           <div className="relative hidden min-h-[580px] flex-col justify-between overflow-hidden bg-[#071F43] p-8 text-white md:flex">
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(245,169,0,0.22),_transparent_38%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.12),_transparent_30%),linear-gradient(160deg,#071F43,#0E3160)]" />

@@ -57,7 +57,7 @@ export function SettingsCard() {
           {isSuccess && settings === null && (
             <p className="rounded-md border border-warning/30 bg-warning-soft px-3 py-2 text-sm">{t("payroll.rules.settings.notSet")}</p>
           )}
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <FormField id="payroll-country" label={t("payroll.rules.settings.country")}>
               <Input
                 id="payroll-country"

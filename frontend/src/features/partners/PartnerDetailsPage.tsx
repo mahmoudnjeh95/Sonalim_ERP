@@ -104,7 +104,7 @@ export function PartnerDetailsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card>
           <CardHeader>
             <CardTitle>{t("partners.details.accountDetails")}</CardTitle>
@@ -157,7 +157,7 @@ export function PartnerDetailsPage() {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>{t("partners.details.contacts")}</CardTitle>
@@ -258,7 +258,7 @@ export function PartnerDetailsPage() {
         </Card>
       </div>
       {(partner.kind === "supplier" || partner.kind === "both") && <PartnerTagsCard partnerId={partnerId!} />}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <RecordList
           title={t("partners.details.opportunities")}
           emptyLabel={t("partners.details.none")}

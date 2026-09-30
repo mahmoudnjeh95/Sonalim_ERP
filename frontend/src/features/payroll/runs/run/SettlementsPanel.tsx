@@ -181,7 +181,7 @@ export function SettlementsPanel({ run, canEdit }: { run: PayrollRun; canEdit: b
               </Select>
               {employees.isSuccess && leavers.length === 0 && <p className="text-xs text-muted-foreground">{t("payroll.run.settlements.noLeaver")}</p>}
             </div>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="settlement-leave-days">{t("payroll.run.settlements.column.leaveDays")}</Label>
                 <Input id="settlement-leave-days" type="number" min={0} step="any" value={leaveDays} onChange={(event) => setLeaveDays(event.target.value)} />

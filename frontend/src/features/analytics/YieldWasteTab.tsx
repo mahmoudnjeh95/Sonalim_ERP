@@ -88,7 +88,7 @@ export function YieldWasteTab() {
       <div className={cn("space-y-5 transition-opacity duration-200", teamCurrent.isPlaceholderData && "opacity-60")} aria-busy={teamCurrent.isPlaceholderData}>
         <YieldWasteFlowPanel current={ops} previous={previousOps} fmt={fmt} showIllustration />
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <Card>
             <CardHeader>
               <div>

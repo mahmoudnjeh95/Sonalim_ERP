@@ -26,7 +26,7 @@ export function ShiftPaperPages({ shiftReportId }: { shiftReportId: string }) {
         <DialogHeader>
           <DialogTitle>{label(S.paperPages)}</DialogTitle>
         </DialogHeader>
-        <div className="grid max-h-[75vh] gap-3 overflow-y-auto sm:grid-cols-2">
+        <div className="grid grid-cols-1 max-h-[75vh] gap-3 overflow-y-auto sm:grid-cols-2">
           {pages.data.map((page) => (
             <figure key={page.id} className="space-y-1">
               <PageImage pageId={page.id} rotation={page.rotation} alt={label(S.photo)} className="w-full rounded-md border border-border" />

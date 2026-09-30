@@ -95,7 +95,7 @@ export function PhotosPanel({
           onFallback={() => cameraRef.current?.click()}
         />
       </CardHeader>
-      <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {session.pages.map((page) => (
           <PageCard
             key={page.id}

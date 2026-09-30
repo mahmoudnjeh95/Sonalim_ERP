@@ -429,7 +429,7 @@ function HeaderNames({
   });
 
   return (
-    <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="grid grid-cols-1 gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-5">
       {HEADER_FIELDS.map((field) => (
         <div key={field.key} className="space-y-1">
           <FieldLabel htmlFor={`shift-${field.key}`} className="text-xs text-muted-foreground">

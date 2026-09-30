@@ -83,7 +83,7 @@ export function DowntimeAnalyticsTab() {
   return (
     <div className="space-y-5">
       {header}
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <div>
@@ -153,7 +153,7 @@ export function DowntimeAnalyticsTab() {
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>{t("analytics.downtime.captureQuality.title")}</CardTitle>

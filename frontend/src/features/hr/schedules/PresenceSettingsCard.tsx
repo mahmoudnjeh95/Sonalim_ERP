@@ -91,7 +91,7 @@ export function PresenceSettingsCard() {
         )}
       </CardHeader>
       <CardContent className="space-y-4">
-        <div className="grid gap-3 sm:grid-cols-2">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {field("night-start", t("hr.presenceSettings.nightStart"), <Input id="night-start" type="time" disabled={!canEdit} value={draft.nightStart} onChange={(e) => setDraft({ ...draft, nightStart: e.target.value })} />)}
           {field("night-end", t("hr.presenceSettings.nightEnd"), <Input id="night-end" type="time" disabled={!canEdit} value={draft.nightEnd} onChange={(e) => setDraft({ ...draft, nightEnd: e.target.value })} />)}
           {field("punch-attach", t("hr.presenceSettings.attach"), <Input id="punch-attach" type="number" min={0} disabled={!canEdit} value={draft.attach} onChange={(e) => setDraft({ ...draft, attach: e.target.value })} />)}

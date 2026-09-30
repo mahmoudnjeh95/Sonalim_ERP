@@ -27,7 +27,7 @@ export function ExpiryAlertsCard() {
       </CardHeader>
       <CardContent>
         {isLoading && (
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             {[0, 1, 2].map((index) => (
               <Skeleton key={index} className="h-24 w-full" />
             ))}
@@ -35,7 +35,7 @@ export function ExpiryAlertsCard() {
         )}
         {isError && <p className="text-sm text-destructive">{t("hr.alerts.error")}</p>}
         {data && (
-          <div className="grid gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <AlertColumn title={t("hr.alerts.contracts")} days={data.contract_expiry_horizon_days} empty={data.contracts_ending.length === 0}>
               {data.contracts_ending.map((item) => (
                 <ContractLine key={item.contract_id} item={item} />
@@ -63,9 +63,9 @@ function AlertColumn({ title, days, empty, children }: { title: string; days: nu
   return (
     <div className="space-y-2">
       <div className="flex items-baseline justify-between gap-2">
-        <p className="text-sm font-medium">{title}</p>
+        <p className="min-w-0 truncate text-sm font-medium">{title}</p>
         {days !== null && (
-          <span className="text-xs text-muted-foreground">
+          <span className="shrink-0 text-xs text-muted-foreground">
             {days} {t("hr.alerts.withinDays")}
           </span>
         )}
@@ -85,10 +85,10 @@ function ContractLine({ item }: { item: ContractAlert }) {
   const { t } = useI18n();
   return (
     <li className="flex items-center justify-between gap-2 text-sm">
-      <Link to={`/hr/employees/${item.employee_id}?tab=contracts`} className="truncate hover:underline">
+      <Link to={`/hr/employees/${item.employee_id}?tab=contracts`} className="min-w-0 truncate hover:underline">
         {item.employee_name}
       </Link>
-      <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <span className="flex shrink-0 flex-wrap items-center justify-end gap-1.5 text-xs text-muted-foreground">
         {t(CONTRACT_TYPE_LABEL[item.contract_type])} · {formatDate(item.date)}
         {item.state === "expired" && (
           <Badge variant={DOCUMENT_STATE_VARIANT.expired}>{t(DOCUMENT_STATE_LABEL.expired)}</Badge>
@@ -102,10 +102,10 @@ function DocumentLine({ item }: { item: DocumentAlert }) {
   const { t } = useI18n();
   return (
     <li className="flex items-center justify-between gap-2 text-sm">
-      <Link to={`/hr/employees/${item.employee_id}?tab=documents`} className="truncate hover:underline">
+      <Link to={`/hr/employees/${item.employee_id}?tab=documents`} className="min-w-0 truncate hover:underline">
         {item.employee_name} · {item.title ?? t(DOCUMENT_KIND_LABEL[item.kind])}
       </Link>
-      <Badge variant={DOCUMENT_STATE_VARIANT[item.state]}>
+      <Badge className="shrink-0" variant={DOCUMENT_STATE_VARIANT[item.state]}>
         {t(DOCUMENT_STATE_LABEL[item.state])} · {formatDate(item.expires_on)}
       </Badge>
     </li>

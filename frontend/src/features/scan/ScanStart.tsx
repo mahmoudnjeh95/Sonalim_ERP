@@ -73,7 +73,7 @@ export function ScanStart({ onCreated }: { onCreated: (sessionId: string) => voi
   return (
     <Card>
       <CardContent className="space-y-4 py-4">
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-1">
             <FieldLabel htmlFor="scan-date">{label(S.date)}</FieldLabel>
             <Input id="scan-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />

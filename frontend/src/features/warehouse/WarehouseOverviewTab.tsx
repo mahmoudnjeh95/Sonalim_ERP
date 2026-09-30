@@ -537,7 +537,7 @@ export function WarehouseOverviewTab() {
       <div className={cn("space-y-6 transition-opacity duration-200", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
       <motion.section {...sectionMotion(0)} className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">{t("warehouse.overview.section.today")}</h2>
-        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile>
             <StatCard label={t("warehouse.overview.stat.stockValue")} value={summary.stock_value} icon={<Coins className="h-5 w-5" />} unit="XOF" accent="primary" />
           </KpiTile>
@@ -592,7 +592,7 @@ export function WarehouseOverviewTab() {
         <h2 className="text-sm font-medium text-muted-foreground">
           {fill(t("warehouse.overview.section.period"), { from: formatDate(overview.period.from), to: formatDate(overview.period.to) })}
         </h2>
-        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile>
             <UnitBreakdownStat label={t("warehouse.overview.stat.inbound")} icon={<MovementInIcon className="h-5 w-5" />} accent="primary" breakdown={inboundBreakdown} />
           </KpiTile>

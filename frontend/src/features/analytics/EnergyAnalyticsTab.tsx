@@ -87,7 +87,7 @@ export function EnergyAnalyticsTab() {
             <CardDescription>{t("analytics.energy.trend.subtitle")}</CardDescription>
           </div>
         </CardHeader>
-        <CardContent className="grid gap-4 lg:grid-cols-2">
+        <CardContent className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <div className="h-64 w-full">
             <InteractiveChart height="100%">
               <LineChart data={summary.byDate} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -123,7 +123,7 @@ export function EnergyAnalyticsTab() {
         </CardContent>
       </Card>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader>
             <CardTitle>{t("analytics.energy.perTonne.title")}</CardTitle>

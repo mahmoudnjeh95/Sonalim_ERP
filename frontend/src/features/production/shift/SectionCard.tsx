@@ -366,7 +366,7 @@ export function Part({
     <div className="space-y-2">
       {part.title && <h3 className="text-sm font-medium">{label(part.title)}</h3>}
       {part.shape === "single" ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {part.columns.map((column) => {
             const decor = decorate?.(value as Row, column.key);
             return (

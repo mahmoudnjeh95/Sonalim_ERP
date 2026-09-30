@@ -254,7 +254,7 @@ export function AnalyticsOverviewSection() {
               />
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
               <Card>
                 <CardHeader>
                   <div>
@@ -274,7 +274,7 @@ export function AnalyticsOverviewSection() {
               <YieldWasteFlowPanel current={ops} previous={previousOps} fmt={fmt} />
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               {sources.machinePerformance.isError ? (
                 <Card>
                   <AnalyticsErrorState

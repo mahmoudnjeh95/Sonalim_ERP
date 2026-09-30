@@ -117,13 +117,13 @@ export function ReviewPanel({
         </Button>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1fr)_380px]">
         <div className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle className="text-base">{label(S.header)}</CardTitle>
             </CardHeader>
-            <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+            <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
               {HEADER_FIELDS.map(([field, fieldLabel]) => {
                 const path = fieldPath("header", "-", "-", field);
                 const doubt = isDoubt(path, values.header[field]);

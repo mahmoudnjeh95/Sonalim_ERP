@@ -148,7 +148,7 @@ export function ValuationTab() {
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <StatCard label={t("warehouse.valuation.stat.total")} value={Math.round(totalValue)} icon={<Coins className="h-5 w-5" />} unit="XOF" accent="primary" />
         <StatCard label={t("warehouse.valuation.stat.unvaluedProducts")} value={unvaluedProducts} icon={<Layers className="h-5 w-5" />} accent="warning" />
       </div>
