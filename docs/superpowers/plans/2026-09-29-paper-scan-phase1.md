@@ -7075,7 +7075,7 @@ function Workspace({ session, onBack }: { session: SessionDetail; onBack: () => 
   });
 
   const lineName = reference.workCenters.find((w) => w.id === session.work_center_id)?.name ?? "—";
-  const validated = session.shift?.status === "validated";
+  const validated = session.shift_report?.status === "validated";
   const open = session.status === "open";
   const shiftLink = `/production?tab=shift-report&line=${encodeURIComponent(session.work_center_id)}&date=${session.report_date}&shift=${encodeURIComponent(session.shift)}`;
 
@@ -7090,7 +7090,7 @@ function Workspace({ session, onBack }: { session: SessionDetail; onBack: () => 
           <span className="font-medium">{`${lineName} · ${session.report_date} · ${session.shift}`}</span>
           {session.window && <span className="text-sm text-muted-foreground">{`${session.window.start}–${session.window.end}`}</span>}
           <Badge variant={open ? "warning" : "default"}>{label(SESSION_STATUS[session.status])}</Badge>
-          {session.shift && <Badge variant={validated ? "destructive" : "primary"}>{label(SHIFT_STATUS[session.shift.status])}</Badge>}
+          {session.shift_report && <Badge variant={validated ? "destructive" : "primary"}>{label(SHIFT_STATUS[session.shift_report.status])}</Badge>}
           <div className="ml-auto flex gap-2">
             {session.shift_report_id && (
               <Button variant="outline" size="sm" onClick={() => navigate(shiftLink)}>{label(S.openShift)}</Button>
