@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manuel Paie — Sonalim</title>
+<style>
+/* Manuel Sonalim - feuille de style commune.
+   Conçue pour des lecteurs peu ou pas scolarisés :
+   grands caractères, forts contrastes, une idée par bloc.
+   Elle est recopiée dans chaque page pour qu'un fichier
+   seul, copié sur une clé USB, s'affiche correctement. */
+
+:root {
+  --encre: #14213d;
+  --gris: #5a6472;
+  --trait: #d9dee6;
+  --fond: #ffffff;
+  --fond-doux: #f4f6fa;
+  --bleu: #1d3b78;
+  --rouge: #d7263d;
+  --ambre-fond: #fff6e0;
+  --ambre-trait: #e0a500;
+  --vert-fond: #e8f6ed;
+  --vert-trait: #1d7a44;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fond-doux);
+  color: var(--encre);
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+}
+
+.page { max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+
+/* ---- couverture du guide ---- */
+.couverture {
+  background: var(--bleu);
+  color: #fff;
+  padding: 48px 24px 40px;
+  margin-bottom: 40px;
+}
+.couverture .dedans { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+.couverture .module { font-size: 17px; letter-spacing: .18em; text-transform: uppercase; opacity: .8; }
+.couverture h1 { font-size: 46px; margin: 10px 0 12px; line-height: 1.15; }
+.couverture p { font-size: 21px; margin: 0; max-width: 680px; opacity: .95; }
+
+/* ---- sommaire ---- */
+.sommaire { background: #fff; border: 1px solid var(--trait); border-radius: 12px; padding: 24px 28px; margin-bottom: 44px; }
+.sommaire h2 { margin: 0 0 14px; font-size: 22px; }
+.sommaire ol { margin: 0; padding-left: 26px; }
+.sommaire li { margin: 7px 0; }
+.sommaire a { color: var(--bleu); text-decoration: none; }
+.sommaire a:hover { text-decoration: underline; }
+
+/* ---- un bloc = une tâche ---- */
+.tache {
+  background: #fff;
+  border: 1px solid var(--trait);
+  border-radius: 14px;
+  padding: 28px 30px 32px;
+  margin-bottom: 40px;
+  page-break-inside: avoid;
+}
+.tache > .numero {
+  display: inline-block;
+  background: var(--bleu); color: #fff;
+  font-size: 16px; font-weight: 700;
+  padding: 4px 14px; border-radius: 999px;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.tache h2 { font-size: 31px; margin: 14px 0 6px; line-height: 1.2; }
+.tache .but { color: var(--gris); font-size: 19px; margin: 0 0 22px; }
+
+/* ---- la capture d'écran et ses pastilles ---- */
+.capture { position: relative; display: block; margin: 0 0 24px; border: 2px solid var(--trait); border-radius: 10px; overflow: hidden; }
+.capture img { display: block; width: 100%; height: auto; }
+.pastille {
+  position: absolute;
+  width: 38px; height: 38px;
+  /* La pastille se pose A GAUCHE du point mesure, pas dessus : sinon elle
+     cache le bouton ou la case qu'elle designe, et le lecteur ne voit plus
+     le mot qu'il doit reconnaitre a l'ecran. */
+  margin: -19px 0 0 -19px;
+  border-radius: 50%;
+  background: var(--rouge); color: #fff;
+  font-size: 21px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px var(--rouge), 0 2px 6px rgba(0,0,0,.35);
+}
+
+/* ---- les étapes sous l'image ---- */
+.etapes { list-style: none; margin: 0 0 8px; padding: 0; counter-reset: etape; }
+.etapes li { position: relative; padding: 10px 0 10px 54px; border-top: 1px solid var(--trait); font-size: 20px; }
+.etapes li:first-child { border-top: none; }
+.etapes li::before {
+  counter-increment: etape; content: counter(etape);
+  position: absolute; left: 0; top: 9px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--rouge); color: #fff;
+  font-weight: 700; font-size: 20px;
+  display: flex; align-items: center; justify-content: center;
+}
+.etapes b { background: #eef2fa; padding: 1px 7px; border-radius: 5px; font-weight: 600; white-space: nowrap; }
+
+/* ---- encadrés ---- */
+.boite { border-radius: 10px; padding: 16px 20px; margin: 20px 0 0; font-size: 19px; }
+.boite .chapeau { font-weight: 700; display: block; margin-bottom: 4px; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; }
+.attention { background: var(--ambre-fond); border-left: 8px solid var(--ambre-trait); }
+.reussi { background: var(--vert-fond); border-left: 8px solid var(--vert-trait); }
+
+/* ---- repères de navigation ---- */
+.chemin { background: #eef2fa; border-radius: 8px; padding: 10px 16px; font-size: 18px; margin: 0 0 20px; }
+.chemin b { color: var(--bleu); }
+
+footer { color: var(--gris); font-size: 16px; text-align: center; padding: 30px 0 0; border-top: 1px solid var(--trait); }
+
+/* ---- impression papier A4 ---- */
+@media print {
+  body { background: #fff; font-size: 12pt; }
+  .couverture { background: #fff !important; color: var(--encre) !important; border-bottom: 3px solid var(--bleu); padding-top: 0; }
+  .couverture h1 { font-size: 30pt; }
+  .tache { border: 1px solid #bbb; box-shadow: none; }
+  .capture { break-inside: avoid; }
+  a { color: inherit; }
+}
+</style>
+</head>
+<body>
+
+<div class="couverture">
+  <div class="dedans">
+    <div class="module">Manuel Sonalim · Guide 5 sur 5</div>
+    <h1>Paie — Payer<br>le personnel</h1>
+    <p>Ce guide montre comment préparer la paie du mois, comment ajouter une prime
+       ou une avance, comment lire un bulletin, et qui a le droit d'approuver.</p>
+  </div>
+</div>
+
+<div class="page">
+
+<div class="sommaire">
+  <h2>Ce que vous allez apprendre</h2>
+  <ol>
+    <li><a href="#t1">Les cinq états d'une paie</a></li>
+    <li><a href="#t2">Ajouter une prime ou une avance</a></li>
+    <li><a href="#t3">Ouvrir la paie du mois</a></li>
+    <li><a href="#t4">Approuver la paie</a></li>
+    <li><a href="#t5">Lire le bulletin d'une personne</a></li>
+  </ol>
+</div>
+
+<section class="tache" id="t1">
+  <span class="numero">Tâche 1</span>
+  <h2>Les cinq états d'une paie</h2>
+  <p class="but">Avant tout : une paie passe par cinq étapes, toujours dans cet ordre.
+     On ne peut pas sauter une étape.</p>
+  <p class="chemin">Dans le menu à gauche : <b>PAIE</b> → <b>Paies</b></p>
+
+  <figure class="capture">
+    <img src="images/paie/01-paies.png" alt="Écran Paies : la liste des paies du mois">
+    <span class="pastille" style="left:14%; top:44%">1</span>
+    <span class="pastille" style="left:45%; top:44%">2</span>
+    <span class="pastille" style="left:63%; top:44%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Les boutons trient la liste : <b>Brouillon</b>, <b>Calculée</b>,
+        <b>Approuvée</b>, <b>Payée</b>, <b>Extournée</b>.</li>
+    <li>La colonne <b>STATUT</b> dit où en est la paie du mois.
+        <b>Calculée</b> veut dire : les chiffres sont faits, mais personne n'a encore dit oui.</li>
+    <li>Les colonnes <b>BRUT</b> et <b>NET</b> : le brut est avant les retenues,
+        le net est ce que la personne reçoit vraiment.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    <b>Extournée</b> veut dire : la paie a été annulée après coup.
+    Cela laisse une trace exprès, pour que l'on sache ce qui s'est passé.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Vous savez dire, en lisant le statut, si la paie du mois est finie ou non.
+  </div>
+</section>
+
+<section class="tache" id="t2">
+  <span class="numero">Tâche 2</span>
+  <h2>Ajouter une prime ou une avance</h2>
+  <p class="but">À faire AVANT de calculer la paie. Après, il faut tout recalculer.</p>
+  <p class="chemin">Dans le menu à gauche : <b>PAIE</b> → <b>Éléments variables</b></p>
+
+  <figure class="capture">
+    <img src="images/paie/04-elements-variables.png" alt="Écran Éléments variables">
+    <span class="pastille" style="left:14%; top:33%">1</span>
+    <span class="pastille" style="left:27%; top:33%">2</span>
+    <span class="pastille" style="left:60%; top:46%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>L'onglet <b>Éléments de paie</b> : les primes et les retenues du mois.</li>
+    <li>Les onglets <b>Avances</b> et <b>Prêts</b> : l'argent déjà donné à la personne,
+        qui sera retiré de son salaire.</li>
+    <li>Cliquez <b>Ajouter un élément</b>, puis choisissez l'employé et la rubrique.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Si la paie du mois est déjà <b>Calculée</b>, une prime ajoutée maintenant
+    n'est pas comptée. Il faut cliquer <b>Recalculer</b> sur la paie.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La ligne apparaît dans le tableau, avec le nom de l'employé et le montant.
+  </div>
+</section>
+
+<section class="tache" id="t3">
+  <span class="numero">Tâche 3</span>
+  <h2>Ouvrir la paie du mois</h2>
+  <p class="but">Pour voir les totaux et vérifier avant de payer qui que ce soit.</p>
+  <p class="chemin">Dans le menu à gauche : <b>PAIE</b> → <b>Paies</b>, puis cliquez la ligne du mois.</p>
+
+  <figure class="capture">
+    <img src="images/paie/02-paie-detail.png" alt="La page d'une paie : totaux, avertissements et bulletins">
+    <span class="pastille" style="left:14%; top:13%">1</span>
+    <span class="pastille" style="left:14%; top:24%">2</span>
+    <span class="pastille" style="left:14%; top:34%">3</span>
+    <span class="pastille" style="left:14%; top:48%">4</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Les cinq grands chiffres : le nombre de <b>Bulletins</b>, le <b>Brut</b>,
+        le <b>Net</b>, le <b>Coût employeur</b>, et les bulletins qui portent un avertissement.</li>
+    <li>Le cadre vert <b>Comptabilisée au grand livre</b> : la paie est déjà
+        enregistrée en comptabilité, avec son numéro d'écriture.</li>
+    <li>Le cadre orange prévient quand les règles de calcul sont encore
+        en brouillon : les chiffres peuvent changer.</li>
+    <li>Les onglets <b>Bulletins</b>, <b>Écarts</b>, <b>Paiements</b> et
+        <b>Déclarations</b> : la liste de tout le monde, les différences avec
+        le mois d'avant, et les papiers pour l'État.</li>
+  </ol>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Vous voyez le nombre de bulletins et les totaux en haut de l'écran.
+  </div>
+</section>
+
+<section class="tache" id="t4">
+  <span class="numero">Tâche 4</span>
+  <h2>Approuver la paie</h2>
+  <p class="but">C'est le moment où l'on dit : « ces chiffres sont bons, on peut payer ».</p>
+  <p class="chemin">Sur la page de la paie, le bouton bleu en haut à droite.</p>
+
+  <figure class="capture">
+    <img src="images/paie/02-paie-detail.png" alt="Le bouton Approuver, en haut à droite">
+    <span class="pastille" style="left:73%; top:5.5%">1</span>
+    <span class="pastille" style="left:14%; top:40%">2</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Cliquez le bouton bleu <b>Approuver</b>, tout en haut à droite.</li>
+    <li>Lisez d'abord la phrase grise au-dessus des onglets.
+        Elle dit qui a calculé la paie, et qui doit l'approuver.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention — la règle des deux personnes</span>
+    Le programme écrit : « Vous avez calculé cette paie : un autre utilisateur
+    doit l'approuver. »<br>
+    Celui qui calcule ne peut pas approuver lui-même. C'est exprès :
+    deux paires d'yeux valent mieux qu'une quand il s'agit de l'argent des gens.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Le statut de la paie passe de <b>Calculée</b> à <b>Approuvée</b>.
+  </div>
+</section>
+
+<section class="tache" id="t5">
+  <span class="numero">Tâche 5</span>
+  <h2>Lire le bulletin d'une personne</h2>
+  <p class="but">Pour répondre à un employé qui demande pourquoi il a reçu cette somme.</p>
+  <p class="chemin">Sur la page de la paie, onglet <b>Bulletins</b>, puis cliquez un nom.</p>
+
+  <figure class="capture">
+    <img src="images/paie/03-bulletin.png" alt="Le bulletin de paie d'un employé">
+    <span class="pastille" style="left:20%; top:4%">1</span>
+    <span class="pastille" style="left:14%; top:14%">2</span>
+    <span class="pastille" style="left:63%; top:5%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>En haut : le nom de la personne, son matricule, et le mois du bulletin.</li>
+    <li>Les trois chiffres : le <b>Brut</b>, le <b>Net à payer</b>
+        (la somme que la personne reçoit), et le <b>Coût employeur</b>.</li>
+    <li>Le bouton <b>Imprimer</b> sort le bulletin sur papier, pour le remettre
+        à l'employé.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Un bulletin est un papier personnel. Ne le montrez qu'à la personne concernée
+    et à son chef.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Le nom de l'employé et son <b>Net à payer</b> s'affichent à l'écran.
+  </div>
+</section>
+
+<footer>
+  Manuel Sonalim — guide Paie · Images prises le 30 septembre 2026 ·
+  Monnaie : franc CFA (XOF) · Les noms affichés sont des exemples de démonstration.
+</footer>
+
+</div>
+</body>
+</html>

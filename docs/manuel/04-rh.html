@@ -1,0 +1,359 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manuel Ressources humaines — Sonalim</title>
+<style>
+/* Manuel Sonalim - feuille de style commune.
+   Conçue pour des lecteurs peu ou pas scolarisés :
+   grands caractères, forts contrastes, une idée par bloc.
+   Elle est recopiée dans chaque page pour qu'un fichier
+   seul, copié sur une clé USB, s'affiche correctement. */
+
+:root {
+  --encre: #14213d;
+  --gris: #5a6472;
+  --trait: #d9dee6;
+  --fond: #ffffff;
+  --fond-doux: #f4f6fa;
+  --bleu: #1d3b78;
+  --rouge: #d7263d;
+  --ambre-fond: #fff6e0;
+  --ambre-trait: #e0a500;
+  --vert-fond: #e8f6ed;
+  --vert-trait: #1d7a44;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fond-doux);
+  color: var(--encre);
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+}
+
+.page { max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+
+/* ---- couverture du guide ---- */
+.couverture {
+  background: var(--bleu);
+  color: #fff;
+  padding: 48px 24px 40px;
+  margin-bottom: 40px;
+}
+.couverture .dedans { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+.couverture .module { font-size: 17px; letter-spacing: .18em; text-transform: uppercase; opacity: .8; }
+.couverture h1 { font-size: 46px; margin: 10px 0 12px; line-height: 1.15; }
+.couverture p { font-size: 21px; margin: 0; max-width: 680px; opacity: .95; }
+
+/* ---- sommaire ---- */
+.sommaire { background: #fff; border: 1px solid var(--trait); border-radius: 12px; padding: 24px 28px; margin-bottom: 44px; }
+.sommaire h2 { margin: 0 0 14px; font-size: 22px; }
+.sommaire ol { margin: 0; padding-left: 26px; }
+.sommaire li { margin: 7px 0; }
+.sommaire a { color: var(--bleu); text-decoration: none; }
+.sommaire a:hover { text-decoration: underline; }
+
+/* ---- un bloc = une tâche ---- */
+.tache {
+  background: #fff;
+  border: 1px solid var(--trait);
+  border-radius: 14px;
+  padding: 28px 30px 32px;
+  margin-bottom: 40px;
+  page-break-inside: avoid;
+}
+.tache > .numero {
+  display: inline-block;
+  background: var(--bleu); color: #fff;
+  font-size: 16px; font-weight: 700;
+  padding: 4px 14px; border-radius: 999px;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.tache h2 { font-size: 31px; margin: 14px 0 6px; line-height: 1.2; }
+.tache .but { color: var(--gris); font-size: 19px; margin: 0 0 22px; }
+
+/* ---- la capture d'écran et ses pastilles ---- */
+.capture { position: relative; display: block; margin: 0 0 24px; border: 2px solid var(--trait); border-radius: 10px; overflow: hidden; }
+.capture img { display: block; width: 100%; height: auto; }
+.pastille {
+  position: absolute;
+  width: 38px; height: 38px;
+  /* La pastille se pose A GAUCHE du point mesure, pas dessus : sinon elle
+     cache le bouton ou la case qu'elle designe, et le lecteur ne voit plus
+     le mot qu'il doit reconnaitre a l'ecran. */
+  margin: -19px 0 0 -19px;
+  border-radius: 50%;
+  background: var(--rouge); color: #fff;
+  font-size: 21px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px var(--rouge), 0 2px 6px rgba(0,0,0,.35);
+}
+
+/* ---- les étapes sous l'image ---- */
+.etapes { list-style: none; margin: 0 0 8px; padding: 0; counter-reset: etape; }
+.etapes li { position: relative; padding: 10px 0 10px 54px; border-top: 1px solid var(--trait); font-size: 20px; }
+.etapes li:first-child { border-top: none; }
+.etapes li::before {
+  counter-increment: etape; content: counter(etape);
+  position: absolute; left: 0; top: 9px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--rouge); color: #fff;
+  font-weight: 700; font-size: 20px;
+  display: flex; align-items: center; justify-content: center;
+}
+.etapes b { background: #eef2fa; padding: 1px 7px; border-radius: 5px; font-weight: 600; white-space: nowrap; }
+
+/* ---- encadrés ---- */
+.boite { border-radius: 10px; padding: 16px 20px; margin: 20px 0 0; font-size: 19px; }
+.boite .chapeau { font-weight: 700; display: block; margin-bottom: 4px; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; }
+.attention { background: var(--ambre-fond); border-left: 8px solid var(--ambre-trait); }
+.reussi { background: var(--vert-fond); border-left: 8px solid var(--vert-trait); }
+
+/* ---- repères de navigation ---- */
+.chemin { background: #eef2fa; border-radius: 8px; padding: 10px 16px; font-size: 18px; margin: 0 0 20px; }
+.chemin b { color: var(--bleu); }
+
+footer { color: var(--gris); font-size: 16px; text-align: center; padding: 30px 0 0; border-top: 1px solid var(--trait); }
+
+/* ---- impression papier A4 ---- */
+@media print {
+  body { background: #fff; font-size: 12pt; }
+  .couverture { background: #fff !important; color: var(--encre) !important; border-bottom: 3px solid var(--bleu); padding-top: 0; }
+  .couverture h1 { font-size: 30pt; }
+  .tache { border: 1px solid #bbb; box-shadow: none; }
+  .capture { break-inside: avoid; }
+  a { color: inherit; }
+}
+</style>
+</head>
+<body>
+
+<div class="couverture">
+  <div class="dedans">
+    <div class="module">Manuel Sonalim · Guide 4 sur 5</div>
+    <h1>Ressources humaines —<br>Le personnel</h1>
+    <p>Ce guide montre comment retrouver un employé, comment lire son dossier,
+       comment surveiller les papiers qui expirent, comment noter les présences
+       et comment répondre à une demande de congé.</p>
+  </div>
+</div>
+
+<div class="page">
+
+<div class="sommaire">
+  <h2>Ce que vous allez apprendre</h2>
+  <ol>
+    <li><a href="#t1">Trouver un employé dans la liste</a></li>
+    <li><a href="#t2">Surveiller les papiers qui expirent</a></li>
+    <li><a href="#t3">Ouvrir le dossier d'un employé</a></li>
+    <li><a href="#t4">Se déplacer dans les sept onglets du dossier</a></li>
+    <li><a href="#t5">Noter la présence du jour</a></li>
+    <li><a href="#t6">Répondre à une demande de congé</a></li>
+  </ol>
+</div>
+
+<section class="tache" id="t1">
+  <span class="numero">Tâche 1</span>
+  <h2>Trouver un employé dans la liste</h2>
+  <p class="but">C'est le travail le plus fréquent : retrouver la fiche de quelqu'un.</p>
+  <p class="chemin">Dans le menu à gauche : <b>RESSOURCES HUMAINES</b> → <b>Employés</b></p>
+
+  <figure class="capture">
+    <img src="images/rh/03-liste-employes.png" alt="La liste des employés">
+    <span class="pastille" style="left:2.5%; top:11%">1</span>
+    <span class="pastille" style="left:31%; top:30%">2</span>
+    <span class="pastille" style="left:2.5%; top:47%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Les boutons <b>Tous</b>, <b>Actif</b>, <b>En congé</b>, <b>Inactif</b>, <b>Sorti</b>
+        trient la liste. <b>Actif</b> = les gens qui travaillent aujourd'hui.</li>
+    <li>Pour chercher quelqu'un, tapez son nom dans la case sous le mot <b>NOM</b>.
+        Vous pouvez aussi chercher par <b>MATRICULE</b>, par exemple HRP-008.</li>
+    <li>Chaque ligne est une personne : son matricule, son nom, son département,
+        son poste et son type de contrat.</li>
+  </ol>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La personne que vous cherchez apparaît sur une ligne du tableau.
+  </div>
+</section>
+
+<section class="tache" id="t2">
+  <span class="numero">Tâche 2</span>
+  <h2>Surveiller les papiers qui expirent</h2>
+  <p class="but">Le programme prévient tout seul quand un contrat se termine
+     ou quand une carte d'identité n'est plus valable. À regarder chaque lundi.</p>
+  <p class="chemin">Dans le menu à gauche : <b>RESSOURCES HUMAINES</b> → <b>Employés</b></p>
+
+  <figure class="capture">
+    <img src="images/rh/02-echeances.png" alt="Le cadre Échéances">
+    <span class="pastille" style="left:2%; top:14%">1</span>
+    <span class="pastille" style="left:56%; top:14%">2</span>
+    <span class="pastille" style="left:88%; top:20%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li><b>Contrats arrivant à terme</b> : ces contrats se terminent bientôt.
+        Il faut les renouveler, ou prévenir la personne.</li>
+    <li><b>Fins de période d'essai</b> : il faut décider si l'on garde la personne.</li>
+    <li>Les étiquettes rouges <b>Expiré</b> : le papier n'est plus valable du tout.
+        Les étiquettes oranges <b>Expire bientôt</b> : il reste peu de jours.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Une étiquette rouge veut dire que la date est déjà passée.
+    Commencez toujours par les rouges, puis les oranges.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Vous avez noté les noms en rouge, pour aller demander les papiers manquants.
+  </div>
+</section>
+
+<section class="tache" id="t3">
+  <span class="numero">Tâche 3</span>
+  <h2>Ouvrir le dossier d'un employé</h2>
+  <p class="but">Le dossier contient tout ce que l'entreprise sait de la personne.</p>
+  <p class="chemin">Dans le menu à gauche : <b>RESSOURCES HUMAINES</b> → <b>Employés</b></p>
+
+  <figure class="capture">
+    <img src="images/rh/04-dossier-employe.png" alt="Le dossier d'un employé, onglet Identité">
+    <span class="pastille" style="left:20%; top:4%">1</span>
+    <span class="pastille" style="left:14%; top:24%">2</span>
+    <span class="pastille" style="left:49%; top:24%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Cliquez le nom de la personne dans la liste : son dossier s'ouvre.
+        En haut, son nom, son matricule, son poste et son département.</li>
+    <li>Le cadre <b>Identité</b> : sa date et son lieu de naissance, sa nationalité,
+        sa situation de famille.</li>
+    <li>Le cadre <b>Numéros d'identification</b> : ses numéros <b>NINA</b>,
+        <b>INPS</b> et <b>AMO</b>. Ce sont eux qui servent pour la paie
+        et pour la sécurité sociale.</li>
+  </ol>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Le nom de la personne s'affiche en grand, en haut de l'écran.
+  </div>
+</section>
+
+<section class="tache" id="t4">
+  <span class="numero">Tâche 4</span>
+  <h2>Se déplacer dans les sept onglets du dossier</h2>
+  <p class="but">Le dossier est rangé en sept parties. Chaque onglet est une partie.</p>
+  <p class="chemin">Dans le dossier d'un employé : la rangée de mots sous son nom.</p>
+
+  <figure class="capture">
+    <img src="images/rh/04-dossier-employe.png" alt="La rangée des sept onglets">
+    <span class="pastille" style="left:16%; top:15.5%">1</span>
+    <span class="pastille" style="left:28%; top:15.5%">2</span>
+    <span class="pastille" style="left:42%; top:15.5%">3</span>
+    <span class="pastille" style="left:56%; top:15.5%">4</span>
+  </figure>
+
+  <ol class="etapes">
+    <li><b>Identité</b> et <b>Famille</b> : qui est la personne, et les personnes à sa charge.</li>
+    <li><b>Contrats</b> : tous ses contrats, du plus ancien au plus récent.</li>
+    <li><b>Paiement</b> : comment elle est payée. <b>Documents</b> : ses papiers scannés.</li>
+    <li><b>Congés</b> : ses demandes de congé. <b>Bulletins</b> : ses fiches de paie.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Le bouton <b>Enregistrer la sortie</b>, en haut à droite, sert quand la personne
+    quitte l'entreprise pour de bon. Ne le cliquez jamais par curiosité.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Le contenu de l'écran change quand vous cliquez un autre onglet.
+  </div>
+</section>
+
+<section class="tache" id="t5">
+  <span class="numero">Tâche 5</span>
+  <h2>Noter la présence du jour</h2>
+  <p class="but">C'est la présence notée ici qui sert à calculer la paie du mois.
+     Si elle est fausse, la paie sera fausse.</p>
+  <p class="chemin">Dans le menu à gauche : <b>RESSOURCES HUMAINES</b> → <b>Présence</b></p>
+
+  <figure class="capture">
+    <img src="images/rh/06-presence.png" alt="Écran Présence du jour">
+    <span class="pastille" style="left:15.6%; top:16%">1</span>
+    <span class="pastille" style="left:33.9%; top:16%">2</span>
+    <span class="pastille" style="left:66.2%; top:27.6%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Les onglets <b>Jour</b>, <b>Semaine</b> et <b>Mois d'un employé</b>
+        changent la façon de regarder. Commencez par <b>Jour</b>.</li>
+    <li>L'onglet <b>Clôture du mois</b> sert une seule fois par mois,
+        quand tout est noté et vérifié.</li>
+    <li>Le bouton <b>Enregistrer la présence</b> garde ce que vous avez saisi.
+        Le chiffre entre parenthèses dit combien de personnes sont concernées.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Notez la présence le jour même. Un oubli se voit dans le filtre
+    <b>Non enregistrés</b>, mais il fait attendre toute la paie du mois.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Plus personne n'apparaît dans le filtre <b>Non enregistrés</b>.
+  </div>
+</section>
+
+<section class="tache" id="t6">
+  <span class="numero">Tâche 6</span>
+  <h2>Répondre à une demande de congé</h2>
+  <p class="but">Pour le chef : accepter ou refuser un congé demandé par un employé.</p>
+  <p class="chemin">Dans le menu à gauche : <b>RESSOURCES HUMAINES</b> → <b>Congés</b></p>
+
+  <figure class="capture">
+    <img src="images/rh/05-conges.png" alt="Écran Demandes de congé">
+    <span class="pastille" style="left:15%; top:34%">1</span>
+    <span class="pastille" style="left:70.1%; top:83.2%">2</span>
+    <span class="pastille" style="left:76.8%; top:83.2%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Cliquez <b>En attente</b> : ce sont les demandes qui attendent votre réponse.</li>
+    <li>Pour accepter, cliquez <b>Approuver</b> sur la ligne de la personne.</li>
+    <li>Pour refuser, cliquez <b>Refuser</b>. Expliquez toujours pourquoi à la personne.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Regardez la colonne <b>JUSTIFICATIF REQUIS</b> avant d'approuver :
+    certains congés demandent un papier, par exemple un certificat du médecin.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La demande quitte la liste <b>En attente</b>, et son étiquette devient
+    <b>Approuvé</b> ou <b>Refusé</b>.
+  </div>
+</section>
+
+<footer>
+  Manuel Sonalim — guide Ressources humaines · Images prises le 30 septembre 2026 ·
+  Les noms affichés sont des exemples de démonstration.
+</footer>
+
+</div>
+</body>
+</html>
