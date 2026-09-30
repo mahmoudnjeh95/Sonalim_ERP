@@ -2,17 +2,35 @@ import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useAuth } from "../../lib/auth";
 import { Skeleton } from "../../components/ui/skeleton";
-import { fetchPageImage } from "./scanApi";
+import { fetchPageBlob } from "./scanApi";
 
+/**
+ * Caches the photo's Blob (shared across every consumer), then hands each
+ * caller its own object URL made from that blob and revoked on cleanup — so
+ * thumbnails and the viewer don't fight over one URL's lifetime, and nothing
+ * stays pinned in memory after use.
+ */
 export function usePageImage(pageId: string | undefined) {
   const { session } = useAuth();
-  return useQuery({
+  const query = useQuery({
     queryKey: ["scan", "page-image", pageId],
-    queryFn: () => fetchPageImage(session!.token, pageId!),
+    queryFn: () => fetchPageBlob(session!.token, pageId!),
     enabled: !!pageId,
     staleTime: Infinity,
     gcTime: 10 * 60_000,
   });
+  const blob = query.data;
+  const [url, setUrl] = useState<string | undefined>(undefined);
+  useEffect(() => {
+    if (!blob) {
+      setUrl(undefined);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(blob);
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [blob]);
+  return { ...query, data: url };
 }
 
 /** The photo turned the way the OCR read it, so boxes (fractions of the upright page) line up. */

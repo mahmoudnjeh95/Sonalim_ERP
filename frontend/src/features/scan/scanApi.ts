@@ -227,8 +227,8 @@ export function getVocabulary(token: string, workCenterId?: string) {
   return apiFetch<VocabularyOptions>(`${base}/vocabulary${query}`, { token });
 }
 
-/** A photo as an object URL: an <img> cannot send the session's bearer token itself. */
-export async function fetchPageImage(token: string, pageId: string): Promise<string> {
+/** A photo's bytes: an <img> cannot send the session's bearer token itself, so callers fetch the blob and make their own object URL (and revoke it). */
+export async function fetchPageBlob(token: string, pageId: string): Promise<Blob> {
   let response: Response;
   try {
     response = await fetch(`${BASE_URL}${base}/pages/${pageId}/image`, { headers: { Authorization: `Bearer ${token}` } });
@@ -236,5 +236,5 @@ export async function fetchPageImage(token: string, pageId: string): Promise<str
     throw networkError();
   }
   if (!response.ok) throw await apiErrorFromResponse(response);
-  return URL.createObjectURL(await response.blob());
+  return await response.blob();
 }
