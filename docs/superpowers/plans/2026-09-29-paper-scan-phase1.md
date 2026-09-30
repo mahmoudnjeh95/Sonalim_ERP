@@ -4405,6 +4405,15 @@ git commit -m "docs(ocr): probe results for RapidOCR on the example fiches"
 
 ---
 
+### Amendment after the probe (2026-09-30, user chose "local OCR, improved")
+
+The Task 14 probe (see `ocr/README.md`) read every printed anchor but only 7 of 23 handwritten values cleanly: neighbouring values came out glued in one detected box ("12h1812h37", "7400,63"). Fix, applied in Tasks 15 and 16 below:
+
+- **Task 15** — `locate._table` also returns, per row, the **region of every column the row's handwriting touches**: the column's span (from the midpoints between neighbouring column centres, the first/last column running to the block's edge) × the row's vertical extent (min `y0` … max `y1` of the row's boxes). A row becomes `{"cells": {...}, "regions": {key: (x0, y0, x1, y1)}}`; a box spanning two columns gives both columns a region. `extract` passes `regions` through. Add a test: one box drawn across the `quantity` and `cause` columns of the waste table yields regions for both keys.
+- **Task 16** — `Engine.recognize(crop) -> tuple[str, float]` runs recognition only (no detection) on a cropped image (`self._ocr(crop, use_det=False, use_cls=False, use_rec=True)` or the installed version's equivalent — rapidocr 3.9.2 is installed, shipping PP-OCRv6-small; record the exact call in `ocr/README.md`). `pipeline.read` re-reads **each region** of each table row on the upright image (crop padded by 2 px, clipped to the image): when the re-read text is not blank it replaces that cell (`text`, its score as `confidence`, the region as `box`); the detection's text stays when the re-read is blank. `regions` are dropped from the returned result. The photo test's key-cell report is run before and after this change and both scores go into `ocr/README.md`.
+- Use the pinned versions from `ocr/README.md` (`rapidocr==3.9.2`, `onnxruntime==1.30.0`, `opencv-python-headless==5.0.0.93`, `numpy==2.4.6`). The fabrication silo band prints "ETAT DE SILO" — templates anchor on "debut production"/"fin production", unaffected.
+- When the user sends full-resolution phone photos, add them to `OCR_FIXTURES_DIR` and rerun the report.
+
 ### Task 15: Locating a fiche's blocks and cells (pure logic + templates)
 
 **Files:**
