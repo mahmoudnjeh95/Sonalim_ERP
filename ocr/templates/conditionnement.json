@@ -1,0 +1,39 @@
+{
+  "form_type": "conditionnement",
+  "titles": ["fiche conditionnement par equipe", "fiche conditionnement"],
+  "markers": ["verification d etat de paquet", "dechet pates ou intrants", "arret machine"],
+  "boundaries": ["elabore par", "valide par"],
+  "header": [
+    {"key": "date", "anchors": ["date"], "exclude": ["creation", "mise a jour", "fab"]},
+    {"key": "team_hours", "anchors": ["equipe"], "exclude": ["fiche"]},
+    {"key": "line_pc", "anchors": ["pc"], "kind": "checkbox"},
+    {"key": "line_pl", "anchors": ["pl"], "kind": "checkbox"},
+    {"key": "machiniste", "anchors": ["machiniste"], "exclude": ["aide"]},
+    {"key": "aide_machiniste", "anchors": ["aide machiniste"]}
+  ],
+  "blocks": [
+    {"key": "silo_start", "anchors": ["debut production"], "columns": [
+      {"key": "format", "headers": ["format"], "x": 0.12}, {"key": "lot", "headers": ["n du lot", "lot"], "x": 0.37},
+      {"key": "level", "headers": ["quantite"], "x": 0.62}, {"key": "line_state", "headers": ["etat de la ligne"], "x": 0.87}]},
+    {"key": "silo_end", "anchors": ["fin production"], "columns": [
+      {"key": "format", "headers": ["format"], "x": 0.12}, {"key": "lot", "headers": ["n du lot", "lot"], "x": 0.37},
+      {"key": "level", "headers": ["quantite"], "x": 0.62}, {"key": "line_state", "headers": ["etat de la ligne"], "x": 0.87}]},
+    {"key": "packing", "anchors": ["conditionnement"], "exclude": ["fiche"], "columns": [
+      {"key": "format", "headers": ["format"], "x": 0.06}, {"key": "lot", "headers": ["n lot", "lot"], "x": 0.17},
+      {"key": "fab_date", "headers": ["date de fab"], "x": 0.29}, {"key": "pack_type", "headers": ["type de conditi", "type de condit"], "x": 0.41},
+      {"key": "film_type", "headers": ["type film"], "x": 0.53}, {"key": "cartons", "headers": ["qte du cartons", "cartons"], "x": 0.64},
+      {"key": "bobine", "headers": ["qte bobine", "bobine"], "x": 0.75}, {"key": "scotch", "headers": ["qte scotch", "scotch"], "x": 0.85},
+      {"key": "ruban", "headers": ["qte ruban", "ruban"], "x": 0.95}]},
+    {"key": "packet_checks", "anchors": ["verification d etat de paquet", "etat de paquet"], "columns": [
+      {"key": "time", "headers": ["heure"], "x": 0.06}, {"key": "film", "headers": ["film"], "x": 0.19},
+      {"key": "weight", "headers": ["pds paquet"], "x": 0.32}, {"key": "long_weld", "headers": ["soudure longi", "soudure long"], "x": 0.45},
+      {"key": "vert_weld", "headers": ["soudure vert"], "x": 0.58}, {"key": "date_print", "headers": ["imp date"], "x": 0.71},
+      {"key": "observation", "headers": ["observation"], "x": 0.88}]},
+    {"key": "waste", "anchors": ["dechet pates ou intrants", "dechet pates"], "columns": [
+      {"key": "time", "headers": ["heure"], "x": 0.05}, {"key": "type", "headers": ["type de dechet"], "x": 0.18},
+      {"key": "quantity", "headers": ["qte kg", "qte"], "x": 0.33}, {"key": "cause", "headers": ["cause"], "x": 0.7}]},
+    {"key": "stops", "anchors": ["arret machine"], "columns": [
+      {"key": "panne", "headers": ["panne"], "x": 0.2}, {"key": "start", "headers": ["heure d"], "x": 0.43},
+      {"key": "end", "headers": ["heure f"], "x": 0.53}, {"key": "action", "headers": ["action corrective"], "x": 0.8}]}
+  ]
+}

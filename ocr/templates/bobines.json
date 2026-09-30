@@ -1,0 +1,19 @@
+{
+  "form_type": "bobines",
+  "titles": ["fiche changement bobines", "changement bobines"],
+  "markers": ["type bobine", "pds bobi", "pds cyl"],
+  "boundaries": ["elabore par", "valide par"],
+  "header": [],
+  "blocks": [
+    {"key": "changes", "anchors": ["type bobine"], "columns": [
+      {"key": "date", "headers": ["date"], "x": 0.03}, {"key": "team", "headers": ["eq"], "x": 0.08},
+      {"key": "hours", "headers": ["h travail"], "x": 0.13}, {"key": "machine", "headers": ["n machine"], "x": 0.19},
+      {"key": "counter", "headers": ["d compteur"], "x": 0.25}, {"key": "format", "headers": ["format"], "x": 0.32},
+      {"key": "reel_type", "headers": ["type bobine"], "x": 0.39}, {"key": "internal_lot", "headers": ["n lot int", "lot int"], "x": 0.45},
+      {"key": "start", "headers": ["h d"], "x": 0.5}, {"key": "end", "headers": ["h f"], "x": 0.55},
+      {"key": "reel_weight", "headers": ["pds bobi"], "x": 0.61}, {"key": "core_weight", "headers": ["pds cyl"], "x": 0.67},
+      {"key": "waste", "headers": ["dechets"], "x": 0.73}, {"key": "remain_weight", "headers": ["poids"], "x": 0.78},
+      {"key": "remain_conf", "headers": ["conf"], "x": 0.83}, {"key": "remain_nonconf", "headers": ["non conf"], "x": 0.88},
+      {"key": "machinist", "headers": ["machiniste"], "x": 0.95}]}
+  ]
+}
