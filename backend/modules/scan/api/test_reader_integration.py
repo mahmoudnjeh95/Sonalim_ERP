@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from ulid import ULID
 
-from modules.scan.api.ocr_client import OcrUnavailable
+from modules.scan.api.ocr_client import OcrReadError, OcrUnavailable
 from modules.scan.api.reader import read_next_page, requeue_stale_reads
 from modules.scan.api.scan_world import fabrication_result, make_world
 
@@ -88,3 +88,40 @@ def test_requeue_stale_reads(db, page):
     db.execute("UPDATE scan.scan_pages SET status = 'reading' WHERE id = %s", (page,))
     assert requeue_stale_reads(_Connection(db)) >= 1
     assert _state(db, page)[0] == "queued"
+
+
+def test_an_ocr_read_error_spends_attempts_like_any_other_failure(db, page):
+    def bad_request(image, hint):
+        raise OcrReadError("500 Internal Server Error: boom")
+
+    outcomes = [read_next_page(_Connection(db), bad_request)[1] for _ in range(3)]
+    assert outcomes == ["retry", "retry", "failed"]
+    status, attempts, form_type, error = _state(db, page)
+    assert (status, attempts, form_type) == ("failed", 3, None)
+    assert "500 Internal Server Error" in error
+
+
+def test_a_page_of_a_discarded_session_is_not_picked(db, page):
+    other_tenant = f"{TENANT}-2"
+    world = make_world(db, other_tenant)
+    other_session_id, other_page_id = str(ULID()), str(ULID())
+    db.execute(
+        "INSERT INTO scan.scan_sessions (id, tenant_id, kind, work_center_id, report_date, shift, created_by, status) "
+        "VALUES (%s, %s, 'shift', %s, %s, 'Matin', %s, 'discarded')",
+        (other_session_id, other_tenant, world["work_center"], world["day"], world["actor"]),
+    )
+    db.execute(
+        "INSERT INTO scan.scan_pages (id, tenant_id, session_id, image, content_type, uploaded_by, created_at, form_hint) "
+        "VALUES (%s, %s, %s, %s, 'image/jpeg', %s, '1999-01-01', 'fabrication')",
+        (other_page_id, other_tenant, other_session_id, b"discarded-img", world["actor"]),
+    )
+    # The discarded session's page is older and would sort first, but only the open session's page may be picked.
+    seen = []
+
+    def read(image, hint):
+        seen.append(image)
+        return fabrication_result()
+
+    assert read_next_page(_Connection(db), read) == (page, "read")
+    assert seen == [b"img"]
+    assert _state(db, other_page_id)[0] == "queued"

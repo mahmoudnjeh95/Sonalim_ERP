@@ -29,8 +29,10 @@ def requeue_stale_reads(connection: psycopg.Connection) -> int:
 
 def read_next_page(connection: psycopg.Connection, read: Callable[[bytes, str | None], dict]) -> tuple[str, str] | None:
     row = connection.execute(
-        "SELECT id, image, form_hint FROM scan.scan_pages WHERE status = 'queued' "
-        "ORDER BY created_at, id LIMIT 1 FOR UPDATE SKIP LOCKED"
+        "SELECT p.id, p.image, p.form_hint FROM scan.scan_pages p "
+        "JOIN scan.scan_sessions s ON s.id = p.session_id "
+        "WHERE p.status = 'queued' AND s.status = 'open' "
+        "ORDER BY p.attempts, p.created_at, p.id LIMIT 1 FOR UPDATE OF p SKIP LOCKED"
     ).fetchone()
     if row is None:
         connection.rollback()

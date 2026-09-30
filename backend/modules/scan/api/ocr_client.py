@@ -11,6 +11,10 @@ class OcrUnavailable(Exception):
     """The container did not answer with a reading: down, restarting, too slow, or broken."""
 
 
+class OcrReadError(Exception):
+    """The container answered but refused this photo: an HTTP error that isn't an outage."""
+
+
 class OcrClient:
     def __init__(self, base_url: str, timeout: float = 180) -> None:
         self._base_url = base_url.rstrip("/")
@@ -24,5 +28,14 @@ class OcrClient:
         try:
             with urllib.request.urlopen(request, timeout=self._timeout) as response:
                 return json.loads(response.read())
+        except urllib.error.HTTPError as error:
+            if error.code in (502, 503, 504):
+                raise OcrUnavailable(f"{error.code} {error.reason}") from error
+            excerpt = ""
+            try:
+                excerpt = error.read(500).decode("utf-8", errors="replace")
+            except Exception:
+                pass
+            raise OcrReadError(f"{error.code} {error.reason}: {excerpt}") from error
         except (urllib.error.URLError, TimeoutError, ConnectionError, json.JSONDecodeError) as error:
             raise OcrUnavailable(str(getattr(error, "reason", error))) from error
