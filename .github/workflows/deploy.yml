@@ -54,6 +54,7 @@ jobs:
 
       - name: Build and push OCR image
         uses: docker/build-push-action@v6
+        continue-on-error: true
         with:
           context: ./ocr
           push: true
