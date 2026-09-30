@@ -12,6 +12,8 @@ from core.events import consumers as event_consumers
 from core.events.dispatcher import EXCHANGE, dispatch_pending
 from core.exchange_rate_rollover import roll_forward_missing_rates
 from core.migrations.runner import migrate_on_startup
+from modules.scan.api.ocr_client import OcrClient
+from modules.scan.api.reader import read_next_page, requeue_stale_reads
 from modules.warehouse.api.replenishment_service import ReplenishmentService
 from modules.warehouse.api.reservation_service import ReservationService
 
@@ -28,6 +30,8 @@ from modules.warehouse.events import consumers as _warehouse_consumers  # noqa: 
 EXCHANGE_RATE_ROLLOVER_HOUR_UTC = 18
 RESERVATION_EXPIRY_INTERVAL_SECONDS = 60
 REPLENISHMENT_INTERVAL_SECONDS = 900
+SCAN_READER_IDLE_SECONDS = 2
+SCAN_READER_RETRY_SECONDS = 15
 
 
 def run_outbox_dispatcher(rabbitmq_url: str) -> None:
@@ -93,6 +97,28 @@ def run_replenishment() -> None:
         time.sleep(REPLENISHMENT_INTERVAL_SECONDS)
 
 
+def run_scan_reader(ocr_url: str) -> None:
+    """Has the OCR container read the queued photos, one at a time, in their own thread
+    so a slow page never holds up the event consumers."""
+    client = OcrClient(ocr_url)
+    print("Scan reader started", flush=True)
+    with get_connection() as db_connection:
+        requeued = requeue_stale_reads(db_connection)
+    if requeued:
+        print(f"Scan reader: put {requeued} interrupted page(s) back in the queue", flush=True)
+    while True:
+        try:
+            with get_connection() as db_connection:
+                step = read_next_page(db_connection, client.read)
+        except Exception as error:  # retried next tick, never kills the thread
+            print(f"Scan reader failed: {error}", flush=True)
+            step = ("", "retry")
+        if step is None:
+            time.sleep(SCAN_READER_IDLE_SECONDS)
+        elif step[1] in ("retry", "failed"):
+            time.sleep(SCAN_READER_RETRY_SECONDS)
+
+
 def run() -> None:
     migrate_on_startup()
     rabbitmq_url = os.environ["RABBITMQ_URL"]
@@ -100,6 +126,11 @@ def run() -> None:
     threading.Thread(target=run_exchange_rate_rollover, daemon=True).start()
     threading.Thread(target=run_reservation_expiry, daemon=True).start()
     threading.Thread(target=run_replenishment, daemon=True).start()
+    ocr_url = os.environ.get("OCR_URL")
+    if ocr_url:
+        threading.Thread(target=run_scan_reader, args=(ocr_url,), daemon=True).start()
+    else:
+        print("OCR_URL not set: scanned photos stay queued until it is", flush=True)
     event_consumers.consume_forever(rabbitmq_url)
 
 
