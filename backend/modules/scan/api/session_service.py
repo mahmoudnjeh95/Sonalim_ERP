@@ -14,15 +14,21 @@ import datetime
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.service import WorkOrderService
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.work_center_service import WorkCenterService
+from modules.scan.api.alias_service import ScanAliasService
+from modules.scan.api.vocabulary_service import build_vocabulary
 from modules.scan.domain.attribution import Selection, attribute, header_of_page, line_label_of
+from modules.scan.domain.draft import ProposalContext
 from modules.scan.domain.ocr_result import page_read_from_json
+from modules.scan.domain.proposal import build_proposal
 from modules.scan.domain.review import count_rows, fingerprint
 
 MAX_PAGES = 20
@@ -175,6 +181,67 @@ class ScanSessionService:
         ).fetchall()
         names = ("id", "session_id", "form_type", "rotation", "width", "height", "created_at")
         return [{n: _iso(v) for n, v in zip(names, row)} for row in rows]
+
+    # ---- proposal and review -----------------------------------------------
+
+    def _context(self, tenant_id: str, session: dict, shift: dict | None) -> ProposalContext | None:
+        window = self._window(tenant_id, session["shift"])
+        if window is None:
+            return None
+        default_product = None
+        if session["default_of_id"]:
+            orders = WorkOrderService(self._connection).list_work_orders(tenant_id)
+            order = next((o for o in orders if o.id == session["default_of_id"]), None)
+            default_product = order.product_id if order else None
+        return ProposalContext(
+            report_date=datetime.date.fromisoformat(session["report_date"]),
+            shift_start=window.start,
+            shift_end=window.end,
+            team=shift["team"] if shift else None,
+            default_of_id=session["default_of_id"],
+            default_product_id=default_product,
+            vocabulary=build_vocabulary(self._connection, tenant_id=tenant_id, work_center_id=session["work_center_id"]),
+            aliases=ScanAliasService(self._connection).alias_map(tenant_id=tenant_id),
+        )
+
+    def _build(self, tenant_id: str, session: dict, shift: dict | None) -> Result[dict]:
+        ctx = self._context(tenant_id, session, shift)
+        selection = self._selection(tenant_id, session)
+        if ctx is None or selection is None:
+            return Err("UNKNOWN_SHIFT", f"{session['shift']!r} is no longer one of the plant's shifts",
+                       f"{session['shift']!r} ne fait plus partie des shifts de l'usine")
+        pages = [
+            page_read_from_json(p["id"], p["ocr_result"])
+            for p in self._pages(tenant_id, session["id"])
+            if p["status"] == "read" and p["ocr_result"]
+        ]
+        include = set((session["review_state"] or {}).get("include_pages") or [])
+        return Ok(build_proposal(pages, ctx, selection, include))
+
+    def proposal(self, *, tenant_id: str, session_id: str) -> Result[dict]:
+        session = self._session_row(tenant_id, session_id)
+        if session is None:
+            return _SESSION_NOT_FOUND
+        shift = self._shift_state(tenant_id, session)
+        built = self._build(tenant_id, session, shift)
+        if isinstance(built, Err):
+            return built
+        return Ok({"proposal": built.value, "shift": shift, "review_state": session["review_state"]})
+
+    def save_review(self, *, tenant_id: str, session_id: str, review_state: dict) -> Result[None]:
+        """The review in progress, autosaved while the user works.
+
+        Not audited: it is a working copy saved every few seconds, like a form draft in the
+        browser; what the review decides is audited when it is applied.
+        """
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        self._connection.execute(
+            "UPDATE scan.scan_sessions SET review_state = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+            (Jsonb(review_state), session_id, tenant_id),
+        )
+        return Ok(None)
 
     # ---- changing ----------------------------------------------------------
 
