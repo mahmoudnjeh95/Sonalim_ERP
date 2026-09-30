@@ -402,7 +402,7 @@ export const en = {
   "crm.activity.kind.call": "Call",
   "crm.activity.kind.meeting": "Meeting",
   "crm.activity.subject.lead": "Lead",
-  "crm.activity.subject.account": "Account",
+  "crm.activity.subject.partner": "Account",
   "crm.activity.subject.opportunity": "Opportunity",
 
   "hr.title": "Human resources",
@@ -588,6 +588,7 @@ export const en = {
   "partners.created": "Partner created",
   "partners.dialog.editTitle": "Edit partner",
   "partners.dialog.editDescription": "Update this partner's details.",
+  "partners.view": "View",
   "partners.edit": "Edit",
   "partners.update": "Save changes",
   "partners.updating": "Saving…",

@@ -4,7 +4,8 @@ import { ArrowLeft, Mail, Pencil, Phone, Plus, Tag as TagIcon, UserRound } from 
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
-import { currentLocale, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
+import { formatXofWithCode } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -149,7 +150,7 @@ export function PartnerDetailsPage() {
             <CardTitle>{t("partners.details.openPipeline")}</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
-            {new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(
+            {formatXofWithCode(
               opportunities.filter((o) => !["won", "lost"].includes(o.stage)).reduce((sum, o) => sum + o.amount, 0),
             )}
           </CardContent>

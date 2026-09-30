@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
+import { CURRENCY_CODE, formatXofWithCode } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -50,6 +51,10 @@ const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 type StatusFilter = "all" | InvoiceStatus;
 
 function formatCurrency(amount: number, currency: string) {
+  // XOF goes through the shared helper: ICU's symbol for it is "F CFA", which
+  // would disagree with the "XOF" printed everywhere else on this same page.
+  // A genuine foreign currency keeps its own symbol.
+  if (currency === CURRENCY_CODE) return formatXofWithCode(amount);
   try {
     return new Intl.NumberFormat(currentLocale(), { style: "currency", currency }).format(amount);
   } catch {

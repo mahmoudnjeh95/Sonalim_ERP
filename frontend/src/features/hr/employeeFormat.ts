@@ -1,9 +1,10 @@
 import { currentLocale } from "../../lib/i18n";
+import { formatXofWithCode } from "../../lib/currency";
 
 /** Whole XOF in the app's language ("150 000 XOF"); "—" when the value is hidden or absent. */
 export function formatXof(amount: number | null | undefined): string {
   if (amount == null) return "—";
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
+  return formatXofWithCode(amount);
 }
 
 /** An amount in whatever currency it is actually recorded in (a legacy non-XOF contract keeps
