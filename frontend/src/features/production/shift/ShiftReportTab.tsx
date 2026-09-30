@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
-import { CalendarDays, ClipboardList, Lock, Maximize2, RotateCcw, ShieldCheck } from "lucide-react";
+import { CalendarDays, ClipboardList, Lock, Maximize2, RotateCcw, ScanLine, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
@@ -35,6 +35,8 @@ import {
 } from "./shiftApi";
 import { T, useLabel } from "./shiftText";
 import { AppLoader } from "../../../components/patterns/AppLoader";
+import { ShiftPaperPages } from "../../scan/ShiftPaperPages";
+import { S as SCAN_TEXT } from "../../scan/scanText";
 
 const DONE = new Set(["submitted", "nothing_to_report"]);
 
@@ -73,6 +75,7 @@ export function ShiftReportTab() {
   const token = session!.token;
   const label = useLabel();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const canView = hasPermission("production.shift.view");
 
   // A link from an OF page names the line, date and shift to open; without one it opens on today and the clock's shift.
@@ -184,12 +187,29 @@ export function ShiftReportTab() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-          <ClipboardList className="h-5 w-5 text-primary" />
-          {label(T.title)}
-        </h2>
-        <p className="text-sm text-muted-foreground">{label(T.subtitle)}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+            <ClipboardList className="h-5 w-5 text-primary" />
+            {label(T.title)}
+          </h2>
+          <p className="text-sm text-muted-foreground">{label(T.subtitle)}</p>
+        </div>
+        <div className="flex gap-2">
+          {shift && (hasPermission("scan.view_scans") || hasPermission("scan.use_scanner")) && <ShiftPaperPages shiftReportId={shift.id} />}
+          {hasPermission("scan.use_scanner") && shift?.status !== "validated" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                navigate(`/production?tab=scan&line=${encodeURIComponent(workCenterId)}&date=${date}&shift=${encodeURIComponent(shiftName)}`)
+              }
+            >
+              <ScanLine className="h-4 w-4" />
+              {label(SCAN_TEXT.importFromPhotos)}
+            </Button>
+          )}
+        </div>
       </div>
 
       <Card>
