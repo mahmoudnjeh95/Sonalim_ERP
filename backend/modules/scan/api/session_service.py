@@ -29,12 +29,16 @@ from modules.scan.domain.attribution import Selection, attribute, header_of_page
 from modules.scan.domain.draft import ProposalContext
 from modules.scan.domain.ocr_result import page_read_from_json
 from modules.scan.domain.proposal import build_proposal
-from modules.scan.domain.review import count_rows, fingerprint
+from modules.scan.domain.review import (
+    APPLY_ORDER, aliases_to_learn, count_rows, final_values, fingerprint, outcomes, stale_sections, strip_private,
+)
 
 MAX_PAGES = 20
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
 IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 FORM_HINTS = frozenset({"fabrication", "conditionnement", "bobines"})
+HEADER_FIELDS = ("team", "conducteur", "agent_fabrication", "machiniste", "aide_machiniste")
+APPLY_REASON = "Import depuis photos"
 
 _SESSION_NAMES = (
     "id", "kind", "work_center_id", "report_date", "shift", "default_of_id", "shift_report_id", "status",
@@ -347,3 +351,91 @@ class ScanSessionService:
         )
         self._audit(tenant_id, actor_id, "scan_session.discarded", session_id, {})
         return Ok(self._session_row(tenant_id, session_id))
+
+    # ---- apply -------------------------------------------------------------
+
+    def apply(
+        self, *, tenant_id: str, actor_id: str, session_id: str, header: dict, sections: dict,
+        fingerprints: dict, allowed_sections: set[str],
+    ) -> Result[dict]:
+        """Write the reviewed sections into the shift report as drafts, all or nothing.
+
+        The caller commits on Ok and rolls back on Err, so a section save_section refuses
+        leaves nothing written.
+        """
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        session = found.value
+        if not sections:
+            return Err("NOTHING_TO_APPLY", "no section was chosen to write", "aucune section n'a été choisie")
+        unknown = sorted(k for k in sections if k not in APPLY_ORDER)
+        if unknown:
+            return Err("INVALID_SECTION", f"these sections cannot be imported: {', '.join(unknown)}",
+                       f"ces sections ne peuvent pas être importées : {', '.join(unknown)}")
+        refused = sorted(k for k in sections if k not in allowed_sections)
+        if refused:
+            return Err("FORBIDDEN_SECTION", f"you may not edit: {', '.join(refused)}", f"vous ne pouvez pas modifier : {', '.join(refused)}")
+        shift = self._shift_state(tenant_id, session)
+        if shift is not None and shift["status"] == "validated":
+            return Err("SHIFT_VALIDATED", "this shift is validated and its stock posted; it must be returned before it can change",
+                       "ce shift est validé et son stock passé ; il doit être renvoyé avant toute modification")
+        stale = stale_sections(list(sections), shift["sections"] if shift else None, fingerprints)
+        if stale:
+            return Err("SECTION_CHANGED", f"changed since the review was loaded: {', '.join(stale)}",
+                       f"modifiées depuis le chargement de la vérification : {', '.join(stale)}")
+        built = self._build(tenant_id, session, shift)
+        if isinstance(built, Err):
+            return built
+
+        reports = ShiftReportService(self._connection)
+        header_fields = {k: header[k] for k in HEADER_FIELDS if header.get(k) not in (None, "")}
+        if shift is None:
+            opened = reports.open_shift(
+                tenant_id=tenant_id, actor_id=actor_id, work_center_id=session["work_center_id"],
+                report_date=datetime.date.fromisoformat(session["report_date"]), shift=session["shift"],
+                team=header_fields.get("team"),
+            )
+            if isinstance(opened, Err):
+                return opened
+            shift_id = opened.value["id"]
+        else:
+            shift_id = shift["id"]
+        if header_fields:
+            updated = reports.update_header(tenant_id=tenant_id, actor_id=actor_id, shift_report_id=shift_id, fields=header_fields)
+            if isinstance(updated, Err):
+                return updated
+        written = []
+        for key in APPLY_ORDER:
+            if key not in sections:
+                continue
+            saved = reports.save_section(
+                tenant_id=tenant_id, actor_id=actor_id, shift_report_id=shift_id, section_key=key,
+                payload=strip_private(sections[key]), reason=APPLY_REASON,
+            )
+            if isinstance(saved, Err):
+                return Err(saved.code, f"{key}: {saved.message}", f"{key} : {saved.message_fr or saved.message}")
+            written.append(key)
+
+        finals = final_values(sections, header)
+        aliases = ScanAliasService(self._connection)
+        for kind, read_text, value in aliases_to_learn(built.value["coded"], finals):
+            aliases.learn(tenant_id=tenant_id, actor_id=actor_id, kind=kind, read_text=read_text, target_value=value)
+        for row in outcomes(built.value, finals):
+            self._connection.execute(
+                """
+                INSERT INTO scan.scan_field_outcomes
+                    (id, tenant_id, session_id, page_id, field_path, read_text, confidence, proposed_value, final_value, flag, changed)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (str(ULID()), tenant_id, session_id, row["page_id"], row["field_path"], row["read_text"], row["confidence"],
+                 row["proposed_value"], row["final_value"], row["flag"], row["changed"]),
+            )
+        self._connection.execute(
+            "UPDATE scan.scan_sessions SET status = 'applied', shift_report_id = %s, applied_by = %s, applied_at = NOW(), "
+            "updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+            (shift_id, actor_id, session_id, tenant_id),
+        )
+        self._audit(tenant_id, actor_id, "scan_session.applied", session_id,
+                    {"shift_report_id": shift_id, "sections_written": written, "header": sorted(header_fields)})
+        return Ok({"shift_report_id": shift_id, "sections_written": written})
