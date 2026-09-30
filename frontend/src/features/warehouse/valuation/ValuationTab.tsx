@@ -64,9 +64,9 @@ function LayersDialog({ productId, productName, onClose }: { productId: string |
                     {formatNumber(layer.quantity_remaining)}
                     <span className="text-muted-foreground"> / {formatNumber(layer.quantity_in)}</span>
                   </TableCell>
-                  <TableCell>{layer.unit_cost !== null ? `${formatXof(layer.unit_cost)} F CFA` : t("warehouse.valuation.unvalued")}</TableCell>
+                  <TableCell>{layer.unit_cost !== null ? `${formatXof(layer.unit_cost)} XOF` : t("warehouse.valuation.unvalued")}</TableCell>
                   <TableCell>
-                    {layer.unit_cost !== null ? `${formatXof(layer.unit_cost * layer.quantity_remaining)} F CFA` : "—"}
+                    {layer.unit_cost !== null ? `${formatXof(layer.unit_cost * layer.quantity_remaining)} XOF` : "—"}
                   </TableCell>
                 </TableRow>
               );
@@ -110,10 +110,10 @@ export function ValuationTab() {
     {
       key: "unitCost",
       header: t("warehouse.valuation.column.unitCost"),
-      cell: (row) => (row.average_unit_cost !== null ? `${formatXof(row.average_unit_cost)} F CFA` : "—"),
+      cell: (row) => (row.average_unit_cost !== null ? `${formatXof(row.average_unit_cost)} XOF` : "—"),
       filterCell: columnFilters.rangeCell("unitCost"),
     },
-    { key: "value", header: t("warehouse.valuation.column.value"), cell: (row) => `${formatXof(row.value)} F CFA`, filterCell: columnFilters.rangeCell("value") },
+    { key: "value", header: t("warehouse.valuation.column.value"), cell: (row) => `${formatXof(row.value)} XOF`, filterCell: columnFilters.rangeCell("value") },
     {
       key: "unvalued",
       header: t("warehouse.valuation.column.unvalued"),
@@ -149,7 +149,7 @@ export function ValuationTab() {
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-2">
-        <StatCard label={t("warehouse.valuation.stat.total")} value={Math.round(totalValue)} icon={<Coins className="h-5 w-5" />} unit="F CFA" accent="primary" />
+        <StatCard label={t("warehouse.valuation.stat.total")} value={Math.round(totalValue)} icon={<Coins className="h-5 w-5" />} unit="XOF" accent="primary" />
         <StatCard label={t("warehouse.valuation.stat.unvaluedProducts")} value={unvaluedProducts} icon={<Layers className="h-5 w-5" />} accent="warning" />
       </div>
       <p className="text-sm text-muted-foreground">{t("warehouse.valuation.description")}</p>

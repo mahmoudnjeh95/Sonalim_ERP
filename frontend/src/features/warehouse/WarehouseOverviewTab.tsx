@@ -539,7 +539,7 @@ export function WarehouseOverviewTab() {
         <h2 className="text-sm font-medium text-muted-foreground">{t("warehouse.overview.section.today")}</h2>
         <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile>
-            <StatCard label={t("warehouse.overview.stat.stockValue")} value={summary.stock_value} icon={<Coins className="h-5 w-5" />} unit="F CFA" accent="primary" />
+            <StatCard label={t("warehouse.overview.stat.stockValue")} value={summary.stock_value} icon={<Coins className="h-5 w-5" />} unit="XOF" accent="primary" />
           </KpiTile>
           <KpiTile>
             <StatCard

@@ -2,7 +2,7 @@ import type { RuleRowKind } from "../api";
 import type { TranslationKey } from "../../../lib/i18n";
 
 /**
- * How a rule-row column is typed in: `money` is whole F CFA, `percent` is 0–100, `json` is an
+ * How a rule-row column is typed in: `money` is whole XOF, `percent` is 0–100, `json` is an
  * object typed as JSON text (tax relief parameters).
  */
 export type RuleRowFieldKind = "text" | "number" | "money" | "percent" | "boolean" | "select" | "json";

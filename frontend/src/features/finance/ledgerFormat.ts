@@ -12,7 +12,7 @@ export function formatAmountCell(amount: number): string {
 }
 
 export function formatXof(amount: number): string {
-  return `${formatAmount(amount)} F CFA`;
+  return `${formatAmount(amount)} XOF`;
 }
 
 export function formatDate(iso: string): string {
