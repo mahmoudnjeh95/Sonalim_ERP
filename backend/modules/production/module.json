@@ -75,7 +75,7 @@
     "production.shift.edit.packet_checks",
     "production.shift.edit.waste_packing",
     "production.shift.edit.energy",
-    "production.shift.unlock_validated",
+    "production.admin_unlock_validated",
     "production.admin_reports",
     "production.use_ia_assistant"
   ]

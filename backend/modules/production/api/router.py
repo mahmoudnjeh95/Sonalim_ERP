@@ -3080,7 +3080,7 @@ def edit_shift_report_section_after_validation(
     shift_report_id: str,
     section_key: str,
     body: UnlockedEditSectionRequest,
-    tenant: TenantContext = Depends(require_permission("production.shift.unlock_validated")),
+    tenant: TenantContext = Depends(require_permission("production.admin_unlock_validated")),
 ) -> dict:
     with get_connection() as connection:
         result = ShiftValidationService(connection).edit_section_after_validation(

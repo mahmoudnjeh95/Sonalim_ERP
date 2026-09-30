@@ -48,7 +48,6 @@
     "hr.view_positions",
     "hr.manage_positions",
     "hr.admin_positions",
-    "hr.view_sensitive",
-    "hr.self_service"
+    "hr.view_sensitive"
   ]
 }
