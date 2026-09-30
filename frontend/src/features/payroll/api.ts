@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiErrorFromResponse, apiFetch, networkError } from "../../lib/api";
+import { apiErrorFromResponse, apiFetch, networkError, BASE_URL } from "../../lib/api";
 import { useAuth } from "../../lib/auth";
 
 // Every type below mirrors what backend/modules/payroll/api/*_service.py returns (money and
@@ -1162,19 +1162,18 @@ export function useAnnualRecap(year: number) {
 // (API origin), since the API does not share the SPA's origin. The route needs the bearer token,
 // so a bare <a href> would 401: fetch it with fetchPayrollFile, then save the blob.
 // ---------------------------------------------------------------------------
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
 
 /** A bank or mobile-money batch file (payroll.pay_runs). A bank batch with no template for its bank is refused with TEMPLATE_MISSING; a cash batch with PAYOUT_INVALID. */
 export function batchFileUrl(batchId: string): string {
-  return `${API_BASE_URL}/payroll/payout-batches/${batchId}/file`;
+  return `${BASE_URL}/payroll/payout-batches/${batchId}/file`;
 }
 
 export function declarationCsvUrl(period: string, code: string): string {
-  return `${API_BASE_URL}/payroll/declarations${query({ period, code, format: "csv" })}`;
+  return `${BASE_URL}/payroll/declarations${query({ period, code, format: "csv" })}`;
 }
 
 export function annualRecapCsvUrl(year: number): string {
-  return `${API_BASE_URL}/payroll/declarations/annual${query({ year, format: "csv" })}`;
+  return `${BASE_URL}/payroll/declarations/annual${query({ year, format: "csv" })}`;
 }
 
 /** GETs one of the URLs above with the session token; a refusal throws the same bilingual ApiError as apiFetch (its `code` tells TEMPLATE_MISSING apart). */

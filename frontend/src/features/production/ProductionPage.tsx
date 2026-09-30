@@ -1,6 +1,6 @@
 import { Navigate, useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
-import { Boxes, ClipboardList, Factory, FileSpreadsheet, Recycle, Settings, Tag } from "lucide-react";
+import { Boxes, ClipboardList, Factory, FileSpreadsheet, Recycle, ScanLine, Settings, Tag } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { outlineIcon } from "../../components/patterns/outlineIcon";
@@ -20,6 +20,7 @@ import { RecipesTab } from "./RecipesTab";
 import { RegrindTab } from "./RegrindTab";
 import { DaySheetTab } from "./DaySheetTab";
 import { ShiftReportTab } from "./shift/ShiftReportTab";
+import { ScanTab } from "../scan/ScanTab";
 import { ValidationCenterTab } from "./ValidationCenterTab";
 import { ProductionSettingsTab } from "./ProductionSettingsTab";
 
@@ -27,6 +28,7 @@ const TABS = [
   { value: "work-orders", labelKey: "production.tabs.workOrders", icon: outlineIcon(WorkOrderIcon), Component: WorkOrdersTab },
   { value: "planning", labelKey: "production.tabs.planning", icon: outlineIcon(PlanningIcon), Component: PlanningTab },
   { value: "shift-report", labelKey: "production.tabs.shiftReport", icon: ClipboardList, Component: ShiftReportTab },
+  { value: "scan", labelKey: "production.tabs.scan", icon: ScanLine, Component: ScanTab },
   { value: "day-sheet", labelKey: "production.tabs.daySheet", icon: FileSpreadsheet, Component: DaySheetTab },
   { value: "validation", labelKey: "production.tabs.validation", icon: outlineIcon(ApprovalIcon), Component: ValidationCenterTab },
   { value: "recipes", labelKey: "production.tabs.recipes", icon: outlineIcon(LabIcon), Component: RecipesTab },

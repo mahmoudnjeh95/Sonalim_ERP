@@ -15,6 +15,17 @@ export interface Option {
 }
 export type OptionMap = Record<OptionSource, Option[]>;
 
+/** How a cell is marked by a screen reviewing values it did not type (the paper scan). */
+export interface CellDecor {
+  tone: "doubt" | "required";
+  title?: string;
+}
+
+export const DECOR_CLASS: Record<CellDecor["tone"], string> = {
+  doubt: "bg-warning-soft ring-1 ring-inset ring-warning/60",
+  required: "ring-1 ring-inset ring-destructive",
+};
+
 /**
  * A row being edited: the backend's row plus client-only fields -- a key, a flag for a row
  * just added, and the fields that hold a default nobody has typed over (`_auto`).
@@ -338,6 +349,8 @@ export function ShiftGrid({
   idPrefix,
   storageKey,
   keepOne,
+  decorate,
+  onCellFocus,
 }: {
   columns: Column[];
   rows: GridRow[];
@@ -353,6 +366,10 @@ export function ShiftGrid({
   storageKey?: string;
   /** The table never drops below one line: removing the only line clears it instead. */
   keepOne?: boolean;
+  /** Marks a cell (the scan review's yellow doubts and red required values). */
+  decorate?: (row: Row, key: string) => CellDecor | undefined;
+  /** Called when a cell takes focus (the scan review shows where the value was read). */
+  onCellFocus?: (row: Row, key: string) => void;
 }) {
   const label = useLabel();
   const sizing = useColumnWidths(storageKey, columns);
@@ -477,10 +494,18 @@ export function ShiftGrid({
                         </button>
                       </td>
                     )}
-                    {columns.map((column, columnIndex) => (
+                    {columns.map((column, columnIndex) => {
+                      const decor = decorate?.(row, column.key);
+                      return (
                       <td
                         key={column.key}
-                        className={cn("px-1 py-1", columnIndex === 0 && cn("bg-background border-r border-border/70", pin, firstLeft))}
+                        title={decor?.title}
+                        onFocusCapture={onCellFocus ? () => onCellFocus(row, column.key) : undefined}
+                        className={cn(
+                          "px-1 py-1",
+                          columnIndex === 0 && cn("bg-background border-r border-border/70", pin, firstLeft),
+                          decor && DECOR_CLASS[decor.tone],
+                        )}
                       >
                         <Cell
                           column={column}
@@ -492,7 +517,8 @@ export function ShiftGrid({
                           idPrefix={`${idPrefix}-${row._key}`}
                         />
                       </td>
-                    ))}
+                      );
+                    })}
                   </motion.tr>
                   {child && open && (
                     <tr className="bg-muted/30">

@@ -34,6 +34,7 @@ from modules.finance.api.ledger_router import router as finance_ledger_router
 from modules.finance.api.router import router as finance_router
 from modules.maintenance.api.router import router as maintenance_router
 from modules.production.api.router import router as production_router
+from modules.scan.api.router import router as scan_router
 from modules.sales.api.router import router as sales_router
 from modules.warehouse.api.router import router as warehouse_router
 from modules.hr.api.router import router as hr_router
@@ -88,6 +89,7 @@ app.include_router(payroll_router)
 app.include_router(procurement_router)
 app.include_router(qc_router)
 app.include_router(maintenance_router)
+app.include_router(scan_router)
 
 
 @app.get("/")

@@ -23,7 +23,7 @@ const CHANGE_VARIANT: Record<Change, "primary" | "accent" | "warning" | "default
   same: "default",
 };
 
-/** A signed difference: "+12 000 F CFA", "-3 500 F CFA", or a muted zero. */
+/** A signed difference: "+12 000 XOF", "-3 500 XOF", or a muted zero. */
 function Delta({ value }: { value: number }) {
   if (value === 0) return <span className="text-muted-foreground">{formatXof(0)}</span>;
   return <span className="font-medium">{value > 0 ? `+${formatXof(value)}` : formatXof(value)}</span>;

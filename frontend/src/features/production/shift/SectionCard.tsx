@@ -10,7 +10,7 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Label as FieldLabel } from "../../../components/ui/label";
-import { Cell, ShiftGrid, type GridRow, type OptionMap } from "./ShiftGrid";
+import { Cell, DECOR_CLASS, ShiftGrid, type CellDecor, type GridRow, type OptionMap } from "./ShiftGrid";
 import { FullscreenOverlay } from "./FullscreenOverlay";
 import { RevisionHistory } from "./RevisionHistory";
 import { StatusNode } from "./StatusNode";
@@ -339,6 +339,8 @@ export function Part({
   options,
   disabled,
   defaults,
+  decorate,
+  onCellFocus,
 }: {
   part: PartDef;
   sectionKey: string;
@@ -348,6 +350,8 @@ export function Part({
   disabled: boolean;
   /** What a line added to a table starts with. */
   defaults?: Row;
+  decorate?: (row: Row, key: string) => CellDecor | undefined;
+  onCellFocus?: (row: Row, key: string) => void;
 }) {
   const label = useLabel();
   const idPrefix = `${sectionKey}-${part.payloadKey}`;
@@ -357,21 +361,29 @@ export function Part({
       {part.title && <h3 className="text-sm font-medium">{label(part.title)}</h3>}
       {part.shape === "single" ? (
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {part.columns.map((column) => (
-            <div key={column.key} className="space-y-1">
-              <FieldLabel htmlFor={`${idPrefix}-${column.key}`} className="text-xs text-muted-foreground">
-                {label(column.label)}
-              </FieldLabel>
-              <Cell
-                column={column}
-                value={(value as Row)[column.key]}
-                onChange={(next) => onChange({ ...(value as Row), [column.key]: next })}
-                options={options}
-                disabled={disabled}
-                idPrefix={idPrefix}
-              />
-            </div>
-          ))}
+          {part.columns.map((column) => {
+            const decor = decorate?.(value as Row, column.key);
+            return (
+              <div
+                key={column.key}
+                title={decor?.title}
+                onFocusCapture={onCellFocus ? () => onCellFocus(value as Row, column.key) : undefined}
+                className={cn("space-y-1", decor && cn("rounded-md p-1", DECOR_CLASS[decor.tone]))}
+              >
+                <FieldLabel htmlFor={`${idPrefix}-${column.key}`} className="text-xs text-muted-foreground">
+                  {label(column.label)}
+                </FieldLabel>
+                <Cell
+                  column={column}
+                  value={(value as Row)[column.key]}
+                  onChange={(next) => onChange({ ...(value as Row), [column.key]: next })}
+                  options={options}
+                  disabled={disabled}
+                  idPrefix={idPrefix}
+                />
+              </div>
+            );
+          })}
         </div>
       ) : (
         <ShiftGrid
@@ -386,6 +398,8 @@ export function Part({
           idPrefix={idPrefix}
           storageKey={idPrefix}
           keepOne
+          decorate={decorate}
+          onCellFocus={onCellFocus}
         />
       )}
     </div>
