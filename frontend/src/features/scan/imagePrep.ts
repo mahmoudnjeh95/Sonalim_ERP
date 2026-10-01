@@ -7,7 +7,9 @@ const MAX_SIDE = 4096;
 const MIN_SIDE = 1200;
 // A page is sent as it is up to 10 MB (the server's limit); only a bigger one is compressed. It
 // travels as base64 inside JSON (+33 %), which the proxies in front of the app must accept (16 MB).
-const MAX_JPEG_BYTES = 10 * 1024 * 1024;
+// When a proxy refuses it anyway (413), the page is sent again under the next, smaller budget; the
+// last one keeps the request under nginx's 1 MB default.
+export const UPLOAD_BUDGETS = [10 * 1024 * 1024, 3 * 1024 * 1024, 700 * 1024];
 const QUALITIES = [0.92, 0.85, 0.75, 0.65];
 
 function toBase64(blob: Blob): Promise<string> {
@@ -27,9 +29,9 @@ function encode(canvas: HTMLCanvasElement, quality: number): Promise<Blob> {
 
 /**
  * A photo made upright (EXIF), scaled down and re-encoded as JPEG before it is sent: the quality
- * steps down first, then the size, until the page fits the upload budget.
+ * steps down first, then the size, until the page fits `maxBytes`.
  */
-export async function prepareImage(file: File): Promise<PageUpload> {
+export async function prepareImage(file: File, maxBytes = UPLOAD_BUDGETS[0]): Promise<PageUpload> {
   const bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
   const longest = Math.max(bitmap.width, bitmap.height);
   let side = Math.min(MAX_SIDE, longest);
@@ -45,9 +47,9 @@ export async function prepareImage(file: File): Promise<PageUpload> {
       let blob: Blob | null = null;
       for (const quality of QUALITIES) {
         blob = await encode(canvas, quality);
-        if (blob.size <= MAX_JPEG_BYTES) break;
+        if (blob.size <= maxBytes) break;
       }
-      if (blob!.size <= MAX_JPEG_BYTES || side <= MIN_SIDE) {
+      if (blob!.size <= maxBytes || side <= MIN_SIDE) {
         return { filename: file.name, content_type: "image/jpeg", width, height, data_base64: await toBase64(blob!) };
       }
       side = Math.max(MIN_SIDE, Math.round(side * 0.8));

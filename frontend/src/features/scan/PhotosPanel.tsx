@@ -11,7 +11,7 @@ import { Checkbox } from "../../components/ui/checkbox";
 import { Select } from "../../components/ui/select";
 import { useLabel } from "../production/shift/shiftText";
 import { CameraDialog } from "./CameraDialog";
-import { prepareImage } from "./imagePrep";
+import { prepareImage, UPLOAD_BUDGETS } from "./imagePrep";
 import { PageImage } from "./PageImage";
 import {
   deletePage, rereadPage, scanProposalPrefix, scanSessionKey, uploadPages,
@@ -41,10 +41,20 @@ export function PhotosPanel({
 
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
+      // A budget a proxy refused (413) is not tried again for the rest of the batch.
+      let budget = 0;
       for (const [index, file] of files.entries()) {
         setPreparing(index + 1);
-        const prepared = await prepareImage(file);
-        await uploadPages(token, session.id, [prepared]);
+        for (;;) {
+          const prepared = await prepareImage(file, UPLOAD_BUDGETS[budget]);
+          try {
+            await uploadPages(token, session.id, [prepared]);
+            break;
+          } catch (error) {
+            if (!(error instanceof ApiError && error.status === 413) || budget === UPLOAD_BUDGETS.length - 1) throw error;
+            budget += 1;
+          }
+        }
         refresh();
       }
     },
