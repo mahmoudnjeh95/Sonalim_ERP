@@ -264,11 +264,15 @@ class ProgramService:
             dates = due_occurrences(start_date, interval_value, interval_unit, lead_days, today, created_at.date())
             if not dates:
                 continue
-            checkpoint_ids = self._program_checkpoint_ids(program_id)
-            if not checkpoint_ids:
-                checkpoint_ids = [c["id"] for c in MapService(self._connection).active_checkpoints(
-                    tenant_id=tenant_id, equipment_id=equipment_id
-                )]
+            # Resolve against the machine's *currently* active checkpoints, never the
+            # program's stored ids verbatim: a selected point may have been archived since
+            # the program was saved, and a due program must never be dropped over that.
+            # An empty selection already means "every active checkpoint" (brief/spec); a
+            # selection that has gone entirely stale falls back the same way, via the same
+            # intersection, rather than a separate branch.
+            active = MapService(self._connection).active_checkpoints(tenant_id=tenant_id, equipment_id=equipment_id)
+            selected = set(self._program_checkpoint_ids(program_id))
+            checkpoint_ids = [c["id"] for c in active if not selected or c["id"] in selected]
             tasks = [] if checkpoint_ids else [{"label": name, "action": "other"}]
             for occurrence_date in dates:
                 result = jobs.create_job(
@@ -290,10 +294,13 @@ class ProgramService:
                 if isinstance(result, Ok):
                     created += 1
                 elif result.code != "ALREADY_EXISTS":
-                    # A genuine refusal (e.g. a checkpoint named by the program was archived
-                    # since) must not take down the whole sweep: one bad program's occurrence
-                    # is skipped so every other program and occurrence is still materialised in
-                    # this same run; it is simply tried again on the next sweep.
+                    # The checkpoint-archived case is already handled above (resolved against
+                    # the machine's active checkpoints before calling create_job, with the
+                    # ad-hoc fallback when none remain), so create_job should not refuse here
+                    # in practice. This is a last-resort guard for a genuinely unexpected error
+                    # (e.g. the equipment itself vanished mid-sweep): logged and skipped so one
+                    # bad program's occurrence never takes down every other program's sweep in
+                    # the same run; it is simply tried again on the next sweep.
                     print(
                         f"Maintenance sweep: program {program_id} occurrence {occurrence_date} refused: {result.code}",
                         flush=True,

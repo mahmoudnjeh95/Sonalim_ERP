@@ -218,6 +218,72 @@ def test_program_checkpoint_subset_is_snapshotted(db, ctx):
     assert detail["checks"][0]["checkpoint_id"] == ctx.points[0]
 
 
+def test_program_with_an_archived_checkpoint_still_creates_its_job(db, ctx):
+    """A due program must never be dropped because one of its selected points was
+    archived after the program was saved: the sweep resolves against the machine's
+    currently active checkpoints, not the program's stored ids verbatim."""
+    programs = ProgramService(db)
+    created = _create_program(
+        programs,
+        ctx,
+        interval_value=1,
+        interval_unit="day",
+        start_date=TODAY,
+        lead_days=0,
+        checkpoint_ids=list(ctx.points),  # both points selected
+    )
+    program_id = created.value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=1))
+
+    maps = MapService(db)
+    archived = maps.archive_checkpoint(tenant_id=T, actor_id=ctx.sup, checkpoint_id=ctx.points[0])
+    assert isinstance(archived, Ok), archived
+
+    result = programs.run_due(tenant_id=T, today=TODAY)
+    assert result["created"] == 1
+
+    row = db.execute(
+        "SELECT id FROM maintenance.jobs WHERE program_id = %s AND occurrence_date = %s", (program_id, TODAY)
+    ).fetchone()
+    assert row is not None
+    detail = job_detail(db, T, row[0], TODAY)
+    # Only the still-active point remains; the archived one is silently dropped from the
+    # snapshot rather than refusing the whole occurrence.
+    assert detail["checks_total"] == 1
+    assert detail["checks"][0]["checkpoint_id"] == ctx.points[1]
+
+
+def test_program_with_every_selected_checkpoint_archived_falls_back_to_ad_hoc_task(db, ctx):
+    programs = ProgramService(db)
+    created = _create_program(
+        programs,
+        ctx,
+        interval_value=1,
+        interval_unit="day",
+        start_date=TODAY,
+        lead_days=0,
+        checkpoint_ids=list(ctx.points),
+    )
+    program_id = created.value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=1))
+
+    maps = MapService(db)
+    for checkpoint_id in ctx.points:
+        assert isinstance(maps.archive_checkpoint(tenant_id=T, actor_id=ctx.sup, checkpoint_id=checkpoint_id), Ok)
+
+    result = programs.run_due(tenant_id=T, today=TODAY)
+    assert result["created"] == 1
+
+    row = db.execute(
+        "SELECT id FROM maintenance.jobs WHERE program_id = %s AND occurrence_date = %s", (program_id, TODAY)
+    ).fetchone()
+    assert row is not None
+    detail = job_detail(db, T, row[0], TODAY)
+    assert detail["checks_total"] == 1
+    assert detail["checks"][0]["checkpoint_id"] is None
+    assert detail["checks"][0]["label"] == "Graissage mensuel"
+
+
 def test_overdue_notified_once(db, ctx):
     programs = ProgramService(db)
     created = _create_program(
