@@ -8,6 +8,7 @@ import { Sidebar } from "./Sidebar";
 import { AppLoader } from "../components/patterns/AppLoader";
 import { useI18n } from "../lib/i18n";
 import { useIsMobile } from "../lib/useIsMobile";
+import { NotificationBell } from "../features/notifications/NotificationBell";
 
 // The loader never flashes for less than this, and the page needs this long to
 // mount its queries after the outgoing route finishes its exit animation.
@@ -130,6 +131,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
               SE
             </div>
             <p className="truncate text-sm font-semibold">Sonalim ERP</p>
+            <div className="ml-auto">
+              <NotificationBell />
+            </div>
           </div>
         )}
 

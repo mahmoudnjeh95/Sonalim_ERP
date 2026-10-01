@@ -55,6 +55,7 @@ import { LanguageToggle } from "../components/patterns/LanguageToggle";
 import { cn } from "../lib/utils";
 import { outlineIcon } from "../components/patterns/outlineIcon";
 import { SidebarUserMenu } from "./SidebarUserMenu";
+import { NotificationBell } from "../features/notifications/NotificationBell";
 import ProductionIcon from "../assets/icons/production/line.svg?react";
 import QualityIcon from "../assets/icons/quality/check.svg?react";
 import MaintenanceIcon from "../assets/icons/maintenance/wrench.svg?react";
@@ -394,7 +395,12 @@ export function Sidebar({ isMobile = false, onNavigate }: { isMobile?: boolean; 
       </nav>
 
       <div className="border-t border-border p-3">
-        <SidebarUserMenu collapsed={collapsed} onNavigate={onNavigate} />
+        <div className={cn("flex items-center gap-1", collapsed ? "flex-col" : "flex-row")}>
+          <div className="min-w-0 flex-1">
+            <SidebarUserMenu collapsed={collapsed} onNavigate={onNavigate} />
+          </div>
+          <NotificationBell collapsed={collapsed} />
+        </div>
 
         {!isMobile && (
         <button
