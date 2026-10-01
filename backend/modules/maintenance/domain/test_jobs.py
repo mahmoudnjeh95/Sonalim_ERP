@@ -8,6 +8,7 @@ from modules.maintenance.domain.jobs import (
     can_assign,
     can_cancel,
     can_close,
+    can_delegate,
     can_record_entry,
     entry_timing,
     status_after_entry,
@@ -36,6 +37,19 @@ def test_closed_job_cannot_be_assigned():
 
 def test_in_progress_job_cannot_be_assigned():
     assert can_assign("in_progress").code == "INVALID_TRANSITION"
+
+
+# -- can_delegate -------------------------------------------------------------
+
+
+def test_checks_can_be_delegated_while_the_job_is_being_worked():
+    for status in ("assigned", "in_progress", "rework"):
+        assert isinstance(can_delegate(status), Ok)
+
+
+def test_checks_cannot_be_delegated_before_assignment_or_after_submission():
+    for status in ("planned", "submitted", "closed", "cancelled"):
+        assert can_delegate(status).code == "INVALID_TRANSITION"
 
 
 # -- can_record_entry ---------------------------------------------------------

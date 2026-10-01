@@ -8,9 +8,16 @@ from core.domain.result import Err, Ok, Result
 JOB_STATUSES = ("planned", "assigned", "in_progress", "submitted", "rework", "closed", "cancelled")
 CHECK_ACTIONS = ("inspect", "lubricate", "tighten", "clean", "replace", "measure", "other")
 OUTCOMES = ("ok", "issue", "not_done")
+JOB_KINDS = ("preventive", "corrective")
+JOB_PRIORITIES = ("normal", "urgent")
+VERDICTS = ("accepted", "rejected")
 
 # A job may be assigned (or re-assigned) while it sits in either of these states.
 _ASSIGNABLE_STATUSES = {"planned", "assigned"}
+
+# The chef hands checks to team members while the job is theirs to work: once it
+# has a chef and until it is submitted (a rework hands it back to them).
+_DELEGABLE_STATUSES = {"assigned", "in_progress", "rework"}
 
 # A check can take a new entry only while the job is being worked and the check
 # itself has not already been accepted by a reviewer.
@@ -49,6 +56,16 @@ def can_assign(status: str) -> Result[None]:
             "INVALID_TRANSITION",
             f"cannot assign a job in status {status}",
             f"impossible d'assigner une intervention au statut {status}",
+        )
+    return Ok(None)
+
+
+def can_delegate(status: str) -> Result[None]:
+    if status not in _DELEGABLE_STATUSES:
+        return Err(
+            "INVALID_TRANSITION",
+            f"cannot delegate the checks of a job in status {status}",
+            f"impossible de déléguer les points d'une intervention au statut {status}",
         )
     return Ok(None)
 

@@ -41,6 +41,18 @@ def employee_names(connection: psycopg.Connection, tenant_id: str, employee_ids:
     return names
 
 
+def active_employee_names(connection: psycopg.Connection, tenant_id: str, employee_ids: Iterable[str]) -> dict[str, str]:
+    """Like `employee_names`, but only for the ids that are *active* HR employees -- the
+    people a check may be delegated to or recorded for. Anyone else is omitted."""
+    service = EmployeeService(connection)
+    names: dict[str, str] = {}
+    for employee_id in {e for e in employee_ids if e}:
+        employee = service.get_employee(tenant_id=tenant_id, employee_id=employee_id)
+        if employee is not None and employee["status"] == "active":
+            names[employee_id] = employee["full_name"]
+    return names
+
+
 def active_employees(connection: psycopg.Connection, tenant_id: str) -> list[dict]:
     """Every active HR employee of the tenant, as `{id, name}` -- the pool `/team-candidates` picks from."""
     employees = EmployeeService(connection).list_employees(tenant_id, "active")
