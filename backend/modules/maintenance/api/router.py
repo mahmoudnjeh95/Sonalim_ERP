@@ -7,6 +7,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.maintenance.api.equipment_service import UNSET, EquipmentService
+from modules.maintenance.api import maps_router, teams_router
 from modules.maintenance.domain.equipment import Equipment
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -166,3 +167,7 @@ def delete_equipment(
             connection.rollback()
             raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
         connection.commit()
+
+
+router.include_router(teams_router.router)
+router.include_router(maps_router.router)
