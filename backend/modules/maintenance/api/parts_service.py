@@ -397,6 +397,7 @@ class PartsService:
                     reference=reference,
                     actor_id=actor_id,
                     move_type="maintenance",
+                    respect_reservations=True,
                 )
                 if isinstance(issued, Err):
                     # Only reachable if the stock moved under us since the check: the caller rolls back.

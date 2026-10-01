@@ -129,6 +129,19 @@ def issue(level: StockLevel, quantity: float) -> Result[StockLevel]:
     )
 
 
+def issue_unreserved(level: StockLevel, quantity: float) -> Result[StockLevel]:
+    """An issue that may only take stock nobody has reserved: what is promised to
+    another order stays on the shelf for it."""
+    if quantity > 0 and quantity > level.quantity_on_hand - level.quantity_reserved:
+        free = level.quantity_on_hand - level.quantity_reserved
+        return Err(
+            INSUFFICIENT_STOCK,
+            f"cannot issue {quantity}, only {free} free ({level.quantity_reserved} reserved)",
+            f"impossible de sortir {quantity}, seulement {free} disponible ({level.quantity_reserved} réservé)",
+        )
+    return issue(level, quantity)
+
+
 def adjust(level: StockLevel, delta: float) -> Result[StockLevel]:
     """Applies a manual correction ("ajustement") of arbitrary sign to on-hand quantity."""
     if delta == 0:

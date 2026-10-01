@@ -376,6 +376,33 @@ def test_reserved_and_quarantined_stock_is_not_available_to_issue(db, ctx):
     assert _maintenance_moves(db) == []
 
 
+def test_a_reservation_made_after_the_check_is_still_honoured(db, ctx, monkeypatch):
+    """The race: approval checks what is free, then issues. If a reservation lands in
+    between, the issue itself (under the stock row lock) must refuse to take reserved
+    stock. Simulated by letting the check see the shelf as it was before the reservation."""
+    _stock(db, ctx.sup, ctx.bearing, ctx.store, 5)
+    request_id = _request(db, ctx, [{"product_id": ctx.bearing, "uom_id": ctx.piece, "quantity": 4}]).value
+    [line] = _one(db, request_id)["lines"]
+    stale_free = StockService(db).get_available_quantity(T, ctx.bearing, ctx.store)
+    reserved = StockService(db).reserve_stock(
+        tenant_id=T, product_id=ctx.bearing, location_id=ctx.store, quantity=3,
+        correlation_id=str(ULID()), reference="sales-order", actor_id=ctx.sup,
+    )
+    assert isinstance(reserved, Ok), reserved
+    monkeypatch.setattr(StockService, "get_available_quantity", lambda self, *args: stale_free)
+
+    refused = _approve(db, ctx, request_id, [{"line_id": line["id"], "location_id": ctx.store, "issue_quantity": 4}])
+
+    assert isinstance(refused, Err) and refused.code == "INSUFFICIENT_STOCK"
+    assert refused.message_fr
+    assert _maintenance_moves(db) == []
+    on_hand, held = db.execute(
+        "SELECT quantity_on_hand, quantity_reserved FROM warehouse.stock_items WHERE product_id = %s AND location_id = %s",
+        (ctx.bearing, ctx.store),
+    ).fetchone()
+    assert (float(on_hand), float(held)) == (5.0, 3.0)
+
+
 def test_availability_lists_every_location_holding_the_part(db, ctx):
     _stock(db, ctx.sup, ctx.bearing, ctx.store, 4)
     _stock(db, ctx.sup, ctx.bearing, ctx.annex, 1)

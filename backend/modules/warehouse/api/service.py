@@ -15,6 +15,7 @@ from modules.warehouse.domain.entities import (
     adjust,
     consume_in_production,
     issue,
+    issue_unreserved,
     receive,
     release_reservation,
     reserve,
@@ -665,8 +666,13 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
         move_type: str = "issue",
+        respect_reservations: bool = False,
     ) -> Result[StockLevel]:
-        """Records a "sortie" — physical consumption of stock (e.g. a receipt moving into production use)."""
+        """Records a "sortie" — physical consumption of stock (e.g. a receipt moving into production use).
+
+        With `respect_reservations`, only stock nobody has reserved may go: the check runs on
+        the row locked below, so a reservation made after the caller looked at availability
+        is still honoured."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
@@ -688,7 +694,7 @@ class StockService:
             quantity_reserved=float(row[1]) if row else 0.0,
         )
 
-        result = issue(current, quantity)
+        result = issue_unreserved(current, quantity) if respect_reservations else issue(current, quantity)
         if isinstance(result, Err):
             return result
         self._valuation.record_outflow(
