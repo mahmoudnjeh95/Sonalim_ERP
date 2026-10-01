@@ -21,6 +21,7 @@ import { QualityPage } from "../features/qc/QualityPage";
 import { AnalyticsPage } from "../features/analytics/AnalyticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { CheckpointMapEditor } from "../features/maintenance/map/CheckpointMapEditor";
+import { JobPage } from "../features/maintenance/jobs/JobPage";
 import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPage";
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
@@ -100,6 +101,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/analytics", element: <AnalyticsPage /> },
   { path: "/maintenance", element: <MaintenancePage /> },
   { path: "/maintenance/equipment/:equipmentId/map", element: <CheckpointMapEditor /> },
+  { path: "/maintenance/jobs/:jobId", element: <JobPage /> },
   { path: "/warehouse", element: <WarehousePage /> },
   { path: "/products", element: <ProductsPage /> },
   { path: "/inventories", element: <InventoriesPage /> },

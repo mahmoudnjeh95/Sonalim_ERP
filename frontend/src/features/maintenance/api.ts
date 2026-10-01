@@ -669,6 +669,11 @@ function useMaintenanceMutation<TData, TVariables, TContext = unknown>(
   });
 }
 
+/** The equipment registry (GET /maintenance/equipment, needs maintenance.view_equipment) — shares its cache key with the Equipment tab, which invalidates it on every write. Used by the jobs list's machine filter and the new-job dialog. */
+export function useEquipmentList(token: Token) {
+  return useQuery({ queryKey: MAINTENANCE_EQUIPMENT_QUERY_KEY, queryFn: () => listEquipment(token), enabled: !!token });
+}
+
 export function useTeams(token: Token) {
   return useQuery({ queryKey: MAINTENANCE_TEAMS_QUERY_KEY, queryFn: () => listTeams(token), enabled: !!token });
 }

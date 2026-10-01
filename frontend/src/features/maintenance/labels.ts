@@ -1,7 +1,7 @@
 import { CircleDot, Droplet, Eye, Gauge, RefreshCw, Sparkles, Wrench, type LucideIcon } from "lucide-react";
 import type { BadgeProps } from "../../components/ui/badge";
 import type { TranslationKey } from "../../lib/i18n";
-import type { CheckAction, JobStatus, Outcome } from "./api";
+import type { CheckAction, CheckState, JobListItem, JobStatus, Outcome } from "./api";
 
 /**
  * Display metadata (i18n key, badge colour, icon where relevant) for the
@@ -61,4 +61,29 @@ export const OUTCOME_BADGE_VARIANT: Record<Outcome, BadgeProps["variant"]> = {
   ok: "success",
   issue: "destructive",
   not_done: "default",
+};
+
+/** A job check's own state (not the job's): what the checks table, the job page and the review panel show per point. */
+export const CHECK_STATE_LABEL_KEY: Record<CheckState, TranslationKey> = {
+  pending: "maintenance.checkState.pending",
+  done: "maintenance.checkState.done",
+  accepted: "maintenance.checkState.accepted",
+  rejected: "maintenance.checkState.rejected",
+};
+
+export const CHECK_STATE_BADGE_VARIANT: Record<CheckState, BadgeProps["variant"]> = {
+  pending: "outline",
+  done: "primary",
+  accepted: "success",
+  rejected: "destructive",
+};
+
+export const JOB_KIND_LABEL_KEY: Record<JobListItem["kind"], TranslationKey> = {
+  preventive: "maintenance.jobKind.preventive",
+  corrective: "maintenance.jobKind.corrective",
+};
+
+export const JOB_PRIORITY_LABEL_KEY: Record<JobListItem["priority"], TranslationKey> = {
+  normal: "maintenance.jobPriority.normal",
+  urgent: "maintenance.jobPriority.urgent",
 };
