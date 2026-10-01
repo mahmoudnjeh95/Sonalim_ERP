@@ -23,7 +23,10 @@ export function useAuthedImage(
   const { session } = useAuth();
   const token = session?.token;
   const query = useQuery({
-    queryKey: ["maintenance", "authed-image", id, version ?? null],
+    // Deliberately outside the ["maintenance"] prefix every maintenance write invalidates: a view
+    // photo is versioned by `version` and an entry photo never changes, so recording a point must
+    // not download the machine photo again (and blink it on screen).
+    queryKey: ["maintenance-image", id, version ?? null],
     queryFn: () => fetchBlob(token!, id!),
     enabled: !!token && !!id,
     staleTime: Infinity,

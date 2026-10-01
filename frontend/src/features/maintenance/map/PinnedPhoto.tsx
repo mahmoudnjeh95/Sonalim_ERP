@@ -158,11 +158,14 @@ export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, onPinMov
               if (!canDrag) onPinClick?.(pin.id);
             }}
             className={cn(
-              "absolute flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-sm font-semibold shadow-soft",
+              // `before:` widens the tap area to 44 px around the 36 px disc.
+              "absolute flex h-9 w-9 items-center justify-center rounded-full border-2 text-sm font-semibold shadow-soft before:absolute before:-inset-1 before:rounded-full before:content-['']",
               canDrag ? "cursor-grab touch-none active:cursor-grabbing" : onPinClick ? "cursor-pointer" : "cursor-default",
               TONE_CLASS[pin.tone],
             )}
-            style={{ left: `${position.x}%`, top: `${position.y}%` }}
+            // Centred on its point through Framer's own x/y: a Tailwind `-translate-*` class is
+            // overwritten by the inline transform Framer writes for the `scale` animation.
+            style={{ left: `${position.x}%`, top: `${position.y}%`, x: "-50%", y: "-50%" }}
             animate={
               pin.tone === "active"
                 ? { scale: [1, 1.18, 1] }

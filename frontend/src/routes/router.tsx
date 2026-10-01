@@ -22,6 +22,7 @@ import { AnalyticsPage } from "../features/analytics/AnalyticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
 import { CheckpointMapEditor } from "../features/maintenance/map/CheckpointMapEditor";
 import { JobPage } from "../features/maintenance/jobs/JobPage";
+import { CheckWizard } from "../features/maintenance/wizard/CheckWizard";
 import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPage";
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
@@ -72,6 +73,16 @@ function ProtectedRoute() {
       <Outlet />
     </AppLayout>
   );
+}
+
+// Signed-in screens that take the whole screen, without the sidebar layout:
+// the maintenance check wizard is run on a phone on the shop floor.
+function ProtectedFullScreenRoute() {
+  const { session } = useAuth();
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+  return <Outlet />;
 }
 
 // Every protected leaf route gets the same errorElement so a crash on one
@@ -139,6 +150,10 @@ const protectedChildren: RouteObject[] = [
   { path: "/payroll/inputs", element: <InputsPage /> },
 ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
 
+const fullScreenChildren: RouteObject[] = [
+  { path: "/maintenance/jobs/:jobId/run", element: <CheckWizard /> },
+].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
+
 export const router = createBrowserRouter([
   {
     // Catches errors thrown outside any leaf (e.g. in ProtectedRoute/AppLayout
@@ -149,6 +164,10 @@ export const router = createBrowserRouter([
       {
         element: <ProtectedRoute />,
         children: protectedChildren,
+      },
+      {
+        element: <ProtectedFullScreenRoute />,
+        children: fullScreenChildren,
       },
     ],
   },
