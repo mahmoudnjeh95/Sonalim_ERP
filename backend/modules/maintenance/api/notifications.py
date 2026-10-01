@@ -21,9 +21,14 @@ __all__ = [
     "JOB_REWORK",
     "JOB_SUBMITTED",
     "JOB_URGENT",
+    "PARTS_APPROVED",
+    "PARTS_LINK",
+    "PARTS_REJECTED",
+    "PARTS_REQUESTED",
     "PLAN_PERMISSION",
     "job_link",
     "notify_job",
+    "notify_parts",
     "supervisors",
 ]
 
@@ -49,6 +54,30 @@ _JOB_TITLES: dict[str, tuple[str, str]] = {
     JOB_REWORK: ("Job {number} on {machine} sent back for rework", "Intervention {number} sur {machine} renvoyée en correction"),
     JOB_CLOSED: ("Job {number} on {machine} closed", "Intervention {number} sur {machine} clôturée"),
     JOB_CANCELLED: ("Job {number} on {machine} cancelled", "Intervention {number} sur {machine} annulée"),
+}
+
+
+PARTS_REQUESTED = "maintenance.parts_requested"
+PARTS_APPROVED = "maintenance.parts_approved"
+PARTS_REJECTED = "maintenance.parts_rejected"
+
+# Parts notifications open the Parts tab, where the request is decided or read.
+PARTS_LINK = "/maintenance?tab=parts"
+
+# kind -> (English title, French title); both name the job and its machine.
+_PARTS_TITLES: dict[str, tuple[str, str]] = {
+    PARTS_REQUESTED: (
+        "Parts requested for job {number} on {machine}",
+        "Demande de pièces pour l'intervention {number} sur {machine}",
+    ),
+    PARTS_APPROVED: (
+        "Parts approved for job {number} on {machine}",
+        "Pièces validées pour l'intervention {number} sur {machine}",
+    ),
+    PARTS_REJECTED: (
+        "Parts request refused for job {number} on {machine}",
+        "Demande de pièces refusée pour l'intervention {number} sur {machine}",
+    ),
 }
 
 
@@ -92,4 +121,34 @@ def notify_job(
         body=body,
         body_fr=body_fr if body_fr is not None else body,
         link=job_link(job_id),
+    )
+
+
+def notify_parts(
+    connection: psycopg.Connection,
+    *,
+    tenant_id: str,
+    user_ids: Iterable[str | None],
+    kind: str,
+    number: str,
+    equipment_name: str,
+    body: str | None = None,
+) -> int:
+    """One notification per distinct recipient about a parts request on job `number`.
+
+    `kind` picks the title (one of the `PARTS_*` constants); `body` is the note the
+    requester or the supervisor typed, the same in both languages. Links to the
+    Parts tab. Empty/None recipients are skipped. Returns the number of rows written.
+    """
+    title, title_fr = _PARTS_TITLES[kind]
+    return notify(
+        connection,
+        tenant_id=tenant_id,
+        user_ids=[user_id for user_id in user_ids if user_id],
+        kind=kind,
+        title=title.format(number=number, machine=equipment_name),
+        title_fr=title_fr.format(number=number, machine=equipment_name),
+        body=body,
+        body_fr=body,
+        link=PARTS_LINK,
     )

@@ -11,6 +11,7 @@ import datetime
 
 import psycopg
 
+from modules.maintenance.api.parts_service import list_part_requests
 from modules.maintenance.api.people import employee_names, user_names
 
 __all__ = ["entry_photo", "job_detail", "list_jobs"]
@@ -275,13 +276,8 @@ def job_detail(connection: psycopg.Connection, tenant_id: str, job_id: str, toda
 
 
 def _part_requests(connection: psycopg.Connection, tenant_id: str, job_id: str) -> list[dict]:
-    """The job's spare-parts requests (`PartRequest[]`). Empty until the parts service exists;
-    B6 switches it on here, and only here:
-
-        from modules.maintenance.api.parts_service import list_part_requests
-        return list_part_requests(connection, tenant_id, job_id=job_id)
-    """
-    return []
+    """The job's spare-parts requests (`PartRequest[]`), newest first."""
+    return list_part_requests(connection, tenant_id, job_id=job_id)
 
 
 def entry_photo(connection: psycopg.Connection, tenant_id: str, entry_id: str) -> tuple[bytes, str] | None:

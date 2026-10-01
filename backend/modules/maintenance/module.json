@@ -3,7 +3,7 @@
   "version": "0.2.0",
   "depends": ["core"],
   "optional_depends": ["hr", "warehouse"],
-  "provides_api": ["EquipmentService", "JobService"],
+  "provides_api": ["EquipmentService", "JobService", "PartsService"],
   "publishes_events": ["maintenance.parts.purchase_requested"],
   "subscribes_events": [],
   "migrations_path": "./migrations",
