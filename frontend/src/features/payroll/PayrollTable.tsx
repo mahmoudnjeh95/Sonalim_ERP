@@ -2,6 +2,8 @@ import { useEffect, useState, type ReactNode } from "react";
 import { Inbox, SearchX } from "lucide-react";
 import { AppLoader } from "../../components/patterns/AppLoader";
 import { ColumnFilterRow, type FilterCell } from "../../components/patterns/ColumnFilterRow";
+import { MobileCardList } from "../../components/patterns/MobileCardList";
+import { useIsMobile } from "../../lib/useIsMobile";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { Button } from "../../components/ui/button";
@@ -58,6 +60,7 @@ export function PayrollTable<Row>({
   }, [loading]);
 
   const sorted = table.sortRows(rows);
+  const isMobile = useIsMobile();
   const span = Math.max(table.visibleColumns.length, 1);
   const filterRow: FilterCell[] | null = filterCells
     ? table.visibleColumns.map((column) => filterCells[columns.findIndex((c) => c.key === column.key)] ?? { type: "blank" })
@@ -74,12 +77,25 @@ export function PayrollTable<Row>({
             {t("payroll.common.clearFilters")}
           </Button>
         )}
-        <div className="ml-auto">
-          <ColumnVisibilityMenu columns={columns} isVisible={table.isVisible} onToggle={table.toggleVisible} onReset={table.resetAll} />
-        </div>
+        {!isMobile && (
+          <div className="ml-auto">
+            <ColumnVisibilityMenu columns={columns} isVisible={table.isVisible} onToggle={table.toggleVisible} onReset={table.resetAll} />
+          </div>
+        )}
       </div>
       {loading && !booted ? (
         <AppLoader label={t("payroll.common.loading")} className="py-10" />
+      ) : isMobile ? (
+        <MobileCardList
+          columns={table.visibleColumns}
+          rows={sorted}
+          rowKey={rowKey}
+          loading={loading}
+          emptyIcon={emptyIcon ?? <SearchX className="h-5 w-5" />}
+          emptyTitle={emptyTitle}
+          emptyDescription={emptyDescription}
+          onRowClick={onRowClick}
+        />
       ) : (
         <div className="rounded-lg border border-border">
           <Table colWidths={table.colWidths}>
