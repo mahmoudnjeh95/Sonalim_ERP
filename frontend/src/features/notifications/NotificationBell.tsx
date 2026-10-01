@@ -61,8 +61,8 @@ function NotificationRow({ notification, onOpen }: { notification: AppNotificati
     >
       <span className={cn("mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full", unread ? "bg-primary" : "bg-transparent")} aria-hidden />
       <span className="min-w-0 flex-1">
-        <span className={cn("block truncate", unread ? "font-medium text-foreground" : "text-muted-foreground")}>{title}</span>
-        {body && <span className="block truncate text-xs text-muted-foreground">{body}</span>}
+        <span className={cn("line-clamp-2 break-words", unread ? "font-medium text-foreground" : "text-muted-foreground")}>{title}</span>
+        {body && <span className="line-clamp-2 break-words text-xs text-muted-foreground">{body}</span>}
         <span className="block text-[11px] text-muted-foreground/70">{formatRelativeTime(notification.created_at)}</span>
       </span>
     </button>
