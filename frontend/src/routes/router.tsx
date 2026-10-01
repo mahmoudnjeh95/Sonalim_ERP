@@ -30,6 +30,7 @@ import { PostingRulesPage } from "../features/finance/PostingRulesPage";
 import { TrialBalancePage } from "../features/finance/TrialBalancePage";
 import { GeneralLedgerPage } from "../features/finance/GeneralLedgerPage";
 import { PeriodsPage } from "../features/finance/PeriodsPage";
+import { ProfilePage } from "../features/profile/ProfilePage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
 import { EmployeesPage } from "../features/hr/EmployeesPage";
@@ -113,6 +114,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/admin/users", element: <UsersPage /> },
   { path: "/admin/roles", element: <RolesPage /> },
   { path: "/admin/activity-log", element: <ActivityLogPage /> },
+  { path: "/profile", element: <ProfilePage /> },
   { path: "/settings", element: <SettingsPage /> },
   { path: "/hr/employees", element: <EmployeesPage /> },
   { path: "/hr/employees/:employeeId", element: <EmployeeFilePage /> },

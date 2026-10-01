@@ -30,7 +30,6 @@ import {
   LineChart,
   ListChecks,
   BriefcaseBusiness,
-  LogOut,
   PackageSearch,
   Recycle,
   ScanLine,
@@ -43,7 +42,6 @@ import {
   Target,
   TrendingUp,
   Truck,
-  UserCircle,
   Users,
   Wallet,
   Zap,
@@ -56,6 +54,7 @@ import { useI18n, type TranslationKey } from "../lib/i18n";
 import { LanguageToggle } from "../components/patterns/LanguageToggle";
 import { cn } from "../lib/utils";
 import { outlineIcon } from "../components/patterns/outlineIcon";
+import { SidebarUserMenu } from "./SidebarUserMenu";
 import ProductionIcon from "../assets/icons/production/line.svg?react";
 import QualityIcon from "../assets/icons/quality/check.svg?react";
 import MaintenanceIcon from "../assets/icons/maintenance/wrench.svg?react";
@@ -237,7 +236,7 @@ function isItemActive(item: NavItem, pathname: string): boolean {
 }
 
 export function Sidebar({ isMobile = false, onNavigate }: { isMobile?: boolean; onNavigate?: () => void } = {}) {
-  const { session, logout, hasPermission } = useAuth();
+  const { session, hasPermission } = useAuth();
   const { t, language, setLanguage } = useI18n();
   const location = useLocation();
   const reduceMotion = useReducedMotion();
@@ -395,35 +394,7 @@ export function Sidebar({ isMobile = false, onNavigate }: { isMobile?: boolean; 
       </nav>
 
       <div className="border-t border-border p-3">
-        <NavLink to="/settings" onClick={onNavigate} title={collapsed ? t("nav.settings") : undefined} className={cn(linkClass(location.pathname.startsWith("/settings")), "mb-1")}>
-          {location.pathname.startsWith("/settings") && (
-            <motion.span
-              layoutId="sidebar-active"
-              className="absolute inset-0 rounded-md bg-primary/10"
-              transition={{ type: "spring", stiffness: 500, damping: 40 }}
-            />
-          )}
-          <SettingsIcon className={cn("relative h-4 w-4 shrink-0", location.pathname.startsWith("/settings") && "text-primary")} />
-          {!collapsed && <span className="relative truncate">{t("nav.settings")}</span>}
-        </NavLink>
-
-        <div className={cn("flex items-center gap-2.5 rounded-md py-2", collapsed ? "justify-center px-1.5" : "px-2.5")}>
-          <UserCircle className="h-7 w-7 shrink-0 text-muted-foreground" />
-          {!collapsed && (
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium">{session?.email ?? session?.userId ?? "—"}</p>
-              <p className="truncate text-[11px] text-muted-foreground">{t("nav.signedIn")}</p>
-            </div>
-          )}
-          <button
-            onClick={logout}
-            aria-label={t("nav.signOut")}
-            title={collapsed ? t("nav.signOut") : undefined}
-            className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
-        </div>
+        <SidebarUserMenu collapsed={collapsed} onNavigate={onNavigate} />
 
         {!isMobile && (
         <button

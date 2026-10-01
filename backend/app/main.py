@@ -28,6 +28,7 @@ from core.products import router as core_products_router
 from core.products import tags_router as core_product_tags_router
 from core.products import uoms_router as core_uoms_router
 from core.table_preferences import router as core_table_preferences_router
+from core.user_avatars import router as core_user_avatars_router
 from core.users import router as core_users_router
 from modules.crm.api.router import router as crm_router
 from modules.finance.api.ledger_router import router as finance_ledger_router
@@ -66,6 +67,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(core_users_router)
+app.include_router(core_user_avatars_router)
 app.include_router(core_roles_router)
 app.include_router(core_partners_router)
 app.include_router(core_exchange_rates_router)

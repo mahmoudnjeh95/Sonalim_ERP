@@ -7,7 +7,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.result import Err, err_detail
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, require_session
 from modules.hr.api.service import DepartmentService, EmployeeService, LeaveService
 from modules.hr.api.contract_service import ContractService
 from modules.hr.api.payroll_service import AttendanceService, PayrollService
@@ -77,7 +77,7 @@ class PayslipUpdateBody(BaseModel):
     taxes: float | None = None
 
 # Refusals answered 404 / 409; every other refusal is a 422. Later phases add their codes here.
-_NOT_FOUND_CODES = {"NOT_FOUND"}
+_NOT_FOUND_CODES = {"NOT_FOUND", "NO_EMPLOYEE_FILE"}
 _CONFLICT_CODES = {
     "BADGE_TAKEN",
     "USER_ALREADY_LINKED",
@@ -253,6 +253,22 @@ def get_employee(employee_id: str, tenant: TenantContext = Depends(require_permi
         if record is None:
             fail(_EMPLOYEE_NOT_FOUND)
         return mask(record, EMPLOYEE_FIELDS, visible=can_view_sensitive(connection, tenant))
+
+
+@router.get("/me/profile")
+def get_my_profile(tenant: TenantContext = Depends(require_session)):
+    """The signed-in person's own employee file.
+
+    No hr.view_employees here on purpose: reading your own file is not the privilege that
+    reading a colleague's is. It is unmasked for the same reason get_by_user is -- the
+    national, INPS and AMO numbers on it are the caller's own, already on their payslip.
+    """
+    with get_connection() as connection:
+        record = EmployeeService(connection).get_by_user(tenant_id=tenant.tenant_id, user_id=tenant.user_id)
+        if record is None:
+            fail(Err("NO_EMPLOYEE_FILE", "no employee file is linked to this account",
+                     "aucun dossier employé n'est lié à ce compte"))
+        return record
 
 
 @router.post("/employees", status_code=status.HTTP_201_CREATED)
