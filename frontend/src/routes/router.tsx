@@ -20,6 +20,7 @@ import { IaAssistantTab } from "../features/production/IaAssistantTab";
 import { QualityPage } from "../features/qc/QualityPage";
 import { AnalyticsPage } from "../features/analytics/AnalyticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
+import { CheckpointMapEditor } from "../features/maintenance/map/CheckpointMapEditor";
 import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPage";
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
@@ -98,6 +99,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/quality", element: <QualityPage /> },
   { path: "/analytics", element: <AnalyticsPage /> },
   { path: "/maintenance", element: <MaintenancePage /> },
+  { path: "/maintenance/equipment/:equipmentId/map", element: <CheckpointMapEditor /> },
   { path: "/warehouse", element: <WarehousePage /> },
   { path: "/products", element: <ProductsPage /> },
   { path: "/inventories", element: <InventoriesPage /> },
