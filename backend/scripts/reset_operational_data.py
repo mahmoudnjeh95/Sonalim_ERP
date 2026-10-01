@@ -15,6 +15,9 @@ WIPED     work orders (OF) and regrind orders (OFR), the legacy Daily/Conditionn
 ZEROED    every stock quantity in warehouse.stock_items (the rows stay, so each
           product/location keeps its place -- only on-hand / reserved / in-production
           go to 0) and the OF-/OFR-/NC- numbering counters.
+RESTARTED every maintenance program keeps its settings but is marked as generated
+          through yesterday, so the next sweep raises jobs from today on instead of
+          re-creating every past occurrence whose job was just wiped.
 CUSTOMERS removed (they came from the sales/CRM demo data); suppliers stay. Pass
           --keep-customers to keep them.
 
@@ -159,6 +162,7 @@ EDITED_TABLES = [
     "core.partners",
     "core.partner_tag_links",
     "core.sequences",
+    "maintenance.programs",
     "warehouse.stock_items",
 ]
 
@@ -202,7 +206,6 @@ KEPT_TABLES = [
     "maintenance.equipment",
     "maintenance.equipment_views",
     "maintenance.checkpoints",
-    "maintenance.programs",
     "maintenance.program_checkpoints",
     "maintenance.teams",
     "maintenance.team_members",
@@ -327,7 +330,21 @@ def purge(connection, tenant_id: str, *, keep_customers: bool = False) -> dict[s
         (tenant_id, RESET_SEQUENCES),
     )
     report["core.sequences (reset)"] = cursor.rowcount
+
+    if "maintenance.programs" in live:
+        report["maintenance.programs (sweep restarted)"] = restart_program_sweeps(connection, tenant_id)
     return report
+
+
+def restart_program_sweeps(connection, tenant_id: str) -> int:
+    """Marks every preventive program as generated through yesterday. Its jobs are wiped
+    with the rest of the operational data; without this the next sweep would re-raise
+    every occurrence since the program was created, all of them overdue."""
+    cursor = connection.execute(
+        "UPDATE maintenance.programs SET last_generated_date = CURRENT_DATE - 1 WHERE tenant_id = %s",
+        (tenant_id,),
+    )
+    return cursor.rowcount
 
 
 def print_report(report: dict[str, int], verb: str) -> None:

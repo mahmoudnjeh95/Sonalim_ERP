@@ -158,14 +158,14 @@ class ProgramService:
     ) -> Result[dict]:
         row = self._connection.execute(
             """
-            SELECT equipment_id, name, interval_value, interval_unit, start_date, lead_days
+            SELECT equipment_id, name, interval_value, interval_unit, start_date, lead_days, active
             FROM maintenance.programs WHERE id = %s AND tenant_id = %s FOR UPDATE
             """,
             (program_id, tenant_id),
         ).fetchone()
         if row is None:
             return _not_found(program_id)
-        equipment_id, current_name, current_value, current_unit, current_start, current_lead = row
+        equipment_id, current_name, current_value, current_unit, current_start, current_lead, was_active = row
 
         new_name = current_name if name is None else name.strip()
         new_value = current_value if interval_value is None else interval_value
@@ -208,6 +208,11 @@ class ProgramService:
         if active is not None:
             sets.append("active = %s")
             params.append(active)
+        if active and not was_active:
+            # A program switched back on picks up from today: the occurrences that fell
+            # while it was paused are not raised as a batch of overdue jobs.
+            sets.append("last_generated_date = GREATEST(last_generated_date, %s)")
+            params.append(datetime.date.today() - datetime.timedelta(days=1))
         params.append(program_id)
         self._connection.execute(f"UPDATE maintenance.programs SET {', '.join(sets)} WHERE id = %s", params)
 
@@ -251,7 +256,7 @@ class ProgramService:
         rows = self._connection.execute(
             """
             SELECT id, equipment_id, name, description, interval_value, interval_unit, start_date, lead_days,
-                   stops_machine, default_team_id, created_at
+                   stops_machine, default_team_id, created_at, last_generated_date
             FROM maintenance.programs WHERE tenant_id = %s AND active
             """,
             (tenant_id,),
@@ -259,9 +264,14 @@ class ProgramService:
         jobs = JobService(self._connection)
         for (
             program_id, equipment_id, name, description, interval_value, interval_unit, start_date, lead_days,
-            stops_machine, default_team_id, created_at,
+            stops_machine, default_team_id, created_at, last_generated_date,
         ) in rows:
-            dates = due_occurrences(start_date, interval_value, interval_unit, lead_days, today, created_at.date())
+            # The program remembers how far it has generated, so jobs that disappear
+            # (the go-live reset wipes them) are never raised a second time.
+            not_before = created_at.date()
+            if last_generated_date is not None:
+                not_before = max(not_before, last_generated_date + datetime.timedelta(days=1))
+            dates = due_occurrences(start_date, interval_value, interval_unit, lead_days, today, not_before)
             if not dates:
                 continue
             # Resolve against the machine's *currently* active checkpoints, never the
@@ -274,6 +284,9 @@ class ProgramService:
             selected = set(self._program_checkpoint_ids(program_id))
             checkpoint_ids = [c["id"] for c in active if not selected or c["id"] in selected]
             tasks = [] if checkpoint_ids else [{"label": name, "action": "other"}]
+            # Advances only over occurrences that now have a job, and stops at the first
+            # refused one so the next sweep tries it again.
+            generated_through = None
             for occurrence_date in dates:
                 result = jobs.create_job(
                     tenant_id=tenant_id,
@@ -293,7 +306,10 @@ class ProgramService:
                 )
                 if isinstance(result, Ok):
                     created += 1
-                elif result.code != "ALREADY_EXISTS":
+                    generated_through = occurrence_date
+                elif result.code == "ALREADY_EXISTS":
+                    generated_through = occurrence_date
+                else:
                     # The checkpoint-archived case is already handled above (resolved against
                     # the machine's active checkpoints before calling create_job, with the
                     # ad-hoc fallback when none remain), so create_job should not refuse here
@@ -305,6 +321,12 @@ class ProgramService:
                         f"Maintenance sweep: program {program_id} occurrence {occurrence_date} refused: {result.code}",
                         flush=True,
                     )
+                    break
+            if generated_through is not None:
+                self._connection.execute(
+                    "UPDATE maintenance.programs SET last_generated_date = %s WHERE id = %s",
+                    (generated_through, program_id),
+                )
 
         overdue_notified = self._notify_overdue(tenant_id, today)
         return {"created": created, "overdue_notified": overdue_notified}
@@ -347,7 +369,7 @@ class ProgramService:
 
         programs = self._connection.execute(
             """
-            SELECT id, equipment_id, name, interval_value, interval_unit, start_date
+            SELECT id, equipment_id, name, interval_value, interval_unit, start_date, last_generated_date
             FROM maintenance.programs WHERE tenant_id = %s AND active
             """,
             (tenant_id,),
@@ -362,8 +384,13 @@ class ProgramService:
 
         projected: list[dict] = []
         window_start = max(date_from, today)
-        for program_id, equipment_id, name, interval_value, interval_unit, start_date in programs:
-            dates = occurrences(start_date, interval_value, interval_unit, window_start, date_to)
+        for program_id, equipment_id, name, interval_value, interval_unit, start_date, last_generated_date in programs:
+            # Dates the sweep has already passed are never raised again, so they are not
+            # projected either.
+            program_start = window_start
+            if last_generated_date is not None:
+                program_start = max(program_start, last_generated_date + datetime.timedelta(days=1))
+            dates = occurrences(start_date, interval_value, interval_unit, program_start, date_to)
             if not dates:
                 continue
             existing = self._connection.execute(

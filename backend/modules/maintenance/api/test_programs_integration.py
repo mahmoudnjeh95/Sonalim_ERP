@@ -463,3 +463,92 @@ def test_unknown_equipment_is_refused(db, ctx):
     bad = _create_program(programs, ctx, equipment_id=str(ULID()))
     assert isinstance(bad, Err)
     assert bad.code == "NOT_FOUND"
+
+
+def _wipe_program_jobs(db, program_id):
+    """What the go-live reset does to a program's jobs: they are gone, the program stays."""
+    job_ids = [row[0] for row in db.execute("SELECT id FROM maintenance.jobs WHERE program_id = %s", (program_id,))]
+    check_ids = [row[0] for row in db.execute("SELECT id FROM maintenance.job_checks WHERE job_id = ANY(%s)", (job_ids,))]
+    db.execute("DELETE FROM maintenance.check_entries WHERE check_id = ANY(%s)", (check_ids,))
+    db.execute("DELETE FROM maintenance.check_reviews WHERE check_id = ANY(%s)", (check_ids,))
+    db.execute("DELETE FROM maintenance.job_checks WHERE job_id = ANY(%s)", (job_ids,))
+    db.execute("DELETE FROM maintenance.job_events WHERE job_id = ANY(%s)", (job_ids,))
+    db.execute("DELETE FROM maintenance.jobs WHERE id = ANY(%s)", (job_ids,))
+
+
+def _last_generated(db, program_id):
+    return db.execute("SELECT last_generated_date FROM maintenance.programs WHERE id = %s", (program_id,)).fetchone()[0]
+
+
+def test_the_sweep_remembers_how_far_it_generated(db, ctx):
+    programs = ProgramService(db)
+    program_id = _create_program(
+        programs, ctx, interval_value=1, interval_unit="week", start_date=TODAY - datetime.timedelta(days=21)
+    ).value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=21))
+
+    assert programs.run_due(tenant_id=T, today=TODAY)["created"] == 4
+    assert _last_generated(db, program_id) == TODAY
+
+
+def test_jobs_wiped_after_the_sweep_are_not_generated_again(db, ctx):
+    """The go-live reset keeps programs and wipes jobs: the next sweep must not
+    re-create every past occurrence as a pile of overdue jobs."""
+    programs = ProgramService(db)
+    program_id = _create_program(
+        programs, ctx, interval_value=1, interval_unit="week", start_date=TODAY - datetime.timedelta(days=21)
+    ).value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=21))
+    programs.run_due(tenant_id=T, today=TODAY)
+
+    _wipe_program_jobs(db, program_id)
+
+    assert programs.run_due(tenant_id=T, today=TODAY)["created"] == 0
+    assert programs.run_due(tenant_id=T, today=TODAY + datetime.timedelta(days=7))["created"] == 1
+    assert [row[0] for row in _jobs_for_program(db, program_id)] == [TODAY + datetime.timedelta(days=7)]
+
+
+def test_a_reset_mark_of_yesterday_restarts_the_sweep_from_today(db, ctx):
+    """The reset script sets last_generated_date to yesterday: today's occurrence
+    (and anything inside the notice window) is generated again, nothing older."""
+    programs = ProgramService(db)
+    program_id = _create_program(
+        programs, ctx, interval_value=1, interval_unit="week", start_date=TODAY - datetime.timedelta(days=21)
+    ).value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=21))
+    programs.run_due(tenant_id=T, today=TODAY)
+    _wipe_program_jobs(db, program_id)
+    db.execute(
+        "UPDATE maintenance.programs SET last_generated_date = %s WHERE id = %s",
+        (TODAY - datetime.timedelta(days=1), program_id),
+    )
+
+    assert programs.run_due(tenant_id=T, today=TODAY)["created"] == 1
+    assert [row[0] for row in _jobs_for_program(db, program_id)] == [TODAY]
+
+
+def test_reactivating_a_paused_program_does_not_back_fill_the_pause(db, ctx):
+    programs = ProgramService(db)
+    program_id = _create_program(
+        programs, ctx, interval_value=1, interval_unit="week", start_date=TODAY - datetime.timedelta(days=21)
+    ).value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=21))
+    programs.update_program(tenant_id=T, actor_id=ctx.sup, program_id=program_id, active=False)
+
+    programs.update_program(tenant_id=T, actor_id=ctx.sup, program_id=program_id, active=True)
+
+    assert programs.run_due(tenant_id=T, today=TODAY)["created"] == 1
+    assert [row[0] for row in _jobs_for_program(db, program_id)] == [TODAY]
+
+
+def test_calendar_does_not_project_dates_the_sweep_already_passed(db, ctx):
+    programs = ProgramService(db)
+    program_id = _create_program(
+        programs, ctx, interval_value=1, interval_unit="day", start_date=TODAY, lead_days=2
+    ).value["id"]
+    programs.run_due(tenant_id=T, today=TODAY)
+    _wipe_program_jobs(db, program_id)
+
+    projected = programs.calendar(T, TODAY, TODAY + datetime.timedelta(days=4), TODAY)["projected"]
+    dates = sorted(p["date"] for p in projected if p["program_id"] == program_id)
+    assert dates == [(TODAY + datetime.timedelta(days=n)).isoformat() for n in (3, 4)]
