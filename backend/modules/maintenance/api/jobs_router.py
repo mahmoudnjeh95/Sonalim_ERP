@@ -38,6 +38,7 @@ class CreateJobRequest(BaseModel):
     checkpoint_ids: list[str] = []
     tasks: list[JobTaskRequest] = []
     team_id: str | None = None
+    # Left out, a team brings its own chef; sent as null, the job waits for one ("assign later").
     chef_user_id: str | None = None
 
 
@@ -149,6 +150,7 @@ def create_job(
             tasks=[task.model_dump() for task in body.tasks],
             team_id=body.team_id,
             chef_user_id=body.chef_user_id,
+            chef_from_team="chef_user_id" not in body.model_fields_set,
         )
         return _detail_after(connection, tenant, result)
 
@@ -184,7 +186,7 @@ def delegate_job(
 
 
 @router.post("/jobs/{job_id}/checks/{check_id}/entries", status_code=status.HTTP_201_CREATED)
-async def record_check_entry(
+def record_check_entry(
     job_id: str,
     check_id: str,
     performer_employee_id: str = Form(...),
@@ -198,8 +200,11 @@ async def record_check_entry(
     tenant: TenantContext = Depends(require_permission("maintenance.execute_jobs")),
 ) -> dict:
     """One point of the guided check. Timing is either the timer's `started_at` + `finished_at`
-    (ISO-8601 with offset) or a `manual_minutes` duration typed afterwards."""
-    photo_part = (await photo.read(), photo.content_type or "") if photo is not None else None
+    (ISO-8601 with offset) or a `manual_minutes` duration typed afterwards.
+
+    A plain `def`, run in the thread pool: the database work (and the job detail it
+    returns) must not hold the event loop while a photo comes in."""
+    photo_part = (photo.file.read(), photo.content_type or "") if photo is not None else None
     with get_connection() as connection:
         result = JobService(connection).record_entry(
             tenant_id=tenant.tenant_id,

@@ -1,5 +1,4 @@
 import { useEffect } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm } from "react-hook-form";
 import { Plus, Trash2 } from "lucide-react";
@@ -9,16 +8,12 @@ import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Label } from "../../../components/ui/label";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
-import { ProductSelect } from "../../../components/patterns/ProductSelect";
+import { Select } from "../../../components/ui/select";
+import { Skeleton } from "../../../components/ui/skeleton";
 import { useAuth } from "../../../lib/auth";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
-import { productRequiresIntegerQuantity, productUnit } from "../../../lib/units";
-import { useProductCatalog } from "../../products/catalog";
-import { listUoms } from "../../warehouse/api";
-import { useCreatePartRequest, type JobDetail } from "../api";
+import { useCreatePartRequest, usePartRequestProducts, type JobDetail } from "../api";
 import { apiErrorMessage } from "../jobs/jobFormat";
-
-const UOMS_QUERY_KEY = ["core", "uoms"] as const;
 
 const TEXTAREA_CLASS =
   "flex w-full rounded-md border border-border bg-background px-3 py-1.5 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm";
@@ -60,6 +55,9 @@ function initialForm(initial: PartRequestInitial | undefined): PartRequestForm {
  * (`initial`). A line repeater (product + quantity, always in the product's own
  * unit — the backend refuses any other `uom_id` with `UOM_MISMATCH` because
  * stock is issued in that unit with no conversion) plus a free-text note.
+ *
+ * Products come from the maintenance module's own list, spare parts first, so a
+ * technician without the core product rights still sees them.
  */
 export function PartRequestDialog({
   job,
@@ -76,8 +74,9 @@ export function PartRequestDialog({
   const { t } = useI18n();
   const token = session!.token;
 
-  const { catalog, products } = useProductCatalog();
-  const { data: uoms = [] } = useQuery({ queryKey: UOMS_QUERY_KEY, queryFn: () => listUoms(token) });
+  const { data: products = [], isLoading: productsLoading } = usePartRequestProducts(token);
+  const spareProducts = products.filter((product) => product.in_spare_parts);
+  const otherProducts = products.filter((product) => !product.in_spare_parts);
   const createRequest = useCreatePartRequest(token);
 
   const {
@@ -107,8 +106,9 @@ export function PartRequestDialog({
         jobId: job.id,
         input: {
           lines: values.lines.map((line) => {
-            const product = products.find((p) => p.id === line.product_id);
-            return { product_id: line.product_id, uom_id: product!.uom_id, quantity: Number(line.quantity) };
+            const product = products.find((p) => p.product_id === line.product_id);
+            // The product is always in the list the line was picked from; its unit is the only one accepted.
+            return { product_id: line.product_id, uom_id: product?.uom_id ?? "", quantity: Number(line.quantity.replace(",", ".")) };
           }),
           note: values.note.trim() || null,
         },
@@ -129,82 +129,111 @@ export function PartRequestDialog({
           <DialogTitle>{t("maintenance.parts.request.title")}</DialogTitle>
           <DialogDescription>{t("maintenance.parts.request.description").replace("{number}", job.number)}</DialogDescription>
         </DialogHeader>
-        <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
+        {/* The fields mount once the products are in, so a pre-filled line shows its product, not "—". */}
+        {productsLoading ? (
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
-              <Label>{t("maintenance.parts.request.field.lines")}</Label>
-              <Button type="button" size="sm" variant="outline" onClick={() => lines.append({ product_id: "", quantity: "" })}>
-                <Plus className="h-3.5 w-3.5" />
-                {t("maintenance.parts.request.field.lines.add")}
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-10 w-full" />
+            <Skeleton className="h-16 w-full" />
+          </div>
+        ) : (
+          <form className="space-y-4" onSubmit={handleSubmit(onSubmit)} noValidate>
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <Label>{t("maintenance.parts.request.field.lines")}</Label>
+                <Button type="button" size="sm" variant="outline" onClick={() => lines.append({ product_id: "", quantity: "" })}>
+                  <Plus className="h-3.5 w-3.5" />
+                  {t("maintenance.parts.request.field.lines.add")}
+                </Button>
+              </div>
+              {lines.fields.map((field, index) => {
+                const productId = watchedLines?.[index]?.product_id;
+                const product = products.find((p) => p.product_id === productId);
+                const unit = product?.uom_code ?? null;
+                const wholeNumberOnly = product?.uom_integer_only ?? false;
+                return (
+                  <div key={field.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
+                    <div className="col-span-2 sm:col-span-1">
+                      <Select
+                        aria-label={t("maintenance.parts.request.field.product")}
+                        aria-invalid={errors.lines?.[index]?.product_id ? true : undefined}
+                        {...register(`lines.${index}.product_id`)}
+                      >
+                        <option value="">—</option>
+                        {spareProducts.length > 0 && (
+                          <optgroup label={t("maintenance.parts.request.group.spare")}>
+                            {spareProducts.map((option) => (
+                              <option key={option.product_id} value={option.product_id}>
+                                {option.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                        {otherProducts.length > 0 && (
+                          <optgroup label={t("maintenance.parts.request.group.other")}>
+                            {otherProducts.map((option) => (
+                              <option key={option.product_id} value={option.product_id}>
+                                {option.name}
+                              </option>
+                            ))}
+                          </optgroup>
+                        )}
+                      </Select>
+                      {errors.lines?.[index]?.product_id && (
+                        <p className="mt-1 text-sm text-destructive">{errorText(errors.lines[index]?.product_id?.message)}</p>
+                      )}
+                    </div>
+                    <div>
+                      <Input
+                        type="number"
+                        min={0}
+                        step={wholeNumberOnly ? "1" : "any"}
+                        aria-label={t("maintenance.parts.request.field.quantity")}
+                        placeholder={unit ?? t("maintenance.parts.request.field.quantity")}
+                        error={errorText(errors.lines?.[index]?.quantity?.message)}
+                        {...register(`lines.${index}.quantity`)}
+                      />
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      className="h-10 w-10 px-0 sm:h-9 sm:w-9"
+                      aria-label={t("common.delete")}
+                      disabled={lines.fields.length <= 1}
+                      onClick={() => lines.remove(index)}
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </Button>
+                  </div>
+                );
+              })}
+              {errors.lines?.root?.message && <p className="text-sm text-destructive">{errorText(errors.lines.root.message)}</p>}
+              {errors.lines?.message && <p className="text-sm text-destructive">{errorText(errors.lines.message)}</p>}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="part-request-note">
+                {t("maintenance.parts.request.field.note")}{" "}
+                <span className="font-normal text-muted-foreground">({t("common.optional")})</span>
+              </Label>
+              <textarea id="part-request-note" rows={2} className={TEXTAREA_CLASS} {...register("note")} />
+            </div>
+
+            {createRequest.isError && (
+              <p className="text-sm text-destructive" role="alert">
+                {apiErrorMessage(createRequest.error, t("maintenance.parts.request.error"))}
+              </p>
+            )}
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+                {t("common.cancel")}
+              </Button>
+              <Button type="submit" disabled={createRequest.isPending}>
+                {createRequest.isPending ? t("maintenance.parts.request.sending") : t("maintenance.parts.request.submit")}
               </Button>
             </div>
-            {lines.fields.map((field, index) => {
-              const productId = watchedLines?.[index]?.product_id;
-              const unit = productUnit(productId, products, uoms);
-              const wholeNumberOnly = productRequiresIntegerQuantity(productId, products, uoms);
-              return (
-                <div key={field.id} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2 sm:grid-cols-[minmax(0,1fr)_140px_auto]">
-                  <div className="col-span-2 sm:col-span-1">
-                    <ProductSelect
-                      products={catalog}
-                      aria-label={t("maintenance.parts.request.field.product")}
-                      aria-invalid={errors.lines?.[index]?.product_id ? true : undefined}
-                      {...register(`lines.${index}.product_id`)}
-                    />
-                    {errors.lines?.[index]?.product_id && (
-                      <p className="mt-1 text-sm text-destructive">{errorText(errors.lines[index]?.product_id?.message)}</p>
-                    )}
-                  </div>
-                  <div>
-                    <Input
-                      type="number"
-                      min={0}
-                      step={wholeNumberOnly ? "1" : "any"}
-                      aria-label={t("maintenance.parts.request.field.quantity")}
-                      placeholder={unit ?? t("maintenance.parts.request.field.quantity")}
-                      error={errorText(errors.lines?.[index]?.quantity?.message)}
-                      {...register(`lines.${index}.quantity`)}
-                    />
-                  </div>
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    className="h-10 w-10 px-0 sm:h-9 sm:w-9"
-                    aria-label={t("common.delete")}
-                    disabled={lines.fields.length <= 1}
-                    onClick={() => lines.remove(index)}
-                  >
-                    <Trash2 className="h-4 w-4" />
-                  </Button>
-                </div>
-              );
-            })}
-            {errors.lines?.root?.message && <p className="text-sm text-destructive">{errorText(errors.lines.root.message)}</p>}
-            {errors.lines?.message && <p className="text-sm text-destructive">{errorText(errors.lines.message)}</p>}
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="part-request-note">
-              {t("maintenance.parts.request.field.note")}{" "}
-              <span className="font-normal text-muted-foreground">({t("common.optional")})</span>
-            </Label>
-            <textarea id="part-request-note" rows={2} className={TEXTAREA_CLASS} {...register("note")} />
-          </div>
-
-          {createRequest.isError && (
-            <p className="text-sm text-destructive" role="alert">
-              {apiErrorMessage(createRequest.error, t("maintenance.parts.request.error"))}
-            </p>
-          )}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
-              {t("common.cancel")}
-            </Button>
-            <Button type="submit" disabled={createRequest.isPending}>
-              {createRequest.isPending ? t("maintenance.parts.request.sending") : t("maintenance.parts.request.submit")}
-            </Button>
-          </div>
-        </form>
+          </form>
+        )}
       </DialogContent>
     </Dialog>
   );

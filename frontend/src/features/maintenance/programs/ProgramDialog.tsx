@@ -150,8 +150,10 @@ export function ProgramDialog({
       checkpoint_ids: values.checkpoint_ids,
     };
     if (isEditing && program) {
+      // A program stays on its machine (its jobs and points belong to it): the machine is not sent.
+      const { equipment_id: _machine, ...changes } = input;
       update.mutate(
-        { programId: program.id, input },
+        { programId: program.id, input: changes },
         {
           onSuccess: () => {
             toast.success(t("maintenance.programs.dialog.saved"));
@@ -181,21 +183,36 @@ export function ProgramDialog({
         <form className="space-y-5" onSubmit={handleSubmit(onSubmit)} noValidate>
           <div className="space-y-1.5">
             <Label htmlFor="program-equipment">{t("maintenance.programs.field.machine")}</Label>
-            <Select
-              id="program-equipment"
-              aria-invalid={errors.equipment_id ? true : undefined}
-              {...register("equipment_id", {
-                // The points belong to a machine: changing it drops the ones picked on the previous one.
-                onChange: () => setValue("checkpoint_ids", []),
-              })}
-            >
-              <option value="">{t("maintenance.programs.field.machine.choose")}</option>
-              {machines.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.code} — {item.name}
-                </option>
-              ))}
-            </Select>
+            {isEditing && program ? (
+              <>
+                <Input
+                  id="program-equipment"
+                  readOnly
+                  disabled
+                  value={(() => {
+                    const machine = equipment.find((item) => item.id === program.equipment_id);
+                    return machine ? `${machine.code} — ${machine.name}` : program.equipment_name;
+                  })()}
+                />
+                <p className="text-xs text-muted-foreground">{t("maintenance.programs.field.machine.locked")}</p>
+              </>
+            ) : (
+              <Select
+                id="program-equipment"
+                aria-invalid={errors.equipment_id ? true : undefined}
+                {...register("equipment_id", {
+                  // The points belong to a machine: changing it drops the ones picked on the previous one.
+                  onChange: () => setValue("checkpoint_ids", []),
+                })}
+              >
+                <option value="">{t("maintenance.programs.field.machine.choose")}</option>
+                {machines.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {item.code} — {item.name}
+                  </option>
+                ))}
+              </Select>
+            )}
             {errors.equipment_id && <p className="text-sm text-destructive">{errorText(errors.equipment_id.message)}</p>}
           </div>
 

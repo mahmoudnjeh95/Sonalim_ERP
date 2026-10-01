@@ -11,6 +11,7 @@ review: history is append-only.
 from __future__ import annotations
 
 import datetime
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -115,13 +116,15 @@ class JobService:
         chef_user_id: str | None = None,
         program_id: str | None = None,
         occurrence_date: datetime.date | None = None,
+        chef_from_team: bool = True,
     ) -> Result[str]:
         """Creates a job and returns its id.
 
         Its checks are a snapshot: the given checkpoints (in the map's order: view,
         then point) followed by the ad-hoc `tasks` (`{label, action, instructions?}`).
         It starts `assigned` when a chef is known -- given, or the given team's -- and
-        `planned` otherwise. A program occurrence (`program_id` + `occurrence_date`)
+        `planned` otherwise. `chef_from_team=False` keeps the job without a chef even with a
+        team (the user chose "assign later"); a program's sweep leaves it True. A program occurrence (`program_id` + `occurrence_date`)
         is only ever materialised once: a second call returns `ALREADY_EXISTS`.
         """
         title = (title or "").strip()
@@ -139,11 +142,17 @@ class JobService:
             )
 
         equipment = self._connection.execute(
-            "SELECT name FROM maintenance.equipment WHERE id = %s AND tenant_id = %s", (equipment_id, tenant_id)
+            "SELECT name, archived_at FROM maintenance.equipment WHERE id = %s AND tenant_id = %s", (equipment_id, tenant_id)
         ).fetchone()
         if equipment is None:
             return Err("NOT_FOUND", f"equipment {equipment_id} not found", f"équipement {equipment_id} introuvable")
-        equipment_name = equipment[0]
+        equipment_name, archived_at = equipment
+        if archived_at is not None:
+            return Err(
+                "EQUIPMENT_ARCHIVED",
+                f"equipment {equipment_name} is archived: no job can be raised on it",
+                f"l'équipement {equipment_name} est archivé : aucune intervention ne peut y être créée",
+            )
 
         if program_id is not None and self._occurrence_exists(program_id, occurrence_date):
             return self._already_exists(occurrence_date)
@@ -158,7 +167,7 @@ class JobService:
                 "une intervention doit comporter au moins un point de contrôle ou une tâche",
             )
 
-        resolved = self._resolve_assignee(tenant_id, team_id, chef_user_id)
+        resolved = self._resolve_assignee(tenant_id, team_id, chef_user_id, chef_from_team=chef_from_team)
         if isinstance(resolved, Err):
             return resolved
         assignee = resolved.value
@@ -408,6 +417,9 @@ class JobService:
             return allowed
         if outcome not in OUTCOMES:
             return Err("INVALID_OUTCOME", f"unknown outcome: {outcome}", f"résultat inconnu : {outcome}")
+        if measured_value is not None and not math.isfinite(measured_value):
+            # NaN would be stored and then break every read of the job (JSON has no NaN).
+            return Err("INVALID_MEASURE", "the measure must be a number", "la mesure doit être un nombre")
         performer = active_employee_names(self._connection, tenant_id, [performer_employee_id])
         if performer_employee_id not in performer:
             return self._unknown_employee(performer_employee_id)
@@ -468,14 +480,23 @@ class JobService:
                 (new_status, now, job.id),
             )
             stopped = False
+            status_before = None
             if job.stops_machine:
+                status_before = self._equipment_status(tenant_id, job.equipment_id)
                 moved = self._move_equipment(
                     tenant_id, actor_id, job.equipment_id, to_status="maintenance", only_from=("operational", "down")
                 )
                 if isinstance(moved, Err):
                     return moved
                 stopped = moved.value
-            self._event(tenant_id, job.id, actor_id, "started", {"equipment_stopped": stopped})
+            # The status the job took the machine from: a cancel puts a broken machine back down.
+            self._event(
+                tenant_id,
+                job.id,
+                actor_id,
+                "started",
+                {"equipment_stopped": stopped, "equipment_status_before": status_before if stopped else None},
+            )
 
         payload = {
             "check_id": check_id,
@@ -631,7 +652,16 @@ class JobService:
         released = self._release_equipment(tenant_id, actor_id, job)
         if isinstance(released, Err):
             return released
-        payload = {"from_status": job.status, "reason": reason, "equipment_restarted": released.value}
+        restarted = released.value
+        equipment_status = "operational" if restarted else None
+        if restarted and self._status_before_stop(job.id) == "down":
+            # Cancelled, the job repaired nothing: the machine it took down is down again
+            # (through operational -- maintenance cannot go straight to down).
+            downed = self._move_equipment(tenant_id, actor_id, job.equipment_id, to_status="down", only_from=("operational",))
+            if isinstance(downed, Err):
+                return downed
+            restarted, equipment_status = False, "down"
+        payload = {"from_status": job.status, "reason": reason, "equipment_restarted": restarted, "equipment_status": equipment_status}
         self._event(tenant_id, job.id, actor_id, "cancelled", payload)
         self._audit(tenant_id, actor_id, job.id, "job.cancelled", payload)
         self._notify(tenant_id, job, [job.chef_user_id], notifications.JOB_CANCELLED, body=reason)
@@ -731,8 +761,8 @@ class JobService:
                 f"point(s) de contrôle absent(s) de cette machine : {', '.join(foreign)}",
             )
 
-        # The map's order: view, then point. sorted() is stable, so points that tie keep the order they were asked in.
-        ordered = sorted(found.value, key=lambda c: (view_rank[c["view_id"]], c["sort_order"]))
+        # The map's order: view, then point; points that tie (made before they were numbered) by id, i.e. creation order.
+        ordered = sorted(found.value, key=lambda c: (view_rank[c["view_id"]], c["sort_order"], c["id"]))
         checks = [
             {
                 "checkpoint_id": c["id"],
@@ -770,8 +800,11 @@ class JobService:
             )
         return Ok(checks)
 
-    def _resolve_assignee(self, tenant_id: str, team_id: str | None, chef_user_id: str | None) -> Result[_Assignee]:
-        """The team and chef a job is given to. A team given without a chef brings its own."""
+    def _resolve_assignee(
+        self, tenant_id: str, team_id: str | None, chef_user_id: str | None, *, chef_from_team: bool = True
+    ) -> Result[_Assignee]:
+        """The team and chef a job is given to. A team given without a chef brings its own,
+        unless `chef_from_team` is False (the chef was explicitly left for later)."""
         team_id, chef_user_id = team_id or None, chef_user_id or None
         team_name = None
         if team_id is not None:
@@ -781,7 +814,7 @@ class JobService:
             if team is None:
                 return Err("UNKNOWN_TEAM", f"team {team_id} not found", f"équipe {team_id} introuvable")
             team_name = team[0]
-            if chef_user_id is None:
+            if chef_user_id is None and chef_from_team:
                 chef_user_id = team[1]
 
         chef_name = None
@@ -834,6 +867,24 @@ class JobService:
             "SELECT id, label FROM maintenance.job_checks WHERE job_id = %s", (job_id,)
         ).fetchall()
         return {row[0]: row[1] for row in rows}
+
+    def _equipment_status(self, tenant_id: str, equipment_id: str) -> str | None:
+        row = self._connection.execute(
+            "SELECT status FROM maintenance.equipment WHERE id = %s AND tenant_id = %s", (equipment_id, tenant_id)
+        ).fetchone()
+        return row[0] if row is not None else None
+
+    def _status_before_stop(self, job_id: str) -> str | None:
+        """The machine's status when the job stopped it (from its "started" event); None
+        for a job started before this was recorded, which keeps the plain release."""
+        row = self._connection.execute(
+            """
+            SELECT payload->>'equipment_status_before' FROM maintenance.job_events
+            WHERE job_id = %s AND kind = 'started' ORDER BY at DESC, id DESC LIMIT 1
+            """,
+            (job_id,),
+        ).fetchone()
+        return row[0] if row is not None else None
 
     def _release_equipment(self, tenant_id: str, actor_id: str, job: _Job) -> Result[bool]:
         """Puts back to `operational` the machine a job had stopped, now that this job has

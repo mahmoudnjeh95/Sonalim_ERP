@@ -183,10 +183,18 @@ class ProgramService:
                 return Err("UNKNOWN_TEAM", f"team {default_team_id} not found", f"équipe {default_team_id} introuvable")
 
         if checkpoint_ids is not None:
-            checked = self._checkpoints_on_machine(tenant_id, equipment_id, checkpoint_ids)
+            # A point the program already had passes even if archived since: the edit form
+            # sends it back, and refusing it would make the program unsavable. It stays
+            # inert -- the sweep only snapshots active points. Kept rather than dropped, so a
+            # program whose every point was archived does not turn into "every point".
+            already = set(self._program_checkpoint_ids(program_id))
+            distinct_ids = list(dict.fromkeys(checkpoint_ids))
+            checked = self._checkpoints_on_machine(
+                tenant_id, equipment_id, [checkpoint_id for checkpoint_id in distinct_ids if checkpoint_id not in already]
+            )
             if isinstance(checked, Err):
                 return checked
-            checkpoint_ids = checked.value
+            checkpoint_ids = distinct_ids
 
         sets = ["name = %s", "interval_value = %s", "interval_unit = %s", "lead_days = %s"]
         params: list[object] = [new_name, new_value, new_unit, new_lead]
@@ -241,9 +249,17 @@ class ProgramService:
 
     # ---- sweep ---------------------------------------------------------------
 
-    def tenants_with_active_programs(self) -> list[str]:
-        rows = self._connection.execute("SELECT DISTINCT tenant_id FROM maintenance.programs WHERE active").fetchall()
-        return [row[0] for row in rows]
+    def tenants_to_sweep(self) -> list[str]:
+        """Every tenant the sweep must visit: one with an active program (jobs to raise)
+        or with an open job (an overdue notice to send -- corrective jobs included)."""
+        rows = self._connection.execute(
+            """
+            SELECT tenant_id FROM maintenance.programs WHERE active
+            UNION
+            SELECT tenant_id FROM maintenance.jobs WHERE status NOT IN ('closed', 'cancelled')
+            """
+        ).fetchall()
+        return sorted(row[0] for row in rows)
 
     def run_due(self, *, tenant_id: str, today: datetime.date) -> dict:
         """Materialises every occurrence whose notice window has opened, then raises the
@@ -255,9 +271,12 @@ class ProgramService:
         created = 0
         rows = self._connection.execute(
             """
-            SELECT id, equipment_id, name, description, interval_value, interval_unit, start_date, lead_days,
-                   stops_machine, default_team_id, created_at, last_generated_date
-            FROM maintenance.programs WHERE tenant_id = %s AND active
+            SELECT p.id, p.equipment_id, p.name, p.description, p.interval_value, p.interval_unit, p.start_date,
+                   p.lead_days, p.stops_machine, p.default_team_id, p.created_at, p.last_generated_date
+            FROM maintenance.programs p
+            JOIN maintenance.equipment e ON e.id = p.equipment_id
+            -- an archived (retired) machine gets no more jobs, even from a program left active
+            WHERE p.tenant_id = %s AND p.active AND e.archived_at IS NULL
             """,
             (tenant_id,),
         ).fetchall()

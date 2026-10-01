@@ -800,3 +800,65 @@ def test_job_detail_has_the_contract_shape(db, ctx):
         "finished_at", "duration_seconds", "duration_source", "outcome", "note", "measured_value", "has_photo",
     }
     assert job_detail(db, T, "missing", TODAY) is None
+
+
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_a_measure_that_is_not_a_number_is_refused(db, ctx, value):
+    """NaN would be stored, then break every later read of the job (JSON has no NaN)."""
+    jobs = JobService(db)
+    job_id = _create(jobs, ctx, stops_machine=False).value
+    check_id = job_detail(db, T, job_id, TODAY)["checks"][0]["id"]
+
+    refused = _entry(jobs, ctx, job_id, check_id, measured_value=value)
+
+    assert isinstance(refused, Err)
+    assert refused.code == "INVALID_MEASURE"
+    assert job_detail(db, T, job_id, TODAY)["checks"][0]["entries"] == []
+
+
+def test_cancelling_a_stopping_job_puts_a_broken_machine_back_down(db, ctx):
+    """The job did not repair it: a machine that was down when the job stopped it is
+    down again once the job is cancelled, not shown as running on the production board."""
+    EquipmentService(db).transition_status(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, new_status="down")
+    jobs = JobService(db)
+    job_id = _create(jobs, ctx, stops_machine=True).value
+    check_id = job_detail(db, T, job_id, TODAY)["checks"][0]["id"]
+    assert isinstance(_entry(jobs, ctx, job_id, check_id), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+
+    assert isinstance(jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=job_id, reason="Mauvaise équipe"), Ok)
+
+    assert _equipment_status(db, ctx.machine) == "down"
+    cancelled = job_detail(db, T, job_id, TODAY)["timeline"][-1]
+    assert (cancelled["payload"]["equipment_restarted"], cancelled["payload"]["equipment_status"]) == (False, "down")
+
+
+def test_a_team_without_a_chef_named_brings_its_own(db, ctx):
+    team = TeamService(db).create_team(tenant_id=T, actor_id=ctx.sup, name="Équipe B", chef_user_id=ctx.chef).value
+    jobs = JobService(db)
+
+    job_id = _create(jobs, ctx, team_id=team["id"], chef_user_id=None).value
+
+    detail = job_detail(db, T, job_id, TODAY)
+    assert (detail["status"], detail["chef_user_id"]) == ("assigned", ctx.chef)
+
+
+def test_a_team_with_the_chef_left_for_later_stays_to_assign(db, ctx):
+    """"Assigner plus tard" picked in the dialog: the team's chef is not filled in behind the user's back."""
+    team = TeamService(db).create_team(tenant_id=T, actor_id=ctx.sup, name="Équipe C", chef_user_id=ctx.chef).value
+    jobs = JobService(db)
+
+    job_id = _create(jobs, ctx, team_id=team["id"], chef_user_id=None, chef_from_team=False).value
+
+    detail = job_detail(db, T, job_id, TODAY)
+    assert (detail["status"], detail["chef_user_id"], detail["team_id"]) == ("planned", None, team["id"])
+    assert _notifications(db, ctx.chef) == []
+
+
+def test_no_job_is_raised_on_an_archived_machine(db, ctx):
+    EquipmentService(db).archive_equipment(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine)
+
+    refused = _create(JobService(db), ctx)
+
+    assert isinstance(refused, Err)
+    assert refused.code == "EQUIPMENT_ARCHIVED"

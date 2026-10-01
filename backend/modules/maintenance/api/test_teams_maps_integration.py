@@ -364,3 +364,50 @@ def test_checkpoints_by_ids_refuses_missing_or_archived(db, actor):
 
     archived = service.checkpoints_by_ids(tenant_id=TENANT, ids=[checkpoint["id"]])
     assert isinstance(archived, Err) and archived.code == "UNKNOWN_CHECKPOINT"
+
+
+def test_view_whose_point_a_program_picks_cannot_be_deleted(db, actor):
+    """program_checkpoints references the points with no cascade: deleting must answer
+    VIEW_IN_USE, not fail on the foreign key."""
+    from modules.maintenance.api.program_service import ProgramService
+
+    equipment_id = _make_equipment(db)
+    service = MapService(db)
+    view = service.create_view(
+        tenant_id=TENANT, actor_id=actor, equipment_id=equipment_id, label="Front", image=JPEG_BYTES, mime=JPEG_MIME
+    ).value
+    checkpoint = service.add_checkpoint(
+        tenant_id=TENANT, actor_id=actor, view_id=view["id"], x_pct=10, y_pct=20, label="Bolt", action="tighten"
+    ).value
+    created = ProgramService(db).create_program(
+        tenant_id=TENANT, actor_id=actor, equipment_id=equipment_id, name="Serrage", description=None,
+        interval_value=1, interval_unit="month", start_date=datetime.date.today(), lead_days=0,
+        estimated_minutes=None, default_team_id=None, stops_machine=False, checkpoint_ids=[checkpoint["id"]],
+    )
+    assert isinstance(created, Ok), created
+
+    result = service.delete_view(tenant_id=TENANT, actor_id=actor, view_id=view["id"])
+
+    assert isinstance(result, Err) and result.code == "VIEW_IN_USE"
+    assert len(service.list_views(tenant_id=TENANT, equipment_id=equipment_id)) == 1
+
+
+def test_points_keep_their_order_after_one_is_moved(db, actor):
+    """Pins are numbered by their order: dragging point 1 must not renumber the map."""
+    equipment_id = _make_equipment(db)
+    service = MapService(db)
+    view = service.create_view(
+        tenant_id=TENANT, actor_id=actor, equipment_id=equipment_id, label="Front", image=JPEG_BYTES, mime=JPEG_MIME
+    ).value
+    ids = [
+        service.add_checkpoint(
+            tenant_id=TENANT, actor_id=actor, view_id=view["id"], x_pct=10 * n, y_pct=20, label=f"P{n}", action="inspect"
+        ).value["id"]
+        for n in (1, 2, 3)
+    ]
+
+    service.update_checkpoint(tenant_id=TENANT, actor_id=actor, checkpoint_id=ids[0], x_pct=55, y_pct=55)
+
+    listed = service.list_views(tenant_id=TENANT, equipment_id=equipment_id)[0]["checkpoints"]
+    assert [checkpoint["label"] for checkpoint in listed] == ["P1", "P2", "P3"]
+    assert [checkpoint["sort_order"] for checkpoint in listed] == [1, 2, 3]

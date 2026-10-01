@@ -50,3 +50,10 @@ def spare_parts_catalog(tenant: TenantContext = Depends(require_permission("main
     """The products the map editor offers for a checkpoint, with their stock in the spare-parts location."""
     with get_connection() as connection:
         return SparePartsService(connection).catalog(tenant.tenant_id)
+
+
+@router.get("/part-products")
+def part_request_products(tenant: TenantContext = Depends(require_permission("maintenance.view_jobs"))) -> list[dict]:
+    """The products a parts request may name, spare parts first -- readable without core.view_products."""
+    with get_connection() as connection:
+        return SparePartsService(connection).request_products(tenant.tenant_id)

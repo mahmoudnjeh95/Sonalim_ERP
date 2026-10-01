@@ -112,7 +112,7 @@ def run_maintenance_programs() -> None:
                 service = ProgramService(db_connection)
                 created = 0
                 overdue = 0
-                for tenant_id in service.tenants_with_active_programs():
+                for tenant_id in service.tenants_to_sweep():
                     result = service.run_due(tenant_id=tenant_id, today=datetime.date.today())
                     created += result["created"]
                     overdue += result["overdue_notified"]

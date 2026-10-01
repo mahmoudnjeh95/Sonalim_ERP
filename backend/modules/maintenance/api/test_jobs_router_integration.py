@@ -103,7 +103,7 @@ def api(db, monkeypatch):
 
     return SimpleNamespace(
         client=TestClient(app), acting_as=acting_as, sup=sup, chef=chef, other=other, nobody=nobody,
-        machine=machine, point=point["id"], employee=employee.value["id"],
+        machine=machine, point=point["id"], employee=employee.value["id"], db=db,
     )
 
 
@@ -263,3 +263,22 @@ def test_refusals_carry_their_code_and_status(api):
     assert {code: (r.status_code, r.json()["detail"]["code"]) for code, r in unprocessable.items()} == {
         code: (422, code) for code in unprocessable
     }
+
+
+def test_a_chef_left_out_comes_from_the_team_but_null_waits_for_one(api):
+    """The dialog's "Assigner plus tard" sends chef_user_id: null and must be respected;
+    leaving the field out lets the team bring its own chef."""
+    from modules.maintenance.api.team_service import TeamService
+
+    team = TeamService(api.db).create_team(tenant_id=TENANT, actor_id=api.sup, name="Équipe A", chef_user_id=api.chef).value
+    api.acting_as(api.sup)
+    body = {
+        "equipment_id": api.machine, "title": "Fuite", "priority": "normal", "due_date": TODAY.isoformat(),
+        "stops_machine": False, "tasks": [{"label": "Réparer", "action": "other"}], "team_id": team["id"],
+    }
+
+    left_out = api.client.post("/maintenance/jobs", json=body).json()
+    later = api.client.post("/maintenance/jobs", json={**body, "chef_user_id": None}).json()
+
+    assert (left_out["status"], left_out["chef_user_id"]) == ("assigned", api.chef)
+    assert (later["status"], later["chef_user_id"]) == ("planned", None)

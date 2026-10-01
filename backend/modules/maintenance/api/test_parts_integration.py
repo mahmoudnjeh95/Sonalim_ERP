@@ -346,7 +346,11 @@ def test_two_lines_of_one_product_cannot_take_more_than_the_location_holds(db, c
         ),
         Ok,
     )
-    assert [move[2] for move in _maintenance_moves(db)] == [3.0, 2.0]
+    # Both moves share the transaction's created_at and their ULIDs can fall in one
+    # millisecond, so their order is not fixed: check the amounts, and each line's split.
+    assert sorted(move[2] for move in _maintenance_moves(db)) == [2.0, 3.0]
+    decided_first, decided_second = _one(db, request_id)["lines"]
+    assert (decided_first["issued_quantity"], decided_second["issued_quantity"]) == (3, 2)
     assert _available(db, ctx.bearing, ctx.store) == 0
     [envelope] = _purchase_events(db)
     assert envelope["payload"]["lines"] == [
@@ -678,3 +682,20 @@ def test_every_decision_is_audited(db, ctx):
             (other, "part_request.rejected", ctx.sup),
         ]
     )
+
+
+def test_a_request_on_a_cancelled_job_can_no_longer_be_approved(db, ctx):
+    """Stock must not leave the warehouse for a job that is over; the request can still be refused."""
+    _stock(db, ctx.sup, ctx.bearing, ctx.store, 4)
+    request_id = _request(db, ctx, [{"product_id": ctx.bearing, "uom_id": ctx.piece, "quantity": 2}]).value
+    cancelled = JobService(db).cancel(tenant_id=T, actor_id=ctx.sup, job_id=ctx.job, reason="doublon")
+    assert isinstance(cancelled, Ok), cancelled
+    line_id = _one(db, request_id)["lines"][0]["id"]
+
+    refused = _approve(db, ctx, request_id, [{"line_id": line_id, "location_id": ctx.store, "issue_quantity": 2}])
+
+    assert isinstance(refused, Err)
+    assert refused.code == "INVALID_TRANSITION"
+    assert StockService(db).get_available_quantity(T, ctx.bearing, ctx.store) == 4
+    rejected = PartsService(db).reject(tenant_id=T, actor_id=ctx.sup, request_id=request_id, note="intervention annulée")
+    assert isinstance(rejected, Ok), rejected

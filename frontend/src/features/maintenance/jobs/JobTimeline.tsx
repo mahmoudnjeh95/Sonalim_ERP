@@ -153,8 +153,16 @@ function PayloadSummary({ event }: { event: JobEvent }): ReactNode {
     }
     case "closed":
       return payload.equipment_restarted === true ? t("maintenance.jobs.timeline.summary.machineRestarted") : null;
-    case "cancelled":
-      return text(payload.reason);
+    case "cancelled": {
+      const reason = text(payload.reason);
+      const machine =
+        payload.equipment_status === "down"
+          ? t("maintenance.jobs.timeline.summary.machineBackDown")
+          : payload.equipment_restarted === true
+            ? t("maintenance.jobs.timeline.summary.machineRestarted")
+            : null;
+      return [reason, machine].filter(Boolean).join(" · ") || null;
+    }
     default:
       return null;
   }

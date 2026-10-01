@@ -332,6 +332,17 @@ export interface SparePartProduct {
   locations: SparePartLocation[];
 }
 
+/** A product a parts request may name (GET /maintenance/part-products), spare parts first. */
+export interface PartRequestProduct {
+  product_id: string;
+  name: string;
+  sku: string;
+  uom_id: string;
+  uom_code: string;
+  uom_integer_only: boolean;
+  in_spare_parts: boolean;
+}
+
 export interface SparePartsCatalog {
   location_id: string | null;
   location_name: string | null;
@@ -366,6 +377,7 @@ export const maintenancePartRequestAvailabilityKey = (id: string) => ["maintenan
 export const MAINTENANCE_SETTINGS_QUERY_KEY = ["maintenance", "settings"] as const;
 export const MAINTENANCE_LOCATION_OPTIONS_QUERY_KEY = ["maintenance", "settings", "locations"] as const;
 export const MAINTENANCE_SPARE_PARTS_QUERY_KEY = ["maintenance", "spare-parts"] as const;
+export const MAINTENANCE_PART_PRODUCTS_QUERY_KEY = ["maintenance", "part-products"] as const;
 
 /** Every maintenance query key shares this prefix, for a broad invalidation after a mutation that touches more than one list. */
 const MAINTENANCE_PREFIX = ["maintenance"] as const;
@@ -730,6 +742,10 @@ export function listLocationOptions(token: string) {
   return apiFetch<LocationOption[]>("/maintenance/settings/locations", { token });
 }
 
+export function listPartRequestProducts(token: string) {
+  return apiFetch<PartRequestProduct[]>("/maintenance/part-products", { token });
+}
+
 export function getSparePartsCatalog(token: string) {
   return apiFetch<SparePartsCatalog>("/maintenance/spare-parts", { token });
 }
@@ -938,6 +954,11 @@ export function useLocationOptions(token: Token, enabled = true) {
 /** The products the map editor offers for a checkpoint (maintenance.manage_checkpoints). */
 export function useSparePartsCatalog(token: Token) {
   return useQuery({ queryKey: MAINTENANCE_SPARE_PARTS_QUERY_KEY, queryFn: () => getSparePartsCatalog(token), enabled: !!token });
+}
+
+/** The products a parts request may name (maintenance.view_jobs): the request form uses this, not the core product list a technician cannot read. */
+export function usePartRequestProducts(token: Token, enabled = true) {
+  return useQuery({ queryKey: MAINTENANCE_PART_PRODUCTS_QUERY_KEY, queryFn: () => listPartRequestProducts(token), enabled: !!token && enabled });
 }
 
 export function useRejectPartRequest(token: Token) {

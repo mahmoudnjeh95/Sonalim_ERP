@@ -12,11 +12,12 @@ import { useAuth } from "../../lib/auth";
  * `fetchBlob` is the plain async function to call (e.g. `fetchViewImageBlob`,
  * `fetchCheckEntryPhotoBlob`), `id` is the resource id (fetch skipped while
  * null/undefined), and `version` is an opaque cache-buster (e.g. a view's
- * `updated_at`) appended to the query key so a replaced photo is refetched
- * rather than served stale from the query cache.
+ * `updated_at`): it is part of the query key and is handed to `fetchBlob` too,
+ * which puts it in the URL -- the server lets the browser cache a photo for a
+ * day, so without it a replaced photo would still come from the browser's cache.
  */
 export function useAuthedImage(
-  fetchBlob: (token: string, id: string) => Promise<Blob>,
+  fetchBlob: (token: string, id: string, version?: string) => Promise<Blob>,
   id: string | null | undefined,
   version?: string | number | null,
 ) {
@@ -27,7 +28,7 @@ export function useAuthedImage(
     // photo is versioned by `version` and an entry photo never changes, so recording a point must
     // not download the machine photo again (and blink it on screen).
     queryKey: ["maintenance-image", id, version ?? null],
-    queryFn: () => fetchBlob(token!, id!),
+    queryFn: () => fetchBlob(token!, id!, version === null || version === undefined ? undefined : String(version)),
     enabled: !!token && !!id,
     staleTime: Infinity,
     gcTime: 10 * 60_000,

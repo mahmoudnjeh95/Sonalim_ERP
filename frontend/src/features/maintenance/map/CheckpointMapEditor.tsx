@@ -36,6 +36,9 @@ import { PinnedPhoto, type Pin } from "./PinnedPhoto";
 import { PartsCount } from "./CheckpointPicker";
 import { CheckpointForm } from "./CheckpointForm";
 
+/** The pin of a point being placed, not saved yet. */
+const PENDING_PIN_ID = "__pending__";
+
 /** The label+image dialog shared by "Ajouter une vue" and "Remplacer la photo". */
 function ViewFormDialog({
   open,
@@ -213,6 +216,11 @@ export function CheckpointMapEditor() {
 
   function handlePinMoveEnd(id: string, x: number, y: number) {
     if (!activeView) return;
+    if (id === PENDING_PIN_ID) {
+      // The new point is not saved yet: moving it just changes where it will be created.
+      setPendingPosition({ x, y });
+      return;
+    }
     // Optimistic: the pin stays at the dropped spot immediately; roll back to
     // the server position only if the PATCH actually fails.
     setOptimisticPositions((prev) => ({ ...prev, [id]: { x, y } }));
@@ -250,7 +258,7 @@ export function CheckpointMapEditor() {
       };
     });
   if (pendingPosition) {
-    pins.push({ id: "__pending__", x: pendingPosition.x, y: pendingPosition.y, n: pins.length + 1, tone: "active" });
+    pins.push({ id: PENDING_PIN_ID, x: pendingPosition.x, y: pendingPosition.y, n: pins.length + 1, tone: "active" });
   }
 
   return (
@@ -343,6 +351,7 @@ export function CheckpointMapEditor() {
                         variant="outline"
                         onClick={() => {
                           if (!activeView) return;
+                          if (!window.confirm(t("maintenance.map.view.deleteConfirm").replace("{label}", activeView.label))) return;
                           deleteView.mutate(activeView.id, {
                             onSuccess: () => {
                               toast.success(t("maintenance.map.view.deleted"));
@@ -538,7 +547,7 @@ function CheckpointsList({
   onSelect: (id: string) => void;
 }) {
   const { t } = useI18n();
-  const real = checkpoints.filter((p) => p.id !== "__pending__");
+  const real = checkpoints.filter((p) => p.id !== PENDING_PIN_ID);
   if (real.length === 0) {
     return <p className="px-2 py-3 text-sm text-muted-foreground">{t("maintenance.map.point.listEmpty")}</p>;
   }

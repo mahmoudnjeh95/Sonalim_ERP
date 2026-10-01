@@ -1,5 +1,7 @@
 import datetime
 
+import pytest
+
 from core.domain.result import Err, Ok
 from modules.maintenance.domain.jobs import (
     CheckSnapshot,
@@ -235,3 +237,25 @@ def test_timing_rejects_non_positive_manual_minutes():
     now = datetime.datetime(2026, 10, 1, 10, tzinfo=datetime.timezone.utc)
     assert entry_timing(started_at=None, finished_at=None, manual_minutes=0, now=now).code == "INVALID_TIMING"
     assert entry_timing(started_at=None, finished_at=None, manual_minutes=-5, now=now).code == "INVALID_TIMING"
+
+
+def test_a_sub_second_timer_records_one_second():
+    """check_entries.duration_seconds must be > 0: a Start/Finish tapped within a second
+    is still a recorded check, not a database error."""
+    now = datetime.datetime(2026, 10, 1, 8, 0, tzinfo=datetime.timezone.utc)
+    timing = entry_timing(started_at=now - datetime.timedelta(milliseconds=400), finished_at=now, manual_minutes=None, now=now)
+
+    assert timing.value.seconds == 1
+
+
+def test_a_tiny_manual_duration_records_one_second():
+    now = datetime.datetime(2026, 10, 1, 8, 0, tzinfo=datetime.timezone.utc)
+
+    assert entry_timing(started_at=None, finished_at=None, manual_minutes=0.005, now=now).value.seconds == 1
+
+
+@pytest.mark.parametrize("minutes", [float("nan"), float("inf")])
+def test_a_manual_duration_that_is_not_a_number_is_refused(minutes):
+    now = datetime.datetime(2026, 10, 1, 8, 0, tzinfo=datetime.timezone.utc)
+
+    assert entry_timing(started_at=None, finished_at=None, manual_minutes=minutes, now=now).code == "INVALID_TIMING"

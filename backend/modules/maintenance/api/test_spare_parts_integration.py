@@ -362,3 +362,26 @@ def test_availability_marks_the_spare_parts_locations(db, ctx):
         ("Étagère B", True),
         ("Matières premières", False),
     }
+
+
+# ---- products a parts request may name ----------------------------------------------------
+
+
+def test_request_products_list_every_product_spare_parts_first(db, ctx):
+    _choose_store(db, ctx)
+    _stock(db, ctx.sup, ctx.grease, ctx.shelf, 2)
+
+    products = SparePartsService(db).request_products(T)
+
+    assert [(product["name"], product["in_spare_parts"]) for product in products] == [
+        ("Graisse alimentaire", True),
+        ("Roulement 6204", True),
+        ("Semoule", False),
+    ]
+
+
+def test_request_products_without_a_location_mark_nothing_as_spare(db, ctx):
+    products = SparePartsService(db).request_products(T)
+
+    assert {product["in_spare_parts"] for product in products} == {False}
+    assert len(products) == 3

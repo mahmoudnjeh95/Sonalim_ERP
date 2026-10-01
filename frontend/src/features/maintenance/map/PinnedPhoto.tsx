@@ -54,6 +54,17 @@ const TONE_CLASS: Record<PinTone, string> = {
  * own aspect ratio (via a loaded-size measurement), so percent coordinates
  * always land on the photo itself, never in the surrounding letterboxing.
  */
+/**
+ * How far (in screen pixels) a pressed pin must travel before it is a drag: a
+ * finger always jitters a little on a tap, and that tap must open the point,
+ * not move it. The usual touch slop.
+ */
+const DRAG_SLOP_PX = 6;
+
+export function isDrag(start: { x: number; y: number }, current: { x: number; y: number }): boolean {
+  return Math.hypot(current.x - start.x, current.y - start.y) > DRAG_SLOP_PX;
+}
+
 export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, onPinMoveEnd, className }: PinnedPhotoProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
@@ -64,6 +75,7 @@ export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, onPinMov
   // feedback only; the caller PATCHes once, from `onPinMoveEnd`).
   const [livePosition, setLivePosition] = useState<{ x: number; y: number } | null>(null);
   const dragMoved = useRef(false);
+  const dragStart = useRef<{ x: number; y: number } | null>(null);
 
   function percentFromEvent(clientX: number, clientY: number): { x: number; y: number } | null {
     const box = boxRef.current;
@@ -89,12 +101,14 @@ export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, onPinMov
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragMoved.current = false;
+    dragStart.current = { x: event.clientX, y: event.clientY };
     setLivePosition(null);
     setDraggingId(pinId);
   }
 
   function handlePinPointerMove(pinId: string, event: ReactPointerEvent<HTMLButtonElement>) {
     if (draggingId !== pinId || !canDrag) return;
+    if (!dragMoved.current && dragStart.current && !isDrag(dragStart.current, { x: event.clientX, y: event.clientY })) return;
     const point = percentFromEvent(event.clientX, event.clientY);
     if (!point) return;
     dragMoved.current = true;

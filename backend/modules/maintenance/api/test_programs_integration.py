@@ -418,11 +418,11 @@ def test_run_due_endpoint_is_per_tenant(db, ctx):
     assert other_result["created"] == 1
 
 
-def test_tenants_with_active_programs(db, ctx):
+def test_a_tenant_with_an_active_program_is_swept(db, ctx):
     programs = ProgramService(db)
     created = _create_program(programs, ctx, interval_value=1, interval_unit="day", start_date=TODAY, lead_days=0)
     assert isinstance(created, Ok), created
-    tenants = programs.tenants_with_active_programs()
+    tenants = programs.tenants_to_sweep()
     assert T in tenants
 
 
@@ -552,3 +552,71 @@ def test_calendar_does_not_project_dates_the_sweep_already_passed(db, ctx):
     projected = programs.calendar(T, TODAY, TODAY + datetime.timedelta(days=4), TODAY)["projected"]
     dates = sorted(p["date"] for p in projected if p["program_id"] == program_id)
     assert dates == [(TODAY + datetime.timedelta(days=n)).isoformat() for n in (3, 4)]
+
+
+def test_a_program_saves_again_after_one_of_its_points_is_archived(db, ctx):
+    """The edit form sends back the ids the program already had; one archived since
+    must not make every later save fail. It stays inert: the sweep skips it."""
+    programs = ProgramService(db)
+    program_id = _create_program(programs, ctx).value["id"]
+    MapService(db).archive_checkpoint(tenant_id=T, actor_id=ctx.sup, checkpoint_id=ctx.points[0])
+
+    saved = programs.update_program(
+        tenant_id=T, actor_id=ctx.sup, program_id=program_id, name="Graissage trimestriel", checkpoint_ids=list(ctx.points)
+    )
+
+    assert isinstance(saved, Ok), saved
+    assert saved.value["name"] == "Graissage trimestriel"
+    assert set(saved.value["checkpoint_ids"]) == set(ctx.points)
+
+
+def test_a_program_still_refuses_a_newly_picked_archived_point(db, ctx):
+    programs = ProgramService(db)
+    program_id = _create_program(programs, ctx, checkpoint_ids=[ctx.points[1]]).value["id"]
+    MapService(db).archive_checkpoint(tenant_id=T, actor_id=ctx.sup, checkpoint_id=ctx.points[0])
+
+    refused = programs.update_program(tenant_id=T, actor_id=ctx.sup, program_id=program_id, checkpoint_ids=list(ctx.points))
+
+    assert isinstance(refused, Err)
+    assert refused.code == "UNKNOWN_CHECKPOINT"
+
+
+def test_archiving_a_machine_pauses_its_programs(db, ctx):
+    """A retired machine gets no more preventive jobs; un-archiving does not restart them
+    (the program is switched back on by hand, which skips the occurrences missed)."""
+    programs = ProgramService(db)
+    program_id = _create_program(programs, ctx, interval_unit="day").value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=1))
+
+    archived = EquipmentService(db).archive_equipment(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine)
+    assert isinstance(archived, Ok), archived
+
+    [program] = [p for p in programs.list_programs(T, TODAY) if p["id"] == program_id]
+    assert program["active"] is False
+    assert programs.run_due(tenant_id=T, today=TODAY)["created"] == 0
+
+
+def test_the_sweep_skips_a_program_left_active_on_an_archived_machine(db, ctx):
+    programs = ProgramService(db)
+    program_id = _create_program(programs, ctx, interval_unit="day").value["id"]
+    _created_at_on(db, program_id, TODAY - datetime.timedelta(days=1))
+    db.execute("UPDATE maintenance.equipment SET archived_at = NOW() WHERE id = %s", (ctx.machine,))
+
+    assert programs.run_due(tenant_id=T, today=TODAY)["created"] == 0
+
+
+def test_a_tenant_with_only_corrective_jobs_is_still_swept_for_overdue_notices(db, ctx):
+    """Overdue notices are sent by the sweep; a tenant without any active program must
+    still be visited when it has open jobs."""
+    from modules.maintenance.api.job_service import JobService
+
+    created = JobService(db).create_job(
+        tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, title="Fuite d'huile", description=None,
+        kind="corrective", priority="urgent", due_date=TODAY - datetime.timedelta(days=2), stops_machine=False,
+        checkpoint_ids=[], tasks=[{"label": "Réparer la fuite", "action": "other"}], chef_user_id=ctx.chef,
+    )
+    assert isinstance(created, Ok), created
+
+    programs = ProgramService(db)
+    assert T in programs.tenants_to_sweep()
+    assert programs.run_due(tenant_id=T, today=TODAY)["overdue_notified"] == 1

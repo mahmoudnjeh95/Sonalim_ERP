@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import math
 from dataclasses import dataclass
 
 from core.domain.result import Err, Ok, Result
@@ -257,17 +258,19 @@ def entry_timing(
                 "finished_at cannot be in the future",
                 "l'heure de fin ne peut pas être dans le futur",
             )
-        seconds = int((finished_at - started_at).total_seconds())
+        # At least one second: duration_seconds is > 0, and a Start/Finish tapped within
+        # a second is still a recorded check.
+        seconds = max(1, int((finished_at - started_at).total_seconds()))
         return Ok(Timing(started_at=started_at, finished_at=finished_at, seconds=seconds, source="timer"))
 
     if manual_mode:
-        if manual_minutes <= 0:
+        if not math.isfinite(manual_minutes) or manual_minutes <= 0:
             return Err(
                 "INVALID_TIMING",
                 "manual duration must be greater than zero",
                 "la durée manuelle doit être supérieure à zéro",
             )
-        seconds = int(round(manual_minutes * 60))
+        seconds = max(1, int(round(manual_minutes * 60)))
         computed_start = now - datetime.timedelta(seconds=seconds)
         return Ok(Timing(started_at=computed_start, finished_at=now, seconds=seconds, source="manual"))
 

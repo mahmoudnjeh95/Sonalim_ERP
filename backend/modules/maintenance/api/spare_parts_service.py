@@ -274,6 +274,35 @@ class SparePartsService:
             "products": products,
         }
 
+    def request_products(self, tenant_id: str) -> list[dict]:
+        """Every product a parts request may name, with its unit, the spare parts
+        (the catalog's products) first, then by name. The request form reads this
+        rather than the core product list, which a technician has no right to."""
+        spare_ids = {product["product_id"] for product in self.catalog(tenant_id)["products"]}
+        rows = self._connection.execute(
+            """
+            SELECT p.id, p.name, p.sku, u.id, u.code, u.is_integer_only
+            FROM core.products p
+            JOIN core.uoms u ON u.id = p.uom_id AND u.tenant_id = p.tenant_id
+            WHERE p.tenant_id = %s
+            """,
+            (tenant_id,),
+        ).fetchall()
+        products = [
+            {
+                "product_id": product_id,
+                "name": name,
+                "sku": sku,
+                "uom_id": uom_id,
+                "uom_code": uom_code,
+                "uom_integer_only": integer_only,
+                "in_spare_parts": product_id in spare_ids,
+            }
+            for product_id, name, sku, uom_id, uom_code, integer_only in rows
+        ]
+        products.sort(key=lambda product: (not product["in_spare_parts"], product["name"].casefold(), product["product_id"]))
+        return products
+
     def parts_with_stock(self, tenant_id: str, checkpoint_ids: list[str]) -> dict[str, list[dict]]:
         """Each checkpoint's parts, with what the spare-parts location has available
         in total and shelf by shelf."""

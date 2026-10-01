@@ -70,13 +70,14 @@ def list_views(
 
 
 @router.post("/equipment/{equipment_id}/views", status_code=status.HTTP_201_CREATED)
-async def create_view(
+def create_view(
     equipment_id: str,
     label: str = Form(...),
     image: UploadFile = File(...),
     tenant: TenantContext = Depends(require_permission("maintenance.manage_checkpoints")),
 ) -> dict:
-    data = await image.read()
+    # A plain `def` (thread pool) like every other handler: the database work must not hold the event loop.
+    data = image.file.read()
     with get_connection() as connection:
         return _result(
             connection,
@@ -92,14 +93,14 @@ async def create_view(
 
 
 @router.patch("/views/{view_id}")
-async def update_view(
+def update_view(
     view_id: str,
     label: str | None = Form(default=None),
     sort_order: int | None = Form(default=None),
     image: UploadFile | None = File(default=None),
     tenant: TenantContext = Depends(require_permission("maintenance.manage_checkpoints")),
 ) -> dict:
-    data = await image.read() if image is not None else None
+    data = image.file.read() if image is not None else None
     mime = image.content_type if image is not None else None
     with get_connection() as connection:
         return _result(

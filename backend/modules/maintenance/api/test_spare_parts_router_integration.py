@@ -64,7 +64,10 @@ def _user(db, full_name, *permissions):
 
 @pytest.fixture
 def api(db, monkeypatch):
-    sup = _user(db, "Sara Superviseur", "maintenance.view_jobs", "maintenance.plan_jobs", "maintenance.manage_checkpoints")
+    sup = _user(
+        db, "Sara Superviseur", "maintenance.view_jobs", "maintenance.plan_jobs", "maintenance.manage_checkpoints",
+        "maintenance.view_equipment",
+    )
     chef = _user(db, "Chef Keita", "maintenance.view_jobs", "maintenance.execute_jobs")
 
     piece = str(ULID())
@@ -95,6 +98,7 @@ def api(db, monkeypatch):
     wrapped = _Connection(db)
     monkeypatch.setattr(spare_parts_router, "get_connection", lambda: wrapped)
     monkeypatch.setattr(maps_router, "get_connection", lambda: wrapped)
+    monkeypatch.setattr(router_module, "get_connection", lambda: wrapped)
     monkeypatch.setattr("core.tenancy.get_connection", lambda: wrapped)
 
     current = {"user": sup}
@@ -184,3 +188,36 @@ def test_a_fractional_count_of_parts_is_a_422(api):
 
     assert refused.status_code == 422
     assert refused.json()["detail"]["code"] == "QUANTITY_MUST_BE_INTEGER"
+
+
+def test_a_technician_lists_the_products_a_parts_request_can_name(api):
+    """The request form must not depend on core.view_products, which a technician lacks."""
+    api.client.put("/maintenance/settings", json={"spare_parts_location_id": api.store})
+    api.acting_as(api.chef)
+
+    listed = api.client.get("/maintenance/part-products")
+
+    assert listed.status_code == 200, listed.text
+    bearing = next(product for product in listed.json() if product["product_id"] == api.bearing)
+    assert bearing == {
+        "product_id": api.bearing, "name": "Roulement 6204", "sku": "PDR-ROUL",
+        "uom_id": api.piece, "uom_code": "pc", "uom_integer_only": True, "in_spare_parts": True,
+    }
+
+
+def test_a_view_photo_is_added_and_replaced_over_http(api):
+    machine = api.client.get("/maintenance/equipment").json()[0]["id"]
+
+    created = api.client.post(
+        f"/maintenance/equipment/{machine}/views",
+        data={"label": "Vue arrière"},
+        files={"image": ("arriere.jpg", JPEG_BYTES, "image/jpeg")},
+    )
+    assert created.status_code == 201, created.text
+    view_id = created.json()["id"]
+
+    replaced = api.client.patch(
+        f"/maintenance/views/{view_id}", files={"image": ("arriere2.jpg", JPEG_BYTES + b"1", "image/jpeg")}
+    )
+    assert replaced.status_code == 200, replaced.text
+    assert api.client.get(f"/maintenance/views/{view_id}/image").content == JPEG_BYTES + b"1"

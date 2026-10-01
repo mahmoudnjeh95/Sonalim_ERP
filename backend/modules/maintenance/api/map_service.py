@@ -145,6 +145,20 @@ class MapService:
                 "this map is referenced by an existing job and cannot be deleted",
                 "ce plan est référencé par une intervention existante et ne peut pas être supprimé",
             )
+        picked_by_program = self._connection.execute(
+            """
+            SELECT 1 FROM maintenance.program_checkpoints pc
+            JOIN maintenance.checkpoints c ON c.id = pc.checkpoint_id
+            WHERE c.view_id = %s LIMIT 1
+            """,
+            (view_id,),
+        ).fetchone()
+        if picked_by_program is not None:
+            return Err(
+                "VIEW_IN_USE",
+                "a preventive program picks points on this map, so it cannot be deleted",
+                "un programme préventif utilise des points de ce plan : il ne peut pas être supprimé",
+            )
 
         self._connection.execute("DELETE FROM maintenance.checkpoints WHERE view_id = %s", (view_id,))
         self._connection.execute("DELETE FROM maintenance.equipment_views WHERE id = %s", (view_id,))
@@ -206,13 +220,15 @@ class MapService:
             return checked_parts
 
         checkpoint_id = str(ULID())
+        # Next number on the view: pins are numbered in this order, which must not shift.
         self._connection.execute(
             """
             INSERT INTO maintenance.checkpoints
-                (id, tenant_id, view_id, x_pct, y_pct, label, action, instructions, measure_unit, requires_photo)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (id, tenant_id, view_id, x_pct, y_pct, label, action, instructions, measure_unit, requires_photo, sort_order)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                    (SELECT COALESCE(MAX(sort_order), 0) + 1 FROM maintenance.checkpoints WHERE view_id = %s))
             """,
-            (checkpoint_id, tenant_id, view_id, x_pct, y_pct, label, action, instructions, measure_unit, requires_photo),
+            (checkpoint_id, tenant_id, view_id, x_pct, y_pct, label, action, instructions, measure_unit, requires_photo, view_id),
         )
         save_checkpoint_parts(self._connection, tenant_id, checkpoint_id, checked_parts.value)
         record_audit(
@@ -332,7 +348,7 @@ class MapService:
             FROM maintenance.checkpoints c
             JOIN maintenance.equipment_views v ON v.id = c.view_id
             WHERE c.tenant_id = %s AND v.equipment_id = %s AND c.archived_at IS NULL
-            ORDER BY v.sort_order, c.sort_order
+            ORDER BY v.sort_order, v.created_at, c.sort_order, c.id
             """,
             (tenant_id, equipment_id),
         ).fetchall()
@@ -397,7 +413,7 @@ class MapService:
         view_id, equipment_id, label, sort_order, image_mime, updated_at = row
         clause = "" if include_archived else "AND archived_at IS NULL"
         checkpoint_rows = self._connection.execute(
-            f"SELECT {_CHECKPOINT_COLUMNS} FROM maintenance.checkpoints WHERE view_id = %s {clause} ORDER BY sort_order",
+            f"SELECT {_CHECKPOINT_COLUMNS} FROM maintenance.checkpoints WHERE view_id = %s {clause} ORDER BY sort_order, id",
             (view_id,),
         ).fetchall()
         return {

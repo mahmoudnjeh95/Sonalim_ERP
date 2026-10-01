@@ -387,6 +387,17 @@ class PartsService:
             return _request_not_found(request_id)
         if request.status != "pending":
             return self._already_decided(request.status)
+        # FOR SHARE: a cancel or close of the job (which locks it FOR UPDATE) waits for this decision.
+        job_status = self._connection.execute(
+            "SELECT status FROM maintenance.jobs WHERE id = %s FOR SHARE", (request.job_id,)
+        ).fetchone()[0]
+        if job_status in _CLOSED_JOB_STATUSES:
+            # Nothing leaves the warehouse for a job that is over; the request can still be refused.
+            return Err(
+                "INVALID_TRANSITION",
+                f"the job is {job_status}: refuse this request instead",
+                "l'intervention est clôturée ou annulée : refusez plutôt cette demande",
+            )
         request_lines = self._lines(tenant_id, request_id)
 
         decisions = self._checked_decisions(tenant_id, request_lines, lines)
