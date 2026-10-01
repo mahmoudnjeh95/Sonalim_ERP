@@ -17,6 +17,7 @@ __all__ = [
     "JOB_CANCELLED",
     "JOB_CLOSED",
     "JOB_DUE",
+    "JOB_OVERDUE",
     "JOB_REWORK",
     "JOB_SUBMITTED",
     "JOB_URGENT",
@@ -32,6 +33,7 @@ PLAN_PERMISSION = "maintenance.plan_jobs"
 JOB_URGENT = "maintenance.job_urgent"
 JOB_ASSIGNED = "maintenance.job_assigned"
 JOB_DUE = "maintenance.job_due"
+JOB_OVERDUE = "maintenance.job_overdue"
 JOB_SUBMITTED = "maintenance.job_submitted"
 JOB_REWORK = "maintenance.job_rework"
 JOB_CLOSED = "maintenance.job_closed"
@@ -42,6 +44,7 @@ _JOB_TITLES: dict[str, tuple[str, str]] = {
     JOB_URGENT: ("Urgent job {number} on {machine}", "Intervention urgente {number} sur {machine}"),
     JOB_ASSIGNED: ("Job {number} assigned to you on {machine}", "Intervention {number} assignée sur {machine}"),
     JOB_DUE: ("Preventive job {number} is due on {machine}", "Intervention préventive {number} à réaliser sur {machine}"),
+    JOB_OVERDUE: ("Job {number} on {machine} is overdue", "Intervention {number} sur {machine} en retard"),
     JOB_SUBMITTED: ("Job {number} on {machine} awaits your review", "Intervention {number} sur {machine} à valider"),
     JOB_REWORK: ("Job {number} on {machine} sent back for rework", "Intervention {number} sur {machine} renvoyée en correction"),
     JOB_CLOSED: ("Job {number} on {machine} closed", "Intervention {number} sur {machine} clôturée"),
