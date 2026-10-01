@@ -625,6 +625,69 @@ def test_cancel_requires_reason(db, ctx):
     assert isinstance(missing, Err) and missing.code == "NOT_FOUND"
 
 
+def test_cancelling_a_started_stopping_job_releases_the_machine(db, ctx):
+    jobs = JobService(db)
+    job_id = _create(jobs, ctx, stops_machine=True).value
+    check_id = job_detail(db, T, job_id, TODAY)["checks"][0]["id"]
+    assert isinstance(_entry(jobs, ctx, job_id, check_id), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+
+    assert isinstance(jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=job_id, reason="Pièce manquante"), Ok)
+    assert _equipment_status(db, ctx.machine) == "operational"
+    cancelled = job_detail(db, T, job_id, TODAY)["timeline"][-1]
+    assert (cancelled["kind"], cancelled["payload"]["equipment_restarted"]) == ("cancelled", True)
+
+    # a stopping job that never started did not stop the machine: cancelling it leaves a
+    # machine someone put in maintenance by hand exactly where it is
+    never_started = _create(jobs, ctx, stops_machine=True).value
+    EquipmentService(db).transition_status(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, new_status="maintenance")
+    assert isinstance(jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=never_started, reason="Doublon"), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+    assert job_detail(db, T, never_started, TODAY)["timeline"][-1]["payload"]["equipment_restarted"] is False
+
+
+def test_machine_stays_in_maintenance_while_another_stopping_job_is_open(db, ctx):
+    jobs, first, first_ids = _submitted_job(db, ctx, stops_machine=True)
+    second = _create(jobs, ctx, stops_machine=True, checkpoint_ids=[ctx.points[2]]).value
+    second_check = job_detail(db, T, second, TODAY)["checks"][0]["id"]
+    assert isinstance(_entry(jobs, ctx, second, second_check), Ok)
+    # a job that does not stop the machine, and a stopping one that has not started, never hold it
+    harmless = _create(jobs, ctx, stops_machine=False).value
+    _entry(jobs, ctx, harmless, job_detail(db, T, harmless, TODAY)["checks"][0]["id"])
+    _create(jobs, ctx, stops_machine=True)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+
+    # closing the first job does not release a machine the second one is still working on
+    jobs.review(tenant_id=T, actor_id=ctx.sup, job_id=first, verdicts=[(i, "accepted", None) for i in first_ids])
+    assert isinstance(jobs.close(tenant_id=T, actor_id=ctx.sup, job_id=first), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+    assert job_detail(db, T, first, TODAY)["timeline"][-1]["payload"]["equipment_restarted"] is False
+
+    # still held while the second job waits for its review (submitted) ...
+    assert isinstance(jobs.submit(tenant_id=T, actor_id=ctx.chef, job_id=second, actor_can_plan=False), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+
+    # ... and released when the last stopping job on the machine ends
+    jobs.review(tenant_id=T, actor_id=ctx.sup, job_id=second, verdicts=[(second_check, "accepted", None)])
+    assert isinstance(jobs.close(tenant_id=T, actor_id=ctx.sup, job_id=second), Ok)
+    assert _equipment_status(db, ctx.machine) == "operational"
+    assert job_detail(db, T, second, TODAY)["timeline"][-1]["payload"]["equipment_restarted"] is True
+
+
+def test_cancelling_one_of_two_started_stopping_jobs_keeps_the_machine_stopped(db, ctx):
+    jobs = JobService(db)
+    started = []
+    for point in ctx.points[:2]:
+        job_id = _create(jobs, ctx, stops_machine=True, checkpoint_ids=[point]).value
+        _entry(jobs, ctx, job_id, job_detail(db, T, job_id, TODAY)["checks"][0]["id"])
+        started.append(job_id)
+
+    jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=started[0], reason="Reportée")
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+    jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=started[1], reason="Reportée")
+    assert _equipment_status(db, ctx.machine) == "operational"
+
+
 def test_notifications_fan_out_on_urgent_and_submit(db, ctx):
     second_sup = _user(db, "Second Superviseur", permissions=("maintenance.plan_jobs",))
     jobs = JobService(db)

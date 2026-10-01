@@ -47,6 +47,10 @@ __all__ = ["JobService"]
 
 _ENTITY = "maintenance_job"
 
+# A job that stops its machine holds it from its first entry until it is closed or
+# cancelled: while it is being worked, awaiting review, or back in rework.
+_HOLDING_STATUSES = ["in_progress", "submitted", "rework"]
+
 
 @dataclass(frozen=True)
 class _Job:
@@ -58,6 +62,7 @@ class _Job:
     status: str
     stops_machine: bool
     chef_user_id: str | None
+    started_at: datetime.datetime | None
 
 
 @dataclass(frozen=True)
@@ -581,7 +586,7 @@ class JobService:
 
     def close(self, *, tenant_id: str, actor_id: str, job_id: str) -> Result[None]:
         """Closes a submitted job whose every point was accepted; a machine the job had
-        stopped (and that is still in `maintenance`) goes back to `operational`."""
+        stopped goes back to `operational`, unless another stopping job still holds it."""
         job = self._locked_job(tenant_id, job_id)
         if job is None:
             return _job_not_found(job_id)
@@ -593,21 +598,18 @@ class JobService:
             "UPDATE maintenance.jobs SET status = 'closed', closed_at = NOW(), closed_by = %s WHERE id = %s",
             (actor_id, job.id),
         )
-        restarted = False
-        if job.stops_machine:
-            moved = self._move_equipment(
-                tenant_id, actor_id, job.equipment_id, to_status="operational", only_from=("maintenance",)
-            )
-            if isinstance(moved, Err):
-                return moved
-            restarted = moved.value
+        released = self._release_equipment(tenant_id, actor_id, job)
+        if isinstance(released, Err):
+            return released
+        restarted = released.value
         self._event(tenant_id, job.id, actor_id, "closed", {"equipment_restarted": restarted})
         self._audit(tenant_id, actor_id, job.id, "job.closed", {"equipment_restarted": restarted})
         self._notify(tenant_id, job, [job.chef_user_id], notifications.JOB_CLOSED, body=job.title)
         return Ok(None)
 
     def cancel(self, *, tenant_id: str, actor_id: str, job_id: str, reason: str | None) -> Result[None]:
-        """Cancels a job that is not closed yet; the reason is mandatory and kept."""
+        """Cancels a job that is not closed yet; the reason is mandatory and kept. A machine
+        the job had stopped is released like on close, so it is never left stuck in `maintenance`."""
         reason = _clean(reason)
         if reason is None:
             return Err(
@@ -626,7 +628,10 @@ class JobService:
             "UPDATE maintenance.jobs SET status = 'cancelled', cancelled_at = NOW(), cancel_reason = %s WHERE id = %s",
             (reason, job.id),
         )
-        payload = {"from_status": job.status, "reason": reason}
+        released = self._release_equipment(tenant_id, actor_id, job)
+        if isinstance(released, Err):
+            return released
+        payload = {"from_status": job.status, "reason": reason, "equipment_restarted": released.value}
         self._event(tenant_id, job.id, actor_id, "cancelled", payload)
         self._audit(tenant_id, actor_id, job.id, "job.cancelled", payload)
         self._notify(tenant_id, job, [job.chef_user_id], notifications.JOB_CANCELLED, body=reason)
@@ -639,7 +644,8 @@ class JobService:
         the same job (two entries, a submit and an entry...) run one after the other."""
         row = self._connection.execute(
             """
-            SELECT j.id, j.number, j.equipment_id, e.name, j.title, j.status, j.stops_machine, j.chef_user_id
+            SELECT j.id, j.number, j.equipment_id, e.name, j.title, j.status, j.stops_machine, j.chef_user_id,
+                   j.started_at
             FROM maintenance.jobs j
             JOIN maintenance.equipment e ON e.id = j.equipment_id
             WHERE j.id = %s AND j.tenant_id = %s
@@ -828,6 +834,40 @@ class JobService:
             "SELECT id, label FROM maintenance.job_checks WHERE job_id = %s", (job_id,)
         ).fetchall()
         return {row[0]: row[1] for row in rows}
+
+    def _release_equipment(self, tenant_id: str, actor_id: str, job: _Job) -> Result[bool]:
+        """Puts back to `operational` the machine a job had stopped, now that this job has
+        ended (its row is already closed or cancelled). Ok(True) when the machine moved.
+
+        Nothing moves when the job never stopped it (not a stopping job, or never started),
+        when the machine is not in `maintenance` any more (someone moved it by hand), or
+        while another started stopping job on the same machine still holds it.
+        """
+        if not job.stops_machine or job.started_at is None:
+            return Ok(False)
+        # Lock the machine before looking at the other jobs: two stopping jobs ending at the
+        # same moment then run one after the other, and the second one sees the first as ended
+        # instead of each seeing the other as still open and both leaving the machine stopped.
+        machine = self._connection.execute(
+            "SELECT status FROM maintenance.equipment WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (job.equipment_id, tenant_id),
+        ).fetchone()
+        if machine is None or machine[0] != "maintenance":
+            return Ok(False)
+        still_held = self._connection.execute(
+            """
+            SELECT 1 FROM maintenance.jobs
+            WHERE tenant_id = %s AND equipment_id = %s AND id <> %s
+              AND stops_machine AND started_at IS NOT NULL AND status = ANY(%s)
+            LIMIT 1
+            """,
+            (tenant_id, job.equipment_id, job.id, _HOLDING_STATUSES),
+        ).fetchone()
+        if still_held is not None:
+            return Ok(False)
+        return self._move_equipment(
+            tenant_id, actor_id, job.equipment_id, to_status="operational", only_from=("maintenance",)
+        )
 
     def _move_equipment(
         self, tenant_id: str, actor_id: str, equipment_id: str, *, to_status: str, only_from: tuple[str, ...]
