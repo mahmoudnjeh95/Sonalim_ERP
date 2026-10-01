@@ -9,6 +9,7 @@ import {
   Images,
   ListChecks,
   Lock,
+  PackagePlus,
   Play,
   PowerOff,
   Send,
@@ -38,6 +39,7 @@ import { JobTimeline } from "./JobTimeline";
 import { JobViewsStrip } from "./JobViewsStrip";
 import { ReviewPanel } from "./ReviewPanel";
 import { WORKABLE_STATUSES, apiErrorMessage, formatDateTime, formatDay, isRedo } from "./jobFormat";
+import { PartRequestDialog } from "../parts/PartRequestDialog";
 
 const TEXTAREA_CLASS =
   "flex w-full rounded-md border border-border bg-background px-3 py-1.5 text-base shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:text-sm";
@@ -184,6 +186,7 @@ export function JobPage() {
   const [assignOpen, setAssignOpen] = useState(false);
   const [delegateOpen, setDelegateOpen] = useState(false);
   const [cancelOpen, setCancelOpen] = useState(false);
+  const [partRequestOpen, setPartRequestOpen] = useState(false);
   const [highlightedCheckId, setHighlightedCheckId] = useState<string | null>(null);
 
   // The list hands over where it was (its filters live in the URL), so "back" returns to the same view.
@@ -354,7 +357,6 @@ export function JobPage() {
                       {t("maintenance.jobs.action.delegate")}
                     </Button>
                   )}
-                  {/* Task F7: the "Demander des pièces" button belongs here, shown when `showRun` (the API refuses a closed or cancelled job). */}
                   {showAssign && (
                     <Button
                       variant={job.status === "planned" ? "default" : "outline"}
@@ -438,8 +440,17 @@ export function JobPage() {
         </Card>
       )}
 
-      {/* Task F7 fills this block: pass `action` (its "Demander des pièces" button, when `showRun`). */}
-      <JobPartRequests job={job} />
+      <JobPartRequests
+        job={job}
+        action={
+          showRun ? (
+            <Button variant="outline" size="sm" onClick={() => setPartRequestOpen(true)}>
+              <PackagePlus className="h-3.5 w-3.5" />
+              {t("maintenance.jobs.action.requestParts")}
+            </Button>
+          ) : undefined
+        }
+      />
 
       <Card>
         <CardHeader>
@@ -456,6 +467,7 @@ export function JobPage() {
       <AssignDialog job={job} open={assignOpen} onOpenChange={setAssignOpen} />
       <DelegateDialog job={job} open={delegateOpen} onOpenChange={setDelegateOpen} />
       <CancelDialog job={job} open={cancelOpen} onOpenChange={setCancelOpen} />
+      <PartRequestDialog job={job} open={partRequestOpen} onOpenChange={setPartRequestOpen} />
     </div>
   );
 }
