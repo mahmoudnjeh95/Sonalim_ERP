@@ -20,6 +20,7 @@ from core.auth import router as auth_router
 from core.exchange_rates import currencies_router as core_currencies_router
 from core.exchange_rates import router as core_exchange_rates_router
 from core.migrations.runner import migrate_on_startup
+from core.notifications import router as core_notifications_router
 from core.partners import router as core_partners_router
 from core.report_options import router as core_report_options_router
 from core.roles import router as core_roles_router
@@ -79,6 +80,7 @@ app.include_router(core_uoms_router)
 app.include_router(core_report_options_router)
 app.include_router(core_table_preferences_router)
 app.include_router(core_audit_router)
+app.include_router(core_notifications_router)
 app.include_router(warehouse_router)
 app.include_router(production_router)
 app.include_router(crm_router)
