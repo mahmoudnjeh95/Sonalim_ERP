@@ -73,7 +73,7 @@ export function PhotosPanel({
             <p className="mt-0.5 text-sm text-muted-foreground">{label(S.photosHint)}</p>
           </div>
           {!disabled && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <input ref={pickRef} type="file" accept="image/*" multiple hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
               <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
               <Button variant="outline" onClick={() => setCameraOpen(true)} disabled={upload.isPending}>

@@ -34,7 +34,7 @@ from modules.scan.domain.review import (
 )
 
 MAX_PAGES = 20
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
 IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 FORM_HINTS = frozenset({"fabrication", "conditionnement", "bobines"})
 HEADER_FIELDS = ("team", "conducteur", "agent_fabrication", "machiniste", "aide_machiniste")
@@ -314,7 +314,7 @@ class ScanSessionService:
             if not data:
                 return Err("UNSUPPORTED_IMAGE", "a photo is empty", "une photo est vide")
             if len(data) > MAX_IMAGE_BYTES:
-                return Err("IMAGE_TOO_LARGE", "a photo is larger than 8 MB", "une photo dépasse 8 Mo")
+                return Err("IMAGE_TOO_LARGE", "a photo is larger than 10 MB", "une photo dépasse 10 Mo")
             decoded.append((upload, data))
         ids = []
         for upload, data in decoded:
