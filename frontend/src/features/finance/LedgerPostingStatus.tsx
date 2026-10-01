@@ -13,7 +13,7 @@ import { errorText, formatDate, formatXof } from "./ledgerFormat";
 import { LEDGER_KEYS, getSourcePostings, invalidateLedgerData, retryPostingFailure } from "./ledgerApi";
 
 /** Run statuses after which the ledger is expected to hold the run (the approval event posts it). */
-const POSTED_RUN_STATUSES = ["approved", "paid", "reversed"];
+const POSTED_RUN_STATUSES = ["calculated", "approved", "paid", "reversed"];
 
 type PostingState = "posted" | "pending" | "refused";
 
@@ -21,6 +21,12 @@ const STATE_KEYS: Record<PostingState, TranslationKey> = {
   posted: "finance.posting.state.posted",
   pending: "finance.posting.state.pending",
   refused: "finance.posting.state.refused",
+};
+
+const STATE_ICONS: Record<PostingState, typeof CircleCheck> = {
+  posted: CircleCheck,
+  pending: Clock,
+  refused: TriangleAlert,
 };
 
 /** What the ledger holds for one payroll run: its entries, or why they were refused. */
@@ -51,7 +57,7 @@ export function LedgerPostingStatus({ runId, runStatus }: { runId: string; runSt
   const openFailures = data.failures.filter((failure) => failure.status === "open");
   const booked = data.entries.filter((entry) => entry.status !== "draft");
   const state: PostingState = openFailures.length > 0 ? "refused" : booked.length > 0 ? "posted" : "pending";
-  const Icon = state === "posted" ? CircleCheck : state === "refused" ? TriangleAlert : Clock;
+  const Icon = STATE_ICONS[state];
 
   return (
     <div
