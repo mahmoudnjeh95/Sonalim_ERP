@@ -130,12 +130,12 @@ function ViewFormDialog({
   );
 }
 
-function ViewPhoto({ view, pins, onPick, onPinClick, onPinMove }: {
+function ViewPhoto({ view, pins, onPick, onPinClick, onPinMoveEnd }: {
   view: EquipmentView;
   pins: Pin[];
   onPick?: (x: number, y: number) => void;
   onPinClick?: (id: string) => void;
-  onPinMove?: (id: string, x: number, y: number) => void;
+  onPinMoveEnd?: (id: string, x: number, y: number) => void;
 }) {
   const { url, isLoading } = useAuthedImage(fetchViewImageBlob, view.id, view.updated_at);
   const { t } = useI18n();
@@ -146,7 +146,7 @@ function ViewPhoto({ view, pins, onPick, onPinClick, onPinMove }: {
       </div>
     );
   }
-  return <PinnedPhoto src={url} pins={pins} onPick={onPick} onPinClick={onPinClick} onPinMove={onPinMove} />;
+  return <PinnedPhoto src={url} pins={pins} onPick={onPick} onPinClick={onPinClick} onPinMoveEnd={onPinMoveEnd} />;
 }
 
 /**
@@ -169,6 +169,11 @@ export function CheckpointMapEditor() {
   const [selectedCheckpointId, setSelectedCheckpointId] = useState<string | null>(null);
   const [addViewOpen, setAddViewOpen] = useState(false);
   const [replaceViewOpen, setReplaceViewOpen] = useState(false);
+  // Optimistic position shown for a checkpoint while its PATCH (fired once, on
+  // drop) is in flight — cleared on success (the refetched checkpoint already
+  // has the new x_pct/y_pct by then) or on failure (rolls back to the
+  // server's last-known position, which `checkpoint.x_pct/y_pct` still is).
+  const [optimisticPositions, setOptimisticPositions] = useState<Record<string, { x: number; y: number }>>({});
 
   useEffect(() => {
     if (views.length > 0 && !views.some((v) => v.id === activeViewId)) {
@@ -205,24 +210,44 @@ export function CheckpointMapEditor() {
     setSelectedCheckpointId(id);
   }
 
-  function handlePinMove(id: string, x: number, y: number) {
+  function handlePinMoveEnd(id: string, x: number, y: number) {
     if (!activeView) return;
+    // Optimistic: the pin stays at the dropped spot immediately; roll back to
+    // the server position only if the PATCH actually fails.
+    setOptimisticPositions((prev) => ({ ...prev, [id]: { x, y } }));
     updateCheckpoint.mutate(
       { checkpointId: id, input: { x_pct: x, y_pct: y } },
-      { onError: (error) => toast.error(t("maintenance.map.point.moveError"), { description: error instanceof ApiError ? error.message : undefined }) },
+      {
+        onSuccess: () => {
+          setOptimisticPositions((prev) => {
+            const { [id]: _removed, ...rest } = prev;
+            return rest;
+          });
+        },
+        onError: (error) => {
+          setOptimisticPositions((prev) => {
+            const { [id]: _removed, ...rest } = prev;
+            return rest;
+          });
+          toast.error(t("maintenance.map.point.moveError"), { description: error instanceof ApiError ? error.message : undefined });
+        },
+      },
     );
   }
 
   const pins: Pin[] = visibleCheckpoints
     .slice()
     .sort((a, b) => a.sort_order - b.sort_order)
-    .map((checkpoint, index) => ({
-      id: checkpoint.id,
-      x: checkpoint.x_pct,
-      y: checkpoint.y_pct,
-      n: index + 1,
-      tone: checkpoint.id === selectedCheckpointId ? "active" : "default",
-    }));
+    .map((checkpoint, index) => {
+      const optimistic = optimisticPositions[checkpoint.id];
+      return {
+        id: checkpoint.id,
+        x: optimistic?.x ?? checkpoint.x_pct,
+        y: optimistic?.y ?? checkpoint.y_pct,
+        n: index + 1,
+        tone: checkpoint.id === selectedCheckpointId ? "active" : "default",
+      };
+    });
   if (pendingPosition) {
     pins.push({ id: "__pending__", x: pendingPosition.x, y: pendingPosition.y, n: pins.length + 1, tone: "active" });
   }
@@ -350,7 +375,7 @@ export function CheckpointMapEditor() {
                       pins={pins}
                       onPick={addMode ? handlePick : undefined}
                       onPinClick={handlePinClick}
-                      onPinMove={handlePinMove}
+                      onPinMoveEnd={handlePinMoveEnd}
                     />
                   </CardContent>
                 </Card>

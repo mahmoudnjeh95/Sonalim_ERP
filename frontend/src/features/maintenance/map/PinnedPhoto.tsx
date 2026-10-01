@@ -20,8 +20,10 @@ export interface PinnedPhotoProps {
   /** Click/tap on the photo itself, at the % position within the image box — used by the editor's "add point" mode. */
   onPick?: (x: number, y: number) => void;
   onPinClick?: (id: string) => void;
-  /** Dragging a pin to a new % position — the editor PATCHes x_pct/y_pct on drop. */
+  /** Fired on every pointer-move tick while a pin is being dragged — live visual feedback only, not a save point. */
   onPinMove?: (id: string, x: number, y: number) => void;
+  /** Fired once, on pointerup/pointercancel, with the final dropped position — this is what the editor should PATCH. */
+  onPinMoveEnd?: (id: string, x: number, y: number) => void;
   className?: string;
 }
 
@@ -38,19 +40,29 @@ const TONE_CLASS: Record<PinTone, string> = {
  * pins placed at percentage coordinates of the image's own box, so pins stay
  * aligned regardless of the box's rendered size. Reused by the checkpoint-map
  * editor (F3), the job page (F4) and the check wizard (F5):
- * - F3 passes `onPick` (tap-to-place a new point) and `onPinMove` (drag to
- *   reposition an existing one) — editing mode.
- * - F4/F5 render read-only pins (no `onPick`/`onPinMove`) and use
- *   `onPinClick` to open a point's detail/entry form.
+ * - F3 passes `onPick` (tap-to-place a new point) and `onPinMoveEnd` (drag to
+ *   reposition an existing one, saved once on drop) — editing mode. `onPinMove`
+ *   is optional live feedback only: this component already tracks the dragged
+ *   pin's own position internally and renders it smoothly without the caller
+ *   re-rendering `pins` on every tick, so most callers need only
+ *   `onPinMoveEnd`. Neither callback should be read as "save this now" except
+ *   `onPinMoveEnd`, which fires exactly once per drag (pointerup/pointercancel).
+ * - F4/F5 render read-only pins (no `onPick`/`onPinMove`/`onPinMoveEnd`) and
+ *   use `onPinClick` to open a point's detail/entry form.
  *
  * The image is `object-contain` inside a relative box matched to the image's
  * own aspect ratio (via a loaded-size measurement), so percent coordinates
  * always land on the photo itself, never in the surrounding letterboxing.
  */
-export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, className }: PinnedPhotoProps) {
+export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, onPinMoveEnd, className }: PinnedPhotoProps) {
   const boxRef = useRef<HTMLDivElement>(null);
   const [aspectRatio, setAspectRatio] = useState<number | null>(null);
   const [draggingId, setDraggingId] = useState<string | null>(null);
+  // The dragged pin's own live position while the drag is in progress, so it
+  // tracks the pointer smoothly even if the caller doesn't re-render `pins`
+  // on every `onPinMove` tick (it isn't meant to — that callback is for live
+  // feedback only; the caller PATCHes once, from `onPinMoveEnd`).
+  const [livePosition, setLivePosition] = useState<{ x: number; y: number } | null>(null);
   const dragMoved = useRef(false);
 
   function percentFromEvent(clientX: number, clientY: number): { x: number; y: number } | null {
@@ -69,30 +81,42 @@ export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, classNam
     if (point) onPick(point.x, point.y);
   }
 
+  const canDrag = !!onPinMove || !!onPinMoveEnd;
+
   function handlePinPointerDown(pinId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (!onPinMove) return;
+    if (!canDrag) return;
     event.stopPropagation();
     event.preventDefault();
     event.currentTarget.setPointerCapture(event.pointerId);
     dragMoved.current = false;
+    setLivePosition(null);
     setDraggingId(pinId);
   }
 
   function handlePinPointerMove(pinId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (draggingId !== pinId || !onPinMove) return;
+    if (draggingId !== pinId || !canDrag) return;
     const point = percentFromEvent(event.clientX, event.clientY);
     if (!point) return;
     dragMoved.current = true;
-    onPinMove(pinId, point.x, point.y);
+    setLivePosition(point);
+    onPinMove?.(pinId, point.x, point.y);
   }
 
-  function handlePinPointerUp(pinId: string, event: ReactPointerEvent<HTMLButtonElement>) {
-    if (draggingId === pinId) {
-      event.currentTarget.releasePointerCapture(event.pointerId);
-      setDraggingId(null);
+  function endDrag(pinId: string, event: ReactPointerEvent<HTMLButtonElement>) {
+    if (draggingId !== pinId) return;
+    event.currentTarget.releasePointerCapture(event.pointerId);
+    setDraggingId(null);
+    if (dragMoved.current) {
+      // The final dropped position — this is the single save point. Recompute
+      // from the event rather than trusting state timing, same clamp as every
+      // other position read.
+      const point = percentFromEvent(event.clientX, event.clientY) ?? livePosition;
+      if (point) onPinMoveEnd?.(pinId, point.x, point.y);
+    } else {
       // A tap that never moved is a click, not a drag-drop.
-      if (!dragMoved.current) onPinClick?.(pinId);
+      onPinClick?.(pinId);
     }
+    setLivePosition(null);
   }
 
   return (
@@ -118,33 +142,38 @@ export function PinnedPhoto({ src, pins, onPick, onPinClick, onPinMove, classNam
         }}
         className="h-full w-full object-contain"
       />
-      {pins.map((pin) => (
-        <motion.button
-          key={pin.id}
-          type="button"
-          onPointerDown={(event) => handlePinPointerDown(pin.id, event)}
-          onPointerMove={(event) => handlePinPointerMove(pin.id, event)}
-          onPointerUp={(event) => handlePinPointerUp(pin.id, event)}
-          onClick={(event) => {
-            event.stopPropagation();
-            if (!onPinMove) onPinClick?.(pin.id);
-          }}
-          className={cn(
-            "absolute flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-sm font-semibold shadow-soft",
-            onPinMove ? "cursor-grab touch-none active:cursor-grabbing" : onPinClick ? "cursor-pointer" : "cursor-default",
-            TONE_CLASS[pin.tone],
-          )}
-          style={{ left: `${pin.x}%`, top: `${pin.y}%` }}
-          animate={
-            pin.tone === "active"
-              ? { scale: [1, 1.18, 1] }
-              : { scale: 1 }
-          }
-          transition={pin.tone === "active" ? { duration: 1.4, repeat: Infinity, ease: "easeInOut" } : { duration: 0.15 }}
-        >
-          {pin.n}
-        </motion.button>
-      ))}
+      {pins.map((pin) => {
+        const isDragging = draggingId === pin.id;
+        const position = isDragging && livePosition ? livePosition : { x: pin.x, y: pin.y };
+        return (
+          <motion.button
+            key={pin.id}
+            type="button"
+            onPointerDown={(event) => handlePinPointerDown(pin.id, event)}
+            onPointerMove={(event) => handlePinPointerMove(pin.id, event)}
+            onPointerUp={(event) => endDrag(pin.id, event)}
+            onPointerCancel={(event) => endDrag(pin.id, event)}
+            onClick={(event) => {
+              event.stopPropagation();
+              if (!canDrag) onPinClick?.(pin.id);
+            }}
+            className={cn(
+              "absolute flex h-9 w-9 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full border-2 text-sm font-semibold shadow-soft",
+              canDrag ? "cursor-grab touch-none active:cursor-grabbing" : onPinClick ? "cursor-pointer" : "cursor-default",
+              TONE_CLASS[pin.tone],
+            )}
+            style={{ left: `${position.x}%`, top: `${position.y}%` }}
+            animate={
+              pin.tone === "active"
+                ? { scale: [1, 1.18, 1] }
+                : { scale: 1 }
+            }
+            transition={pin.tone === "active" ? { duration: 1.4, repeat: Infinity, ease: "easeInOut" } : { duration: 0.15 }}
+          >
+            {pin.n}
+          </motion.button>
+        );
+      })}
     </div>
   );
 }
