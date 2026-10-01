@@ -2,13 +2,16 @@
 
 KEPT      users, roles and permissions, products (and their classification / tags /
           attributes), UoMs, currencies, warehouse locations, suppliers, machines
-          (maintenance.equipment), work centers, molds, recipes, packaging BOMs, team
+          (maintenance.equipment, their photo maps and checkpoints, maintenance teams
+          and preventive programs), work centers, molds, recipes, packaging BOMs, team
           rosters, shift windows, report options, waste types and every other
           configuration table.
 WIPED     work orders (OF) and regrind orders (OFR), the legacy Daily/Conditionnement
           reports and the per-shift reports with everything under them, QC reports and
           non-conformities, stock moves and lots, cycle counts, purchasing, sales, CRM,
-          finance, HR, the audit log, the event outbox and the AI assistant history.
+          finance, HR, maintenance jobs (checks, entries, reviews, timeline) and parts
+          requests, in-app notifications, the audit log, the event outbox and the AI
+          assistant history.
 ZEROED    every stock quantity in warehouse.stock_items (the rows stay, so each
           product/location keeps its place -- only on-hand / reserved / in-production
           go to 0) and the OF-/OFR-/NC- numbering counters.
@@ -141,6 +144,14 @@ PURGE_TABLES = [
     "warehouse.cost_layer_consumptions",
     "warehouse.cost_layers",
     "warehouse.replenishment_proposals",
+    "core.notifications",
+    "maintenance.jobs",
+    "maintenance.job_checks",
+    "maintenance.check_entries",
+    "maintenance.check_reviews",
+    "maintenance.job_events",
+    "maintenance.part_requests",
+    "maintenance.part_request_lines",
 ]
 
 # Tables that are edited in place rather than emptied (see purge()).
@@ -189,6 +200,12 @@ KEPT_TABLES = [
     "finance.periods",
     "finance.posting_rules",
     "maintenance.equipment",
+    "maintenance.equipment_views",
+    "maintenance.checkpoints",
+    "maintenance.programs",
+    "maintenance.program_checkpoints",
+    "maintenance.teams",
+    "maintenance.team_members",
     "payroll.bank_file_templates",
     "payroll.components",
     "payroll.contributions",
