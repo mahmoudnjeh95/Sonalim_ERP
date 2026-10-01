@@ -344,7 +344,7 @@ def test_checkpoints_by_ids_returns_dicts_in_the_requested_order(db, actor):
     assert [c["id"] for c in result.value] == [second["id"], first["id"]]
     assert set(result.value[0].keys()) == {
         "id", "view_id", "x_pct", "y_pct", "label", "action", "instructions", "measure_unit",
-        "requires_photo", "sort_order", "archived_at",
+        "requires_photo", "sort_order", "archived_at", "parts",
     }
 
 

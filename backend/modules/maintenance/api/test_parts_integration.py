@@ -206,7 +206,7 @@ def test_request_then_approve_issues_stock_and_publishes_purchase_for_remainder(
             {
                 "line_id": bearing_line["id"],
                 "product_id": ctx.bearing,
-                "locations": [{"location_id": ctx.store, "location_name": "Magasin pièces", "available": 4.0}],
+                "locations": [{"location_id": ctx.store, "location_name": "Magasin pièces", "available": 4.0, "in_spare_parts": False}],
             },
             {"line_id": belt_line["id"], "product_id": ctx.belt, "locations": []},
         ]
@@ -368,7 +368,7 @@ def test_reserved_and_quarantined_stock_is_not_available_to_issue(db, ctx):
 
     # 5 on hand - 3 reserved; the quarantine location is not offered at all
     assert PartsService(db).availability(T, request_id)["lines"][0]["locations"] == [
-        {"location_id": ctx.store, "location_name": "Magasin pièces", "available": 2.0}
+        {"location_id": ctx.store, "location_name": "Magasin pièces", "available": 2.0, "in_spare_parts": False}
     ]
     for location, quantity in ((ctx.store, 3), (quarantine, 1)):
         refused = _approve(db, ctx, request_id, [{"line_id": line["id"], "location_id": location, "issue_quantity": quantity}])
@@ -420,10 +420,10 @@ def test_availability_lists_every_location_holding_the_part(db, ctx):
 
     assert [line["product_id"] for line in lines] == [ctx.bearing, ctx.oil]
     assert lines[0]["locations"] == [
-        {"location_id": ctx.annex, "location_name": "Annexe atelier", "available": 1.0},
-        {"location_id": ctx.store, "location_name": "Magasin pièces", "available": 4.0},
+        {"location_id": ctx.annex, "location_name": "Annexe atelier", "available": 1.0, "in_spare_parts": False},
+        {"location_id": ctx.store, "location_name": "Magasin pièces", "available": 4.0, "in_spare_parts": False},
     ]
-    assert lines[1]["locations"] == [{"location_id": ctx.annex, "location_name": "Annexe atelier", "available": 12.5}]
+    assert lines[1]["locations"] == [{"location_id": ctx.annex, "location_name": "Annexe atelier", "available": 12.5, "in_spare_parts": False}]
     assert PartsService(db).availability(T, "no-such-request") is None
     assert PartsService(db).availability(OTHER_TENANT, request_id) is None
 

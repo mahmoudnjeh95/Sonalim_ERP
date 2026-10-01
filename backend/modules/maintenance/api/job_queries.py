@@ -13,6 +13,7 @@ import psycopg
 
 from modules.maintenance.api.parts_service import list_part_requests
 from modules.maintenance.api.people import employee_names, user_names
+from modules.maintenance.api.spare_parts_service import SparePartsService
 
 __all__ = ["entry_photo", "job_detail", "list_jobs"]
 
@@ -248,6 +249,14 @@ def job_detail(connection: psycopg.Connection, tenant_id: str, job_id: str, toda
             requires_photo, assignee_id, state, attempt,
         ) in check_rows
     ]
+
+    # The spare parts each check's point needs, read live from the point with what the
+    # spare-parts location has available; a free task (no point) needs none.
+    parts = SparePartsService(connection).parts_with_stock(
+        tenant_id, [check["checkpoint_id"] for check in checks if check["checkpoint_id"] is not None]
+    )
+    for check in checks:
+        check["parts"] = parts.get(check["checkpoint_id"], []) if check["checkpoint_id"] is not None else []
 
     timeline = [
         {

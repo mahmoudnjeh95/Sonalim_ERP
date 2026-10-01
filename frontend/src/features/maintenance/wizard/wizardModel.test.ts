@@ -48,6 +48,7 @@ const check = (id: string, extra: Partial<JobCheck> = {}): JobCheck => ({
   attempt: 1,
   entries: [],
   reviews: [],
+  parts: [],
   ...extra,
 });
 

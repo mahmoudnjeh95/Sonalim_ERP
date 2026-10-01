@@ -301,7 +301,13 @@ export function ProgramDialog({
                 control={control}
                 name="checkpoint_ids"
                 render={({ field }) => (
-                  <CheckpointPicker views={views} value={field.value} onChange={field.onChange} isLoading={viewsLoading} />
+                  <CheckpointPicker
+                    equipmentId={equipmentId}
+                    views={views}
+                    value={field.value}
+                    onChange={field.onChange}
+                    isLoading={viewsLoading}
+                  />
                 )}
               />
             ) : (

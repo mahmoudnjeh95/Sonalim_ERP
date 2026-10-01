@@ -20,6 +20,11 @@ _STATUS_BY_CODE = {
 }
 
 
+class CheckpointPart(BaseModel):
+    product_id: str
+    quantity: float
+
+
 class AddCheckpointRequest(BaseModel):
     x_pct: float
     y_pct: float
@@ -28,6 +33,7 @@ class AddCheckpointRequest(BaseModel):
     instructions: str | None = None
     measure_unit: str | None = None
     requires_photo: bool = False
+    parts: list[CheckpointPart] = []
 
 
 class UpdateCheckpointRequest(BaseModel):
@@ -39,6 +45,8 @@ class UpdateCheckpointRequest(BaseModel):
     measure_unit: str | None = None
     requires_photo: bool | None = None
     sort_order: int | None = None
+    # Replaces the point's whole list ([] clears it); left out it is left as it is.
+    parts: list[CheckpointPart] | None = None
 
 
 def _result(connection, result):
@@ -151,6 +159,7 @@ def add_checkpoint(
                 instructions=body.instructions,
                 measure_unit=body.measure_unit,
                 requires_photo=body.requires_photo,
+                parts=[part.model_dump() for part in body.parts],
             ),
         )
 
@@ -179,6 +188,7 @@ def update_checkpoint(
                 measure_unit_set="measure_unit" in fields_set,
                 requires_photo=body.requires_photo,
                 sort_order=body.sort_order,
+                parts=[part.model_dump() for part in body.parts] if body.parts is not None else None,
             ),
         )
 

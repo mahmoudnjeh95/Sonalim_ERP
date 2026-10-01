@@ -33,6 +33,7 @@ from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.maintenance.api import notifications
 from modules.maintenance.api.people import user_names
+from modules.maintenance.api.spare_parts_service import SparePartsService
 from modules.maintenance.domain.parts import split_line
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.service import StockService
@@ -320,7 +321,9 @@ class PartsService:
     def availability(self, tenant_id: str, request_id: str) -> dict | None:
         """Per line, every location holding some of its product that may be promised:
         `available = on hand - reserved`, blocked (quarantine) locations left out, only
-        locations with something available, by name. None when there is no such request."""
+        locations with something available, by name. `in_spare_parts` marks the
+        spare-parts location and the ones under it, which the approval puts first.
+        None when there is no such request."""
         request = self._request(tenant_id, request_id)
         if request is None:
             return None
@@ -342,10 +345,16 @@ class PartsService:
             for location in LocationService(self._connection).get_locations_by_ids(tenant_id=tenant_id, location_ids=location_ids)
         }
 
+        spare = SparePartsService(self._connection).spare_locations(tenant_id)
         result_lines = []
         for line in lines:
             offered = [
-                {"location_id": location_id, "location_name": locations[location_id].name, "available": float(available)}
+                {
+                    "location_id": location_id,
+                    "location_name": locations[location_id].name,
+                    "available": float(available),
+                    "in_spare_parts": location_id in spare,
+                }
                 for location_id, available in available_by_product.get(line.product_id, [])
                 if location_id in locations and not locations[location_id].is_blocked
             ]

@@ -9,6 +9,7 @@ import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { usePartRequests, type PartRequest } from "./api";
 import { useHasPermission } from "./hooks";
 import { PartRequestCard } from "./parts/PartRequestCard";
+import { SparePartsLocationCard } from "./parts/SparePartsLocationCard";
 
 const STATUS_FILTERS = ["pending", "approved", "rejected"] as const;
 type StatusFilter = (typeof STATUS_FILTERS)[number];
@@ -23,7 +24,8 @@ const STATUS_FILTER_LABEL_KEY: Record<StatusFilter, TranslationKey> = {
  * The Parts tab: every spare-parts request, filtered by status
  * (En attente / Approuvées / Refusées). A supervisor (`maintenance.plan_jobs`)
  * can decide a pending one straight from its card (Valider opens
- * `ApproveDialog`, Refuser a short note dialog).
+ * `ApproveDialog`, Refuser a short note dialog), and picks the warehouse
+ * location spare parts are kept in.
  */
 export function PartsTab() {
   const { session } = useAuth();
@@ -36,6 +38,7 @@ export function PartsTab() {
 
   return (
     <div className="space-y-4">
+      {canDecide && <SparePartsLocationCard />}
       <FilterTabs
         options={STATUS_FILTERS.map((status) => ({ value: status, label: t(STATUS_FILTER_LABEL_KEY[status]) }))}
         value={statusFilter}

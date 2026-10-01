@@ -92,6 +92,29 @@ export interface Person {
   name: string;
 }
 
+/** A spare part a checkpoint's work needs, in the product's own unit. */
+export interface CheckpointPart {
+  product_id: string;
+  product_name: string;
+  sku: string;
+  uom_id: string;
+  uom_code: string;
+  quantity: number;
+}
+
+/** A shelf (or the spare-parts location itself) holding some of a part: `location_name` is its path, e.g. "Pièces de rechange › Étagère B". */
+export interface SparePartLocation {
+  location_id: string;
+  location_name: string;
+  available: number;
+}
+
+/** A check's part, with what the spare-parts location has available in total and shelf by shelf (0 and [] when no location is set). */
+export interface CheckPart extends CheckpointPart {
+  available: number;
+  locations: SparePartLocation[];
+}
+
 export interface Checkpoint {
   id: string;
   view_id: string;
@@ -104,6 +127,7 @@ export interface Checkpoint {
   requires_photo: boolean;
   sort_order: number;
   archived_at: string | null;
+  parts: CheckpointPart[];
 }
 
 /** Image at GET /views/{id}/image?v=<updated_at>. */
@@ -191,6 +215,8 @@ export interface JobCheck {
   attempt: number;
   entries: CheckEntry[];
   reviews: CheckReview[];
+  /** The spare parts the check's point needs, read live from the point; [] for a free task. */
+  parts: CheckPart[];
 }
 
 export interface JobEvent {
@@ -277,6 +303,39 @@ export interface AvailabilityLocation {
   location_id: string;
   location_name: string;
   available: number;
+  /** The spare-parts location or one under it: the approval offers these first. */
+  in_spare_parts: boolean;
+}
+
+export interface MaintenanceSettings {
+  spare_parts_location_id: string | null;
+  spare_parts_location_name: string | null;
+}
+
+export interface LocationOption {
+  id: string;
+  code: string;
+  name: string;
+  /** The location's path, e.g. "Pièces de rechange › Étagère B". */
+  label: string;
+}
+
+/** A product the map editor offers for a checkpoint: kept in the spare-parts location (default location or stock there). */
+export interface SparePartProduct {
+  product_id: string;
+  name: string;
+  sku: string;
+  uom_id: string;
+  uom_code: string;
+  uom_integer_only: boolean;
+  available: number;
+  locations: SparePartLocation[];
+}
+
+export interface SparePartsCatalog {
+  location_id: string | null;
+  location_name: string | null;
+  products: SparePartProduct[];
 }
 
 export interface AvailabilityLine {
@@ -304,6 +363,9 @@ export const MAINTENANCE_PROGRAMS_QUERY_KEY = ["maintenance", "programs"] as con
 export const maintenanceCalendarKey = (from: string, to: string) => ["maintenance", "calendar", from, to] as const;
 export const maintenancePartRequestsKey = (status?: PartRequest["status"]) => ["maintenance", "part-requests", status ?? "all"] as const;
 export const maintenancePartRequestAvailabilityKey = (id: string) => ["maintenance", "part-requests", id, "availability"] as const;
+export const MAINTENANCE_SETTINGS_QUERY_KEY = ["maintenance", "settings"] as const;
+export const MAINTENANCE_LOCATION_OPTIONS_QUERY_KEY = ["maintenance", "settings", "locations"] as const;
+export const MAINTENANCE_SPARE_PARTS_QUERY_KEY = ["maintenance", "spare-parts"] as const;
 
 /** Every maintenance query key shares this prefix, for a broad invalidation after a mutation that touches more than one list. */
 const MAINTENANCE_PREFIX = ["maintenance"] as const;
@@ -403,6 +465,13 @@ export interface CreateCheckpointInput {
   instructions?: string | null;
   measure_unit?: string | null;
   requires_photo?: boolean;
+  parts?: CheckpointPartInput[];
+}
+
+/** A part on a checkpoint, in the product's own unit. */
+export interface CheckpointPartInput {
+  product_id: string;
+  quantity: number;
 }
 
 export function createCheckpoint(token: string, viewId: string, input: CreateCheckpointInput) {
@@ -418,6 +487,8 @@ export interface UpdateCheckpointInput {
   measure_unit?: string | null;
   requires_photo?: boolean;
   sort_order?: number;
+  /** Replaces the point's whole list ([] clears it); left out it is left as it is. */
+  parts?: CheckpointPartInput[];
 }
 
 export function updateCheckpoint(token: string, checkpointId: string, input: UpdateCheckpointInput) {
@@ -644,6 +715,26 @@ export function rejectPartRequest(token: string, partRequestId: string, note: st
 }
 
 // ---------------------------------------------------------------------------
+// Spare parts
+// ---------------------------------------------------------------------------
+
+export function getMaintenanceSettings(token: string) {
+  return apiFetch<MaintenanceSettings>("/maintenance/settings", { token });
+}
+
+export function updateMaintenanceSettings(token: string, input: { spare_parts_location_id: string | null }) {
+  return apiFetch<MaintenanceSettings>("/maintenance/settings", { method: "PUT", token, body: input });
+}
+
+export function listLocationOptions(token: string) {
+  return apiFetch<LocationOption[]>("/maintenance/settings/locations", { token });
+}
+
+export function getSparePartsCatalog(token: string) {
+  return apiFetch<SparePartsCatalog>("/maintenance/spare-parts", { token });
+}
+
+// ---------------------------------------------------------------------------
 // Query hooks
 // ---------------------------------------------------------------------------
 
@@ -828,6 +919,25 @@ export function useApprovePartRequest(token: Token) {
     ({ partRequestId, input }: { partRequestId: string; input: { lines: ApprovePartRequestLineInput[]; note?: string | null } }) =>
       approvePartRequest(token, partRequestId, input),
   );
+}
+
+/** Which location spare parts are kept in (GET /maintenance/settings, maintenance.view_jobs). */
+export function useMaintenanceSettings(token: Token) {
+  return useQuery({ queryKey: MAINTENANCE_SETTINGS_QUERY_KEY, queryFn: () => getMaintenanceSettings(token), enabled: !!token });
+}
+
+export function useUpdateMaintenanceSettings(token: Token) {
+  return useMaintenanceMutation((input: { spare_parts_location_id: string | null }) => updateMaintenanceSettings(token, input));
+}
+
+/** The warehouse locations a planner picks the spare-parts location from (maintenance.plan_jobs). */
+export function useLocationOptions(token: Token, enabled = true) {
+  return useQuery({ queryKey: MAINTENANCE_LOCATION_OPTIONS_QUERY_KEY, queryFn: () => listLocationOptions(token), enabled: !!token && enabled });
+}
+
+/** The products the map editor offers for a checkpoint (maintenance.manage_checkpoints). */
+export function useSparePartsCatalog(token: Token) {
+  return useQuery({ queryKey: MAINTENANCE_SPARE_PARTS_QUERY_KEY, queryFn: () => getSparePartsCatalog(token), enabled: !!token });
 }
 
 export function useRejectPartRequest(token: Token) {

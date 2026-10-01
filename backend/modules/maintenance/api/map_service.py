@@ -5,6 +5,7 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from modules.maintenance.api.spare_parts_service import checkpoint_parts, save_checkpoint_parts, validate_parts
 from modules.maintenance.domain.jobs import CHECK_ACTIONS
 
 __all__ = ["MapService", "ALLOWED_IMAGE_MIME", "MAX_IMAGE_BYTES"]
@@ -33,6 +34,11 @@ def _checkpoint_dict(row) -> dict:
         "sort_order": sort_order,
         "archived_at": archived_at.isoformat() if archived_at is not None else None,
     }
+
+
+def _parts_payload(parts) -> list[dict]:
+    """The audit trail's view of a parts list: which product, how many."""
+    return [{"product_id": product_id, "quantity": str(quantity)} for product_id, quantity in parts]
 
 
 class MapService:
@@ -182,7 +188,10 @@ class MapService:
         instructions: str | None = None,
         measure_unit: str | None = None,
         requires_photo: bool = False,
+        parts: list[dict] | None = None,
     ) -> Result[dict]:
+        """`parts` are the spare parts the point's work needs, `{product_id, quantity}`
+        in each product's own unit (see `validate_parts`)."""
         view = self._connection.execute(
             "SELECT id FROM maintenance.equipment_views WHERE id = %s AND tenant_id = %s", (view_id, tenant_id)
         ).fetchone()
@@ -192,6 +201,9 @@ class MapService:
         invalid = self._validate_checkpoint(x_pct, y_pct, action)
         if invalid is not None:
             return invalid
+        checked_parts = validate_parts(self._connection, tenant_id, parts or [])
+        if isinstance(checked_parts, Err):
+            return checked_parts
 
         checkpoint_id = str(ULID())
         self._connection.execute(
@@ -202,6 +214,7 @@ class MapService:
             """,
             (checkpoint_id, tenant_id, view_id, x_pct, y_pct, label, action, instructions, measure_unit, requires_photo),
         )
+        save_checkpoint_parts(self._connection, tenant_id, checkpoint_id, checked_parts.value)
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -209,7 +222,7 @@ class MapService:
             action="checkpoint.created",
             entity_type="checkpoint",
             entity_id=checkpoint_id,
-            payload={"view_id": view_id, "label": label, "action": action},
+            payload={"view_id": view_id, "label": label, "action": action, "parts": _parts_payload(checked_parts.value)},
         )
         return Ok(self._get_checkpoint(tenant_id, checkpoint_id))
 
@@ -229,7 +242,10 @@ class MapService:
         measure_unit_set: bool = False,
         requires_photo: bool | None = None,
         sort_order: int | None = None,
+        parts: list[dict] | None = None,
     ) -> Result[dict]:
+        """Only the given fields change. `parts` replaces the point's whole list ([]
+        clears it); None leaves it alone."""
         row = self._connection.execute(
             f"SELECT {_CHECKPOINT_COLUMNS} FROM maintenance.checkpoints WHERE id = %s AND tenant_id = %s FOR UPDATE",
             (checkpoint_id, tenant_id),
@@ -250,6 +266,9 @@ class MapService:
         invalid = self._validate_checkpoint(updated_x, updated_y, updated_action)
         if invalid is not None:
             return invalid
+        checked_parts = validate_parts(self._connection, tenant_id, parts) if parts is not None else None
+        if isinstance(checked_parts, Err):
+            return checked_parts
 
         self._connection.execute(
             """
@@ -270,6 +289,10 @@ class MapService:
                 checkpoint_id,
             ),
         )
+        payload: dict = {"label": updated_label, "action": updated_action}
+        if checked_parts is not None:
+            save_checkpoint_parts(self._connection, tenant_id, checkpoint_id, checked_parts.value)
+            payload["parts"] = _parts_payload(checked_parts.value)
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -277,7 +300,7 @@ class MapService:
             action="checkpoint.updated",
             entity_type="checkpoint",
             entity_id=checkpoint_id,
-            payload={"label": updated_label, "action": updated_action},
+            payload=payload,
         )
         return Ok(self._get_checkpoint(tenant_id, checkpoint_id))
 
@@ -313,7 +336,7 @@ class MapService:
             """,
             (tenant_id, equipment_id),
         ).fetchall()
-        return [_checkpoint_dict(row) for row in rows]
+        return self._with_parts(tenant_id, [_checkpoint_dict(row) for row in rows])
 
     def checkpoints_by_ids(self, *, tenant_id: str, ids: list[str]) -> Result[list[dict]]:
         """Used by B4 to snapshot a job's checks from the map. Err `UNKNOWN_CHECKPOINT`
@@ -326,7 +349,7 @@ class MapService:
             f"SELECT {_CHECKPOINT_COLUMNS} FROM maintenance.checkpoints WHERE tenant_id = %s AND id = ANY(%s) AND archived_at IS NULL",
             (tenant_id, distinct_ids),
         ).fetchall()
-        found = {row[0]: _checkpoint_dict(row) for row in rows}
+        found = {checkpoint["id"]: checkpoint for checkpoint in self._with_parts(tenant_id, [_checkpoint_dict(row) for row in rows])}
         missing = [cid for cid in distinct_ids if cid not in found]
         if missing:
             return Err(
@@ -368,7 +391,7 @@ class MapService:
         row = self._connection.execute(
             f"SELECT {_CHECKPOINT_COLUMNS} FROM maintenance.checkpoints WHERE id = %s AND tenant_id = %s", (checkpoint_id, tenant_id)
         ).fetchone()
-        return _checkpoint_dict(row)
+        return self._with_parts(tenant_id, [_checkpoint_dict(row)])[0]
 
     def _view_dict(self, tenant_id: str, row: tuple, *, include_archived: bool) -> dict:
         view_id, equipment_id, label, sort_order, image_mime, updated_at = row
@@ -384,5 +407,12 @@ class MapService:
             "sort_order": sort_order,
             "image_mime": image_mime,
             "updated_at": updated_at.isoformat(),
-            "checkpoints": [_checkpoint_dict(r) for r in checkpoint_rows],
+            "checkpoints": self._with_parts(tenant_id, [_checkpoint_dict(r) for r in checkpoint_rows]),
         }
+
+    def _with_parts(self, tenant_id: str, checkpoints: list[dict]) -> list[dict]:
+        """Sets each checkpoint's `parts` (the spare parts its work needs), in one query."""
+        parts = checkpoint_parts(self._connection, tenant_id, [checkpoint["id"] for checkpoint in checkpoints])
+        for checkpoint in checkpoints:
+            checkpoint["parts"] = parts.get(checkpoint["id"], [])
+        return checkpoints

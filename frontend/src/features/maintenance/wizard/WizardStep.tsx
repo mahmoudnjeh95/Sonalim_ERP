@@ -23,6 +23,7 @@ import { CHECK_ACTION_ICON, CHECK_ACTION_LABEL_KEY, OUTCOME_LABEL_KEY } from "..
 import { PinnedPhoto, type Pin } from "../map/PinnedPhoto";
 import { useAuthedImage } from "../useAuthedImage";
 import { CheckHistory } from "../jobs/CheckHistory";
+import { CheckPartsList } from "../parts/CheckPartsList";
 import { EntryPhoto } from "../jobs/EntryPhoto";
 import { formatDay, formatMeasure, formatTime, latestRejection } from "../jobs/jobFormat";
 import { PhotoProofInput } from "./PhotoProofInput";
@@ -240,6 +241,8 @@ export interface WizardStepProps {
   onResetTimer: () => void;
   onRedo: () => void;
   onCancelRedo: () => void;
+  /** Opens a parts request filled in with the point's spare parts. */
+  onRequestParts: () => void;
 }
 
 /**
@@ -317,6 +320,7 @@ export function WizardStep(props: WizardStepProps) {
             {check.instructions}
           </p>
         )}
+        <CheckPartsList parts={check.parts} onRequest={props.onRequestParts} />
       </div>
 
       {!recording ? (

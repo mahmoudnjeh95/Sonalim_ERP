@@ -49,7 +49,8 @@ export function ApproveDialog({
   const [note, setNote] = useState("");
 
   // Reset when a different request opens, and once its availability arrives pre-fill each
-  // line's location with its best-stocked one and the quantity with min(requested, available there).
+  // line's location with its best-stocked spare-parts location (the best-stocked one anywhere
+  // when the spare-parts location has none) and the quantity with min(requested, available there).
   useEffect(() => {
     if (!open) return;
     setNote("");
@@ -65,7 +66,8 @@ export function ApproveDialog({
       const next: Record<string, LineState> = {};
       for (const line of request.lines) {
         const locations = availability.lines.find((entry) => entry.line_id === line.id)?.locations ?? [];
-        const best = locations.slice().sort((a, b) => b.available - a.available)[0] ?? null;
+        const byStock = locations.slice().sort((a, b) => b.available - a.available);
+        const best = byStock.find((location) => location.in_spare_parts) ?? byStock[0] ?? null;
         const defaultIssue = best ? Math.min(line.quantity, best.available) : 0;
         next[line.id] = {
           location_id: best && defaultIssue > 0 ? best.location_id : "",
@@ -79,7 +81,10 @@ export function ApproveDialog({
 
   const availableByLine = useMemo(() => {
     const map = new Map<string, { location_id: string; location_name: string; available: number }[]>();
-    for (const line of availability?.lines ?? []) map.set(line.line_id, line.locations);
+    // The spare-parts location and the ones under it first, each group in the server's (name) order.
+    for (const line of availability?.lines ?? []) {
+      map.set(line.line_id, [...line.locations.filter((l) => l.in_spare_parts), ...line.locations.filter((l) => !l.in_spare_parts)]);
+    }
     return map;
   }, [availability]);
 

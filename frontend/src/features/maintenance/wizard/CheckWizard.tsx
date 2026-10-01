@@ -31,6 +31,7 @@ import { WORKABLE_STATUSES, apiErrorMessage, latestEntry } from "../jobs/jobForm
 import { TimerActionButton, useWizardTimers } from "./StepTimer";
 import { WizardStep, fieldId } from "./WizardStep";
 import { WizardSummary } from "./WizardSummary";
+import { PartRequestDialog } from "../parts/PartRequestDialog";
 import {
   DRAFT_FIELDS,
   EMPTY_DRAFT,
@@ -261,6 +262,8 @@ function WizardRun({ job, onSubmitted }: { job: JobDetail; onSubmitted: () => vo
   const [direction, setDirection] = useState(1);
   const [savedFlash, setSavedFlash] = useState<{ n: number; key: number } | null>(null);
   const [leaveOpen, setLeaveOpen] = useState(false);
+  // The check whose spare parts fill the open parts request; null when it is closed.
+  const [partsCheck, setPartsCheck] = useState<JobDetail["checks"][number] | null>(null);
   const [showEveryone, setShowEveryone] = useState(false);
   const [lastPerformer, setLastPerformer] = useState<string | null>(() => readLastPerformer());
 
@@ -579,6 +582,7 @@ function WizardRun({ job, onSubmitted }: { job: JobDetail; onSubmitted: () => vo
                   dropDraft(current.id);
                   timers.clear(current.id);
                 }}
+                onRequestParts={() => setPartsCheck(current)}
               />
             ) : (
               <WizardSummary
@@ -689,6 +693,24 @@ function WizardRun({ job, onSubmitted }: { job: JobDetail; onSubmitted: () => vo
           </div>
         </div>
       </footer>
+
+      <PartRequestDialog
+        job={job}
+        open={partsCheck !== null}
+        onOpenChange={(open) => {
+          if (!open) setPartsCheck(null);
+        }}
+        initial={
+          partsCheck
+            ? {
+                lines: partsCheck.parts.map((part) => ({ product_id: part.product_id, quantity: part.quantity })),
+                note: t("maintenance.parts.requestFromPoint.note")
+                  .replace("{number}", String(numbers.get(partsCheck.id) ?? ""))
+                  .replace("{label}", partsCheck.label),
+              }
+            : undefined
+        }
+      />
 
       <Dialog open={leaveOpen} onOpenChange={setLeaveOpen}>
         <DialogContent>

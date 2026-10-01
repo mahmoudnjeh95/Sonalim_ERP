@@ -789,6 +789,7 @@ def test_job_detail_has_the_contract_shape(db, ctx):
     assert set(detail["checks"][0]) == {
         "id", "sort_order", "checkpoint_id", "view_id", "x_pct", "y_pct", "label", "action", "instructions",
         "measure_unit", "requires_photo", "assignee_employee_id", "assignee_name", "state", "attempt", "entries", "reviews",
+        "parts",
     }
     assert set(detail["timeline"][0]) == {"id", "at", "actor_id", "actor_name", "kind", "payload"}
 

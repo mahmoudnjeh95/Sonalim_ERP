@@ -33,6 +33,7 @@ import {
 import { useAuthedImage } from "../useAuthedImage";
 import { shrinkImageToFile } from "./shrinkImageFile";
 import { PinnedPhoto, type Pin } from "./PinnedPhoto";
+import { PartsCount } from "./CheckpointPicker";
 import { CheckpointForm } from "./CheckpointForm";
 
 /** The label+image dialog shared by "Ajouter une vue" and "Remplacer la photo". */
@@ -559,6 +560,7 @@ function CheckpointsList({
                 {pin.n}
               </span>
               <span className="min-w-0 flex-1 truncate">{checkpoint.label}</span>
+              {checkpoint.parts.length > 0 && <PartsCount count={checkpoint.parts.length} />}
             </button>
           </li>
         );

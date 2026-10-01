@@ -40,13 +40,38 @@ function emptyForm(): PartRequestForm {
   return { lines: [{ product_id: "", quantity: "" }], note: "" };
 }
 
+/** Lines and note a request opens with: a check's spare parts, from the guided check. */
+export interface PartRequestInitial {
+  lines: { product_id: string; quantity: number }[];
+  note: string;
+}
+
+function initialForm(initial: PartRequestInitial | undefined): PartRequestForm {
+  if (!initial || initial.lines.length === 0) return emptyForm();
+  return {
+    lines: initial.lines.map((line) => ({ product_id: line.product_id, quantity: String(line.quantity) })),
+    note: initial.note,
+  };
+}
+
 /**
- * The chef's "Demander des pièces" dialog, opened from the job page. A line
- * repeater (product + quantity, always in the product's own unit — the
- * backend refuses any other `uom_id` with `UOM_MISMATCH` because stock is
- * issued in that unit with no conversion) plus a free-text note.
+ * The chef's "Demander des pièces" dialog, opened from the job page, or from a
+ * step of the guided check with that point's spare parts already filled in
+ * (`initial`). A line repeater (product + quantity, always in the product's own
+ * unit — the backend refuses any other `uom_id` with `UOM_MISMATCH` because
+ * stock is issued in that unit with no conversion) plus a free-text note.
  */
-export function PartRequestDialog({ job, open, onOpenChange }: { job: JobDetail; open: boolean; onOpenChange: (open: boolean) => void }) {
+export function PartRequestDialog({
+  job,
+  open,
+  onOpenChange,
+  initial,
+}: {
+  job: JobDetail;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  initial?: PartRequestInitial;
+}) {
   const { session } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
@@ -68,7 +93,7 @@ export function PartRequestDialog({ job, open, onOpenChange }: { job: JobDetail;
 
   useEffect(() => {
     if (open) {
-      reset(emptyForm());
+      reset(initialForm(initial));
       createRequest.reset();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps

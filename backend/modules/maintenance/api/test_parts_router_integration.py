@@ -150,7 +150,7 @@ def test_request_availability_and_approve_over_http(api):
             {
                 "line_id": line["id"],
                 "product_id": api.bearing,
-                "locations": [{"location_id": api.store, "location_name": "Magasin pièces", "available": 3.0}],
+                "locations": [{"location_id": api.store, "location_name": "Magasin pièces", "available": 3.0, "in_spare_parts": False}],
             }
         ]
     }
