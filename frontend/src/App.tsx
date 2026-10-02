@@ -7,6 +7,7 @@ import { AuthProvider } from "./lib/auth";
 import { I18nProvider } from "./lib/i18n";
 import { HelpTooltipProvider } from "./components/patterns/HelpTooltip";
 import { AppSplash } from "./components/patterns/AppSplash";
+import { BrandStage } from "./components/patterns/brand3d/BrandStage";
 import { router } from "./routes/router";
 
 export default function App() {
@@ -16,6 +17,7 @@ export default function App() {
     <QueryClientProvider client={queryClient}>
       <I18nProvider>
         <AuthProvider>
+          <BrandStage />
           {showSplash && <AppSplash onFinished={() => setShowSplash(false)} />}
           <HelpTooltipProvider delayDuration={200}>
             <RouterProvider router={router} />
