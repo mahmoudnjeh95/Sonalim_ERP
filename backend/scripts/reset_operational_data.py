@@ -1,17 +1,19 @@
 """Go-live reset: wipes every operational/test record and keeps only the master data.
 
-KEPT      users, roles and permissions, products (and their classification / tags /
-          attributes), UoMs, currencies, warehouse locations, suppliers, machines
-          (maintenance.equipment, their photo maps and checkpoints, maintenance teams
-          and preventive programs), work centers, molds, recipes, packaging BOMs, team
-          rosters, shift windows, report options, waste types and every other
-          configuration table.
+KEPT      users (and their profile photos), roles and permissions, products (and their
+          classification / tags / attributes), UoMs, currencies, warehouse locations,
+          suppliers, machines (maintenance.equipment, their photo maps and checkpoints,
+          maintenance teams and preventive programs), work centers, molds, recipes,
+          packaging BOMs, team rosters, shift windows, report options, waste types, the
+          codes the paper scan learned from corrections, and every other configuration
+          table.
 WIPED     work orders (OF) and regrind orders (OFR), the legacy Daily/Conditionnement
           reports and the per-shift reports with everything under them, QC reports and
           non-conformities, stock moves and lots, cycle counts, purchasing, sales, CRM,
-          finance, HR, maintenance jobs (checks, entries, reviews, timeline) and parts
-          requests, in-app notifications, the audit log, the event outbox and the AI
-          assistant history.
+          finance, HR (and the shift-role to HR-position mapping, whose positions go with
+          it), maintenance jobs (checks, entries, reviews, timeline) and parts requests,
+          paper scans (fiche photos and what was read on them), in-app notifications, the
+          audit log, the event outbox and the AI assistant history.
 ZEROED    every stock quantity in warehouse.stock_items (the rows stay, so each
           product/location keeps its place -- only on-hand / reserved / in-production
           go to 0) and the OF-/OFR-/NC- numbering counters.
@@ -135,6 +137,11 @@ PURGE_TABLES = [
     "production.stock_release_lines",
     "production.ia_assistant_conversations",
     "production.ia_assistant_messages",
+    # Configuration, but every row names an hr.positions id, and hr.positions is wiped above.
+    "production.shift_role_positions",
+    "scan.scan_sessions",
+    "scan.scan_pages",
+    "scan.scan_field_outcomes",
     "warehouse.stock_moves",
     "warehouse.lot_stock",
     "warehouse.lots",
@@ -184,6 +191,7 @@ KEPT_TABLES = [
     "core.roles",
     "core.sessions",
     "core.uoms",
+    "core.user_avatars",
     "core.user_permissions",
     "core.user_roles",
     "core.user_table_preferences",
@@ -237,6 +245,7 @@ KEPT_TABLES = [
     "production.waste_types",
     "production.waste_type_builtin_settings",
     "production.work_centers",
+    "scan.scan_aliases",
     "warehouse.locations",
     "warehouse.sites",
     "warehouse.putaway_rules",
