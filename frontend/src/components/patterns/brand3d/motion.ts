@@ -115,8 +115,10 @@ export interface GrainSeed {
   index: number;
   /** The piece it condenses into (modulo the live piece count). */
   piece: number;
-  /** 0..0.35: how far behind the stream's head it travels. */
+  /** 0..0.35: its stagger while condensing into a piece. */
   lag: number;
+  /** 0..1: where along the stream it rides, so the grains fill the whole spiral rather than one ring. */
+  trail: number;
   angle: number;
   radial: number;
   offset: Vec3;
@@ -144,6 +146,7 @@ export function grainSeeds(count: number, seed: number): GrainSeed[] {
       rise: lerp(0.03, 0.1, r()),
       glow: r() < 0.04,
       tone: r(),
+      trail: r(),
     };
   });
 }
@@ -167,7 +170,9 @@ export function grainPosition(
   out: Vec3,
 ): number {
   if (intro && intro.t < INTRO.pastaEnd) {
-    const v = clamp01(intro.state.stream * 1.35 - g.lag);
+    // Twice the stream's pace, minus the grain's place in it: the tail is still deep in when the head arrives,
+    // and every grain has reached the centre when the stream ends.
+    const v = clamp01(intro.state.stream * 2 - g.trail);
     streamPoint(g, v, out);
     const c = brandEase(progress(intro.state.condense, g.lag, 0.55));
     if (c > 0) {

@@ -33,7 +33,7 @@ export function createSemolina(seeds: readonly GrainSeed[]): Semolina {
     points.frustumCulled = false;
     return { members, positions, colours, geometry, material, points };
   };
-  const layers = [layer(seeds.filter((g) => !g.glow), 0.035, 1), layer(seeds.filter((g) => g.glow), 0.09, 4)];
+  const layers = [layer(seeds.filter((g) => !g.glow), 0.045, 1), layer(seeds.filter((g) => g.glow), 0.09, 4)];
   const out: Vec3 = [0, 0, 0];
 
   return {

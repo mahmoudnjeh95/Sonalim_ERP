@@ -166,7 +166,7 @@ function IntroOverlay({ onHandoff }: { onHandoff: () => void }) {
       <button
         type="button"
         onClick={() => stageStore.skipIntro()}
-        className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] right-6 rounded-full px-3 py-1.5 text-xs font-medium uppercase tracking-[0.2em] text-white/60 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A900]/60"
+        className="absolute bottom-[calc(1.5rem+env(safe-area-inset-bottom,0px))] right-6 rounded-full bg-[#071F43]/70 px-3 py-1.5 text-xs font-medium uppercase tracking-[0.2em] text-white/60 transition-colors hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#F5A900]/60"
       >
         {t("app.skipIntro")}
       </button>

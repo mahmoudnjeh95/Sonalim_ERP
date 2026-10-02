@@ -70,6 +70,22 @@ describe("grains", () => {
   const poses: Pose[] = SEEDS.map((p) => piecePose(p, at, introState(at)));
   const out: Vec3 = [0, 0, 0];
 
+  it("stream in along the whole spiral at the open, from the depth to the centre", () => {
+    const zs: number[] = [];
+    for (const g of GRAINS) {
+      if (grainPosition(g, 0.6, { t: 0.6, state: introState(0.6) }, poses, 60, out) > 0) zs.push(out[2]);
+    }
+    expect(Math.min(...zs)).toBeLessThan(-10);
+    expect(Math.max(...zs)).toBeGreaterThan(-3);
+  });
+
+  it("have all reached the centre when the stream ends", () => {
+    for (const g of GRAINS) {
+      grainPosition(g, 1.2, { t: 1.2, state: introState(1.2) }, poses, 60, out);
+      expect(Math.abs(out[2])).toBeLessThan(1e-9);
+    }
+  });
+
   it("are invisible before the stream reaches them", () => {
     for (const g of GRAINS) expect(grainPosition(g, 0, { t: 0, state: introState(0) }, poses, 60, out)).toBe(0);
   });

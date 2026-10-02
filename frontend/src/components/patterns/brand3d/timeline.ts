@@ -114,7 +114,8 @@ function introPose(t: number, aspect: number): CameraPose {
     radius: fitDistance(INTRO_FIT, FOV, aspect) * lerp(0.75, 1, settle),
     azimuth: lerp(-18, -6, drift),
     elevation: lerp(8, 3, drift),
-    target: [0, 0, 0],
+    // Opens looking down the semolina stream (deep behind the logo's place), then settles on the logo.
+    target: [0, 0, lerp(-5, 0, settle)],
   };
 }
 

@@ -92,6 +92,11 @@ describe("cameraPose", () => {
     expect(a.elevation).toBeCloseTo(b.elevation, 2);
   });
 
+  it("opens looking down the semolina stream, behind the logo's place", () => {
+    expect(cameraPose(0, 0, 16 / 9).target[2]).toBeLessThan(-3);
+    expect(cameraPose(INTRO.pastaEnd, 0, 16 / 9).target).toEqual([0, 0, 0]);
+  });
+
   it("frames the logo closer during the intro than the login does", () => {
     expect(cameraPose(3, 3, 16 / 9).radius).toBeLessThan(cameraPose(null, 3, 16 / 9).radius);
   });

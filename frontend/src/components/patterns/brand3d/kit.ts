@@ -138,15 +138,15 @@ export function untoneColor(hex: string): Color {
   return new Color().setRGB(r, g, b, LinearSRGBColorSpace);
 }
 
-/** A soft round sprite (white centre fading out) for grains and the logo's halo. */
-export function softDisc(size = 64): CanvasTexture {
+/** A soft round sprite (white centre fading out). Grains keep a solid core; the logo's halo uses a low, smooth one. */
+export function softDisc(size = 64, core = 0.45, coreAlpha = 0.9): CanvasTexture {
   const canvas = document.createElement("canvas");
   canvas.width = canvas.height = size;
   const ctx = canvas.getContext("2d")!;
   const half = size / 2;
   const gradient = ctx.createRadialGradient(half, half, 0, half, half, half);
   gradient.addColorStop(0, "rgba(255,255,255,1)");
-  gradient.addColorStop(0.45, "rgba(255,255,255,0.9)");
+  gradient.addColorStop(core, `rgba(255,255,255,${coreAlpha})`);
   gradient.addColorStop(1, "rgba(255,255,255,0)");
   ctx.fillStyle = gradient;
   ctx.fillRect(0, 0, size, size);

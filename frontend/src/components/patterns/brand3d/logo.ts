@@ -5,6 +5,7 @@
  */
 import {
   AdditiveBlending,
+  CircleGeometry,
   Color,
   CubicBezierCurve3,
   Curve,
@@ -22,7 +23,7 @@ import {
 } from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import logoSvg from "../../../assets/animations/logo-mark.svg?raw";
-import { BRAND, goldMetal, softDisc } from "./kit";
+import { BRAND, goldMetal, softDisc, untoneColor } from "./kit";
 import { parseLogoSvg, toLogoSpace } from "./logoPaths";
 import type { Vec2 } from "./math";
 import type { LogoState } from "./timeline";
@@ -32,7 +33,7 @@ export interface LogoOptions {
   ringTube?: number;
   /** Multiplier on the SVG stroke widths: the bake thickens small icons. */
   strokeScale?: number;
-  /** Soft additive gold glow behind the mark. */
+  /** Live scene only: a soft gold glow, and a navy backing disc so pasta behind the logo never shows through the ring. */
   halo?: boolean;
 }
 
@@ -110,8 +111,18 @@ export function createLogo({ ringTube = 0.035, strokeScale = 1, halo = true }: L
   materials.push(ringMaterial, faintMaterial, glyphMaterial);
 
   let haloMaterial: MeshBasicMaterial | null = null;
+  let backingMaterial: MeshBasicMaterial | null = null;
   if (halo) {
-    haloMaterial = new MeshBasicMaterial({ map: softDisc(128), color: BRAND.gold, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false });
+    // Exactly the background navy: invisible as a shape, it only hides what passes behind the ring.
+    backingMaterial = new MeshBasicMaterial({ color: untoneColor(BRAND.navyDeep), transparent: true, opacity: 0 });
+    const backingGeometry = new CircleGeometry(ringRadius, 96);
+    const backing = new Mesh(backingGeometry, backingMaterial);
+    backing.position.z = -0.35;
+    group.add(backing);
+    geometries.push(backingGeometry);
+    materials.push(backingMaterial);
+
+    haloMaterial = new MeshBasicMaterial({ map: softDisc(128, 0.3, 0.35), color: BRAND.gold, transparent: true, opacity: 0, blending: AdditiveBlending, depthWrite: false });
     const haloGeometry = new PlaneGeometry(3.2, 3.2);
     const glow = new Mesh(haloGeometry, haloMaterial);
     glow.position.z = -0.3;
@@ -130,7 +141,8 @@ export function createLogo({ ringTube = 0.035, strokeScale = 1, halo = true }: L
       glyph.visible = risen > 0;
       glyphMaterial.opacity = risen;
       glyph.position.y = (1 - risen) * -0.12; // rises into the ring
-      if (haloMaterial) haloMaterial.opacity = 0.35 * drawn;
+      if (haloMaterial) haloMaterial.opacity = 0.2 * drawn;
+      if (backingMaterial) backingMaterial.opacity = drawn;
     },
     dispose() {
       geometries.forEach((g) => g.dispose());

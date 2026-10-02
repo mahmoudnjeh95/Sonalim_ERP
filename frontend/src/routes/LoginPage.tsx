@@ -1,4 +1,4 @@
-import { useState, type FormEvent } from "react";
+import { useLayoutEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { motion, useReducedMotion } from "framer-motion";
 import { Eye, EyeOff, Loader2, Lock, Mail } from "lucide-react";
@@ -10,12 +10,28 @@ import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { BrandWordmark } from "../components/patterns/BrandLoader";
 import { LanguageToggle } from "../components/patterns/LanguageToggle";
-import LogoMark from "../assets/animations/logo-mark.svg?react";
+import { loginRevealed, stageStore, useStage } from "../components/patterns/brand3d/stageStore";
+import logoMark from "../assets/icons/brand/logo-3d-mark-512.png";
+import logoTile88 from "../assets/icons/brand/logo-3d-88.png";
+import logoTile132 from "../assets/icons/brand/logo-3d-132.png";
 
 const FEATURES: TranslationKey[] = ["login.feature.production", "login.feature.quality", "login.feature.warehouse"];
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 
+/** The card: hidden while the welcome intro plays, then it rises; its children follow on their own delays. */
+const card = {
+  hidden: { opacity: 0, y: 18, scale: 0.98 },
+  show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.5, ease: EASE } },
+};
+const fromLeft = {
+  hidden: { opacity: 0, x: -16 },
+  show: { opacity: 1, x: 0, transition: { duration: 0.5, delay: 0.1, ease: EASE } },
+};
+const fromBelow = {
+  hidden: { opacity: 0, y: 20 },
+  show: { opacity: 1, y: 0, transition: { duration: 0.5, delay: 0.2, ease: EASE } },
+};
 /** Entrance for the form column: each child arrives a beat after the previous one. */
 const stagger = {
   hidden: {},
@@ -25,6 +41,14 @@ const rise = {
   hidden: { opacity: 0, y: 14 },
   show: { opacity: 1, y: 0, transition: { duration: 0.45, ease: EASE } },
 };
+
+/**
+ * Navy behind the brand panel's text, carried by the text's own wrapper: clear
+ * at its top edge, at least 85 % from 32 px down (where the tagline starts), so
+ * the text keeps its contrast whatever pasta passes behind and whatever the
+ * panel's height (spec §3). The logo row above it stays clear for the live 3D logo.
+ */
+const PANEL_SCRIM = "linear-gradient(to bottom, rgba(7,31,67,0) 0px, rgba(7,31,67,0.85) 32px, rgba(7,31,67,0.9) 100%)";
 
 const fieldClass =
   "h-11 rounded-xl border-slate-200 bg-slate-50/80 pl-10 text-slate-900 shadow-sm transition-all duration-200 placeholder:text-slate-400 focus:border-[#F5A900] focus:bg-white focus-visible:ring-4 focus-visible:ring-[#F5A900]/15";
@@ -39,6 +63,18 @@ export function LoginPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState(false);
+  const panelSlotRef = useRef<HTMLDivElement>(null);
+  const heroSlotRef = useRef<HTMLDivElement>(null);
+  const revealed = useStage(loginRevealed);
+  // The live 3D logo flies into the slots; until it draws (or with no live 3D) the baked mark holds the place.
+  const live = useStage((s) => s.ready && !s.fallback);
+
+  // Before paint, so the stage's navy is under the page from its first frame (no white flash).
+  useLayoutEffect(() => {
+    const slots = [panelSlotRef.current, heroSlotRef.current].filter((el): el is HTMLDivElement => el !== null);
+    stageStore.set({ loginSlots: slots });
+    return () => stageStore.set({ loginSlots: null });
+  }, []);
 
   async function handleSubmit(event: FormEvent) {
     event.preventDefault();
@@ -55,90 +91,68 @@ export function LoginPage() {
   }
 
   return (
-    <div className="theme-login relative flex min-h-screen items-center justify-center overflow-hidden px-4 py-8">
-      <div className="absolute inset-0 overflow-hidden" aria-hidden="true">
-        <motion.div
-          className="absolute -left-16 top-16 h-72 w-72 rounded-full bg-primary/10 blur-3xl"
-          animate={reduceMotion ? undefined : { x: [0, 30, 0], y: [0, -20, 0], scale: [1, 1.1, 1] }}
-          transition={{ duration: 16, repeat: Infinity, ease: "easeInOut" }}
-        />
-        <motion.div
-          className="absolute -right-20 bottom-10 h-80 w-80 rounded-full bg-accent/10 blur-3xl"
-          animate={reduceMotion ? undefined : { x: [0, -25, 0], y: [0, 18, 0], scale: [1, 1.15, 1] }}
-          transition={{ duration: 18, repeat: Infinity, ease: "easeInOut" }}
-        />
-        <motion.div
-          className="absolute left-1/2 top-1/2 h-96 w-96 -translate-x-1/2 -translate-y-1/2 rounded-full border border-primary/10"
-          animate={reduceMotion ? undefined : { rotate: 360 }}
-          transition={{ duration: 28, repeat: Infinity, ease: "linear" }}
-        />
+    <div className="theme-login relative z-10 flex min-h-screen flex-col items-center justify-center overflow-hidden px-4 py-8">
+      {/* Phones have no brand panel: the live logo hovers here, above the card. */}
+      <div ref={heroSlotRef} aria-hidden="true" className="mb-6 h-24 w-24 md:hidden">
+        {revealed && !live && <img src={logoMark} alt="" className="h-full w-full" />}
       </div>
 
       <motion.div
-        initial={{ opacity: 0, y: 18, scale: 0.98 }}
-        animate={{ opacity: 1, y: 0, scale: 1 }}
-        transition={{ duration: 0.5, ease: EASE }}
-        className="relative z-10 w-full max-w-5xl overflow-hidden rounded-[32px] border border-white/40 bg-white/75 shadow-[0_35px_90px_rgba(7,31,67,0.18)] backdrop-blur-xl"
+        variants={card}
+        initial="hidden"
+        animate={revealed ? "show" : "hidden"}
+        className="relative w-full max-w-5xl overflow-hidden rounded-[32px] border border-white/15 shadow-[0_35px_90px_rgba(0,0,0,0.45)]"
       >
         <div className="grid grid-cols-1 md:grid-cols-[1.1fr_0.9fr]">
-          {/* Brand panel */}
-          <div className="relative hidden min-h-[580px] flex-col justify-between overflow-hidden bg-[#071F43] p-8 text-white md:flex">
-            <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,_rgba(245,169,0,0.22),_transparent_38%),radial-gradient(circle_at_bottom_right,_rgba(255,255,255,0.12),_transparent_30%),linear-gradient(160deg,#071F43,#0E3160)]" />
-            {!reduceMotion && (
-              <motion.div
-                aria-hidden="true"
-                className="pointer-events-none absolute inset-y-0 w-1/3 bg-gradient-to-r from-transparent via-white/[0.06] to-transparent"
-                initial={{ x: "-150%" }}
-                animate={{ x: "450%" }}
-                transition={{ duration: 6, repeat: Infinity, repeatDelay: 4, ease: "easeInOut" }}
-              />
-            )}
-
-            <motion.div
-              initial={{ opacity: 0, x: -16 }}
-              animate={{ opacity: 1, x: 0 }}
-              transition={{ duration: 0.5, delay: 0.1, ease: EASE }}
-              className="relative z-10 flex items-center gap-4"
-            >
-              <div className="flex h-14 w-14 items-center justify-center rounded-2xl border border-white/20 bg-white/10 shadow-[0_12px_30px_rgba(0,0,0,0.25)]">
-                <LogoMark className="h-9 w-9 text-[#F5A900]" />
+          {/* Brand panel: a window onto the 3D scene. */}
+          <div className="relative hidden min-h-[580px] flex-col overflow-hidden border-r border-white/10 p-8 text-white md:flex">
+            <motion.div variants={fromLeft} className="relative z-10 flex items-center gap-4">
+              <div ref={panelSlotRef} aria-hidden="true" className="h-20 w-20 shrink-0">
+                {!live && <img src={logoMark} alt="" className="h-full w-full" />}
               </div>
-              <BrandWordmark tone="dark" size={22} />
+              <div className="rounded-xl bg-[#071F43]/85 px-3 py-2">
+                <BrandWordmark tone="dark" size={22} />
+              </div>
             </motion.div>
 
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ duration: 0.5, delay: 0.2, ease: EASE }}
-              className="relative z-10"
+            <div
+              className="relative z-10 -mx-8 -mb-8 mt-4 flex flex-1 flex-col justify-between gap-8 px-8 pb-8 pt-8"
+              style={{ background: PANEL_SCRIM }}
             >
-              <p className="text-xs uppercase tracking-[0.35em] text-[#F5A900]/90">{t("login.tagline")}</p>
-              <h1 className="mt-5 max-w-md text-4xl font-bold leading-tight text-white">{t("login.heroTitle")}</h1>
-              <p className="mt-4 max-w-md text-base text-slate-300">{t("login.heroSubtitle")}</p>
-            </motion.div>
+              <motion.div variants={fromBelow}>
+                <p className="text-xs uppercase tracking-[0.35em] text-[#F5A900]/90">{t("login.tagline")}</p>
+                <h1 className="mt-5 max-w-md text-4xl font-bold leading-tight text-white">{t("login.heroTitle")}</h1>
+                <p className="mt-4 max-w-md text-base text-slate-300">{t("login.heroSubtitle")}</p>
+              </motion.div>
 
-            <motion.ul variants={stagger} initial="hidden" animate="show" className="relative z-10 grid gap-3">
-              {FEATURES.map((key) => (
-                <motion.li
-                  key={key}
-                  variants={rise}
-                  whileHover={reduceMotion ? undefined : { x: 6 }}
-                  className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-100 backdrop-blur-sm transition-colors hover:border-[#F5A900]/40 hover:bg-white/10"
-                >
-                  <span className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[#F5A900] shadow-[0_0_16px_rgba(245,169,0,0.9)]" />
-                  {t(key)}
-                </motion.li>
-              ))}
-            </motion.ul>
+              <motion.ul variants={stagger} className="grid gap-3">
+                {FEATURES.map((key) => (
+                  <motion.li
+                    key={key}
+                    variants={rise}
+                    whileHover={reduceMotion ? undefined : { x: 6 }}
+                    className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-slate-100 transition-colors hover:border-[#F5A900]/40 hover:bg-white/10"
+                  >
+                    <span className="inline-flex h-2.5 w-2.5 shrink-0 rounded-full bg-[#F5A900] shadow-[0_0_16px_rgba(245,169,0,0.9)]" />
+                    {t(key)}
+                  </motion.li>
+                ))}
+              </motion.ul>
+            </div>
           </div>
 
-          {/* Form panel */}
-          <motion.div variants={stagger} initial="hidden" animate="show" className="flex flex-col bg-white/80 p-6 sm:p-8 md:p-10">
+          {/* Form panel: opaque white (no blur over the live canvas, and no pasta ghosting through the fields). */}
+          <motion.div variants={stagger} className="flex flex-col bg-white p-6 sm:p-8 md:p-10">
             <motion.div variants={rise} className="mb-8 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-gradient-to-br from-primary to-accent text-primary-foreground shadow-[0_10px_30px_rgba(245,169,0,0.35)]">
-                  <LogoMark className="h-7 w-7 text-white" />
-                </div>
+                <img
+                  src={logoTile88}
+                  srcSet={`${logoTile88} 2x, ${logoTile132} 3x`}
+                  alt=""
+                  width={44}
+                  height={44}
+                  className="h-11 w-11 shrink-0 rounded-xl shadow-[0_10px_30px_rgba(245,169,0,0.35)]"
+                />
                 <div>
                   <BrandWordmark tone="light" size={15} />
                   <p className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground">
