@@ -155,3 +155,22 @@ def test_the_oldest_layer_is_drawn_first_whatever_the_ids(db, env):
     cost = ValuationService(db).cost_of_reference(tenant_id=TENANT, reference="shipment:TIE")
     assert cost["cost"] == 10 * 100 + 5 * 150
     assert _valuation(db, env["product"]).value == 5 * 150
+def test_costs_of_references_answers_every_reference_in_one_call(db, env):
+    _receive(db, env, 10, unit_cost=100)
+    stock = StockService(db)
+    for reference, quantity in (("maintenance:MT-1", 3), ("maintenance:MT-2", 2)):
+        issued = stock.issue_stock(
+            tenant_id=TENANT, product_id=env["product"], location_id=env["a"], quantity=quantity,
+            reference=reference, actor_id=env["actor"], move_type="maintenance",
+        )
+        assert isinstance(issued, Ok)
+
+    costs = ValuationService(db).costs_of_references(
+        tenant_id=TENANT, references=["maintenance:MT-1", "maintenance:MT-2", "maintenance:MT-3"]
+    )
+
+    assert {ref: (c["quantity"], c["cost"], c["unvalued_quantity"]) for ref, c in costs.items()} == {
+        "maintenance:MT-1": (3, 300, 0),
+        "maintenance:MT-2": (2, 200, 0),
+        "maintenance:MT-3": (0, 0, 0),
+    }

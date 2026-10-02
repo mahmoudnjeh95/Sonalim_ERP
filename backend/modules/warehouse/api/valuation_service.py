@@ -166,3 +166,30 @@ class ValuationService:
             "unvalued_quantity": unvalued,
             "currency": "XOF",
         }
+
+    def costs_of_references(self, *, tenant_id: str, references: list[str]) -> dict[str, dict]:
+        """`cost_of_reference` for several references in one query. Every reference asked
+        for is in the result; one nothing left under has quantity and cost 0."""
+        rows = self._connection.execute(
+            """
+            SELECT reference, layer_id, quantity, unit_cost FROM warehouse.cost_layer_consumptions
+            WHERE tenant_id = %s AND reference = ANY(%s)
+            """,
+            (tenant_id, list(references)),
+        ).fetchall()
+        allocations: dict[str, list[Allocation]] = {reference: [] for reference in references}
+        for reference, layer_id, quantity, unit_cost in rows:
+            allocations[reference].append(
+                Allocation(layer_id=layer_id, quantity=float(quantity), unit_cost=float(unit_cost) if unit_cost is not None else None)
+            )
+        result: dict[str, dict] = {}
+        for reference, items in allocations.items():
+            cost, unvalued = allocation_cost(items)
+            result[reference] = {
+                "reference": reference,
+                "quantity": sum(a.quantity for a in items),
+                "cost": cost,
+                "unvalued_quantity": unvalued,
+                "currency": "XOF",
+            }
+        return result
