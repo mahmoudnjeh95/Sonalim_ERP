@@ -34,6 +34,10 @@ def _iso(value: datetime.datetime | datetime.date | None) -> str | None:
     return value.isoformat() if value is not None else None
 
 
+def _number(value) -> float | None:
+    return float(value) if value is not None else None
+
+
 def _equipment_not_found(equipment_id: str) -> Err:
     return Err("NOT_FOUND", f"equipment {equipment_id} not found", f"équipement {equipment_id} introuvable")
 
@@ -431,3 +435,140 @@ class HistoryService:
                 }
             )
         return rows
+
+    # ---- one machine's logbook -------------------------------------------------
+
+    def equipment_history(
+        self,
+        *,
+        tenant_id: str,
+        equipment_id: str,
+        date_from: datetime.date,
+        date_to: datetime.date,
+        costs_visible: bool,
+    ) -> Result[dict]:
+        indicators = self.indicators(
+            tenant_id=tenant_id, date_from=date_from, date_to=date_to, costs_visible=costs_visible, equipment_id=equipment_id
+        )
+        if isinstance(indicators, Err):
+            return indicators
+        [machine] = indicators.value["machines"]
+        start, end = period_bounds(date_from, date_to, self._now)
+
+        # (moment, position, item): the position keeps same-instant status changes in chain order.
+        entries: list[tuple[datetime.datetime, int, dict]] = []
+        jobs = self._job_rows(
+            tenant_id,
+            """j.equipment_id = %(equipment)s AND (
+                   (j.created_at >= %(start)s AND j.created_at < %(end)s)
+                OR (j.closed_at >= %(start)s AND j.closed_at < %(end)s)
+                OR (j.cancelled_at >= %(start)s AND j.cancelled_at < %(end)s)
+                OR j.status NOT IN ('closed', 'cancelled'))""",
+            {"equipment": equipment_id, "start": start, "end": end},
+            costs_visible,
+        )
+        for job in jobs:
+            # A closed or cancelled job sits at its end; an open one at its creation.
+            at = job["date"] or job["created_at"]
+            entries.append((datetime.datetime.fromisoformat(at), len(entries), {"kind": "job", "at": at, "job": job}))
+        if self._production is not None:
+            for stop in self._production.stops(tenant_id=tenant_id, date_from=date_from, date_to=date_to, equipment_id=equipment_id):
+                item = {
+                    "kind": "production_stop",
+                    "at": stop["started_at"],
+                    "stop": {
+                        key: stop[key]
+                        for key in (
+                            "started_at", "ended_at", "minutes", "downtime_type", "classification", "motif",
+                            "note", "corrective_action", "report_date", "team", "shift_report_id",
+                        )
+                    },
+                }
+                entries.append((datetime.datetime.fromisoformat(stop["started_at"]), len(entries), item))
+        rows = self._connection.execute(
+            """
+            SELECT occurred_at, payload->>'from_status', payload->>'to_status', actor_id
+            FROM core.audit_log
+            WHERE tenant_id = %s AND entity_type = 'equipment' AND action = 'equipment.status_changed'
+              AND entity_id = %s AND occurred_at >= %s AND occurred_at < %s
+            """,
+            (tenant_id, equipment_id, start, end),
+        ).fetchall()
+        changes = [StatusChange(at=at, from_status=from_status, to_status=to_status) for at, from_status, to_status, _ in rows]
+        # chain_in_order hands back the same objects, so each one finds its actor again by identity.
+        actor_of = {id(change): row[3] for change, row in zip(changes, rows)}
+        actors = user_names(self._connection, tenant_id, [row[3] for row in rows])
+        for change in chain_in_order(changes):
+            item = {
+                "kind": "status_change", "at": change.at.isoformat(), "from_status": change.from_status,
+                "to_status": change.to_status, "actor_name": actors.get(actor_of[id(change)]),
+            }
+            entries.append((change.at, len(entries), item))
+        entries.sort(key=lambda entry: (entry[0], entry[1]), reverse=True)
+
+        summary = {key: machine[key] for key in machine if key not in ("production", "maintenance")}
+        return Ok(
+            {
+                "equipment": summary,
+                "indicators": {"production": machine["production"], "maintenance": machine["maintenance"]},
+                "costs_visible": costs_visible,
+                "production_available": self._production is not None,
+                "timeline": [item for _at, _position, item in entries],
+                "checkpoints": self._checkpoint_summaries(tenant_id, equipment_id),
+            }
+        )
+
+    def _checkpoint_summaries(self, tenant_id: str, equipment_id: str) -> list[dict]:
+        """Every point of the machine's map, in map order, with its whole history (not the
+        period's): an archived point is kept only if it was ever checked."""
+        points = self._connection.execute(
+            """
+            SELECT cp.id, cp.view_id, v.label, cp.label, cp.action, cp.measure_unit, cp.sort_order, cp.archived_at
+            FROM maintenance.checkpoints cp
+            JOIN maintenance.equipment_views v ON v.id = cp.view_id
+            WHERE v.equipment_id = %s AND cp.tenant_id = %s
+            ORDER BY v.sort_order, v.id, cp.sort_order, cp.id
+            """,
+            (equipment_id, tenant_id),
+        ).fetchall()
+        entries = self._connection.execute(
+            """
+            SELECT c.checkpoint_id, c.id, en.finished_at, en.outcome, en.measured_value
+            FROM maintenance.check_entries en
+            JOIN maintenance.job_checks c ON c.id = en.check_id
+            JOIN maintenance.jobs j ON j.id = c.job_id
+            WHERE j.equipment_id = %s AND j.tenant_id = %s AND c.checkpoint_id IS NOT NULL
+            ORDER BY en.finished_at, en.id
+            """,
+            (equipment_id, tenant_id),
+        ).fetchall()
+        by_point: dict[str, list[tuple]] = defaultdict(list)
+        for checkpoint_id, *rest in entries:
+            by_point[checkpoint_id].append(tuple(rest))
+
+        summaries = []
+        for checkpoint_id, view_id, view_label, label, action, unit, sort_order, archived_at in points:
+            history = by_point.get(checkpoint_id, [])
+            if archived_at is not None and not history:
+                continue
+            last = history[-1] if history else None
+            measures = [(finished_at, value) for _check, finished_at, _outcome, value in history if value is not None]
+            summaries.append(
+                {
+                    "checkpoint_id": checkpoint_id,
+                    "view_id": view_id,
+                    "view_label": view_label,
+                    "label": label,
+                    "action": action,
+                    "measure_unit": unit,
+                    "sort_order": sort_order,
+                    "archived": archived_at is not None,
+                    "checks_count": len({check_id for check_id, *_ in history}),
+                    "issues_count": sum(1 for _check, _at, outcome, _value in history if outcome == "issue"),
+                    "last_checked_at": _iso(last[1]) if last else None,
+                    "last_outcome": last[2] if last else None,
+                    "last_measured_value": _number(measures[-1][1]) if measures else None,
+                    "recent_measures": [{"at": at.isoformat(), "value": float(value)} for at, value in measures[-8:]],
+                }
+            )
+        return summaries

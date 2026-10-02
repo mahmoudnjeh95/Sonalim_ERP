@@ -366,3 +366,66 @@ def test_journal_parts_cost_needs_the_valuation_right(db, ctx):
 def test_journal_refuses_unknown_filters(db, ctx):
     refused = _service(db).journal(tenant_id=T, date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True, status="open")
     assert isinstance(refused, Err) and refused.code == "INVALID_FILTER"
+
+
+def _history(db, ctx, production=None, **overrides):
+    arguments = dict(tenant_id=T, equipment_id=ctx.machine, date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True)
+    arguments.update(overrides)
+    result = _service(db, production).equipment_history(**arguments)
+    assert isinstance(result, Ok), result
+    return result.value
+
+
+def test_the_logbook_mixes_jobs_stops_and_status_changes_newest_first(db, ctx):
+    closed = _job(db, ctx, title="Graissage mensuel")
+    _close(db, ctx, closed, ["ok"])
+    _set_job_times(db, closed, created_at=datetime.datetime(2026, 9, 3, tzinfo=UTC), closed_at=datetime.datetime(2026, 9, 5, tzinfo=UTC))
+    still_open = _job(db, ctx, title="Fuite d'huile")
+    _set_job_times(db, still_open, created_at=datetime.datetime(2026, 8, 1, tzinfo=UTC))  # open: listed whatever its age
+    old = _job(db, ctx, title="Ancienne")
+    _close(db, ctx, old, ["ok"])
+    _set_job_times(db, old, created_at=datetime.datetime(2026, 7, 1, tzinfo=UTC), closed_at=datetime.datetime(2026, 7, 2, tzinfo=UTC))
+    EquipmentService(db).transition_status(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, new_status="down")
+    _set_audit_times(db, ctx.machine, {"down": datetime.datetime(2026, 9, 20, 14, tzinfo=UTC)})
+    production = FakeProduction(stops=[_stop(ctx.machine, 75, started_at="2026-09-12T09:40:00+00:00")], running={ctx.machine: 600})
+
+    history = _history(db, ctx, production)
+
+    assert [(item["kind"], item["at"][:10]) for item in history["timeline"]] == [
+        ("status_change", "2026-09-20"),
+        ("production_stop", "2026-09-12"),
+        ("job", "2026-09-05"),
+        ("job", "2026-08-01"),
+    ]
+    status_change = history["timeline"][0]
+    assert (status_change["from_status"], status_change["to_status"], status_change["actor_name"]) == ("operational", "down", "Sara Superviseur")
+    stop = history["timeline"][1]["stop"]
+    assert (stop["minutes"], stop["classification"], stop["note"]) == (75, "mechanical", "filière démontée")
+    assert history["equipment"]["equipment_id"] == ctx.machine
+    assert history["indicators"]["production"]["breakdowns"] == 1
+
+
+def test_the_logbook_summarises_each_checkpoint(db, ctx):
+    for value, outcome in ((68, "ok"), (71, "issue")):
+        job_id = _job(db, ctx, checkpoint_ids=[ctx.points[1]])
+        [check] = _checks(db, job_id)
+        _entry(db, ctx, job_id, check, measured_value=value, outcome=outcome)
+        jobs = JobService(db)
+        jobs.submit(tenant_id=T, actor_id=ctx.chef, job_id=job_id, actor_can_plan=False)
+        jobs.review(tenant_id=T, actor_id=ctx.sup, job_id=job_id, verdicts=[(check, "accepted", None)])
+        jobs.close(tenant_id=T, actor_id=ctx.sup, job_id=job_id)
+    MapService(db).archive_checkpoint(tenant_id=T, actor_id=ctx.sup, checkpoint_id=ctx.points[2])
+
+    points = {p["checkpoint_id"]: p for p in _history(db, ctx)["checkpoints"]}
+
+    measured = points[ctx.points[1]]
+    assert (measured["checks_count"], measured["issues_count"], measured["last_outcome"]) == (2, 1, "issue")
+    assert measured["last_measured_value"] == 71
+    assert [m["value"] for m in measured["recent_measures"]] == [68, 71]
+    assert points[ctx.points[0]]["checks_count"] == 0 and points[ctx.points[0]]["last_checked_at"] is None
+    assert ctx.points[2] not in points  # archived and never checked
+
+
+def test_an_unknown_machine_has_no_logbook(db, ctx):
+    missing = _service(db).equipment_history(tenant_id=T, equipment_id="nope", date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True)
+    assert isinstance(missing, Err) and missing.code == "NOT_FOUND"
