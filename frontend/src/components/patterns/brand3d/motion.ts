@@ -67,7 +67,7 @@ export function pieceSeeds(count: number, seed: number): PieceSeed[] {
       ax: lerp(2.0, 5.0, r()),
       az: lerp(0.6, 1.4, r()),
       centerZ: lerp(-2.8, -4.5, r()),
-      height: lerp(-1.8, 1.8, r()),
+      height: lerp(-3, 3, r()), // fills a portrait frame too; orbit pieces stay behind the logo whatever their height
       phase: r() * Math.PI * 2,
       speed: lerp(0.04, 0.09, r()),
       x: (r() < 0.5 ? -1 : 1) * lerp(2.6, 4.2, r()),

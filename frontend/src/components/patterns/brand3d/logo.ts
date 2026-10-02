@@ -125,7 +125,7 @@ export function createLogo({ ringTube = 0.035, strokeScale = 1, halo = true }: L
     set({ ring: drawn, glyph: risen, flash }) {
       ringGeometry.setDrawRange(0, Math.floor(drawn * RING_SEGMENTS) * RING_RADIAL * 6);
       ring.visible = drawn > 0;
-      ringMaterial.emissiveIntensity = flash * 3; // above the bloom threshold: the one flash when the ring closes
+      ringMaterial.emissiveIntensity = flash * 5; // well above the bloom threshold: the one flash when the ring closes
       faintMaterial.opacity = 0.18 * Math.min(1, drawn * 5);
       glyph.visible = risen > 0;
       glyphMaterial.opacity = risen;

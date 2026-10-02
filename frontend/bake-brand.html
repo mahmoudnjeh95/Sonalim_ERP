@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Sonalim brand bake (dev only)</title>
+    <style>
+      body { margin: 0; padding: 16px; background: #5b6b80; color: #fff; font: 14px system-ui, sans-serif; }
+      #out { display: flex; flex-wrap: wrap; gap: 16px; align-items: flex-end; }
+      figure { margin: 0; }
+      img { display: block; max-width: 480px; background: repeating-conic-gradient(#cfd6df 0 25%, #fff 0 50%) 0 0 / 16px 16px; }
+    </style>
+  </head>
+  <body>
+    <p>Dev-only: renders the baked 3D logo images and posters. Save them with <code>node scripts/bake-brand.mjs</code>.</p>
+    <div id="out"></div>
+    <script type="module" src="/src/components/patterns/brand3d/bake.ts"></script>
+  </body>
+</html>

@@ -55,7 +55,9 @@ export function createWorld(canvas: HTMLCanvasElement, { tier, transparent = fal
   const scene = new Scene();
   const navy = untoneColor(BRAND.navyDeep); // lands on #071F43 after tone mapping: the canvas edge is the CSS navy
   if (!transparent) scene.background = navy;
-  scene.fog = new Fog(navy, 6, 26);
+  // The fog band follows the camera distance (frame()), so a far portrait camera does not turn the pasta brown.
+  const fog = new Fog(navy, 6, 26);
+  scene.fog = fog;
   scene.environment = stage.environment;
   scene.environmentIntensity = ENV_INTENSITY;
   scene.add(new HemisphereLight(0xffffff, BRAND.navyDeep, 0.45));
@@ -100,6 +102,9 @@ export function createWorld(canvas: HTMLCanvasElement, { tier, transparent = fal
       camera.position.set(...cameraPosition(pose));
       camera.lookAt(pose.target[0], pose.target[1], pose.target[2]);
       camera.updateMatrixWorld();
+      // Depth fades in only behind the framed target: nothing in front of it is fogged.
+      fog.near = pose.radius - 1;
+      fog.far = pose.radius + 20;
 
       for (let i = 0; i < layers.count; i++) poses[i] = piecePose(pieces[i], time, state);
       layers.pasta.update(poses);

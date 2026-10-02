@@ -1,7 +1,7 @@
 /**
  * The three.js stage for the brand scene: a TypeScript port of the parts of
  * the brand-motion-design skill's kit/three.js used here, with its measured
- * traps built in: bloom threshold 1.0 (lower turns the scene to milk),
+ * traps built in: bloom threshold above 1 (lower turns the scene to milk),
  * environment ~0.55 and exposure 0.95 (brighter turns every colour pastel),
  * and the background un-toned so the canvas edge is exactly the CSS navy.
  */
@@ -71,7 +71,8 @@ export function createStage(canvas: HTMLCanvasElement, { transparent = false, bl
 
   const composer = new EffectComposer(renderer);
   const renderPass = new RenderPass(new Scene(), new PerspectiveCamera());
-  const bloomPass = new UnrealBloomPass(new Vector2(1, 1), 0.7, 0.55, 1.0);
+  // 1.4, not the kit's 1.0: lit satin pasta reaches ~1.2, and only the sparks and the ring flash may glow.
+  const bloomPass = new UnrealBloomPass(new Vector2(1, 1), 0.7, 0.55, 1.4);
   composer.addPass(renderPass);
   composer.addPass(bloomPass);
   composer.addPass(new OutputPass());
@@ -114,13 +115,17 @@ export function goldMetal(extra: MeshPhysicalMaterialParameters = {}): MeshPhysi
   return new MeshPhysicalMaterial({ color: BRAND.gold, metalness: 1, roughness: 0.28, clearcoat: 0.6, clearcoatRoughness: 0.2, ...extra });
 }
 
-/** Dry pasta: the kit's "satin" (soft sheen, no gloss). Colour comes per instance from the gold ramp. */
+/**
+ * Dry pasta: the kit's "satin" (soft sheen, no gloss). Colour comes per instance from the gold ramp.
+ * Specular and sheen stay low so no highlight crosses the bloom threshold: only the sparks glow.
+ */
 export function pastaSatin(extra: MeshPhysicalMaterialParameters = {}): MeshPhysicalMaterial {
   return new MeshPhysicalMaterial({
-    color: 0xffffff,
+    color: 0xd9d9d9, // 85 %: keeps front-lit pasta under the bloom threshold
     roughness: 0.62,
     metalness: 0,
-    sheen: 0.4,
+    specularIntensity: 0.3,
+    sheen: 0.25,
     sheenRoughness: 0.6,
     sheenColor: new Color(BRAND.goldLight),
     ...extra,
