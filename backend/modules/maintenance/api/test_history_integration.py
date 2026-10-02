@@ -278,3 +278,90 @@ def test_a_reversed_period_and_an_unknown_machine_are_refused(db, ctx):
     assert isinstance(reversed_period, Err) and reversed_period.code == "INVALID_PERIOD"
     unknown = service.indicators(tenant_id=T, date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True, equipment_id="nope")
     assert isinstance(unknown, Err) and unknown.code == "NOT_FOUND"
+
+
+from modules.maintenance.api.parts_service import PartsService, list_part_requests  # noqa: E402
+from modules.warehouse.api.location_service import LocationService  # noqa: E402
+from modules.warehouse.api.service import StockService  # noqa: E402
+
+
+def _journal(db, **overrides):
+    arguments = dict(tenant_id=T, date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True)
+    arguments.update(overrides)
+    result = _service(db).journal(**arguments)
+    assert isinstance(result, Ok), result
+    return result.value["rows"]
+
+
+def test_journal_row_tells_what_was_done_with_rework(db, ctx):
+    jobs = JobService(db)
+    job_id = _job(db, ctx, checkpoint_ids=ctx.points[:1], tasks=[{"label": "Nettoyer", "action": "clean"}])
+    first, second = _checks(db, job_id)
+    _entry(db, ctx, job_id, first)
+    _entry(db, ctx, job_id, second, performer_employee_id=ctx.employees[1])
+    jobs.submit(tenant_id=T, actor_id=ctx.chef, job_id=job_id, actor_can_plan=False)
+    jobs.review(tenant_id=T, actor_id=ctx.sup, job_id=job_id, verdicts=[(first, "accepted", None), (second, "rejected", "mal fait")])
+    _entry(db, ctx, job_id, second, outcome="issue")
+    jobs.submit(tenant_id=T, actor_id=ctx.chef, job_id=job_id, actor_can_plan=False)
+    jobs.review(tenant_id=T, actor_id=ctx.sup, job_id=job_id, verdicts=[(second, "accepted", None)])
+    assert isinstance(jobs.close(tenant_id=T, actor_id=ctx.sup, job_id=job_id), Ok)
+    _set_job_times(db, job_id, closed_at=datetime.datetime(2026, 9, 10, 9, tzinfo=UTC))
+
+    [row] = _journal(db)
+
+    assert row["job_id"] == job_id and row["status"] == "closed"
+    assert row["date"].startswith("2026-09-10")
+    assert row["outcomes"] == {"ok": 1, "issue": 1, "not_done": 0, "pending": 0}
+    assert row["technician_seconds"] == 3 * 300  # three attempts' latest entries, five minutes each
+    assert [p["name"] for p in row["performers"]] == ["Awa Diarra", "Moussa Traoré"]
+    assert row["closed_on_time"] is True and row["chef_name"] == "Chef Keita"
+    assert _journal(db, status="cancelled") == []
+    assert _journal(db, kind="preventive") == []
+
+
+def test_journal_lists_cancelled_jobs_by_their_cancel_date(db, ctx):
+    job_id = _job(db, ctx)
+    assert isinstance(JobService(db).cancel(tenant_id=T, actor_id=ctx.sup, job_id=job_id, reason="doublon"), Ok)
+    _set_job_times(db, job_id, cancelled_at=datetime.datetime(2026, 9, 4, tzinfo=UTC))
+
+    assert _journal(db) == []
+    [row] = _journal(db, status="all")
+    assert (row["status"], row["cancel_reason"], row["date"][:10]) == ("cancelled", "doublon", "2026-09-04")
+
+
+def test_journal_parts_cost_needs_the_valuation_right(db, ctx):
+    uom = str(ULID())
+    db.execute("INSERT INTO core.uoms (id, tenant_id, code, name, category, is_integer_only) VALUES (%s, %s, 'pc', 'Pièce', 'unit', true)", (uom, T))
+    bearing = str(ULID())
+    db.execute("INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'ROUL-6204', 'Roulement 6204', %s)", (bearing, T, uom))
+    store = LocationService(db).create_location(tenant_id=T, actor_id=ctx.sup, code="MAG-PDR", name="Magasin pièces").value.id
+    assert isinstance(StockService(db).receive_stock(
+        tenant_id=T, product_id=bearing, location_id=store, quantity=5, correlation_id=str(ULID()),
+        reference="history-test", actor_id=ctx.sup, unit_cost=5000,
+    ), Ok)
+    job_id = _job(db, ctx)
+    parts = PartsService(db)
+    request_id = parts.create_request(
+        tenant_id=T, actor_id=ctx.chef, job_id=job_id, lines=[{"product_id": bearing, "uom_id": uom, "quantity": 2}],
+        note=None, actor_can_plan=False,
+    ).value
+    [request] = list_part_requests(db, T, job_id=job_id)
+    [line] = request["lines"]
+    assert isinstance(parts.approve(
+        tenant_id=T, actor_id=ctx.sup, request_id=request_id,
+        lines=[{"line_id": line["id"], "location_id": store, "issue_quantity": 2}], note=None, correlation_id=str(ULID()),
+    ), Ok)
+    _close(db, ctx, job_id, ["ok"])
+    _set_job_times(db, job_id, closed_at=datetime.datetime(2026, 9, 12, tzinfo=UTC))
+
+    [visible] = _journal(db)
+    [hidden] = _journal(db, costs_visible=False)
+
+    assert visible["parts"] == {"issued_lines": 1, "purchase_lines": 0}
+    assert visible["parts_cost"] == 10_000
+    assert hidden["parts_cost"] is None and hidden["parts"] == {"issued_lines": 1, "purchase_lines": 0}
+
+
+def test_journal_refuses_unknown_filters(db, ctx):
+    refused = _service(db).journal(tenant_id=T, date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True, status="open")
+    assert isinstance(refused, Err) and refused.code == "INVALID_FILTER"
