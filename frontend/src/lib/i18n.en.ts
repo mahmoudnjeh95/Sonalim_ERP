@@ -369,6 +369,7 @@ export const en = {
 
   "app.loading": "Loading…",
   "app.startingUp": "Starting up…",
+  "app.skipIntro": "Skip",
 
   "settings.title": "Settings",
   "settings.subtitle": "Your account and session.",

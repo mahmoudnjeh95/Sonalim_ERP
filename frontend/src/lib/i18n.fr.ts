@@ -369,6 +369,7 @@ export const fr = {
 
   "app.loading": "Chargement…",
   "app.startingUp": "Démarrage en cours…",
+  "app.skipIntro": "Passer",
 
   "settings.title": "Paramètres",
   "settings.subtitle": "Votre compte et votre session.",
