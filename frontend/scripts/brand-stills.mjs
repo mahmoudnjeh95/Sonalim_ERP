@@ -29,8 +29,8 @@ const ALL = noWebgl
       { name: "login-phone", path: "/login", ...PHONE, wait: 9000 },
       { name: "login-reduced-motion", path: "/login", ...DESKTOP, wait: 7000, reducedMotion: true },
       { name: "login-forced-fallback", path: "/login?brand-fallback=1", ...DESKTOP, wait: 7000 },
-      { name: "app-shell-desktop", path: "/production", ...DESKTOP, wait: 6000, session: true },
-      { name: "app-shell-phone", path: "/production", ...PHONE, wait: 6000, session: true },
+      { name: "app-shell-desktop", path: "/production", ...DESKTOP, wait: 10000, session: true },
+      { name: "app-shell-phone", path: "/production", ...PHONE, wait: 10000, session: true },
     ];
 const SHOTS = only ? ALL.filter((s) => s.name.startsWith(only)) : ALL;
 
@@ -55,9 +55,25 @@ async function demoSession() {
   });
 }
 
+/** Vite restarts when `tsc -b --force` rewrites vite.config.js: wait until it answers again. */
+async function devServerReady() {
+  for (let i = 0; i < 60; i++) {
+    try {
+      if ((await fetch(`${base}/login`)).ok) return;
+    } catch {
+      // Not listening yet.
+    }
+    await sleep(500);
+  }
+  throw new Error(`the dev server at ${base} did not answer`);
+}
+
 mkdirSync(out, { recursive: true });
+await devServerReady();
 const chrome = await launchChrome({ port: 9345, flags: noWebgl ? ["--disable-3d-apis"] : [] });
 try {
+  // Needed for addScriptToEvaluateOnNewDocument to reach new documents (the app-shell session).
+  await chrome.send("Page.enable");
   for (const shot of SHOTS) {
     if (shot.session) {
       const value = await demoSession();

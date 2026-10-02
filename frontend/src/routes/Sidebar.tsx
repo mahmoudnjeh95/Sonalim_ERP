@@ -65,6 +65,8 @@ import ExtrusionIcon from "../assets/icons/production/extrusion.svg?react";
 import LabIcon from "../assets/icons/quality/lab.svg?react";
 import PlanningIcon from "../assets/icons/production/planning.svg?react";
 import WorkOrderIcon from "../assets/icons/production/work-order.svg?react";
+import logoTile64 from "../assets/icons/brand/logo-3d-64.png";
+import logoTile96 from "../assets/icons/brand/logo-3d-96.png";
 
 const COLLAPSED_STORAGE_KEY = "sonalim-erp.sidebar-collapsed";
 
@@ -282,9 +284,14 @@ export function Sidebar({ isMobile = false, onNavigate }: { isMobile?: boolean; 
       )}
     >
       <div className={cn("flex items-center gap-2.5 py-5", collapsed ? "justify-center px-2" : "px-5")}>
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-accent text-sm font-bold text-primary-foreground shadow-glow">
-          SE
-        </div>
+        <img
+          src={logoTile64}
+          srcSet={`${logoTile64} 2x, ${logoTile96} 3x`}
+          alt={collapsed ? "Sonalim ERP" : ""}
+          width={32}
+          height={32}
+          className="h-8 w-8 shrink-0 rounded-lg shadow-glow"
+        />
         {!collapsed && (
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold leading-tight">Sonalim ERP</p>

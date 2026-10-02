@@ -9,6 +9,8 @@ import { AppLoader } from "../components/patterns/AppLoader";
 import { useI18n } from "../lib/i18n";
 import { useIsMobile } from "../lib/useIsMobile";
 import { NotificationBell } from "../features/notifications/NotificationBell";
+import logoTile64 from "../assets/icons/brand/logo-3d-64.png";
+import logoTile96 from "../assets/icons/brand/logo-3d-96.png";
 
 // The loader never flashes for less than this, and the page needs this long to
 // mount its queries after the outgoing route finishes its exit animation.
@@ -127,9 +129,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
             >
               <Menu className="h-5 w-5" />
             </button>
-            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-accent text-sm font-bold text-primary-foreground shadow-glow">
-              SE
-            </div>
+            <img
+              src={logoTile64}
+              srcSet={`${logoTile64} 2x, ${logoTile96} 3x`}
+              alt=""
+              width={32}
+              height={32}
+              className="h-8 w-8 shrink-0 rounded-lg shadow-glow"
+            />
             <p className="truncate text-sm font-semibold">Sonalim ERP</p>
             <div className="ml-auto">
               <NotificationBell />
