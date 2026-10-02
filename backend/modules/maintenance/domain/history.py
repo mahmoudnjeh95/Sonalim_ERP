@@ -60,6 +60,29 @@ def period_bounds(
     return start, max(start, end)
 
 
+def chain_in_order(changes: list[StatusChange]) -> list[StatusChange]:
+    """Oldest first. Changes made in one transaction share their timestamp (NOW()) and their
+    ids give no reliable order, so inside such a group the order follows the chain: each
+    change starts from the status the previous one ended in."""
+    by_time = sorted(changes, key=lambda change: change.at)
+    ordered: list[StatusChange] = []
+    index = 0
+    while index < len(by_time):
+        group = [c for c in by_time[index:] if c.at == by_time[index].at]
+        index += len(group)
+        current = ordered[-1].to_status if ordered else None
+        while group:
+            following = next((c for c in group if c.from_status == current), None)
+            if following is None:
+                # Nothing before it in the group: the change no other one leads into starts it.
+                ends = {c.to_status for c in group}
+                following = next((c for c in group if c.from_status not in ends), group[0])
+            ordered.append(following)
+            group.remove(following)
+            current = following.to_status
+    return ordered
+
+
 def status_at_start(changes: list[StatusChange], start: datetime.datetime, current_status: str) -> str:
     """`changes` oldest first. The last change before the period; else the first change's
     starting status; else the machine never changed and is still in its current status."""
@@ -75,10 +98,13 @@ def immobilisation(
     changes: list[StatusChange], start: datetime.datetime, end: datetime.datetime, current_status: str
 ) -> Immobilisation:
     """Minutes in `down` or `maintenance` within [start, end), and the stretches of it
-    (an episode runs from leaving `operational` to coming back; down -> maintenance is one)."""
+    (an episode runs from leaving `operational` to coming back; down -> maintenance is one,
+    and so is an `operational` that lasted no time at all, as when a cancel passes through it).
+    `changes` in chain order (`chain_in_order`)."""
     stopped_since = start if status_at_start(changes, start, current_status) in STOPPED_STATUSES else None
     episodes = 1 if stopped_since is not None else 0
     minutes = 0.0
+    released_at: datetime.datetime | None = None
     for change in changes:
         if not (start <= change.at < end):
             continue
@@ -86,9 +112,11 @@ def immobilisation(
         if stopped_since is not None and not now_stopped:
             minutes += (change.at - stopped_since).total_seconds() / 60
             stopped_since = None
+            released_at = change.at
         elif stopped_since is None and now_stopped:
             stopped_since = change.at
-            episodes += 1
+            if released_at != change.at:
+                episodes += 1
     if stopped_since is not None:
         minutes += (end - stopped_since).total_seconds() / 60
     return Immobilisation(minutes=minutes, episodes=episodes)

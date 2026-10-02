@@ -131,14 +131,15 @@ def _set_job_times(db, job_id, **columns):
 
 
 def _set_audit_times(db, machine, times):
-    """Every status change in one test transaction has the same NOW(); spread them out in order."""
-    rows = db.execute(
-        "SELECT id FROM core.audit_log WHERE entity_id = %s AND action = 'equipment.status_changed' ORDER BY occurred_at, id",
-        (machine,),
-    ).fetchall()
-    assert len(rows) == len(times)
-    for (audit_id,), when in zip(rows, times):
-        db.execute("UPDATE core.audit_log SET occurred_at = %s WHERE id = %s", (when, audit_id))
+    """Every status change in one test transaction has the same NOW(), and their ids give no
+    reliable order: place each one by the status it moved to (`times`: {to_status: when})."""
+    for to_status, when in times.items():
+        updated = db.execute(
+            "UPDATE core.audit_log SET occurred_at = %s "
+            "WHERE entity_id = %s AND action = 'equipment.status_changed' AND payload->>'to_status' = %s",
+            (when, machine, to_status),
+        ).rowcount
+        assert updated == 1, (to_status, updated)
 
 
 class FakeProduction:
@@ -183,11 +184,11 @@ def test_immobilisation_comes_from_the_status_changes(db, ctx):
     equipment = EquipmentService(db)
     for status in ("down", "maintenance", "operational"):
         assert isinstance(equipment.transition_status(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, new_status=status), Ok)
-    _set_audit_times(db, ctx.machine, [
-        datetime.datetime(2026, 9, 2, 8, tzinfo=UTC),
-        datetime.datetime(2026, 9, 2, 9, tzinfo=UTC),
-        datetime.datetime(2026, 9, 2, 10, tzinfo=UTC),
-    ])
+    _set_audit_times(db, ctx.machine, {
+        "down": datetime.datetime(2026, 9, 2, 8, tzinfo=UTC),
+        "maintenance": datetime.datetime(2026, 9, 2, 9, tzinfo=UTC),
+        "operational": datetime.datetime(2026, 9, 2, 10, tzinfo=UTC),
+    })
     job_id = _job(db, ctx)
     _set_job_times(db, job_id, created_at=datetime.datetime(2026, 9, 2, 8, tzinfo=UTC))
 

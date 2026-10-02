@@ -7,6 +7,7 @@ from core.domain.result import Err
 from modules.maintenance.domain.history import (
     Immobilisation,
     StatusChange,
+    chain_in_order,
     immobilisation,
     maintenance_block,
     outcome_counts,
@@ -65,6 +66,29 @@ def test_two_stoppages_are_two_episodes_and_an_open_one_runs_to_the_end():
         change(at(9, 9), "operational", "maintenance"),
     ]
     assert immobilisation(changes, START, END, "maintenance") == Immobilisation(minutes=3 * DAY, episodes=2)
+
+
+def test_changes_made_in_one_transaction_follow_their_chain_not_their_listing_order():
+    # A cancel moves maintenance -> operational -> down in one transaction: both rows carry the
+    # same NOW(), and their ids give no reliable order.
+    same = at(9, 4, 10)
+    listed = [
+        change(at(9, 2), "operational", "maintenance"),
+        change(same, "operational", "down"),
+        change(same, "maintenance", "operational"),
+    ]
+    ordered = chain_in_order(listed)
+    assert [(c.from_status, c.to_status) for c in ordered] == [
+        ("operational", "maintenance"), ("maintenance", "operational"), ("operational", "down"),
+    ]
+    # the machine stays stopped from the 2nd to the end of the period: one stoppage, never released
+    assert immobilisation(ordered, START, END, "down") == Immobilisation(minutes=9 * DAY, episodes=1)
+
+
+def test_a_same_instant_group_with_nothing_before_starts_where_no_other_change_ends():
+    same = at(9, 4, 10)
+    ordered = chain_in_order([change(same, "operational", "down"), change(same, "maintenance", "operational")])
+    assert [(c.from_status, c.to_status) for c in ordered] == [("maintenance", "operational"), ("operational", "down")]
 
 
 def test_period_bounds_stop_at_now_and_a_future_period_is_empty():

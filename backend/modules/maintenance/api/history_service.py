@@ -17,6 +17,7 @@ from modules.maintenance.api.history_sources import ProductionReadings, job_part
 from modules.maintenance.api.people import employee_names, user_names
 from modules.maintenance.domain.history import (
     StatusChange,
+    chain_in_order,
     immobilisation,
     maintenance_block,
     outcome_counts,
@@ -154,7 +155,7 @@ class HistoryService:
         changes: dict[str, list[StatusChange]] = defaultdict(list)
         for equipment_id, at, from_status, to_status in rows:
             changes[equipment_id].append(StatusChange(at=at, from_status=from_status, to_status=to_status))
-        return changes
+        return {equipment_id: chain_in_order(machine_changes) for equipment_id, machine_changes in changes.items()}
 
     def _maintenance_blocks(
         self,
