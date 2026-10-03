@@ -429,3 +429,39 @@ def test_the_logbook_summarises_each_checkpoint(db, ctx):
 def test_an_unknown_machine_has_no_logbook(db, ctx):
     missing = _service(db).equipment_history(tenant_id=T, equipment_id="nope", date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True)
     assert isinstance(missing, Err) and missing.code == "NOT_FOUND"
+
+
+def test_a_checkpoint_history_keeps_every_attempt_across_jobs(db, ctx):
+    jobs = JobService(db)
+    first_job = _job(db, ctx, checkpoint_ids=[ctx.points[1]])
+    [first_check] = _checks(db, first_job)
+    _entry(db, ctx, first_job, first_check, measured_value=68)
+    jobs.submit(tenant_id=T, actor_id=ctx.chef, job_id=first_job, actor_can_plan=False)
+    jobs.review(tenant_id=T, actor_id=ctx.sup, job_id=first_job, verdicts=[(first_check, "accepted", None)])
+    jobs.close(tenant_id=T, actor_id=ctx.sup, job_id=first_job)
+    _set_job_times(db, first_job, created_at=datetime.datetime(2026, 8, 1, tzinfo=UTC))
+
+    second_job = _job(db, ctx, checkpoint_ids=[ctx.points[1]])
+    [second_check] = _checks(db, second_job)
+    _entry(db, ctx, second_job, second_check, measured_value=78, outcome="issue", note="bruit anormal")
+    jobs.submit(tenant_id=T, actor_id=ctx.chef, job_id=second_job, actor_can_plan=False)
+    jobs.review(tenant_id=T, actor_id=ctx.sup, job_id=second_job, verdicts=[(second_check, "rejected", "refaire après graissage")])
+    _entry(db, ctx, second_job, second_check, measured_value=71, performer_employee_id=ctx.employees[1])
+
+    result = _service(db).checkpoint_history(tenant_id=T, checkpoint_id=ctx.points[1])
+
+    assert isinstance(result, Ok), result
+    history = result.value
+    assert history["checkpoint"]["label"] == "Température palier" and history["checkpoint"]["measure_unit"] == "°C"
+    assert [c["job_id"] for c in history["checks"]] == [second_job, first_job]
+    rejected, redone = history["checks"][0]["attempts"]
+    assert (rejected["attempt"], rejected["review"]["verdict"], rejected["review"]["reason"]) == (1, "rejected", "refaire après graissage")
+    assert rejected["entries"][0]["note"] == "bruit anormal" and rejected["entries"][0]["outcome"] == "issue"
+    assert (redone["attempt"], redone["review"], redone["entries"][0]["performer_name"]) == (2, None, "Moussa Traoré")
+    assert [m["value"] for m in history["measures"]] == [68, 78, 71]
+    assert history["summary"]["checks_count"] == 2 and history["summary"]["issues_count"] == 1
+
+
+def test_an_unknown_checkpoint_has_no_history(db, ctx):
+    missing = _service(db).checkpoint_history(tenant_id=T, checkpoint_id="nope")
+    assert isinstance(missing, Err) and missing.code == "NOT_FOUND"

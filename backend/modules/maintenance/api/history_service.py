@@ -572,3 +572,117 @@ class HistoryService:
                 }
             )
         return summaries
+
+    # ---- one checkpoint ----------------------------------------------------------
+
+    def checkpoint_history(self, *, tenant_id: str, checkpoint_id: str) -> Result[dict]:
+        """Every check of one point across every job (the snapshot keeps the point's id),
+        newest job first; each attempt with its entries and its review."""
+        row = self._connection.execute(
+            """
+            SELECT cp.id, cp.label, cp.action, cp.instructions, cp.measure_unit, cp.requires_photo, cp.view_id, v.label,
+                   v.updated_at, cp.x_pct, cp.y_pct, e.id, e.name, cp.archived_at
+            FROM maintenance.checkpoints cp
+            JOIN maintenance.equipment_views v ON v.id = cp.view_id
+            JOIN maintenance.equipment e ON e.id = v.equipment_id
+            WHERE cp.id = %s AND cp.tenant_id = %s
+            """,
+            (checkpoint_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"checkpoint {checkpoint_id} not found", f"point {checkpoint_id} introuvable")
+        (point_id, label, action, instructions, unit, requires_photo, view_id, view_label,
+         view_updated_at, x_pct, y_pct, equipment_id, equipment_name, archived_at) = row
+
+        checks = self._connection.execute(
+            """
+            SELECT c.id, j.id, j.number, j.kind, j.status
+            FROM maintenance.job_checks c
+            JOIN maintenance.jobs j ON j.id = c.job_id
+            WHERE c.checkpoint_id = %s AND c.tenant_id = %s
+            ORDER BY j.created_at DESC, j.number DESC
+            """,
+            (checkpoint_id, tenant_id),
+        ).fetchall()
+        check_ids = [check[0] for check in checks]
+        entries = self._connection.execute(
+            """
+            SELECT id, check_id, attempt, performer_employee_id, recorded_by, started_at, finished_at, duration_seconds,
+                   duration_source, outcome, note, measured_value, photo IS NOT NULL
+            FROM maintenance.check_entries
+            WHERE check_id = ANY(%s)
+            ORDER BY created_at, id
+            """,
+            (check_ids,),
+        ).fetchall()
+        reviews = self._connection.execute(
+            """
+            SELECT check_id, attempt, verdict, reason, reviewer_id, created_at
+            FROM maintenance.check_reviews
+            WHERE check_id = ANY(%s)
+            ORDER BY created_at, id
+            """,
+            (check_ids,),
+        ).fetchall()
+        users = user_names(self._connection, tenant_id, [*(e[4] for e in entries), *(r[4] for r in reviews)])
+        people = employee_names(self._connection, tenant_id, [e[3] for e in entries])
+        number_of = {check[0]: check[2] for check in checks}
+
+        attempts: dict[str, dict[int, dict]] = defaultdict(dict)
+        for (entry_id, check_id, attempt, performer, recorded_by, started_at, finished_at, duration, source,
+             outcome, note, value, has_photo) in entries:
+            slot = attempts[check_id].setdefault(attempt, {"attempt": attempt, "entries": [], "review": None})
+            slot["entries"].append(
+                {
+                    "entry_id": entry_id,
+                    "performer_name": people.get(performer, performer),
+                    "recorded_by_name": users.get(recorded_by, recorded_by),
+                    "started_at": started_at.isoformat(),
+                    "finished_at": finished_at.isoformat(),
+                    "duration_seconds": duration,
+                    "duration_source": source,
+                    "outcome": outcome,
+                    "note": note,
+                    "measured_value": _number(value),
+                    "has_photo": has_photo,
+                }
+            )
+        for check_id, attempt, verdict, reason, reviewer_id, created_at in reviews:
+            slot = attempts[check_id].setdefault(attempt, {"attempt": attempt, "entries": [], "review": None})
+            slot["review"] = {
+                "verdict": verdict, "reason": reason, "reviewer_name": users.get(reviewer_id, reviewer_id),
+                "created_at": created_at.isoformat(),
+            }
+
+        last_checked_at = max((e[6] for e in entries), default=None)
+        measures = sorted(
+            (
+                {"at": e[6].isoformat(), "value": float(e[11]), "outcome": e[9], "job_number": number_of[e[1]]}
+                for e in entries
+                if e[11] is not None
+            ),
+            key=lambda measure: measure["at"],
+        )
+        return Ok(
+            {
+                "checkpoint": {
+                    "id": point_id, "label": label, "action": action, "instructions": instructions, "measure_unit": unit,
+                    "requires_photo": requires_photo, "view_id": view_id, "view_label": view_label,
+                    "view_version": _iso(view_updated_at), "x_pct": float(x_pct), "y_pct": float(y_pct),
+                    "equipment_id": equipment_id, "equipment_name": equipment_name, "archived_at": _iso(archived_at),
+                },
+                "summary": {
+                    "checks_count": sum(1 for check in checks if attempts.get(check[0])),
+                    "issues_count": sum(1 for e in entries if e[9] == "issue"),
+                    "last_checked_at": _iso(last_checked_at),
+                },
+                "measures": measures,
+                "checks": [
+                    {
+                        "job_id": job_id, "job_number": number, "job_kind": kind, "job_status": status, "check_id": check_id,
+                        "attempts": [attempts[check_id][n] for n in sorted(attempts.get(check_id, {}))],
+                    }
+                    for check_id, job_id, number, kind, status in checks
+                ],
+            }
+        )
