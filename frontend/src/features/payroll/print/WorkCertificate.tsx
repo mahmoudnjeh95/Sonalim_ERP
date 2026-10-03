@@ -4,7 +4,7 @@ import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { hrKeys, listPositions } from "../../hr/api";
 import { CONTRACT_TYPE_LABEL, END_REASON_LABEL } from "../../hr/employeeLabels";
 import type { WorkCertificateData } from "../api";
-import { formatDay } from "./PrintShell";
+import { formatDay } from "../../../components/patterns/PrintShell";
 
 /**
  * The work certificate printed with a final-settlement payslip. The backend gives the position as an
