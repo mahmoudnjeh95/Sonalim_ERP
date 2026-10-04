@@ -6,7 +6,7 @@ import NoBreakdownIllustration from "../../../assets/illustrations/maintenance/n
 import { CountUp } from "../../../components/motion/CountUp";
 import { outlineIcon } from "../../../components/patterns/outlineIcon";
 import { Card } from "../../../components/ui/card";
-import { formatXofWithCode } from "../../../lib/currency";
+import { CURRENCY_CODE, formatXof } from "../../../lib/currency";
 import { useI18n } from "../../../lib/i18n";
 import { formatDuration } from "../../../lib/units";
 import { cn } from "../../../lib/utils";
@@ -34,11 +34,23 @@ function Tiles({ children }: { children: ReactNode }) {
   return <div className="grid grid-cols-2 gap-px bg-border sm:grid-cols-4">{children}</div>;
 }
 
+/**
+ * One figure. A long one ("2 j 15 h 40 min") steps down a size or two rather than
+ * wrapping or spilling into the next tile -- figures shrink, they are never rounded away.
+ */
 function Tile({ label, sub, children }: { label: string; sub?: ReactNode; children: ReactNode }) {
+  const length = typeof children === "string" ? children.length : 0;
   return (
     <div className="min-w-0 bg-card px-4 py-3">
       <p className="truncate text-xs text-muted-foreground">{label}</p>
-      <p className="whitespace-nowrap text-lg font-bold tabular-nums tracking-tight sm:text-xl">{children}</p>
+      <p
+        className={cn(
+          "whitespace-nowrap font-bold tabular-nums tracking-tight",
+          length > 13 ? "text-sm" : length > 9 ? "text-base" : "text-lg sm:text-xl",
+        )}
+      >
+        {children}
+      </p>
       {sub && <p className="truncate text-xs text-muted-foreground">{sub}</p>}
     </div>
   );
@@ -185,10 +197,10 @@ export function MaintenanceCard({ block, costsVisible }: { block: MaintenanceBlo
         </Tile>
         {costsVisible ? (
           <Tile
-            label={t("maintenance.history.kpi.partsCost")}
+            label={`${t("maintenance.history.kpi.partsCost")} (${CURRENCY_CODE})`}
             sub={block.parts_unvalued_quantity ? fill(t("maintenance.history.kpi.unvalued"), { value: block.parts_unvalued_quantity }) : undefined}
           >
-            {block.parts_cost === null ? "—" : formatXofWithCode(block.parts_cost)}
+            {block.parts_cost === null ? "—" : formatXof(block.parts_cost)}
           </Tile>
         ) : (
           <Tile label={t("maintenance.history.kpi.technician")}>{technician}</Tile>
