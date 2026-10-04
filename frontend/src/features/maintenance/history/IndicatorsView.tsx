@@ -131,7 +131,7 @@ export function IndicatorsView({
     {
       key: "machine",
       header: t("maintenance.history.column.machine"),
-      defaultWidth: 220,
+      defaultWidth: 190,
       alwaysVisible: true,
       mobileRole: "title",
       sortValue: (m) => m.name,
@@ -153,8 +153,9 @@ export function IndicatorsView({
     },
     {
       key: "prod_breakdowns",
-      header: t("maintenance.history.kpi.breakdowns"),
-      defaultWidth: 100,
+      // A phone card has no group row above it: say which side the breakdowns come from.
+      header: t(isMobile ? "maintenance.history.stat.productionBreakdowns" : "maintenance.history.kpi.breakdowns"),
+      defaultWidth: 96,
       sortValue: (m) => m.production?.breakdowns ?? -1,
       filterCell: rangeCell("prod_breakdowns"),
       cell: (m) => <span className="font-semibold tabular-nums">{m.production ? m.production.breakdowns : "—"}</span>,
@@ -164,26 +165,26 @@ export function IndicatorsView({
       header: t("maintenance.history.column.stopTime"),
       defaultWidth: 110,
       sortValue: (m) => m.production?.breakdown_minutes ?? -1,
-      cell: (m) => <span className="tabular-nums">{m.production ? formatDuration(m.production.breakdown_minutes) : "—"}</span>,
+      cell: (m) => <span className="whitespace-nowrap tabular-nums">{m.production ? formatDuration(m.production.breakdown_minutes) : "—"}</span>,
     },
     {
       key: "mtbf",
       header: t("maintenance.history.kpi.mtbf"),
       defaultWidth: 110,
       sortValue: (m) => m.production?.mtbf_minutes ?? -1,
-      cell: (m) => <span className="tabular-nums">{minutesOrDash(m.production?.mtbf_minutes)}</span>,
+      cell: (m) => <span className="whitespace-nowrap tabular-nums">{minutesOrDash(m.production?.mtbf_minutes)}</span>,
     },
     {
       key: "mttr",
       header: t("maintenance.history.kpi.mttr"),
       defaultWidth: 100,
       sortValue: (m) => m.production?.mttr_minutes ?? -1,
-      cell: (m) => <span className="tabular-nums">{minutesOrDash(m.production?.mttr_minutes)}</span>,
+      cell: (m) => <span className="whitespace-nowrap tabular-nums">{minutesOrDash(m.production?.mttr_minutes)}</span>,
     },
     {
       key: "maint_breakdowns",
-      header: t("maintenance.history.kpi.breakdowns"),
-      defaultWidth: 100,
+      header: t(isMobile ? "maintenance.history.stat.maintenanceBreakdowns" : "maintenance.history.kpi.breakdowns"),
+      defaultWidth: 96,
       headerClassName: "border-l border-border",
       cellClassName: "border-l border-border",
       sortValue: (m) => m.maintenance.breakdowns,
@@ -193,14 +194,14 @@ export function IndicatorsView({
     {
       key: "immobilisation",
       header: t("maintenance.history.kpi.immobilisation"),
-      defaultWidth: 130,
+      defaultWidth: 146,
       sortValue: (m) => m.maintenance.immobilised_minutes,
-      cell: (m) => <span className="tabular-nums">{formatDuration(m.maintenance.immobilised_minutes)}</span>,
+      cell: (m) => <span className="whitespace-nowrap tabular-nums">{formatDuration(m.maintenance.immobilised_minutes)}</span>,
     },
     {
       key: "preventive",
       header: t("maintenance.history.column.preventive"),
-      defaultWidth: 150,
+      defaultWidth: 128,
       sortValue: (m) => m.maintenance.preventive.overdue,
       cell: (m) => {
         const { due, closed, overdue } = m.maintenance.preventive;
@@ -216,20 +217,22 @@ export function IndicatorsView({
     {
       key: "technician",
       header: t("maintenance.history.column.technician"),
-      defaultWidth: 110,
+      defaultWidth: 118,
+      // Also on each machine's logbook; one column fewer keeps the table readable on a laptop.
+      hiddenByDefault: true,
       sortValue: (m) => m.maintenance.technician_seconds,
-      cell: (m) => <span className="tabular-nums">{formatDuration(m.maintenance.technician_seconds / 60)}</span>,
+      cell: (m) => <span className="whitespace-nowrap tabular-nums">{formatDuration(m.maintenance.technician_seconds / 60)}</span>,
     },
     ...(costsVisible
       ? [
           {
             key: "cost",
-            header: `${t("maintenance.history.kpi.partsCost")} (${CURRENCY_CODE})`,
-            defaultWidth: 140,
+            header: `${t("maintenance.history.journal.column.cost")} (${CURRENCY_CODE})`,
+            defaultWidth: 120,
             sortValue: (m: MachineIndicators) => m.maintenance.parts_cost ?? 0,
             filterCell: rangeCell("cost"),
             cell: (m: MachineIndicators) => (
-              <span className="tabular-nums">{m.maintenance.parts_cost === null ? "—" : formatXofWithCode(m.maintenance.parts_cost)}</span>
+              <span className="whitespace-nowrap tabular-nums">{m.maintenance.parts_cost === null ? "—" : formatXofWithCode(m.maintenance.parts_cost)}</span>
             ),
           },
         ]

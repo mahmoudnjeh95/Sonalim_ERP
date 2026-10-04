@@ -21,7 +21,7 @@ import { useColumnFilters, type FilterField } from "../../../lib/useColumnFilter
 import { useIsMobile } from "../../../lib/useIsMobile";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import { formatDay } from "../jobs/jobFormat";
-import { JOB_KIND_LABEL_KEY } from "../labels";
+import { JOB_KIND_LABEL_KEY, OUTCOME_LABEL_KEY } from "../labels";
 import { exportJournalWorkbook, useHistoryJournal, type JournalFilters, type JournalKind, type JournalRow, type JournalStatus } from "./api";
 import { fill, initials } from "./historyFormat";
 import type { Period } from "./historyPeriod";
@@ -36,12 +36,16 @@ function ResultBar({ row }: { row: JournalRow }) {
   const total = Math.max(ok + issue + notDone, 1);
   return (
     <span className="flex items-center gap-2">
-      <span className="flex h-2 w-20 shrink-0 overflow-hidden rounded-full bg-muted">
+      <span className="flex h-2 w-14 shrink-0 overflow-hidden rounded-full bg-muted">
         <span className="bg-success" style={{ width: `${(ok / total) * 100}%` }} />
         <span className="bg-destructive" style={{ width: `${(issue / total) * 100}%` }} />
         <span className="bg-muted-foreground/40" style={{ width: `${(notDone / total) * 100}%` }} />
       </span>
-      <span className="truncate text-xs text-muted-foreground">{fill(t("maintenance.history.journal.result"), { ok, issue, notDone })}</span>
+      <span className="truncate text-xs text-muted-foreground">
+        {ok} OK
+        {issue > 0 && <span className="text-destructive"> · {fill(t("maintenance.history.points.issues"), { n: issue })}</span>}
+        {notDone > 0 && ` · ${notDone} ${t(OUTCOME_LABEL_KEY.not_done).toLowerCase()}`}
+      </span>
     </span>
   );
 }
@@ -126,24 +130,26 @@ export function JournalView({ period, equipmentId }: { period: Period; equipment
     {
       key: "number",
       header: t("maintenance.history.journal.column.number"),
-      defaultWidth: 140,
+      defaultWidth: 130,
+      minWidth: 124,
       alwaysVisible: true,
       mobileRole: "subtitle",
       sortValue: (r) => r.number,
       filterCell: text("number", t("maintenance.history.journal.column.number")),
-      cell: (r) => <span className="font-mono text-xs font-medium text-primary">{r.number}</span>,
+      cell: (r) => <span className="whitespace-nowrap font-mono text-xs font-medium text-primary">{r.number}</span>,
     },
     {
       key: "date",
       header: t("maintenance.history.journal.column.date"),
-      defaultWidth: 120,
+      defaultWidth: 112,
+      minWidth: 104,
       sortValue: (r) => r.date ?? "",
       cell: (r) => <span className="whitespace-nowrap">{formatDay(r.date)}</span>,
     },
     {
       key: "machine",
       header: t("maintenance.history.column.machine"),
-      defaultWidth: 180,
+      defaultWidth: 150,
       sortValue: (r) => r.equipment_name,
       filterCell: text("machine", t("maintenance.history.column.machine")),
       cell: (r) => (
@@ -155,14 +161,15 @@ export function JournalView({ period, equipmentId }: { period: Period; equipment
     {
       key: "kind",
       header: t("maintenance.history.journal.column.kind"),
-      defaultWidth: 120,
+      defaultWidth: 110,
+      minWidth: 100,
       sortValue: (r) => r.kind,
       cell: (r) => <Badge variant={r.kind === "corrective" ? "destructive" : "primary"}>{t(JOB_KIND_LABEL_KEY[r.kind])}</Badge>,
     },
     {
       key: "title",
       header: t("maintenance.history.journal.column.title"),
-      defaultWidth: 220,
+      defaultWidth: 190,
       mobileRole: "title",
       sortValue: (r) => r.title,
       filterCell: text("title", t("maintenance.history.journal.column.title")),
@@ -175,26 +182,32 @@ export function JournalView({ period, equipmentId }: { period: Period; equipment
     {
       key: "performers",
       header: t("maintenance.history.journal.column.performers"),
-      defaultWidth: 140,
+      defaultWidth: 112,
       filterCell: text("performers", t("maintenance.history.journal.column.performers")),
       cell: (r) => (
         <span className="flex items-center" title={r.performers.map((p) => p.name).join(", ")}>
           {r.performers.length === 0 && <span className="text-muted-foreground">—</span>}
-          {r.performers.map((p) => (
+          {r.performers.slice(0, 3).map((p) => (
             <span
               key={p.employee_id}
-              className="-ml-1.5 grid h-6 w-6 place-items-center rounded-full border-2 border-card bg-primary text-[9px] font-bold text-primary-foreground first:ml-0"
+              className="-ml-1.5 grid h-6 w-6 shrink-0 place-items-center rounded-full border-2 border-card bg-primary text-[9px] font-bold text-primary-foreground first:ml-0"
             >
               {initials(p.name)}
             </span>
           ))}
+          {r.performers.length > 3 && (
+            <span className="-ml-1.5 grid h-6 min-w-6 shrink-0 place-items-center rounded-full border-2 border-card bg-muted px-1 text-[9px] font-bold text-muted-foreground">
+              +{r.performers.length - 3}
+            </span>
+          )}
         </span>
       ),
     },
     {
       key: "time",
       header: t("maintenance.history.journal.column.time"),
-      defaultWidth: 110,
+      defaultWidth: 100,
+      minWidth: 92,
       sortValue: (r) => r.technician_seconds,
       filterCell: range("time"),
       cell: (r) => (
@@ -204,13 +217,15 @@ export function JournalView({ period, equipmentId }: { period: Period; equipment
     {
       key: "result",
       header: t("maintenance.history.journal.column.result"),
-      defaultWidth: 230,
+      defaultWidth: 170,
       cell: (r) => <ResultBar row={r} />,
     },
     {
       key: "parts",
       header: t("maintenance.history.journal.column.parts"),
-      defaultWidth: 90,
+      defaultWidth: 80,
+      // The cost column says the same when costs are visible; one column fewer on a laptop.
+      hiddenByDefault: true,
       sortValue: (r) => r.parts.issued_lines + r.parts.purchase_lines,
       cell: (r) => <span className="tabular-nums">{r.parts.issued_lines + r.parts.purchase_lines || "—"}</span>,
     },
@@ -219,7 +234,8 @@ export function JournalView({ period, equipmentId }: { period: Period; equipment
           {
             key: "cost",
             header: `${t("maintenance.history.journal.column.cost")} (${CURRENCY_CODE})`,
-            defaultWidth: 130,
+            defaultWidth: 112,
+            minWidth: 100,
             sortValue: (r: JournalRow) => r.parts_cost ?? 0,
             filterCell: range("cost"),
             cell: (r: JournalRow) => (
