@@ -6,6 +6,8 @@ import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { ColumnFilterRow, type FilterCell } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { MobileCardList } from "../../components/patterns/MobileCardList";
+import { useIsMobile } from "../../lib/useIsMobile";
 import { useI18n } from "../../lib/i18n";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { cn } from "../../lib/utils";
@@ -79,14 +81,31 @@ export function LedgerTable<Row>({
   const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =
     useTableColumns(tableKey, columns);
   const sorted = sortRows(rows);
+  const isMobile = useIsMobile();
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-center gap-3 px-6">
         {toolbar}
-        <div className="ml-auto">
-          <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
-        </div>
+        {!isMobile && (
+          <div className="ml-auto">
+            <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
+          </div>
+        )}
       </div>
+      {isMobile ? (
+        <div className="px-6">
+          <MobileCardList
+            columns={visibleColumns}
+            rows={sorted}
+            rowKey={rowKey}
+            loading={isLoading}
+            emptyIcon={emptyIcon}
+            emptyTitle={emptyTitle}
+            emptyDescription={emptyDescription}
+            onRowClick={onRowClick}
+          />
+        </div>
+      ) : (
       <Table colWidths={colWidths}>
         <TableHeader>
           <TableRow>
@@ -146,6 +165,7 @@ export function LedgerTable<Row>({
           )}
         </TableBody>
       </Table>
+      )}
     </div>
   );
 }

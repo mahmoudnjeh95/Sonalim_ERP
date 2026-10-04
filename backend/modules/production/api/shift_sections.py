@@ -129,6 +129,7 @@ _RUNS = RowSet(
         _num("water_quantity"),
         _num("water_percentage"),
         _num("humidity_percentage", None),
+        # Derived from the shift's versements and stops (_derive_semolina_flow), never typed.
         _num("semolina_flow_rate"),
         Col("shortfall_comment"),
     ),
@@ -735,6 +736,57 @@ def _derive_run_inputs(connection: psycopg.Connection, *, tenant_id: str, shift_
         )
 
 
+def _derive_semolina_flow(connection: psycopg.Connection, *, tenant_id: str, shift_id: str) -> None:
+    """The shift's semoule flow, written onto every one of its runs.
+
+    Everything poured into the line -- semoule and rebroyat both -- over the hours it actually
+    ran, which is the shift's configured length less the stops on the same fiche. The versements
+    are recorded once for the shift rather than per run, so this is one figure for the shift and
+    every run carries it; the team no longer types a débit that nothing could check.
+
+    Zero when it cannot be worked out -- the shift's hours are not configured, the stops leave no
+    running time, or nothing has been poured in yet -- rather than a figure nobody can account for.
+    """
+    shift = connection.execute(
+        "SELECT shift FROM production.shift_reports WHERE id = %s AND tenant_id = %s", (shift_id, tenant_id)
+    ).fetchone()
+    if not shift:
+        return
+    window = connection.execute(
+        "SELECT start_time, end_time FROM production.shift_windows WHERE tenant_id = %s AND LOWER(BTRIM(shift)) = LOWER(BTRIM(%s))",
+        (tenant_id, shift[0] or ""),
+    ).fetchone()
+
+    flow = 0.0
+    if window:
+        start, end = window
+        minutes = (
+            datetime.datetime.combine(datetime.date.min, end) - datetime.datetime.combine(datetime.date.min, start)
+        ).total_seconds() / 60
+        # A shift that runs past midnight (23-07) ends "before" it starts on the clock.
+        if minutes <= 0:
+            minutes += 24 * 60
+        stopped = connection.execute(
+            "SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60), 0) FROM production.machine_stops "
+            "WHERE tenant_id = %s AND shift_report_id = %s AND started_at IS NOT NULL AND ended_at IS NOT NULL "
+            "AND ended_at >= started_at",
+            (tenant_id, shift_id),
+        ).fetchone()[0]
+        running = minutes - float(stopped or 0)
+        poured = connection.execute(
+            "SELECT (SELECT COALESCE(SUM(quantity), 0) FROM production.shift_versements WHERE tenant_id = %s AND shift_report_id = %s) "
+            "+ (SELECT COALESCE(SUM(quantity), 0) FROM production.shift_rebroyat_versements WHERE tenant_id = %s AND shift_report_id = %s)",
+            (tenant_id, shift_id, tenant_id, shift_id),
+        ).fetchone()[0]
+        if running > 0 and float(poured or 0) > 0:
+            flow = round(float(poured) / (running / 60), 2)
+
+    connection.execute(
+        "UPDATE production.shift_runs SET semolina_flow_rate = %s WHERE tenant_id = %s AND shift_report_id = %s",
+        (flow, tenant_id, shift_id),
+    )
+
+
 def _validate_single_rebroyat(rows: list[dict]) -> Result[None]:
     """A run records one rebroyat item, so a shift's rebroyat versements must all name the same one."""
     products = {r["product_id"] for r in rows if r["product_id"] and (r["quantity"] or 0) > 0}
@@ -792,6 +844,9 @@ def save_section_rows(
             _sync_rowset(connection, tenant_id, shift_report_id, part, value)
     if section_key == "runs":
         _derive_run_inputs(connection, tenant_id=tenant_id, shift_id=shift_report_id)
+    # The flow divides the versements (runs) by the hours the stops left, so either section moving changes it.
+    if section_key in ("runs", "stops"):
+        _derive_semolina_flow(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     if section_key in ("packing", "waste_packing"):
         derive_waste_cartons(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     return Ok(None)

@@ -20,6 +20,7 @@ from core.auth import router as auth_router
 from core.exchange_rates import currencies_router as core_currencies_router
 from core.exchange_rates import router as core_exchange_rates_router
 from core.migrations.runner import migrate_on_startup
+from core.notifications import router as core_notifications_router
 from core.partners import router as core_partners_router
 from core.report_options import router as core_report_options_router
 from core.roles import router as core_roles_router
@@ -28,6 +29,7 @@ from core.products import router as core_products_router
 from core.products import tags_router as core_product_tags_router
 from core.products import uoms_router as core_uoms_router
 from core.table_preferences import router as core_table_preferences_router
+from core.user_avatars import router as core_user_avatars_router
 from core.users import router as core_users_router
 from modules.crm.api.router import router as crm_router
 from modules.finance.api.ledger_router import router as finance_ledger_router
@@ -66,6 +68,7 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(core_users_router)
+app.include_router(core_user_avatars_router)
 app.include_router(core_roles_router)
 app.include_router(core_partners_router)
 app.include_router(core_exchange_rates_router)
@@ -77,6 +80,7 @@ app.include_router(core_uoms_router)
 app.include_router(core_report_options_router)
 app.include_router(core_table_preferences_router)
 app.include_router(core_audit_router)
+app.include_router(core_notifications_router)
 app.include_router(warehouse_router)
 app.include_router(production_router)
 app.include_router(crm_router)

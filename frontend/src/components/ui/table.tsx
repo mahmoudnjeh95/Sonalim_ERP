@@ -19,13 +19,20 @@ export interface FittedColumn {
  * on its own. Each column stops absorbing the shrink once it reaches its own
  * minWidth (not a single shared floor), and the remainder is redistributed over
  * the columns still above their floor, which is why this loops.
+ *
+ * When even the floors do not fit -- a wide table on a phone -- no shrinking is
+ * applied at all: the widths stand and the wrapper scrolls sideways, because a
+ * table squeezed to its minimums is unreadable rather than merely narrow.
  */
 export function fitToWidth(columns: FittedColumn[], available: number | null): number[] {
   if (available === null || columns.length === 0) return columns.map((c) => c.width);
   const total = columns.reduce((sum, c) => sum + c.width, 0);
   if (total <= available) return columns.map((c) => c.width);
   const floorTotal = columns.reduce((sum, c) => sum + c.minWidth, 0);
-  if (floorTotal >= available) return columns.map((c) => c.minWidth);
+  // Not even the floors fit -- a wide table on a phone. Squeezing every column
+  // to its minimum would make the whole table unreadable to save a swipe, so
+  // keep the chosen widths and let the wrapper scroll sideways instead.
+  if (floorTotal >= available) return columns.map((c) => c.width);
 
   const fitted = columns.map((c) => c.width);
   const pinned = new Array<boolean>(columns.length).fill(false);
@@ -77,7 +84,11 @@ export function Table({
   );
 
   return (
-    <div ref={wrapperRef} className="w-full overflow-x-auto">
+    // `touch-pan-x` keeps a sideways drag on a phone scrolling this table rather
+    // than being claimed as a page gesture; a table too wide for the screen is
+    // still readable by swiping it, which is the fallback for every table that
+    // has not yet been given a card layout.
+    <div ref={wrapperRef} className="w-full overflow-x-auto overscroll-x-contain touch-pan-x">
       <table
         className={cn("w-full text-sm", className)}
         style={colWidths ? { tableLayout: "fixed" } : undefined}

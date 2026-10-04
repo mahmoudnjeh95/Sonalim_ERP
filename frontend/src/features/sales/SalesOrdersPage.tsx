@@ -7,7 +7,8 @@ import { CheckCircle2, Pencil, Plus, ShoppingCart, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { currentLocale, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
+import { formatXofWithCode } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { productRequiresIntegerQuantity } from "../../lib/units";
 import { Button } from "../../components/ui/button";
@@ -61,7 +62,7 @@ const PRODUCT_TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
+  return formatXofWithCode(amount);
 }
 
 export function SalesOrdersPage() {

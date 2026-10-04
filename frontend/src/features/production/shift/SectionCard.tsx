@@ -15,7 +15,8 @@ import { FullscreenOverlay } from "./FullscreenOverlay";
 import { RevisionHistory } from "./RevisionHistory";
 import { StatusNode } from "./StatusNode";
 import type { PartDef, SectionDef } from "./sectionConfig";
-import { followLot, hasData, partDefaults, rowCount, toDraft, toPayload, type Draft } from "./shiftModel";
+import { followDefaults, hasData, partDefaults, rowCount, toDraft, toPayload, type Draft } from "./shiftModel";
+import type { ShiftContext } from "./shiftDerived";
 import {
   declareSectionEmpty,
   saveShiftSection,
@@ -45,6 +46,7 @@ export function SectionCard({
   open,
   onToggle,
   onChanged,
+  context,
 }: {
   def: SectionDef;
   state: SectionState;
@@ -54,6 +56,8 @@ export function SectionCard({
   open: boolean;
   onToggle: () => void;
   onChanged: () => void;
+  /** What the other sections settled: the OF production ran, the shift's semoule flow. */
+  context: ShiftContext;
 }) {
   const { session, hasPermission } = useAuth();
   const token = session!.token;
@@ -62,7 +66,7 @@ export function SectionCard({
   const [maximized, setMaximized] = useState(false);
 
   const validated = shift.status === "validated";
-  const canUnlock = canEdit && validated && hasPermission("production.shift.unlock_validated");
+  const canUnlock = canEdit && validated && hasPermission("production.admin_unlock_validated");
   const [unlocked, setUnlocked] = useState(false);
   const [unlockReason, setUnlockReason] = useState("");
   const locked = !canEdit || (validated && !unlocked);
@@ -70,7 +74,8 @@ export function SectionCard({
   // An editable section opens with one blank line in each table; a locked one shows what was handed in.
   const lotNumber = shift.default_lot_number ?? null;
   const reportDate = shift.report_date;
-  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber, reportDate));
+  const runOrderId = context.runOrderId;
+  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber, reportDate, runOrderId));
   const [dirty, setDirty] = useState(false);
 
   // What the server holds is the truth: when it changes (a save, a validator's return),
@@ -79,7 +84,7 @@ export function SectionCard({
   // otherwise flipping `unlocked` would change `locked`, which would reset `unlocked`.
   const serverKey = `${state.revision}|${state.status}|${canEdit}|${JSON.stringify(state.payload ?? {})}`;
   useEffect(() => {
-    setDraft(toDraft(def, state.payload, !locked, lotNumber, reportDate));
+    setDraft(toDraft(def, state.payload, !locked, lotNumber, reportDate, runOrderId));
     setDirty(false);
     // A fresh server snapshot means any correction just landed (or someone else's did);
     // either way the section goes back to being read-only.
@@ -89,16 +94,17 @@ export function SectionCard({
   }, [serverKey]);
 
   const toggleUnlock = () => {
-    if (unlocked) setDraft(toDraft(def, state.payload, false, lotNumber, reportDate)); // cancelling drops the unsaved correction
+    if (unlocked) setDraft(toDraft(def, state.payload, false, lotNumber, reportDate, runOrderId)); // cancelling drops the unsaved correction
     setUnlockReason("");
     setUnlocked(!unlocked);
   };
 
-  // Naming the team gives the shift a lot: lines still untouched pick it up. Not an edit, so not unsaved.
+  // Naming the team gives the shift a lot, and saving the production rows names the OF the lots
+  // were packed under: lines still untouched pick both up. Not an edit, so not unsaved.
   useEffect(() => {
-    if (!locked) setDraft((current) => followLot(def, current, lotNumber, reportDate));
+    if (!locked) setDraft((current) => followDefaults(def, current, lotNumber, reportDate, runOrderId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lotNumber]);
+  }, [lotNumber, runOrderId]);
 
   const filled = hasData(def, draft);
   const count = rowCount(def, draft);
@@ -181,7 +187,7 @@ export function SectionCard({
           onChange={(value) => edit(part.payloadKey, value)}
           options={options}
           disabled={locked || busy}
-          defaults={partDefaults(part, lotNumber, reportDate)}
+          defaults={partDefaults(part, lotNumber, reportDate, runOrderId)}
         />
       ))}
 
@@ -360,7 +366,7 @@ export function Part({
     <div className="space-y-2">
       {part.title && <h3 className="text-sm font-medium">{label(part.title)}</h3>}
       {part.shape === "single" ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
           {part.columns.map((column) => {
             const decor = decorate?.(value as Row, column.key);
             return (

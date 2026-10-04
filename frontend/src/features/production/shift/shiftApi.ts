@@ -151,3 +151,30 @@ export function reverseShiftReport(token: string, id: string, body: { reason: st
 export function bulkValidateShiftReports(token: string, ids: string[]) {
   return apiFetch<ShiftReport[]>(`${base}/bulk/validate`, { method: "POST", body: { ids }, token });
 }
+
+/** One person the fiche's header may name, and the position that puts them on the list. */
+export interface ShiftRolePerson {
+  id: string;
+  name: string;
+  position_id: string;
+}
+
+/** Who each of the four person fields may name, and the HR positions each role is mapped to. */
+export interface ShiftRolePeople {
+  people: Record<string, ShiftRolePerson[]>;
+  positions: Record<string, string[]>;
+}
+
+export const SHIFT_ROLE_PEOPLE_QUERY_KEY = ["production", "shift-roles", "people"] as const;
+
+export function listShiftRolePeople(token: string) {
+  return apiFetch<ShiftRolePeople>("/production/shift-roles/people", { token });
+}
+
+export function setShiftRolePositions(token: string, role: string, positionIds: string[]) {
+  return apiFetch<{ role: string; position_ids: string[] }>(`/production/shift-roles/${role}/positions`, {
+    method: "PUT",
+    token,
+    body: { position_ids: positionIds },
+  });
+}

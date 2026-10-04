@@ -13,7 +13,11 @@ export function Card({ className, ...props }: React.HTMLAttributes<HTMLDivElemen
 export function CardHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
   return (
     <div
-      className={cn("flex items-center justify-between gap-4 border-b border-border px-5 py-4", className)}
+      // flex-wrap so a long title and its action button stack instead of running
+      // off a narrow screen -- buttons are whitespace-nowrap, so without this a
+      // header like "Nouvel ordre de fabrication" overflows a 390px phone
+      // (measured at 514px). On a wide card nothing wraps and this is a no-op.
+      className={cn("flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-b border-border px-5 py-4", className)}
       {...props}
     />
   );

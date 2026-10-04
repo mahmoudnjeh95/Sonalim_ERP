@@ -22,15 +22,27 @@ MODULE_LABELS = {
     "procurement": "Achats",
     "production": "Production",
     "qc": "Qualité",
+    "scan": "Numérisation",
     "sales": "Ventes",
     "warehouse": "Entrepôt",
 }
 
 ADMINISTRATOR_ROLE_CODE = "administrateur"
 
-# Permissions that open personal data (salary, national id, bank details). Like admin_*, they
-# are granted one at a time on purpose and never bundled into a module's everyday role.
-DELIBERATE_GRANT_PERMISSIONS = {"hr.view_sensitive"}
+# Permissions held back from their module's everyday role, for the same reason admin_*
+# codes are: they're granted one at a time, deliberately. The admin_* prefix rule below
+# can't express these, and renaming them to admin_* isn't worth it here: the permission
+# string is what's stored in core.role_permissions, so a rename needs a migration to
+# carry the existing grants over (see production/0070 for one that did).
+#
+#   hr.view_sensitive        personal data: salary, national id, bank details.
+#   hr.view/manage_payroll   running payroll is the payroll role's job, not everyday HR's;
+#                            anyone who does both jobs gets both roles.
+DELIBERATE_GRANT_PERMISSIONS = {
+    "hr.view_sensitive",
+    "hr.view_payroll",
+    "hr.manage_payroll",
+}
 
 # Permissions core itself defines that aren't tied to any business module.
 CORE_PERMISSIONS = [

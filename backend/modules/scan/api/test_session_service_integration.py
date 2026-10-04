@@ -58,7 +58,7 @@ def test_upload_limits(db, world):
     add = lambda files: service.add_pages(tenant_id=TENANT, actor_id=world["actor"], session_id=session_id, files=files)  # noqa: E731
     assert add([{**JPEG, "content_type": "image/heic"}]).code == "UNSUPPORTED_IMAGE"
     assert add([{**JPEG, "data_base64": "not base64!"}]).code == "UNSUPPORTED_IMAGE"
-    big = base64.b64encode(b"0" * (8 * 1024 * 1024 + 1)).decode()
+    big = base64.b64encode(b"0" * (10 * 1024 * 1024 + 1)).decode()
     assert add([{**JPEG, "data_base64": big}]).code == "IMAGE_TOO_LARGE"
     assert add([JPEG] * (MAX_PAGES + 1)).code == "TOO_MANY_PAGES"
 

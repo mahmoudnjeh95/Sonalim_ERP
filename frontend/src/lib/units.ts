@@ -99,10 +99,19 @@ export function commonUnit(
  * else -- rather than a list of known words, so a unit a tenant adds later
  * behaves without anyone editing this file. Anything already ending in `s`
  * is left alone.
+ *
+ * Shape alone is not quite enough, though: a few symbols are also three or more
+ * letters. A currency code (`XOF`) and a metered unit (`kWh`) are invariant, so
+ * they are recognised by their casing rather than by a list of codes -- a symbol
+ * carries an uppercase letter somewhere, a French unit word never does. That
+ * keeps `pièce` and any lowercase unit a tenant adds working untouched, while
+ * `XOF` and `kWh` stay as they are written.
  */
 export function pluralizeUnit(unit: string, value: number): string {
   if (Math.abs(value) < 2) return unit;
   if (!/^\p{L}{3,}$/u.test(unit) || /s$/i.test(unit)) return unit;
+  // An uppercase letter marks a symbol (XOF, kWh), not a word to pluralize.
+  if (/\p{Lu}/u.test(unit)) return unit;
   return `${unit}s`;
 }
 

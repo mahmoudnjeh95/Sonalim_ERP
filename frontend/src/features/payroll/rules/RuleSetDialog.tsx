@@ -142,7 +142,7 @@ export function RuleSetDialog({
             submit();
           }}
         >
-          <div className="grid gap-3 sm:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <FormField id="rule-set-country" label={t("payroll.rules.settings.country")}>
               <Input id="rule-set-country" required maxLength={2} className="uppercase" value={form.country} onChange={set("country")} />
             </FormField>
@@ -161,7 +161,7 @@ export function RuleSetDialog({
               <Input id="rule-set-hours" type="number" required min="1" max="744" step="any" value={form.workingHours} onChange={set("workingHours")} />
             </FormField>
           </div>
-          <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <FormField id="rule-set-round-to" label={t("payroll.ruleSetForm.roundTo")}>
               <Input id="rule-set-round-to" type="number" required={editing} min="1" step="1" value={form.roundTo} onChange={set("roundTo")} />
             </FormField>

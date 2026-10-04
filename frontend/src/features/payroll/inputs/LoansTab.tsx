@@ -255,7 +255,7 @@ export function LoansTab() {
             </div>
             {/* Review focus 4: INPUT_INVALID stays next to the principal and instalments, not only in a toast. */}
             <div className="space-y-1.5">
-              <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="loan-principal">{t("payroll.loans.field.principal")}</Label>
                   <Input

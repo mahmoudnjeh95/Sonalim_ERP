@@ -125,13 +125,16 @@ def _rule(source: str, kind: str, code: str, debit: str | None, credit: str | No
 
 
 # Spec default mapping, to be confirmed by the accountant. Filled where the spec is silent:
-# employer charges credit 442; mobile money pays out of 552. AMO -> 433 needs code rows (the
-# contribution codes belong to payroll) — scripts/seed_finance_ledger.py adds them.
+# employer charges credit 442; mobile money pays out of 552. AMO contributions (Mali's payroll
+# "AMO" code, both employee and employer) go to 433 "Autres organismes sociaux" rather than the
+# generic 431 wildcard.
 DEFAULT_POSTING_RULES: tuple[PostingRule, ...] = (
     _rule("payroll", "earning", "*", "661", None),
     _rule("payroll", "deduction", "*", None, "421"),
     _rule("payroll", "employee_contribution", "*", None, "431"),
+    _rule("payroll", "employee_contribution", "AMO", None, "433"),
     _rule("payroll", "employer_contribution", "*", "664", "431"),
+    _rule("payroll", "employer_contribution", "AMO", "664", "433"),
     _rule("payroll", "employer_charge", "*", "641", "442"),
     _rule("payroll", "tax", "*", None, "447"),
     _rule("payroll", "net", "*", None, "422"),

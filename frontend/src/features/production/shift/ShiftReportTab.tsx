@@ -10,7 +10,8 @@ import { cn } from "../../../lib/utils";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
-import { Input } from "../../../components/ui/input";
+import { Select } from "../../../components/ui/select";
+import { REPORT_OPTIONS_QUERY_KEY, listReportOptions, optionsFor } from "../../../lib/reportOptions";
 import { Label as FieldLabel } from "../../../components/ui/label";
 import { SectionCard } from "./SectionCard";
 import { FullscreenOverlay } from "./FullscreenOverlay";
@@ -22,6 +23,7 @@ import type { OptionMap } from "./ShiftGrid";
 import { useShiftReferenceData } from "./useShiftReferenceData";
 import type { ShiftWindowRow } from "../board/api";
 import { SECTIONS } from "./sectionConfig";
+import { shiftContext } from "./shiftDerived";
 import {
   SECTION_KEYS,
   SHIFT_REPORTS_QUERY_KEY,
@@ -29,7 +31,10 @@ import {
   listShiftReports,
   openShiftReport,
   updateShiftHeader,
+  SHIFT_ROLE_PEOPLE_QUERY_KEY,
+  listShiftRolePeople,
   type HeaderFields,
+  type Row,
   type SectionKey,
   type ShiftReport,
 } from "./shiftApi";
@@ -62,12 +67,18 @@ function currentShift(windows: ShiftWindowRow[]): string {
   return (inside ?? windows[0])?.shift ?? "";
 }
 
-const HEADER_FIELDS: { key: keyof HeaderFields; label: typeof T.team }[] = [
+/**
+ * The names on the paper header. Each is chosen from a list rather than typed: the team from
+ * the tenant's teams (Report options), the four jobs from the people HR has in the positions
+ * mapped to that role (Production settings). A name a report already carries stays on its
+ * list, so opening an old shift never silently blanks who ran it.
+ */
+const HEADER_FIELDS: { key: keyof HeaderFields; label: typeof T.team; role?: string }[] = [
   { key: "team", label: T.team },
-  { key: "conducteur", label: T.conducteur },
-  { key: "agent_fabrication", label: T.agentFabrication },
-  { key: "machiniste", label: T.machiniste },
-  { key: "aide_machiniste", label: T.aideMachiniste },
+  { key: "conducteur", label: T.conducteur, role: "conducteur" },
+  { key: "agent_fabrication", label: T.agentFabrication, role: "agent_fabrication" },
+  { key: "machiniste", label: T.machiniste, role: "machiniste" },
+  { key: "aide_machiniste", label: T.aideMachiniste, role: "aide_machiniste" },
 ];
 
 export function ShiftReportTab() {
@@ -114,6 +125,18 @@ export function ShiftReportTab() {
     enabled: canView && !!existing,
   });
   const shift = detail.data;
+
+  // What the sections work out from each other: the OF production ran (the packing lots start on
+  // it) and the shift's semoule flow (the versements over the hours the stops left). Read from the
+  // saved sections, so a section card never has to know about the others.
+  const context = useMemo(() => {
+    const rowsOf = (key: string, part: string) => {
+      const payload = shift?.sections.find((section) => section.key === key)?.payload;
+      return Array.isArray(payload?.[part]) ? (payload![part] as Row[]) : [];
+    };
+    const window = windows.find((w) => w.shift.trim().toLowerCase() === shiftName.trim().toLowerCase());
+    return shiftContext(rowsOf, window?.length_minutes ?? null);
+  }, [shift, windows, shiftName]);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: SHIFT_REPORTS_QUERY_KEY });
 
@@ -299,6 +322,7 @@ export function ShiftReportTab() {
                   open={openKeys.has(def.key)}
                   onToggle={() => toggle(def.key)}
                   onChanged={refresh}
+                  context={context}
                 />
               );
             })}
@@ -332,6 +356,7 @@ export function ShiftReportTab() {
                     open={openKeys.has(def.key)}
                     onToggle={() => toggle(def.key)}
                     onChanged={refresh}
+                    context={context}
                   />
                 );
               })}
@@ -370,24 +395,29 @@ function HeaderNames({
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(HEADER_FIELDS.map((f) => [f.key, shift[f.key] ?? ""])),
   );
-  // What earlier shifts put in each field, most used first, offered as suggestions.
-  const earlier = useQuery({
-    queryKey: [...SHIFT_REPORTS_QUERY_KEY, "names"],
-    queryFn: () => listShiftReports(session!.token),
+  // The teams the tenant has configured, and the people HR has in each role's positions.
+  const reportOptions = useQuery({
+    queryKey: REPORT_OPTIONS_QUERY_KEY,
+    queryFn: () => listReportOptions(session!.token),
     staleTime: 5 * 60 * 1000,
   });
-  const suggestions = useMemo(() => {
-    const out: Record<string, string[]> = {};
-    for (const field of HEADER_FIELDS) {
-      const counts = new Map<string, number>();
-      for (const past of earlier.data ?? []) {
-        const value = past[field.key]?.trim();
-        if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
-      }
-      out[field.key] = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([v]) => v);
-    }
-    return out;
-  }, [earlier.data]);
+  const rolePeople = useQuery({
+    queryKey: SHIFT_ROLE_PEOPLE_QUERY_KEY,
+    queryFn: () => listShiftRolePeople(session!.token),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  /**
+   * What one field may be set to. A name the shift already carries is kept at the head of its
+   * list even when HR no longer offers it -- somebody who has left still ran that shift, and
+   * dropping them would rewrite what the report says.
+   */
+  const choicesFor = (field: (typeof HEADER_FIELDS)[number]): string[] => {
+    const current = (shift[field.key] ?? "").trim();
+    if (!field.role) return optionsFor(reportOptions.data ?? [], "team", current || null);
+    const names = (rolePeople.data?.people[field.role] ?? []).map((person) => person.name);
+    return current && !names.includes(current) ? [current, ...names] : names;
+  };
 
   const save = useMutation({
     mutationFn: (fields: HeaderFields) => updateShiftHeader(session!.token, shift.id, fields),
@@ -399,28 +429,32 @@ function HeaderNames({
   });
 
   return (
-    <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="grid grid-cols-1 gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-5">
       {HEADER_FIELDS.map((field) => (
         <div key={field.key} className="space-y-1">
           <FieldLabel htmlFor={`shift-${field.key}`} className="text-xs text-muted-foreground">
             {label(field.label)}
           </FieldLabel>
-          <Input
+          <Select
             id={`shift-${field.key}`}
-            list={`shift-${field.key}-suggestions`}
-            autoComplete="off"
             value={values[field.key]}
             disabled={locked}
-            onChange={(e) => setValues((current) => ({ ...current, [field.key]: e.target.value }))}
-            onBlur={() => {
-              if ((shift[field.key] ?? "") !== values[field.key].trim()) save.mutate({ [field.key]: values[field.key].trim() || null });
+            onChange={(e) => {
+              const chosen = e.target.value;
+              setValues((current) => ({ ...current, [field.key]: chosen }));
+              if ((shift[field.key] ?? "") !== chosen) save.mutate({ [field.key]: chosen || null });
             }}
-          />
-          <datalist id={`shift-${field.key}-suggestions`}>
-            {suggestions[field.key].map((value) => (
-              <option key={value} value={value} />
+          >
+            <option value="">—</option>
+            {choicesFor(field).map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
             ))}
-          </datalist>
+          </Select>
+          {choicesFor(field).length === 0 && !locked && (
+            <p className="text-xs text-muted-foreground">{label(field.role ? T.noRolePeople : T.noTeams)}</p>
+          )}
         </div>
       ))}
     </div>

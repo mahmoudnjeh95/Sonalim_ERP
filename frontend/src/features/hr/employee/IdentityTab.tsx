@@ -65,7 +65,7 @@ export function IdentityTab({ employee }: { employee: EmployeeRecord }) {
   }
 
   return (
-    <div className="grid gap-4 md:grid-cols-2">
+    <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
       {sections.map((section) => (
         <Card key={section.title}>
           <CardHeader className="pb-2">

@@ -6,6 +6,8 @@ import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { ColumnFilterRow } from "../../components/patterns/ColumnFilterRow";
 import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibilityMenu";
 import { EmptyState } from "../../components/patterns/EmptyState";
+import { MobileCardList } from "../../components/patterns/MobileCardList";
+import { useIsMobile } from "../../lib/useIsMobile";
 import { useI18n } from "../../lib/i18n";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { cn } from "../../lib/utils";
@@ -42,6 +44,7 @@ export function HrListTable<Row>({
 }: HrListTableProps<Row>) {
   const { t } = useI18n();
   const table = useTableColumns(tableKey, columns);
+  const isMobile = useIsMobile();
   const sorted = table.sortRows(rows);
   const span = table.visibleColumns.length;
   return (
@@ -53,10 +56,27 @@ export function HrListTable<Row>({
             {t("common.clearFilters")}
           </Button>
         )}
-        <div className="ml-auto">
-          <ColumnVisibilityMenu columns={columns} isVisible={table.isVisible} onToggle={table.toggleVisible} onReset={table.resetAll} />
-        </div>
+        {/* Hiding columns has no meaning once the row is a card: every column is
+            already a labelled line, and the menu would only shrink the card. */}
+        {!isMobile && (
+          <div className="ml-auto">
+            <ColumnVisibilityMenu columns={columns} isVisible={table.isVisible} onToggle={table.toggleVisible} onReset={table.resetAll} />
+          </div>
+        )}
       </div>
+      {isMobile ? (
+        <MobileCardList
+          columns={table.visibleColumns}
+          rows={sorted}
+          rowKey={rowKey}
+          loading={loading}
+          emptyIcon={emptyIcon}
+          emptyTitle={emptyTitle}
+          emptyDescription={emptyDescription}
+          onRowClick={onRowClick}
+          rowClassName={rowClassName}
+        />
+      ) : (
       <div className={bordered ? "rounded-lg border border-border" : undefined}>
         <Table colWidths={table.colWidths}>
           <TableHeader>
@@ -111,6 +131,7 @@ export function HrListTable<Row>({
           </TableBody>
         </Table>
       </div>
+      )}
     </div>
   );
 }

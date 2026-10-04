@@ -121,7 +121,12 @@ def work(conn, args) -> int:
     periods = PeriodService(conn)
     for year in sorted(years):
         opened = periods.open_fiscal_year(tenant_id=TENANT, actor_id=actor, year=year)
-        print(f"fiscal year {year}:", "opened" if not isinstance(opened, Err) else opened.code)
+        if isinstance(opened, Err):
+            print(f"fiscal year {year}:", opened.code)
+            if opened.code != "FISCAL_YEAR_EXISTS":
+                raise RuntimeError(f"could not open fiscal year {year}: {opened.code} — {opened.message}")
+        else:
+            print(f"fiscal year {year}: opened")
 
     payroll_api = payroll_ledger_service.PAYROLL_API_FACTORY(conn)
     rules = PostingRuleService(conn)
@@ -133,19 +138,22 @@ def work(conn, args) -> int:
             )
             print(f"AMO rule {kind} {code}:", "added" if not isinstance(created, Err) else created.code)
 
+    steps_for_status = {
+        "calculated": ["payroll.run.approved"],
+        "approved": ["payroll.run.approved"],
+        "paid": ["payroll.run.approved", "payroll.run.paid"],
+        "reversed": ["payroll.run.approved", "payroll.run.paid", "payroll.run.reversed"],
+    }
     refused = 0
     for run_id, period, status in runs:
         print(f"payroll run {run_id} ({period:%m/%Y}, {status})")
         last_day = payroll_ledger_service.last_day_of(period)
-        at = datetime.datetime.combine(min(last_day, datetime.date.today()), datetime.time(12, 0), datetime.timezone.utc)
+        at = datetime.datetime.combine(last_day, datetime.time(12, 0), datetime.timezone.utc)
         payload = {"run_id": run_id, "period": period.isoformat(), "run_type": "regular"}
-        steps = ["payroll.run.approved"]
-        if status in ("paid", "reversed"):
-            steps.append("payroll.run.paid")
-        if status == "reversed":
-            steps.append("payroll.run.reversed")
-        for event_type in steps:
-            refused += not _post(conn, _envelope(event_type, payload, at))
+        for event_type in steps_for_status[status]:
+            if not _post(conn, _envelope(event_type, payload, at)):
+                refused += 1
+                break
 
     print(f"invoices: {len(invoice_envelopes)} event(s) to replay")
     for envelope in invoice_envelopes:

@@ -1,17 +1,25 @@
 """Go-live reset: wipes every operational/test record and keeps only the master data.
 
-KEPT      users, roles and permissions, products (and their classification / tags /
-          attributes), UoMs, currencies, warehouse locations, suppliers, machines
-          (maintenance.equipment), work centers, molds, recipes, packaging BOMs, team
-          rosters, shift windows, report options, waste types and every other
-          configuration table.
+KEPT      users (and their profile photos), roles and permissions, products (and their
+          classification / tags / attributes), UoMs, currencies, warehouse locations,
+          suppliers, machines (maintenance.equipment, their photo maps and checkpoints,
+          maintenance teams and preventive programs), work centers, molds, recipes,
+          packaging BOMs, team rosters, shift windows, report options, waste types, the
+          codes the paper scan learned from corrections, and every other configuration
+          table.
 WIPED     work orders (OF) and regrind orders (OFR), the legacy Daily/Conditionnement
           reports and the per-shift reports with everything under them, QC reports and
           non-conformities, stock moves and lots, cycle counts, purchasing, sales, CRM,
-          finance, HR, the audit log, the event outbox and the AI assistant history.
+          finance, HR (and the shift-role to HR-position mapping, whose positions go with
+          it), maintenance jobs (checks, entries, reviews, timeline) and parts requests,
+          paper scans (fiche photos and what was read on them), in-app notifications, the
+          audit log, the event outbox and the AI assistant history.
 ZEROED    every stock quantity in warehouse.stock_items (the rows stay, so each
           product/location keeps its place -- only on-hand / reserved / in-production
           go to 0) and the OF-/OFR-/NC- numbering counters.
+RESTARTED every maintenance program keeps its settings but is marked as generated
+          through yesterday, so the next sweep raises jobs from today on instead of
+          re-creating every past occurrence whose job was just wiped.
 CUSTOMERS removed (they came from the sales/CRM demo data); suppliers stay. Pass
           --keep-customers to keep them.
 
@@ -129,6 +137,11 @@ PURGE_TABLES = [
     "production.stock_release_lines",
     "production.ia_assistant_conversations",
     "production.ia_assistant_messages",
+    # Configuration, but every row names an hr.positions id, and hr.positions is wiped above.
+    "production.shift_role_positions",
+    "scan.scan_sessions",
+    "scan.scan_pages",
+    "scan.scan_field_outcomes",
     "warehouse.stock_moves",
     "warehouse.lot_stock",
     "warehouse.lots",
@@ -141,6 +154,14 @@ PURGE_TABLES = [
     "warehouse.cost_layer_consumptions",
     "warehouse.cost_layers",
     "warehouse.replenishment_proposals",
+    "core.notifications",
+    "maintenance.jobs",
+    "maintenance.job_checks",
+    "maintenance.check_entries",
+    "maintenance.check_reviews",
+    "maintenance.job_events",
+    "maintenance.part_requests",
+    "maintenance.part_request_lines",
 ]
 
 # Tables that are edited in place rather than emptied (see purge()).
@@ -148,6 +169,7 @@ EDITED_TABLES = [
     "core.partners",
     "core.partner_tag_links",
     "core.sequences",
+    "maintenance.programs",
     "warehouse.stock_items",
 ]
 
@@ -169,6 +191,7 @@ KEPT_TABLES = [
     "core.roles",
     "core.sessions",
     "core.uoms",
+    "core.user_avatars",
     "core.user_permissions",
     "core.user_roles",
     "core.user_table_preferences",
@@ -189,6 +212,13 @@ KEPT_TABLES = [
     "finance.periods",
     "finance.posting_rules",
     "maintenance.equipment",
+    "maintenance.equipment_views",
+    "maintenance.checkpoints",
+    "maintenance.checkpoint_parts",
+    "maintenance.program_checkpoints",
+    "maintenance.settings",
+    "maintenance.teams",
+    "maintenance.team_members",
     "payroll.bank_file_templates",
     "payroll.components",
     "payroll.contributions",
@@ -215,6 +245,7 @@ KEPT_TABLES = [
     "production.waste_types",
     "production.waste_type_builtin_settings",
     "production.work_centers",
+    "scan.scan_aliases",
     "warehouse.locations",
     "warehouse.sites",
     "warehouse.putaway_rules",
@@ -310,7 +341,21 @@ def purge(connection, tenant_id: str, *, keep_customers: bool = False) -> dict[s
         (tenant_id, RESET_SEQUENCES),
     )
     report["core.sequences (reset)"] = cursor.rowcount
+
+    if "maintenance.programs" in live:
+        report["maintenance.programs (sweep restarted)"] = restart_program_sweeps(connection, tenant_id)
     return report
+
+
+def restart_program_sweeps(connection, tenant_id: str) -> int:
+    """Marks every preventive program as generated through yesterday. Its jobs are wiped
+    with the rest of the operational data; without this the next sweep would re-raise
+    every occurrence since the program was created, all of them overdue."""
+    cursor = connection.execute(
+        "UPDATE maintenance.programs SET last_generated_date = CURRENT_DATE - 1 WHERE tenant_id = %s",
+        (tenant_id,),
+    )
+    return cursor.rowcount
 
 
 def print_report(report: dict[str, int], verb: str) -> None:

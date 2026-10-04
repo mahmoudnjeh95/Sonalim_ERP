@@ -270,7 +270,7 @@ export function AdvancesTab() {
             <DialogDescription>{t("payroll.advances.dialogHint")}</DialogDescription>
           </DialogHeader>
           <form className="space-y-4" onSubmit={submit}>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="advance-deduct-period">{t("payroll.advances.column.deductPeriod")}</Label>
                 <Input

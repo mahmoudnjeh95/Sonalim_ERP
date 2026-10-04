@@ -20,6 +20,9 @@ import { IaAssistantTab } from "../features/production/IaAssistantTab";
 import { QualityPage } from "../features/qc/QualityPage";
 import { AnalyticsPage } from "../features/analytics/AnalyticsPage";
 import { MaintenancePage } from "../features/maintenance/MaintenancePage";
+import { CheckpointMapEditor } from "../features/maintenance/map/CheckpointMapEditor";
+import { JobPage } from "../features/maintenance/jobs/JobPage";
+import { CheckWizard } from "../features/maintenance/wizard/CheckWizard";
 import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPage";
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
@@ -30,6 +33,7 @@ import { PostingRulesPage } from "../features/finance/PostingRulesPage";
 import { TrialBalancePage } from "../features/finance/TrialBalancePage";
 import { GeneralLedgerPage } from "../features/finance/GeneralLedgerPage";
 import { PeriodsPage } from "../features/finance/PeriodsPage";
+import { ProfilePage } from "../features/profile/ProfilePage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
 import { EmployeesPage } from "../features/hr/EmployeesPage";
@@ -71,6 +75,16 @@ function ProtectedRoute() {
   );
 }
 
+// Signed-in screens that take the whole screen, without the sidebar layout:
+// the maintenance check wizard is run on a phone on the shop floor.
+function ProtectedFullScreenRoute() {
+  const { session } = useAuth();
+  if (!session) {
+    return <Navigate to="/login" replace />;
+  }
+  return <Outlet />;
+}
+
 // Every protected leaf route gets the same errorElement so a crash on one
 // page unmounts inside AppLayout's <Outlet /> (sidebar/nav stay usable)
 // instead of taking down the whole app with react-router's default screen.
@@ -97,6 +111,8 @@ const protectedChildren: RouteObject[] = [
   { path: "/quality", element: <QualityPage /> },
   { path: "/analytics", element: <AnalyticsPage /> },
   { path: "/maintenance", element: <MaintenancePage /> },
+  { path: "/maintenance/equipment/:equipmentId/map", element: <CheckpointMapEditor /> },
+  { path: "/maintenance/jobs/:jobId", element: <JobPage /> },
   { path: "/warehouse", element: <WarehousePage /> },
   { path: "/products", element: <ProductsPage /> },
   { path: "/inventories", element: <InventoriesPage /> },
@@ -113,6 +129,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/admin/users", element: <UsersPage /> },
   { path: "/admin/roles", element: <RolesPage /> },
   { path: "/admin/activity-log", element: <ActivityLogPage /> },
+  { path: "/profile", element: <ProfilePage /> },
   { path: "/settings", element: <SettingsPage /> },
   { path: "/hr/employees", element: <EmployeesPage /> },
   { path: "/hr/employees/:employeeId", element: <EmployeeFilePage /> },
@@ -133,6 +150,10 @@ const protectedChildren: RouteObject[] = [
   { path: "/payroll/inputs", element: <InputsPage /> },
 ].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
 
+const fullScreenChildren: RouteObject[] = [
+  { path: "/maintenance/jobs/:jobId/run", element: <CheckWizard /> },
+].map((route) => ({ ...route, errorElement: <RouteErrorBoundary /> }));
+
 export const router = createBrowserRouter([
   {
     // Catches errors thrown outside any leaf (e.g. in ProtectedRoute/AppLayout
@@ -143,6 +164,10 @@ export const router = createBrowserRouter([
       {
         element: <ProtectedRoute />,
         children: protectedChildren,
+      },
+      {
+        element: <ProtectedFullScreenRoute />,
+        children: fullScreenChildren,
       },
     ],
   },

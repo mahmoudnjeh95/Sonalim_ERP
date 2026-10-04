@@ -117,8 +117,9 @@ export const S = {
   importFromPhotos: L("Import from photos", "Importer depuis des photos"),
   camera: L("Scan with the camera", "Scanner avec la caméra"),
   snap: L("Take the photo", "Prendre la photo"),
-  shotsTaken: L("photos taken", "photos prises"),
-  useShots: L("Use these photos", "Utiliser ces photos"),
+  photoTaken: L("Photo taken", "Photo prise"),
+  done: L("Done", "Terminé"),
+  closeCamera: L("Close the camera", "Fermer la caméra"),
   cameraUnavailable: L(
     "The camera cannot be opened here (permission refused, no camera, or the page is not secure).",
     "La caméra ne peut pas s'ouvrir ici (autorisation refusée, pas de caméra, ou page non sécurisée).",

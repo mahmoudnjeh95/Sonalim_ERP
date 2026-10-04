@@ -171,7 +171,7 @@ export function QualityDashboardTab() {
           />
         </div>
 
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+        <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
           <Card>
             <CardHeader>
               <div>
@@ -201,12 +201,12 @@ export function QualityDashboardTab() {
           <QualityBreakdownPanel slices={slices} plantPct={summary.totals.conformityPct} />
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <DefectParetoPanel defects={summary.defects} />
           <NcPipelinePanel summary={ncSummary} />
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
+        <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
           <InspectionCoveragePanel summary={summary} awaiting={awaitingCount} />
           <RecoveryPanel rows={dispositionRows} />
         </div>

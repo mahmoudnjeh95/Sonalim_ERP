@@ -137,7 +137,7 @@ export function VariancePanel({ runId }: { runId: string }) {
         </p>
       )}
       {summary.length > 0 && (
-        <dl className="grid gap-3 sm:grid-cols-2">
+        <dl className="grid grid-cols-1 gap-3 sm:grid-cols-2">
           {summary.map((item) => (
             <div key={item.label} className="rounded-lg border border-border bg-background px-3 py-2">
               <dt className="text-xs text-muted-foreground">{item.label}</dt>

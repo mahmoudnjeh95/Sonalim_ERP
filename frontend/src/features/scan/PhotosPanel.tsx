@@ -11,7 +11,7 @@ import { Checkbox } from "../../components/ui/checkbox";
 import { Select } from "../../components/ui/select";
 import { useLabel } from "../production/shift/shiftText";
 import { CameraDialog } from "./CameraDialog";
-import { prepareImage } from "./imagePrep";
+import { prepareImage, UPLOAD_BUDGETS } from "./imagePrep";
 import { PageImage } from "./PageImage";
 import {
   deletePage, rereadPage, scanProposalPrefix, scanSessionKey, uploadPages,
@@ -41,10 +41,20 @@ export function PhotosPanel({
 
   const upload = useMutation({
     mutationFn: async (files: File[]) => {
+      // A budget a proxy refused (413) is not tried again for the rest of the batch.
+      let budget = 0;
       for (const [index, file] of files.entries()) {
         setPreparing(index + 1);
-        const prepared = await prepareImage(file);
-        await uploadPages(token, session.id, [prepared]);
+        for (;;) {
+          const prepared = await prepareImage(file, UPLOAD_BUDGETS[budget]);
+          try {
+            await uploadPages(token, session.id, [prepared]);
+            break;
+          } catch (error) {
+            if (!(error instanceof ApiError && error.status === 413) || budget === UPLOAD_BUDGETS.length - 1) throw error;
+            budget += 1;
+          }
+        }
         refresh();
       }
     },
@@ -73,7 +83,7 @@ export function PhotosPanel({
             <p className="mt-0.5 text-sm text-muted-foreground">{label(S.photosHint)}</p>
           </div>
           {!disabled && (
-            <div className="flex gap-2">
+            <div className="flex flex-wrap gap-2">
               <input ref={pickRef} type="file" accept="image/*" multiple hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
               <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
               <Button variant="outline" onClick={() => setCameraOpen(true)} disabled={upload.isPending}>
@@ -95,7 +105,7 @@ export function PhotosPanel({
           onFallback={() => cameraRef.current?.click()}
         />
       </CardHeader>
-      <CardContent className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+      <CardContent className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {session.pages.map((page) => (
           <PageCard
             key={page.id}

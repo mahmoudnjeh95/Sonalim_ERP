@@ -28,10 +28,14 @@ interface Bilingual {
 }
 
 // Refusals the backend cannot word itself: FastAPI's own request validation (its detail is a
-// list of field errors) and a server that never answered.
+// list of field errors), a proxy refusing an oversized body, and a server that never answered.
 const VALIDATION_FAILED: Bilingual = {
   en: "Some values sent are not valid.",
   fr: "Certaines valeurs envoyées ne sont pas valides.",
+};
+const TOO_LARGE: Bilingual = {
+  en: "What was sent is too large for the server. Try again with a smaller file.",
+  fr: "L'envoi est trop volumineux pour le serveur. Réessayez avec un fichier plus petit.",
 };
 const SERVER_UNREACHABLE: Bilingual = {
   en: "The server cannot be reached. Check the connection and try again.",
@@ -45,6 +49,10 @@ function fixedError(status: number, code: string, text: Bilingual): ApiError {
 // Mirrors the {"code", "message", "message_fr"} detail every router raises (core.domain.result.err_detail).
 // A French user gets `message_fr`; a refusal nobody has translated yet falls back to the English.
 export async function apiErrorFromResponse(response: Response): Promise<ApiError> {
+  // A proxy's 413 is an HTML page, so its only wording is the English status text.
+  if (response.status === 413) {
+    return fixedError(413, "PAYLOAD_TOO_LARGE", TOO_LARGE);
+  }
   const payload = await response.json().catch(() => null);
   const detail = payload?.detail;
   if (Array.isArray(detail)) {
@@ -66,15 +74,20 @@ export function networkError(): ApiError {
 }
 
 export async function apiFetch<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  // A FormData body (maintenance's multipart endpoints: view/checkpoint images,
+  // check-entry photos) must go through untouched — stringifying it would send
+  // "[object FormData]", and setting our own Content-Type would drop the
+  // multipart boundary the browser computes. JSON callers are unaffected.
+  const isFormData = options.body instanceof FormData;
   let response: Response;
   try {
     response = await fetch(`${BASE_URL}${path}`, {
       method: options.method ?? "GET",
       headers: {
-        "Content-Type": "application/json",
+        ...(isFormData ? {} : { "Content-Type": "application/json" }),
         ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
       },
-      body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+      body: options.body === undefined ? undefined : isFormData ? (options.body as FormData) : JSON.stringify(options.body),
     });
   } catch {
     throw networkError();

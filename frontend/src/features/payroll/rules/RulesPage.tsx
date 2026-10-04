@@ -190,7 +190,7 @@ function SelectedRuleSet({
       <CardContent className="space-y-5">
         {/* No link: this is the page it would link to. */}
         <DraftRuleSetBanner ruleSet={{ id: "", name: ruleSet.name, status: ruleSet.status }} />
-        <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 sm:grid-cols-2 lg:grid-cols-3">
           {facts.map((fact) => (
             <div key={fact.labelKey} className="min-w-0">
               <dt className="text-xs text-muted-foreground">{t(fact.labelKey)}</dt>

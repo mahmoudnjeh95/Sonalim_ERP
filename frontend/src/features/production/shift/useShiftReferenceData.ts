@@ -13,6 +13,7 @@ import type { Option, OptionMap } from "./ShiftGrid";
 import type { Row, SectionKey, ShiftReport } from "./shiftApi";
 import { listShiftReports } from "./shiftApi";
 import { packingTypeLabel } from "./packingType";
+import { shiftContext } from "./shiftDerived";
 import { useLabel } from "./shiftText";
 
 /**
@@ -141,6 +142,15 @@ export function useShiftReferenceData(enabled: boolean) {
       // Products already packed this shift -- what a "Produit" packing-waste line may name.
       const packedProductIds = new Set(rowsOf("packing", "rows").map((r) => String(r.product_id)).filter(Boolean));
       const packedProducts = [...packedProductIds].map((id) => ({ value: id, label: productName.get(id) ?? "—" }));
+      // The shift's own figures: its semoule flow, from the versements over the hours the stops
+      // left. The shift's length is what the plant configured for that shift, not a number typed here.
+      const window = (settings.data?.shift_windows ?? []).find(
+        (w) => w.shift.trim().toLowerCase() === (shift?.shift ?? "").trim().toLowerCase(),
+      );
+      const derived = shiftContext((key, part) => rowsOf(key as SectionKey, part), window?.length_minutes ?? null);
+      const derivedOptions: Option[] = [
+        { value: "semolina_flow_rate", label: derived.semolinaFlowRate === null ? "" : String(derived.semolinaFlowRate) },
+      ];
       // Packaging lost is film, carton, bobine, scotch or ruban used on this shift's packing rows, so the
       // list stays short; every packaging item until a packing row names one. A saved line's item stays.
       const usedPackaging = new Set(
@@ -204,6 +214,9 @@ export function useShiftReferenceData(enabled: boolean) {
         fuelSuppliers: suppliersOf(fuelVendors.data, energy?.fuel_supplier_id),
         gasoilSuppliers: suppliersOf(gasoilVendors.data, energy?.gasoil_supplier_id),
         packedProducts,
+        // The figures the fiche works out for itself, carried as options so a column's `valueFor`
+        // can read them: the semoule flow is one figure for the whole shift, shown on every run.
+        shiftDerived: derivedOptions,
         locations: (locations.data ?? []).map((l) => ({ value: l.id, label: l.name })),
         molds: moldList.map(moldOption),
         moldsForShift: moldList.filter((m) => runTypes.size === 0 || runTypes.has(m.type)).map(moldOption),

@@ -33,6 +33,11 @@ export const T = {
   agentFabrication: L("Fabrication agent", "Agent de fabrication"),
   machiniste: L("Machine operator", "Machiniste"),
   aideMachiniste: L("Machine assistant", "Aide machiniste"),
+  noTeams: L("No team is configured (Report options)", "Aucune équipe configurée (Options des rapports)"),
+  noRolePeople: L(
+    "Nobody is mapped to this role (Production settings)",
+    "Personne n'est rattaché à ce rôle (Paramètres production)",
+  ),
   openShift: L("Open this shift", "Ouvrir ce shift"),
   openHint: L(
     "No report exists for this line, date and shift yet.",

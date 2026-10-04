@@ -1,12 +1,14 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Archive, ArchiveRestore, CheckCircle2, Pencil, Plus, Settings2, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, CheckCircle2, MapPin, Pencil, Plus, Settings2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
+import { useHasPermission } from "./hooks";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Badge, type BadgeProps } from "../../components/ui/badge";
@@ -82,6 +84,7 @@ export function EquipmentTab() {
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+  const canManageCheckpoints = useHasPermission("maintenance.manage_checkpoints");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -289,6 +292,14 @@ export function EquipmentTab() {
               <Pencil className="h-3.5 w-3.5" />
               {t("maintenance.equipment.edit")}
             </Button>
+            {canManageCheckpoints && (
+              <Button size="sm" variant="outline" asChild>
+                <Link to={`/maintenance/equipment/${item.id}/map`}>
+                  <MapPin className="h-3.5 w-3.5" />
+                  {t("maintenance.equipment.checkpointMap")}
+                </Link>
+              </Button>
+            )}
             {NEXT_STATUS[item.status].map((status) => (
               <Button
                 key={status}

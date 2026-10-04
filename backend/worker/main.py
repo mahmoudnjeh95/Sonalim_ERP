@@ -12,6 +12,7 @@ from core.events import consumers as event_consumers
 from core.events.dispatcher import EXCHANGE, dispatch_pending
 from core.exchange_rate_rollover import roll_forward_missing_rates
 from core.migrations.runner import migrate_on_startup
+from modules.maintenance.api.program_service import ProgramService
 from modules.scan.api.ocr_client import OcrClient
 from modules.scan.api.reader import read_next_page, requeue_stale_reads
 from modules.warehouse.api.replenishment_service import ReplenishmentService
@@ -30,6 +31,7 @@ from modules.warehouse.events import consumers as _warehouse_consumers  # noqa: 
 EXCHANGE_RATE_ROLLOVER_HOUR_UTC = 18
 RESERVATION_EXPIRY_INTERVAL_SECONDS = 60
 REPLENISHMENT_INTERVAL_SECONDS = 900
+MAINTENANCE_SWEEP_INTERVAL_SECONDS = int(os.environ.get("MAINTENANCE_SWEEP_INTERVAL_SECONDS", "3600"))
 SCAN_READER_IDLE_SECONDS = 2
 SCAN_READER_RETRY_SECONDS = 15
 
@@ -97,6 +99,31 @@ def run_replenishment() -> None:
         time.sleep(REPLENISHMENT_INTERVAL_SECONDS)
 
 
+def run_maintenance_programs() -> None:
+    """Materialises every tenant's due preventive-program occurrences into jobs and
+    raises the overdue notice for the ones nobody has acted on. An hourly cadence is
+    plenty: a program's own `lead_days` is what decides how far ahead a job appears,
+    so running more often only matters at the margin of that one-hour slack. A user
+    can always trigger the same sweep for their tenant from `POST /programs/run-due`."""
+    print("Maintenance program sweep started", flush=True)
+    while True:
+        try:
+            with get_connection() as db_connection:
+                service = ProgramService(db_connection)
+                created = 0
+                overdue = 0
+                for tenant_id in service.tenants_to_sweep():
+                    result = service.run_due(tenant_id=tenant_id, today=datetime.date.today())
+                    created += result["created"]
+                    overdue += result["overdue_notified"]
+                db_connection.commit()
+            if created or overdue:
+                print(f"Maintenance sweep: created {created} job(s), notified {overdue} overdue job(s)", flush=True)
+        except Exception as error:  # retried next tick, never kills the thread
+            print(f"Maintenance program sweep failed: {error}", flush=True)
+        time.sleep(MAINTENANCE_SWEEP_INTERVAL_SECONDS)
+
+
 def run_scan_reader(ocr_url: str) -> None:
     """Has the OCR container read the queued photos, one at a time, in their own thread
     so a slow page never holds up the event consumers."""
@@ -129,6 +156,7 @@ def run() -> None:
     threading.Thread(target=run_exchange_rate_rollover, daemon=True).start()
     threading.Thread(target=run_reservation_expiry, daemon=True).start()
     threading.Thread(target=run_replenishment, daemon=True).start()
+    threading.Thread(target=run_maintenance_programs, daemon=True).start()
     ocr_url = os.environ.get("OCR_URL")
     if ocr_url:
         threading.Thread(target=run_scan_reader, args=(ocr_url,), daemon=True).start()

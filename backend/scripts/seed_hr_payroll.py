@@ -298,9 +298,6 @@ def _ensure_self_service_user(conn) -> str:
         (str(ULID()), TENANT, SELF_SERVICE_EMAIL, hash_password("demo1234"), "Employé démo"),
     )
     user_id = conn.execute("SELECT id FROM core.users WHERE email = %s", (SELF_SERVICE_EMAIL,)).fetchone()[0]
-    conn.execute(
-        "INSERT INTO core.user_permissions (user_id, permission) VALUES (%s, 'hr.self_service') ON CONFLICT DO NOTHING", (user_id,)
-    )
     return user_id
 
 

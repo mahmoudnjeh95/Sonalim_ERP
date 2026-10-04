@@ -205,7 +205,7 @@ export function BankTemplatesDialog({
         {canEdit && draft && (
           <form className="mt-4 space-y-4 rounded-lg border border-border bg-muted/30 p-4" onSubmit={submit}>
             <p className="text-sm font-semibold">{draft.id ? t("payroll.payouts.templates.editTitle") : t("payroll.payouts.templates.new")}</p>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="template-bank">{t("payroll.payouts.templates.bankName")}</Label>
                 <Input

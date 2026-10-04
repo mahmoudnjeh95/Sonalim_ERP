@@ -28,6 +28,13 @@ export interface ColumnDef<Row> {
   filterCell?: FilterCell;
   /** Raw value to compare when sorting by this column. Omit to keep the header unclickable. */
   sortValue?: (row: Row) => string | number | boolean | null | undefined;
+  /**
+   * What this column becomes when the row is drawn as a card on a phone.
+   * Optional: left out, the card layout falls back to `alwaysVisible` and then
+   * to column order, which is right for most tables. Set it where that guess
+   * picks a poor headline, or to keep a controls column out of the detail list.
+   */
+  mobileRole?: "title" | "subtitle" | "detail" | "actions";
 }
 
 const DEFAULT_WIDTH = 160;

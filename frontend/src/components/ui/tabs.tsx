@@ -30,7 +30,9 @@ export function TabsTrigger({ className, children, active, layoutId, ...props }:
   return (
     <TabsPrimitive.Trigger
       className={cn(
-        "relative z-10 rounded-md px-3.5 py-1.5 text-sm font-medium text-muted-foreground outline-none transition-colors",
+        // py-2 on a phone lifts the tab to a ~36px touch target; sm: restores the
+        // original 32px so the desktop tab bar is unchanged.
+        "relative z-10 rounded-md px-3.5 py-2 text-sm font-medium text-muted-foreground outline-none transition-colors sm:py-1.5",
         "data-[state=active]:text-foreground",
         className,
       )}

@@ -387,11 +387,12 @@ def _file_downtime_line(db, actor, *, motif=None, downtime_type=None, classifica
 
 
 def _file_quality_report(db, actor, *, shift="Matin", team=None):
-    of_id = _work_order(db, actor)
+    # A quality report belongs to a shift report (qc 0005 dropped its of_id);
+    # shift_report_id is an opaque reference, so any id will do here.
     db.execute(
-        "INSERT INTO qc.quality_reports (id, tenant_id, of_id, report_date, team, shift, status, created_by) "
+        "INSERT INTO qc.quality_reports (id, tenant_id, shift_report_id, report_date, team, shift, status, created_by) "
         "VALUES (%s, %s, %s, %s, %s, %s, 'draft', %s)",
-        (str(ULID()), TENANT, of_id, datetime.date(2026, 9, 1), team, shift, actor),
+        (str(ULID()), TENANT, str(ULID()), datetime.date(2026, 9, 1), team, shift, actor),
     )
 
 

@@ -41,7 +41,15 @@ describe("fitToWidth", () => {
       { width: 100, minWidth: 90 },
     ];
     const fitted = fitToWidth(columns, 50);
-    expect(fitted[0]).toBe(200);
-    expect(fitted[1]).toBe(90);
+    expect(fitted[0]).toBeGreaterThanOrEqual(200);
+    expect(fitted[1]).toBeGreaterThanOrEqual(90);
+  });
+
+  it("keeps the chosen widths when not even the floors fit, so the table scrolls instead", () => {
+    // A wide table on a phone: 8 columns of 160px in 358px of space. Squeezing
+    // every column to its 72px floor would make the whole table unreadable to
+    // save a sideways swipe, so the widths stand and the wrapper scrolls.
+    const columns = Array.from({ length: 8 }, () => ({ width: 160, minWidth: 72 }));
+    expect(fitToWidth(columns, 358)).toEqual(columns.map((c) => c.width));
   });
 });

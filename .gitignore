@@ -26,3 +26,13 @@ frontend/Sonalim_ERP_Professional_UI_UX_Motion_Blueprint 1.pdf
 # Playwright MCP page snapshots (session scratch)
 .playwright-mcp/
 production-nav-expanded.png
+.scratch_finance_backend.diff
+.scratch_p3c_frontend.diff
+.scratch_p4_frontend.diff
+.scratch_ui_friendliness.diff
+docs/superpowers/plans/2026-09-29-paper-scan-phase1.md.local
+docs/superpowers/specs/2026-09-29-paper-scan-design.md.local
+# Local-only: third-party Claude skill pack (cloned as a submodule) and the marketing site draft
+.claude/skills/vite/
+.gitmodules
+website/
