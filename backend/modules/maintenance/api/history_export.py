@@ -30,19 +30,6 @@ _TEXT = {
 }
 
 
-_FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
-
-
-def _text(value: str | None) -> str | None:
-    """Free text as text. Excel and LibreOffice treat a cell starting with = + - @ as a
-    formula, so a job title or a machine name typed as "=1+1" -- or something far worse --
-    would run on whoever opens the export. A leading apostrophe is the spreadsheet's own
-    "this is literal" marker: it is not shown in the cell and is dropped on copy."""
-    if value and value.startswith(_FORMULA_STARTS):
-        return f"'{value}"
-    return value
-
-
 def journal_workbook(journal: dict, *, lang: str) -> bytes:
     text = _TEXT.get(lang, _TEXT["fr"])
     headers = list(text["headers"]) + ([text["cost"]] if journal["costs_visible"] else [])
@@ -61,14 +48,12 @@ def journal_workbook(journal: dict, *, lang: str) -> bytes:
         minutes = (row["technician_seconds"] + 30) // 60
         total_minutes += minutes
         values = [
-            # Everything a user typed goes through _text: numbers, dates and our own
-            # labels are ours, the rest is theirs.
-            _text(row["number"]),
+            row["number"],
             datetime.date.fromisoformat(row["date"][:10]) if row["date"] else None,
-            _text(f"{row['equipment_code']} — {row['equipment_name']}"),
+            f"{row['equipment_code']} — {row['equipment_name']}",
             text["kind"][row["kind"]],
-            _text(row["title"]),
-            _text(", ".join(person["name"] for person in row["performers"])),
+            row["title"],
+            ", ".join(person["name"] for person in row["performers"]),
             minutes,
             row["outcomes"]["ok"],
             row["outcomes"]["issue"],

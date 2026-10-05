@@ -36,6 +36,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.worksheet import Worksheet
 
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.xlsx_report_style import safe_text
 from modules.production.api.day_sheet_service import (
     NO_LOT,
     NO_PRODUCT,
@@ -504,7 +505,7 @@ def _put(ws: Worksheet, row: int, col: int, value, *, unit: str | None = None, f
         cell.font = MUTED
         cell.alignment = align or CENTER
     else:
-        cell = ws.cell(row=row, column=col, value=value)
+        cell = ws.cell(row=row, column=col, value=safe_text(value))
         if isinstance(value, (int, float)) and not isinstance(value, bool):
             cell.number_format = _fmt(unit)
             cell.alignment = align or RIGHT
@@ -524,7 +525,7 @@ def _put(ws: Worksheet, row: int, col: int, value, *, unit: str | None = None, f
 
 def _title(ws: Worksheet, row: int, span: int, text: str, subtitle: str | None = None) -> int:
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
-    cell = ws.cell(row=row, column=1, value=text)
+    cell = ws.cell(row=row, column=1, value=safe_text(text))
     cell.font = TITLE_FONT
     cell.alignment = LEFT
     for col in range(1, span + 1):
@@ -533,7 +534,7 @@ def _title(ws: Worksheet, row: int, span: int, text: str, subtitle: str | None =
     row += 1
     if subtitle:
         ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
-        cell = ws.cell(row=row, column=1, value=subtitle)
+        cell = ws.cell(row=row, column=1, value=safe_text(subtitle))
         cell.font = SUBTITLE_FONT
         row += 1
     return row + 1
@@ -541,7 +542,7 @@ def _title(ws: Worksheet, row: int, span: int, text: str, subtitle: str | None =
 
 def _heading(ws: Worksheet, row: int, span: int, text: str) -> int:
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
-    cell = ws.cell(row=row, column=1, value=text)
+    cell = ws.cell(row=row, column=1, value=safe_text(text))
     cell.font = SECTION_FONT
     cell.alignment = LEFT
     for col in range(1, span + 1):
@@ -551,7 +552,7 @@ def _heading(ws: Worksheet, row: int, span: int, text: str) -> int:
 
 def _headers(ws: Worksheet, row: int, labels: Iterable[str], start_col: int = 1) -> int:
     for offset, label in enumerate(labels):
-        cell = ws.cell(row=row, column=start_col + offset, value=label)
+        cell = ws.cell(row=row, column=start_col + offset, value=safe_text(label))
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.border = BORDER
