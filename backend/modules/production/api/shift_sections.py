@@ -319,8 +319,12 @@ def _coerce(col: Col, value: Any, where: str, where_fr: str | None = None) -> Re
             return Ok(value if isinstance(value, datetime.time) else datetime.time.fromisoformat(str(value)))
         if col.kind == "ts":
             if isinstance(value, datetime.datetime):
-                return Ok(value)
-            return Ok(datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")))
+                dt = value
+            else:
+                dt = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            return Ok(dt)
     except (TypeError, ValueError):
         return _bad(f"{where}: {col.name} is not a valid {col.kind}", f"{where_fr} : {col.name} n'est pas un {col.kind} valide")
     text = str(value).strip()
