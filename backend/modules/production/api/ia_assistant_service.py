@@ -22,6 +22,7 @@ Set CLAUDE_API_KEY to use Claude, or GROQ_API_KEY for Groq (Llama).
 from __future__ import annotations
 
 import json
+import logging
 import os
 import urllib.error
 import urllib.request
@@ -30,6 +31,8 @@ import anthropic
 import psycopg
 from psycopg.types.json import Jsonb
 from ulid import ULID
+
+logger = logging.getLogger(__name__)
 
 from core.api.service import CoreService
 from modules.maintenance.api.equipment_service import EquipmentService
@@ -403,7 +406,16 @@ def _call_llm(messages: list[dict]) -> dict:
 
 def _call_claude(api_key: str, messages: list[dict]) -> dict:
     """Call Claude API with tool support."""
-    client = anthropic.Anthropic(api_key=api_key)
+    if not api_key:
+        logger.error("CLAUDE_API_KEY is empty or not set")
+        raise IaAssistantUnavailable("CLAUDE_API_KEY not configured")
+
+    try:
+        client = anthropic.Anthropic(api_key=api_key)
+    except Exception as exc:
+        logger.error(f"Failed to initialize Anthropic client: {exc}")
+        raise IaAssistantUnavailable(f"Failed to initialize Claude client: {exc}") from exc
+
     try:
         # Extract system message from messages if present
         system_msg = ""
@@ -446,8 +458,18 @@ def _call_claude(api_key: str, messages: list[dict]) -> dict:
                 }
             ]
         }
+    except anthropic.AuthenticationError as exc:
+        logger.error(f"Claude authentication failed: {exc}")
+        raise IaAssistantUnavailable(f"Claude API authentication failed: check your API key") from exc
+    except anthropic.RateLimitError as exc:
+        logger.warning(f"Claude rate limited: {exc}")
+        raise IaAssistantRateLimited(f"Claude API rate limit reached: {exc}") from exc
     except anthropic.APIError as exc:
+        logger.error(f"Claude API error: {exc}")
         raise IaAssistantUnavailable(f"Claude request failed: {exc}") from exc
+    except Exception as exc:
+        logger.error(f"Unexpected error calling Claude API: {type(exc).__name__}: {exc}")
+        raise IaAssistantUnavailable(f"Unexpected error: {exc}") from exc
 
 
 def _call_groq(api_key: str, messages: list[dict]) -> dict:
@@ -640,8 +662,12 @@ def send_message(
     if _count_recent_user_messages(connection, tenant_id=tenant_id, user_id=user_id) >= MAX_MESSAGES_PER_USER_PER_DAY:
         raise IaAssistantRateLimited(f"{MAX_MESSAGES_PER_USER_PER_DAY} messages/day reached for this user")
 
-    if not os.environ.get("CLAUDE_API_KEY") and not os.environ.get("GROQ_API_KEY"):
+    claude_key = os.environ.get("CLAUDE_API_KEY")
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if not claude_key and not groq_key:
+        logger.error("Neither CLAUDE_API_KEY nor GROQ_API_KEY is configured in environment")
         raise IaAssistantUnavailable("neither CLAUDE_API_KEY nor GROQ_API_KEY is configured")
+    logger.info(f"Using {'Claude' if claude_key else 'Groq'} API for conversation {conversation_id}")
 
     history = _load_history_for_groq(connection, tenant_id=tenant_id, conversation_id=conversation_id)
     language = "French" if locale == "fr" else "English"
