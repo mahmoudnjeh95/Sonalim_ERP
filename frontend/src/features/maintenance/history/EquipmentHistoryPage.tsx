@@ -12,6 +12,7 @@ import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import type { EquipmentStatus } from "../api";
 import { apiErrorMessage } from "../jobs/jobFormat";
 import { useEquipmentHistory } from "./api";
+import { CheckpointHistorySheet } from "./CheckpointHistorySheet";
 import { CheckpointList } from "./CheckpointList";
 import { fill } from "./historyFormat";
 import { usePeriod } from "./historyPeriod";
@@ -32,7 +33,7 @@ export function EquipmentHistoryPage() {
   const { session } = useAuth();
   const { t } = useI18n();
   const location = useLocation();
-  const [, setSearchParams] = useSearchParams();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { period } = usePeriod();
   const history = useEquipmentHistory(session!.token, equipmentId, period);
   const backTo = (location.state as { from?: string } | null)?.from ?? "/maintenance?tab=history";
@@ -57,6 +58,7 @@ export function EquipmentHistoryPage() {
 
   const data = history.data;
   const machine = data.equipment;
+  const pointId = searchParams.get("point");
   const jobs = data.timeline.filter((item) => item.kind === "job").length;
   const stops = data.timeline.filter((item) => item.kind === "production_stop").length;
 
@@ -131,6 +133,8 @@ export function EquipmentHistoryPage() {
           <CheckpointList points={data.checkpoints} onOpen={openPoint} />
         </Card>
       </div>
+
+      <CheckpointHistorySheet checkpointId={pointId} onClose={() => openPoint(null)} />
     </div>
   );
 }
