@@ -17,6 +17,7 @@ import { SectionCard } from "./SectionCard";
 import { FullscreenOverlay } from "./FullscreenOverlay";
 import { ShiftRail } from "./ShiftRail";
 import { DateNavigator } from "./DateNavigator";
+import { UnfinishedStrip } from "./UnfinishedStrip";
 import { LineCardsSelector } from "./LineCardsSelector";
 import { ShiftCardsSelector } from "./ShiftCardsSelector";
 import type { OptionMap } from "./ShiftGrid";
@@ -259,6 +260,16 @@ export function ShiftReportTab() {
       <Card>
         <CardContent className="space-y-4 py-4">
           <div className="space-y-3">
+            {/* A way back into work left unfinished on any date, before picking one by hand. */}
+            <UnfinishedStrip
+              workCenterName={(id) => workCenters.data?.find((w) => w.id === id)?.code ?? id}
+              onPick={(picked) => {
+                setDate(picked.report_date.slice(0, 10));
+                setWorkCenterId(picked.work_center_id);
+                setShiftName(picked.shift);
+              }}
+            />
+
             {/* Date with arrows + modal picker */}
             <div>
               <p className="mb-2 text-xs text-muted-foreground">{label(T.date)}</p>
