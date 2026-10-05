@@ -152,6 +152,15 @@ export function bulkValidateShiftReports(token: string, ids: string[]) {
   return apiFetch<ShiftReport[]>(`${base}/bulk/validate`, { method: "POST", body: { ids }, token });
 }
 
+/**
+ * Removes a shift report that was never fully submitted (needs production.shift.delete).
+ * The server refuses anything submitted or validated with 409 DELETE_NOT_ALLOWED — that
+ * has posted to stock.
+ */
+export function deleteShiftReport(token: string, id: string) {
+  return apiFetch<{ deleted: boolean; id: string }>(`${base}/${id}`, { method: "DELETE", token });
+}
+
 /** One person the fiche's header may name, and the position that puts them on the list. */
 export interface ShiftRolePerson {
   id: string;

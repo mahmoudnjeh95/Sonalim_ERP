@@ -24,6 +24,7 @@ class StopsAnalyticsService:
         tenant_id: str,
         date_from: str | None = None,
         date_to: str | None = None,
+        equipment_id: str | None = None,
     ) -> list[dict]:
         clauses = ["s.tenant_id = %s", "s.status = 'validated'", "ms.ended_at IS NOT NULL"]
         params: list[object] = [tenant_id]
@@ -33,6 +34,10 @@ class StopsAnalyticsService:
         if date_to is not None:
             clauses.append("s.report_date <= %s")
             params.append(date_to)
+        # One machine's stops (its maintenance logbook); left out, every stop, attributed or not.
+        if equipment_id is not None:
+            clauses.append("ms.equipment_id = %s")
+            params.append(equipment_id)
         where = " AND ".join(clauses)
 
         rows = self._connection.execute(
@@ -41,7 +46,8 @@ class StopsAnalyticsService:
                 ms.equipment_id, s.work_center_id, s.team, s.report_date,
                 ms.started_at, ms.ended_at,
                 ROUND(EXTRACT(EPOCH FROM (ms.ended_at - ms.started_at)) / 60) AS minutes,
-                ms.downtime_type, ms.classification, ms.motif, ms.source
+                ms.downtime_type, ms.classification, ms.motif, ms.source,
+                ms.shift_report_id, ms.note, ms.corrective_action
             FROM production.machine_stops ms
             JOIN production.shift_reports s ON s.id = ms.shift_report_id AND s.tenant_id = ms.tenant_id
             WHERE {where}
@@ -62,9 +68,13 @@ class StopsAnalyticsService:
                 "classification": classification,
                 "motif": motif,
                 "source": source,
+                "shift_report_id": shift_report_id,
+                "note": note,
+                "corrective_action": corrective_action,
             }
             for (
                 equipment_id, work_center_id, team, report_date, started_at, ended_at,
                 minutes, downtime_type, classification, motif, source,
+                shift_report_id, note, corrective_action,
             ) in rows
         ]

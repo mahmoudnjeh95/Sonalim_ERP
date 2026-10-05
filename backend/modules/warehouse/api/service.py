@@ -168,8 +168,13 @@ class StockService:
         self._connection.execute(
             """
             INSERT INTO warehouse.stock_reservations
-                (id, tenant_id, product_id, location_id, reference, quantity, quantity_open, expires_at, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                (id, tenant_id, product_id, location_id, reference, quantity, quantity_open, expires_at, created_by,
+                 created_at)
+            -- clock_timestamp(), not the column's NOW() default: NOW() is the transaction's
+            -- start time, so two reservations taken together shared it and the release order
+            -- (ORDER BY created_at, id) fell to the id tie-break -- and ULIDs are not ordered
+            -- inside a millisecond, which could close the newer hold before the older one.
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
             """,
             (str(ULID()), tenant_id, product_id, location_id, reference, quantity, quantity, expires_at, actor_id),
         )

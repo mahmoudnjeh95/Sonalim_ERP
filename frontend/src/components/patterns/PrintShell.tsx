@@ -1,9 +1,16 @@
 import type { ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { ArrowLeft, Printer } from "lucide-react";
-import { Button } from "../../../components/ui/button";
-import { useI18n } from "../../../lib/i18n";
-import type { CompanyHeader } from "../api";
+import { Button } from "../ui/button";
+import { useI18n } from "../../lib/i18n";
+
+/** The employer block of a printed document (payroll's CompanyHeader has this shape). */
+export interface PrintCompany {
+  name: string | null;
+  address: string | null;
+  employer_inps_no: string | null;
+  employer_tax_id: string | null;
+}
 
 /**
  * The global print rule (index.css) already hides the sidebar and header. What it does not undo is
@@ -36,6 +43,7 @@ export function PrintShell({
   title,
   subtitle,
   company,
+  brand,
   backTo,
   children,
 }: {
@@ -43,7 +51,9 @@ export function PrintShell({
   /** Period, run, batch… — what this document is about. */
   subtitle?: ReactNode;
   /** The employer block from the backend response; null when the endpoint does not serve one (declarations). */
-  company: CompanyHeader | null;
+  company: PrintCompany | null;
+  /** A brand block shown at the top left (e.g. the logo and wordmark) for documents with no employer block. */
+  brand?: ReactNode;
   /** Where "Back" goes when the page was opened directly (no in-app history to return to). */
   backTo: string;
   children: ReactNode;
@@ -73,6 +83,7 @@ export function PrintShell({
       <div className="mx-auto max-w-4xl space-y-5 rounded-lg border border-neutral-200 bg-white p-8 text-neutral-900 print:max-w-none print:rounded-none print:border-0 print:p-0 print:text-black">
         <div className="flex items-start justify-between gap-6 border-b border-neutral-400 pb-3">
           <div className="min-w-0">
+            {brand}
             {company && (
               <>
                 <p className="text-base font-semibold">{company.name ?? "—"}</p>

@@ -5,7 +5,7 @@ import { EmptyState } from "../../../components/patterns/EmptyState";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { useCashSheet } from "../api";
 import { formatPeriod, formatXof } from "../format";
-import { PRINT_TABLE, PRINT_TD, PRINT_TH, PrintShell } from "./PrintShell";
+import { PRINT_TABLE, PRINT_TD, PRINT_TH, PrintShell } from "../../../components/patterns/PrintShell";
 
 /** /payroll/payout-batches/:batchId/cash-sheet/print — who gets how much in cash, the note/coin count, a signature column. */
 export function CashSheetPrintPage() {

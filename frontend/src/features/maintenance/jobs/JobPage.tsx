@@ -271,7 +271,9 @@ export function JobPage() {
                 <p className="font-mono text-xs text-muted-foreground">{job.number}</p>
                 <h1 className="break-words text-xl font-semibold tracking-tight">{job.title}</h1>
                 <p className="break-words text-sm text-muted-foreground">
-                  {job.equipment_code} — {job.equipment_name}
+                  <Link to={`/maintenance/equipment/${job.equipment_id}`} className="underline-offset-2 hover:text-primary hover:underline">
+                    {job.equipment_code} — {job.equipment_name}
+                  </Link>
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-1.5">

@@ -66,6 +66,7 @@
     "production.manage_waste_types",
     "production.shift.view",
     "production.shift.validate",
+    "production.shift.delete",
     "production.shift.edit.runs",
     "production.shift.edit.waste_production",
     "production.shift.edit.stops",

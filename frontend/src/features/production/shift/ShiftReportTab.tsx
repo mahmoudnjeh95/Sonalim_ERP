@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
-import { CalendarDays, ClipboardList, Lock, Maximize2, RotateCcw, ScanLine, ShieldCheck } from "lucide-react";
+import { CalendarDays, ClipboardList, Lock, Maximize2, RotateCcw, ScanLine, ShieldCheck, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
@@ -17,18 +17,22 @@ import { SectionCard } from "./SectionCard";
 import { FullscreenOverlay } from "./FullscreenOverlay";
 import { ShiftRail } from "./ShiftRail";
 import { DateNavigator } from "./DateNavigator";
+import { UnfinishedStrip } from "./UnfinishedStrip";
+import { ShiftDayList } from "./ShiftDayList";
 import { LineCardsSelector } from "./LineCardsSelector";
 import { ShiftCardsSelector } from "./ShiftCardsSelector";
 import type { OptionMap } from "./ShiftGrid";
 import { useShiftReferenceData } from "./useShiftReferenceData";
 import type { ShiftWindowRow } from "../board/api";
 import { SECTIONS } from "./sectionConfig";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
 import { shiftContext } from "./shiftDerived";
 import {
   SECTION_KEYS,
   SHIFT_REPORTS_QUERY_KEY,
   getShiftReport,
   listShiftReports,
+  deleteShiftReport,
   openShiftReport,
   updateShiftHeader,
   SHIFT_ROLE_PEOPLE_QUERY_KEY,
@@ -96,6 +100,8 @@ export function ShiftReportTab() {
   const [shiftName, setShiftName] = useState(() => params.get("shift") ?? "");
   const [openKeys, setOpenKeys] = useState<Set<SectionKey>>(new Set());
   const [wholeMaximized, setWholeMaximized] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [dayOpen, setDayOpen] = useState(false);
 
   // ---- reference data -------------------------------------------------------
   const reference = useShiftReferenceData(canView);
@@ -161,6 +167,18 @@ export function ShiftReportTab() {
   const fail = (error: unknown) =>
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
 
+  // Removing a report opened by mistake, or returned and not worth redoing. The server
+  // refuses anything submitted or validated (409): that has posted to stock.
+  const remove = useMutation({
+    mutationFn: () => deleteShiftReport(token, shift!.id),
+    onSuccess: () => {
+      toast.success(label(T.deleted));
+      setConfirmDelete(false);
+      refresh();
+    },
+    onError: fail,
+  });
+
   const open = useMutation({
     mutationFn: () => openShiftReport(token, { work_center_id: workCenterId, report_date: date, shift: shiftName }),
     onSuccess: () => {
@@ -219,6 +237,12 @@ export function ShiftReportTab() {
           <p className="text-sm text-muted-foreground">{label(T.subtitle)}</p>
         </div>
         <div className="flex gap-2">
+          {shift && (shift.status === "open" || shift.status === "returned") && hasPermission("production.shift.delete") && (
+            <Button variant="outline" size="sm" onClick={() => setConfirmDelete(true)} disabled={remove.isPending}>
+              <Trash2 className="h-4 w-4" />
+              {label(T.deleteShift)}
+            </Button>
+          )}
           {shift && (hasPermission("scan.view_scans") || hasPermission("scan.use_scanner")) && <ShiftPaperPages shiftReportId={shift.id} />}
           {hasPermission("scan.use_scanner") && shift?.status !== "validated" && (
             <Button
@@ -238,6 +262,16 @@ export function ShiftReportTab() {
       <Card>
         <CardContent className="space-y-4 py-4">
           <div className="space-y-3">
+            {/* A way back into work left unfinished on any date, before picking one by hand. */}
+            <UnfinishedStrip
+              workCenterName={(id) => workCenters.data?.find((w) => w.id === id)?.code ?? id}
+              onPick={(picked) => {
+                setDate(picked.report_date.slice(0, 10));
+                setWorkCenterId(picked.work_center_id);
+                setShiftName(picked.shift);
+              }}
+            />
+
             {/* Date with arrows + modal picker */}
             <div>
               <p className="mb-2 text-xs text-muted-foreground">{label(T.date)}</p>
@@ -256,6 +290,30 @@ export function ShiftReportTab() {
 
             {/* Shift selection */}
             <ShiftCardsSelector value={shiftName} onChange={setShiftName} windows={windows} />
+
+            {/* Every line and shift of this date at once -- what the paper folder for the
+                day would show, including who last touched each report. */}
+            <div>
+              <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setDayOpen((v) => !v)}>
+                <CalendarDays className="h-4 w-4" />
+                {label(dayOpen ? T.hideDayOverview : T.dayOverview)}
+              </Button>
+              {dayOpen && (
+                <div className="mt-2">
+                  <ShiftDayList
+                    date={date}
+                    workCenters={(workCenters.data ?? []).map((w) => ({ id: w.id, name: w.code }))}
+                    windows={windows}
+                    currentShiftName={date === todayIso() ? currentShift(windows) : ""}
+                    onOpen={(line, name) => {
+                      setWorkCenterId(line);
+                      setShiftName(name);
+                      setDayOpen(false);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
 
             {/* Status badge */}
             {shift && <ShiftStatusBadge status={shift.status} />}
@@ -364,6 +422,24 @@ export function ShiftReportTab() {
           </div>
         </FullscreenOverlay>
       )}
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{label(T.deleteShift)}</DialogTitle>
+            <DialogDescription>{label(T.confirmDeleteShift)}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmDelete(false)} disabled={remove.isPending}>
+              {label(T.cancel)}
+            </Button>
+            <Button variant="destructive" onClick={() => remove.mutate()} disabled={remove.isPending}>
+              <Trash2 className="h-4 w-4" />
+              {label(T.deleteShift)}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

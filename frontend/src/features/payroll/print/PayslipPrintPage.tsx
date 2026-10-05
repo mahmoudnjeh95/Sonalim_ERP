@@ -7,7 +7,7 @@ import { useI18n } from "../../../lib/i18n";
 import { useCertificate, usePayslip, useRuleSet } from "../api";
 import { formatPeriod } from "../format";
 import { PayslipDocument } from "./PayslipDocument";
-import { PrintShell } from "./PrintShell";
+import { PrintShell } from "../../../components/patterns/PrintShell";
 import { WorkCertificate } from "./WorkCertificate";
 
 /** /payroll/payslips/:payslipId/print — one payslip, plus the work certificate on a final settlement. */

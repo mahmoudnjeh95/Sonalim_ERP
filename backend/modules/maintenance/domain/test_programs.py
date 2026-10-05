@@ -1,7 +1,10 @@
 from datetime import date
 
+import pytest
+
 from core.domain.result import Err, Ok
 from modules.maintenance.domain.programs import (
+    MAX_INTERVAL_VALUE,
     due_occurrences,
     next_occurrence,
     nth_occurrence,
@@ -166,3 +169,19 @@ def test_validate_program_rejects_blank_name():
 
 def test_validate_program_accepts_valid_input():
     assert isinstance(validate_program(interval_value=1, interval_unit="month", lead_days=3, name="Graissage mensuel"), Ok)
+
+
+@pytest.mark.parametrize("value", [MAX_INTERVAL_VALUE + 1, 999_999])
+def test_an_interval_too_large_to_schedule_is_refused(value):
+    """Unbounded, the date math overflows ("year 85359 is out of range") and surfaces as
+    an opaque 500 instead of a refusal the user can read."""
+    refused = validate_program(interval_value=value, interval_unit="month", lead_days=0, name="Ronde")
+    assert isinstance(refused, Err) and refused.code == "INVALID_INTERVAL" and refused.message_fr
+
+
+def test_the_largest_allowed_interval_still_schedules():
+    assert isinstance(
+        validate_program(interval_value=MAX_INTERVAL_VALUE, interval_unit="month", lead_days=0, name="Ronde"), Ok
+    )
+    # The sweep asks for occurrences one after another; the largest allowed one must not overflow.
+    assert nth_occurrence(date(2026, 1, 31), MAX_INTERVAL_VALUE, "month", 1).year > 2026

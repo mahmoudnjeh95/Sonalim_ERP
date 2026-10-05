@@ -322,8 +322,13 @@ class ScanSessionService:
             ids.append(page_id)
             self._connection.execute(
                 """
-                INSERT INTO scan.scan_pages (id, tenant_id, session_id, image, content_type, filename, width, height, uploaded_by)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO scan.scan_pages
+                    (id, tenant_id, session_id, image, content_type, filename, width, height, uploaded_by, created_at)
+                -- clock_timestamp(), not the column's NOW() default: NOW() is the
+                -- transaction's start time, so pages uploaded in one request shared it and
+                -- their order (ORDER BY created_at, id -- the order of the paper fiche)
+                -- fell to the id tie-break, and ULIDs are not ordered inside a millisecond.
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
                 """,
                 (page_id, tenant_id, session_id, data, upload["content_type"], upload.get("filename"),
                  upload.get("width"), upload.get("height"), actor_id),

@@ -5,7 +5,7 @@ import { EmptyState } from "../../../components/patterns/EmptyState";
 import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { useAnnualRecap, useDeclaration } from "../api";
 import { formatPeriod, formatXof } from "../format";
-import { PRINT_TABLE, PRINT_TD, PRINT_TH, PrintShell } from "./PrintShell";
+import { PRINT_TABLE, PRINT_TD, PRINT_TH, PrintShell } from "../../../components/patterns/PrintShell";
 
 const TEXT_COLUMNS = new Set(["employee_no", "full_name", "identifier"]);
 const COUNT_COLUMNS = new Set(["months"]);

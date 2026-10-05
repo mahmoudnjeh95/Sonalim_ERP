@@ -11,10 +11,16 @@ import { ProgramsTab } from "./ProgramsTab";
 import { PartsTab } from "./PartsTab";
 import { EquipmentTab } from "./EquipmentTab";
 import { TeamsTab } from "./TeamsTab";
+import HistorySvg from "../../assets/icons/maintenance/history.svg?react";
+import { outlineIcon } from "../../components/patterns/outlineIcon";
+import { HistoryTab } from "./history/HistoryTab";
+
+const HistoryIcon = outlineIcon(HistorySvg);
 
 const ALL_TABS = [
   { value: "calendar", labelKey: "maintenance.tabs.calendar", icon: CalendarDays, Component: CalendarTab, permission: "maintenance.view_jobs" },
   { value: "jobs", labelKey: "maintenance.tabs.jobs", icon: ClipboardList, Component: JobsTab, permission: "maintenance.view_jobs" },
+  { value: "history", labelKey: "maintenance.tabs.history", icon: HistoryIcon, Component: HistoryTab, permission: "maintenance.view_jobs" },
   { value: "programs", labelKey: "maintenance.tabs.programs", icon: Repeat, Component: ProgramsTab, permission: "maintenance.view_jobs" },
   { value: "parts", labelKey: "maintenance.tabs.parts", icon: PackageSearch, Component: PartsTab, permission: "maintenance.view_jobs" },
   { value: "equipment", labelKey: "maintenance.tabs.equipment", icon: Wrench, Component: EquipmentTab, permission: "maintenance.view_equipment" },

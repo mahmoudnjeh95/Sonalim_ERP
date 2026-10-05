@@ -7,7 +7,7 @@ import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import { useRuleSet, useRunPrint } from "../api";
 import { formatPeriod } from "../format";
 import { PayslipDocument } from "./PayslipDocument";
-import { PrintShell } from "./PrintShell";
+import { PrintShell } from "../../../components/patterns/PrintShell";
 
 /** /payroll/runs/:runId/print — every payslip of the run, one per printed page. */
 export function RunPrintPage() {

@@ -119,7 +119,9 @@ export function AppLayout({ children }: { children: ReactNode }) {
       )}
       <main ref={mainRef} className="relative flex-1 overflow-y-auto overflow-x-hidden px-4 py-4 md:px-8 md:py-8">
         {isMobile && (
-          <div className="sticky top-0 z-30 -mx-4 -mt-4 mb-4 flex items-center gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur-sm">
+          // "print-hidden": this bar is a div, which index.css's "aside, nav, header" print
+          // rule misses, so it used to print atop the first page of every printed document.
+          <div className="print-hidden sticky top-0 z-30 -mx-4 -mt-4 mb-4 flex items-center gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur-sm">
             <button
               ref={menuButtonRef}
               onClick={() => setDrawerOpen(true)}

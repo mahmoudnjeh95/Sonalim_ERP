@@ -149,3 +149,28 @@ def test_shift_pages_lists_only_the_applied_sessions_pages(db, world):
         (shift_report_id, other_session["id"]),
     )
     assert service.shift_pages(tenant_id=TENANT, shift_report_id=shift_report_id) == [listed]
+
+
+def test_pages_uploaded_together_keep_the_order_they_were_sent_in(db, world):
+    """Pages are listed and read in `created_at, id` order, which is the order of the
+    paper fiche. NOW() is the transaction's start time, so pages uploaded in one request
+    shared it and the order fell to the ULID tie-break -- not ordered inside a
+    millisecond, so a three-page fiche could come back shuffled."""
+    service = ScanSessionService(db)
+    session = _session(db, world)
+    files = [{**JPEG, "filename": f"page-{n}.jpg"} for n in range(1, 4)]
+
+    pages = ok(service.add_pages(tenant_id=TENANT, actor_id=world["actor"], session_id=session["id"], files=files))
+
+    times = [
+        row[0]
+        for row in db.execute(
+            "SELECT created_at FROM scan.scan_pages WHERE session_id = %s ORDER BY created_at, id", (session["id"],)
+        ).fetchall()
+    ]
+    assert len(times) == 3
+    assert times[0] < times[1] < times[2], "pages uploaded together share a timestamp: their order rests on the id tie-break"
+
+    # The listing comes back in the order the pages were sent, which is the fiche's order.
+    listed = ok(service.get_session(tenant_id=TENANT, session_id=session["id"]))["pages"]
+    assert [p["id"] for p in listed] == [p["id"] for p in pages]

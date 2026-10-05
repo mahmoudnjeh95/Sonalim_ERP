@@ -148,3 +148,24 @@ def test_admin_update_extends_or_clears_the_expiry_and_is_audited(db, env):
         (TENANT, row.id),
     ).fetchone()[0]
     assert audits == 2
+
+
+def test_two_reservations_in_one_transaction_do_not_share_a_timestamp(db, env):
+    """Releasing closes reservations oldest first (ORDER BY created_at, id). NOW() is the
+    transaction's start time, so two reservations taken together shared it and the order
+    fell to the ULID tie-break, which is not ordered inside a millisecond -- the newer
+    hold could be closed before the older one."""
+    _reserve(db, env, 10, "hold:tie")
+    _reserve(db, env, 5, "hold:tie")
+
+    times = [
+        row[0]
+        for row in db.execute(
+            "SELECT created_at FROM warehouse.stock_reservations WHERE tenant_id = %s AND reference = 'hold:tie' "
+            "ORDER BY created_at, id",
+            (TENANT,),
+        ).fetchall()
+    ]
+
+    assert len(times) == 2
+    assert times[0] < times[1], "both reservations share a timestamp: the release order depends on the id tie-break"

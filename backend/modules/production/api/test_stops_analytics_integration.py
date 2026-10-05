@@ -138,3 +138,25 @@ def test_stops_outside_the_date_range_are_excluded(db, env):
 def test_stops_scoped_to_tenant(db, env):
     _shift_with_stop(db, env, equipment_id=env["equipment"])
     assert _stops(db, tenant_id="a-different-tenant") == []
+
+
+def test_filters_by_machine_and_returns_the_shift_note_and_corrective_action(db, env):
+    shift_id = _shift_with_stop(db, env, equipment_id=env["equipment"], classification="mechanical")
+    db.execute(
+        "UPDATE production.machine_stops SET note = 'filière démontée', corrective_action = 'nettoyage filière' "
+        "WHERE shift_report_id = %s",
+        (shift_id,),
+    )
+    db.execute(
+        "INSERT INTO production.machine_stops (id, tenant_id, shift_report_id, equipment_id, started_at, ended_at, downtime_type) "
+        "VALUES (%s, %s, %s, %s, '2030-07-01T10:00:00Z', '2030-07-01T10:10:00Z', 'corrective')",
+        (str(ULID()), TENANT, shift_id, str(ULID())),
+    )
+
+    assert len(_stops(db)) == 2
+    [row] = StopsAnalyticsService(db).list_stops(
+        tenant_id=TENANT, date_from="2030-07-01", date_to="2030-07-01", equipment_id=env["equipment"]
+    )
+    assert (row["note"], row["corrective_action"], row["shift_report_id"]) == (
+        "filière démontée", "nettoyage filière", shift_id,
+    )

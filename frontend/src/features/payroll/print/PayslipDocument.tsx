@@ -3,7 +3,7 @@ import { useI18n, type TranslationKey } from "../../../lib/i18n";
 import type { PayslipDetail, PayslipLine } from "../api";
 import { DraftRuleSetBanner } from "../DraftRuleSetBanner";
 import { formatPeriod, formatXof } from "../format";
-import { formatDay, PRINT_TABLE, PRINT_TD, PRINT_TH } from "./PrintShell";
+import { formatDay, PRINT_TABLE, PRINT_TD, PRINT_TH } from "../../../components/patterns/PrintShell";
 
 const SECTION_ORDER = ["earning", "employee_contribution", "relief", "tax", "deduction", "employer_contribution", "employer_charge"];
 

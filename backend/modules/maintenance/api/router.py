@@ -7,7 +7,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.maintenance.api.equipment_service import UNSET, EquipmentService
-from modules.maintenance.api import jobs_router, maps_router, parts_router, programs_router, spare_parts_router, teams_router
+from modules.maintenance.api import history_router, jobs_router, maps_router, parts_router, programs_router, spare_parts_router, teams_router
 from modules.maintenance.domain.equipment import Equipment
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -175,3 +175,4 @@ router.include_router(jobs_router.router)
 router.include_router(programs_router.router)
 router.include_router(parts_router.router)
 router.include_router(spare_parts_router.router)
+router.include_router(history_router.router)

@@ -191,4 +191,32 @@ export const T = {
     "This removes the rows in this section. Continue?",
     "Cela supprime les lignes de cette section. Continuer ?",
   ),
+
+  // Deleting a report that was never fully submitted.
+  deleteShift: L("Delete this report", "Supprimer ce rapport"),
+  confirmDeleteShift: L(
+    "This permanently deletes this shift report and everything in it. This cannot be undone.",
+    "Cela supprime définitivement ce rapport de poste et tout ce qu'il contient. Action irréversible.",
+  ),
+  deleted: L("Shift report deleted", "Rapport de poste supprimé"),
+
+  // Autosave and its local backup.
+  savedAt: L("Saved at", "Enregistré à"),
+  restoreFound: L(
+    "Unsaved changes from an earlier visit were found on this device.",
+    "Des modifications non enregistrées d'une visite précédente ont été retrouvées sur cet appareil.",
+  ),
+  restore: L("Restore them", "Les restaurer"),
+  discard: L("Discard them", "Les ignorer"),
+
+  // Finding your way back to a report: the unfinished strip and the day's list.
+  unfinishedTitle: L("Continue where you left off", "Reprendre là où vous en étiez"),
+  lastTouched: L("Last touched by", "Dernière modification par"),
+  noReportYet: L("Not started yet", "Pas encore commencé"),
+  continueShift: L("Current shift", "Poste en cours"),
+  newShift: L("New", "Nouveau"),
+  backToDay: L("Back to the day", "Retour à la journée"),
+  dayOverview: L("The whole day", "Toute la journée"),
+  sectionsHandedIn: L("sections handed in", "sections rendues"),
+  hideDayOverview: L("Hide the day", "Masquer la journée"),
 } as const;
