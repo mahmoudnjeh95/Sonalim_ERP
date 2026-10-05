@@ -42,7 +42,7 @@ from modules.production.api.team_performance_service import TeamPerformanceServi
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
 from modules.warehouse.api.service import StockService
 
-CLAUDE_MODEL = "claude-opus-4-1"
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-opus-5")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 REQUEST_TIMEOUT_SECONDS = 20
@@ -409,6 +409,9 @@ def _to_claude_messages(messages: list[dict]) -> list[dict]:
                 converted[-1]["content"].append(block)
             else:
                 converted.append({"role": "user", "content": [block]})
+        elif role == "assistant" and msg.get("_claude_content"):
+            # Claude's own blocks verbatim -- thinking blocks must be passed back unchanged.
+            converted.append({"role": "assistant", "content": msg["_claude_content"]})
         elif role == "assistant" and msg.get("tool_calls"):
             blocks: list[dict] = []
             if msg.get("content"):
@@ -461,19 +464,19 @@ def _call_claude(api_key: str, messages: list[dict]) -> dict:
 
         response = client.messages.create(
             model=CLAUDE_MODEL,
-            max_tokens=1024,
-            temperature=0.2,
+            max_tokens=16000,
             system=system_msg or SYSTEM_INSTRUCTION_TEMPLATE.format(language="English"),
             tools=TOOL_DECLARATIONS,
             messages=_to_claude_messages(filtered_messages),
         )
+        if response.stop_reason == "refusal":
+            raise IaAssistantUnavailable("Claude declined to answer this request")
 
-        # Extract text content and tool uses from Claude's response
-        text_content = ""
+        text_parts = []
         tool_uses = []
         for block in response.content:
-            if hasattr(block, 'text'):
-                text_content = block.text
+            if block.type == "text":
+                text_parts.append(block.text)
             elif block.type == "tool_use":
                 tool_uses.append({
                     "id": block.id,
@@ -487,8 +490,10 @@ def _call_claude(api_key: str, messages: list[dict]) -> dict:
             "choices": [
                 {
                     "message": {
-                        "content": text_content or None,
+                        "role": "assistant",
+                        "content": "\n\n".join(text_parts) or None,
                         "tool_calls": tool_uses if tool_uses else None,
+                        "_claude_content": [block.model_dump(exclude_none=True) for block in response.content],
                     }
                 }
             ]
