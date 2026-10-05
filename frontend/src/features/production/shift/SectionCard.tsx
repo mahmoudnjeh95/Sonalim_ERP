@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Lock, LockOpen, Maximize2, RotateCcw, Save, Send } from "lucide-react";
@@ -75,8 +75,17 @@ export function SectionCard({
   const lotNumber = shift.default_lot_number ?? null;
   const reportDate = shift.report_date;
   const runOrderId = context.runOrderId;
+  // Per shift and section, so two sections never share a backup and an old shift's copy
+  // cannot land in a new one.
+  const storageKey = `sonalim-erp.shift-draft.${shift.id}.${def.key}`;
   const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber, reportDate, runOrderId));
   const [dirty, setDirty] = useState(false);
+  const [restoreAvailable, setRestoreAvailable] = useState(false);
+  // Read by the unmount flush, which must not re-run (and so re-subscribe) on every keystroke.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
 
   // What the server holds is the truth: when it changes (a save, a validator's return),
   // the grids follow it and the section is clean again. Keyed on canEdit, not on
@@ -90,6 +99,14 @@ export function SectionCard({
     // either way the section goes back to being read-only.
     setUnlocked(false);
     setUnlockReason("");
+    if (!locked) {
+      try {
+        setRestoreAvailable(window.localStorage.getItem(storageKey) !== null);
+      } catch {
+        // private browsing, or storage full: there is simply nothing to offer back
+        setRestoreAvailable(false);
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverKey]);
 
@@ -111,24 +128,94 @@ export function SectionCard({
   const submitted = state.status === "submitted";
 
   const edit = (partKey: string, value: GridRow[] | Row) => {
-    setDraft((current) => ({ ...current, [partKey]: value }));
+    setDraft((current) => {
+      const next = { ...current, [partKey]: value };
+      try {
+        // The local copy is written on every keystroke; the debounced save below is the
+        // one that reaches the server. A closed tab or a dead network keeps this one.
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        // private browsing / full quota: the debounced server save is still authoritative
+      }
+      return next;
+    });
     setDirty(true);
+    setRestoreAvailable(false);
+  };
+
+  const forgetBackup = () => {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      // best effort only
+    }
+  };
+
+  const restoreDraft = () => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        setDraft(JSON.parse(raw) as Draft);
+        setDirty(true);
+      }
+    } catch {
+      // unreadable backup: leave the server's version in place
+    }
+    setRestoreAvailable(false);
+  };
+
+  const discardRestore = () => {
+    forgetBackup();
+    setRestoreAvailable(false);
   };
 
   const fail = (error: unknown) =>
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
 
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (_opts?: { silent?: boolean }) =>
       unlocked
         ? unlockedEditSection(token, shift.id, def.key, toPayload(def, draft), unlockReason.trim() || undefined)
         : saveShiftSection(token, shift.id, def.key, toPayload(def, draft)),
-    onSuccess: () => {
-      toast.success(label(unlocked ? T.unlockedEditSaved : T.saved));
+    onSuccess: (_data, opts) => {
+      forgetBackup();
+      setDirty(false);
+      if (!opts?.silent) toast.success(label(unlocked ? T.unlockedEditSaved : T.saved));
       onChanged();
     },
-    onError: fail,
+    onError: (error, opts) => {
+      // An autosave failure still has to reach the user, but one toast at a time: reusing
+      // the id replaces it instead of stacking while they keep typing into a stuck save.
+      if (opts?.silent) {
+        toast.error(label(T.failed), {
+          id: `autosave-${shift.id}-${def.key}`,
+          description: error instanceof ApiError ? error.message : undefined,
+        });
+        return;
+      }
+      fail(error);
+    },
   });
+
+  // Debounced autosave, 1.5s after the last change. Never while a correction is being
+  // written: that save goes through a different endpoint and carries a reason the user
+  // is still typing, so it stays a deliberate press of Save.
+  const autosaves = !locked && !unlocked;
+  useEffect(() => {
+    if (!autosaves || !dirty) return;
+    const timer = window.setTimeout(() => save.mutate({ silent: true }), 1500);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, autosaves, dirty]);
+
+  // Leaving the section (another section, another shift, the tab): the local copy is
+  // already current, this only tries the last network round trip.
+  useEffect(() => {
+    return () => {
+      if (dirtyRef.current && autosaves) save.mutate({ silent: true });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const submit = useMutation({
     mutationFn: async () => {
       if (dirty) await saveShiftSection(token, shift.id, def.key, toPayload(def, draft));
@@ -175,6 +262,20 @@ export function SectionCard({
             <span className="font-medium">{label(T.sentBackBy)}: </span>
             {state.return_reason}
           </span>
+        </div>
+      )}
+
+      {restoreAvailable && !locked && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-sm">
+          <span>{label(T.restoreFound)}</span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={discardRestore}>
+              {label(T.discard)}
+            </Button>
+            <Button size="sm" onClick={restoreDraft}>
+              {label(T.restore)}
+            </Button>
+          </div>
         </div>
       )}
 
