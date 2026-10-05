@@ -465,3 +465,52 @@ def test_a_checkpoint_history_keeps_every_attempt_across_jobs(db, ctx):
 def test_an_unknown_checkpoint_has_no_history(db, ctx):
     missing = _service(db).checkpoint_history(tenant_id=T, checkpoint_id="nope")
     assert isinstance(missing, Err) and missing.code == "NOT_FOUND"
+
+
+def test_another_tenants_checkpoint_is_not_readable(db, ctx):
+    """The point id is a URL parameter: asking for one that belongs to another tenant must
+    be a plain NOT_FOUND, never that tenant's checks."""
+    other = "integration-test-history-other"
+    stranger = str(ULID())
+    db.execute(
+        "INSERT INTO core.users (id, tenant_id, email, password_hash, full_name) VALUES (%s, %s, %s, 'x', 'Autre')",
+        (stranger, other, f"{stranger}@test.local"),
+    )
+    machine = EquipmentService(db).create_equipment(
+        tenant_id=other, actor_id=stranger, work_center_id="wc-9", code="OTHER-1", name="Machine d'un autre"
+    ).value.id
+    view = MapService(db).create_view(
+        tenant_id=other, actor_id=stranger, equipment_id=machine, label="Face", image=JPEG_BYTES, mime="image/jpeg"
+    ).value
+    point = MapService(db).add_checkpoint(
+        tenant_id=other, actor_id=stranger, view_id=view["id"], x_pct=10, y_pct=10, label="Secret", action="inspect"
+    ).value
+
+    refused = _service(db).checkpoint_history(tenant_id=T, checkpoint_id=point["id"])
+
+    assert isinstance(refused, Err) and refused.code == "NOT_FOUND"
+    # ...and the other tenant can still read its own.
+    assert isinstance(_service(db).checkpoint_history(tenant_id=other, checkpoint_id=point["id"]), Ok)
+
+
+def test_another_tenants_machine_has_no_logbook_or_indicators(db, ctx):
+    other = "integration-test-history-other2"
+    stranger = str(ULID())
+    db.execute(
+        "INSERT INTO core.users (id, tenant_id, email, password_hash, full_name) VALUES (%s, %s, %s, 'x', 'Autre')",
+        (stranger, other, f"{stranger}@test.local"),
+    )
+    machine = EquipmentService(db).create_equipment(
+        tenant_id=other, actor_id=stranger, work_center_id="wc-9", code="OTHER-2", name="Machine d'un autre"
+    ).value.id
+
+    logbook = _service(db).equipment_history(
+        tenant_id=T, equipment_id=machine, date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True
+    )
+    indicators = _service(db).indicators(
+        tenant_id=T, date_from=PERIOD[0], date_to=PERIOD[1], costs_visible=True, equipment_id=machine
+    )
+
+    assert isinstance(logbook, Err) and logbook.code == "NOT_FOUND"
+    assert isinstance(indicators, Err) and indicators.code == "NOT_FOUND"
+    assert machine not in {m["equipment_id"] for m in _indicators(db)["machines"]}
