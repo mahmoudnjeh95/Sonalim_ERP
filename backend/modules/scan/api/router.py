@@ -9,7 +9,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, require_session, user_has_permission
 from modules.scan.api.alias_service import ScanAliasService
-from modules.scan.api.session_service import ScanSessionService
+from modules.scan.api.session_service import ScanSessionService, available_readers
 from modules.scan.api.vocabulary_service import build_vocabulary, vocabulary_options
 from modules.scan.domain.review import APPLY_ORDER
 
@@ -30,6 +30,12 @@ class CreateSessionRequest(BaseModel):
     report_date: datetime.date
     shift: str
     default_of_id: str | None = None
+    reader: str | None = None
+
+
+class ReaderRequest(BaseModel):
+    reader: str
+    reread_all: bool = False
 
 
 class PageUpload(BaseModel):
@@ -93,7 +99,21 @@ def create_session(body: CreateSessionRequest, tenant: TenantContext = Depends(U
     with get_connection() as connection:
         return _result(connection, ScanSessionService(connection).create_session(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, kind=body.kind, work_center_id=body.work_center_id,
-            report_date=body.report_date, shift=body.shift, default_of_id=body.default_of_id,
+            report_date=body.report_date, shift=body.shift, default_of_id=body.default_of_id, reader=body.reader,
+        ))
+
+
+@router.get("/readers")
+def readers(tenant: TenantContext = Depends(USE)) -> dict:
+    return available_readers()
+
+
+@router.put("/sessions/{session_id}/reader")
+def set_reader(session_id: str, body: ReaderRequest, tenant: TenantContext = Depends(USE)) -> dict:
+    with get_connection() as connection:
+        return _result(connection, ScanSessionService(connection).set_reader(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, session_id=session_id,
+            reader=body.reader, reread_all=body.reread_all,
         ))
 
 

@@ -15,6 +15,9 @@ services:
       # in the server .env to go back to applying `python -m scripts.migration_sql` by hand.
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
       OCR_URL: ${OCR_URL:-http://ocr:8100}
+      # The paper-scan reader a new scan starts with: ocr (photos stay on the server) or
+      # claude (photos sent to the Anthropic API). The user can switch per scan in the UI.
+      SCAN_READER: ${SCAN_READER:-ocr}
     ports:
       - "127.0.0.1:8000:8000"
     depends_on:
@@ -51,6 +54,9 @@ services:
       RABBITMQ_URL: ${RABBITMQ_URL:-amqp://erp:${RABBITMQ_PASSWORD:-erp}@rabbitmq:5672/}
       AUTO_MIGRATE: ${AUTO_MIGRATE:-true}
       OCR_URL: ${OCR_URL:-http://ocr:8100}
+      # The paper-scan reader runs here; each scan picks local OCR or Claude in the UI.
+      CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      SCAN_CLAUDE_MODEL: ${SCAN_CLAUDE_MODEL:-}
     depends_on:
       postgres:
         condition: service_healthy

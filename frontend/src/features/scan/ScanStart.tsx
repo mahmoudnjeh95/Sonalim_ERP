@@ -15,7 +15,8 @@ import { listWorkOrders } from "../production/api";
 import { listShiftReports, SHIFT_REPORTS_QUERY_KEY } from "../production/shift/shiftApi";
 import { useLabel } from "../production/shift/shiftText";
 import { useShiftReferenceData } from "../production/shift/useShiftReferenceData";
-import { createSession, SCAN_SESSIONS_QUERY_KEY } from "./scanApi";
+import { ReaderPicker } from "./ReaderPicker";
+import { createSession, getReaders, SCAN_READERS_QUERY_KEY, SCAN_SESSIONS_QUERY_KEY, type Reader } from "./scanApi";
 import { S, SHIFT_STATUS } from "./scanText";
 
 const today = () => new Date().toISOString().slice(0, 10);
@@ -32,6 +33,9 @@ export function ScanStart({ onCreated }: { onCreated: (sessionId: string) => voi
   const [line, setLine] = useState(() => params.get("line") ?? "");
   const [shift, setShift] = useState(() => params.get("shift") ?? "");
   const [ofId, setOfId] = useState("");
+  const readers = useQuery({ queryKey: SCAN_READERS_QUERY_KEY, queryFn: () => getReaders(token) });
+  const [picked, setPicked] = useState<Reader | null>(null);
+  const reader = picked ?? readers.data?.default ?? "ocr";
 
   useEffect(() => {
     if (!line && reference.workCenters.length) setLine(reference.workCenters[0].id);
@@ -62,7 +66,7 @@ export function ScanStart({ onCreated }: { onCreated: (sessionId: string) => voi
   const lookupPending = !!line && (reports.isLoading || reports.isFetching);
 
   const create = useMutation({
-    mutationFn: () => createSession(token, { work_center_id: line, report_date: date, shift, default_of_id: ofId || null }),
+    mutationFn: () => createSession(token, { work_center_id: line, report_date: date, shift, default_of_id: ofId || null, reader }),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: SCAN_SESSIONS_QUERY_KEY });
       onCreated(created.id);
@@ -103,6 +107,11 @@ export function ScanStart({ onCreated }: { onCreated: (sessionId: string) => voi
               ))}
             </Select>
           </div>
+        </div>
+
+        <div className="space-y-1">
+          <FieldLabel>{label(S.reader)}</FieldLabel>
+          <ReaderPicker value={reader} readers={readers.data} onChange={setPicked} />
         </div>
 
         {report ? (

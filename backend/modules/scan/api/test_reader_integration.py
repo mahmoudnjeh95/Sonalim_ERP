@@ -125,3 +125,33 @@ def test_a_page_of_a_discarded_session_is_not_picked(db, page):
     assert read_next_page(_Connection(db), read) == (page, "read")
     assert seen == [b"img"]
     assert _state(db, other_page_id)[0] == "queued"
+
+
+def test_each_page_is_read_by_its_scans_reader(db, page):
+    db.execute("UPDATE scan.scan_sessions SET reader = 'claude' WHERE id = (SELECT session_id FROM scan.scan_pages WHERE id = %s)", (page,))
+    seen = []
+
+    def by(name):
+        def read(image, hint):
+            seen.append(name)
+            return fabrication_result()
+        return read
+
+    assert read_next_page(_Connection(db), {"ocr": by("ocr"), "claude": by("claude")}) == (page, "read")
+    assert seen == ["claude"]
+    assert db.execute("SELECT read_by FROM scan.scan_pages WHERE id = %s", (page,)).fetchone()[0] == "claude"
+
+
+def test_a_page_waits_when_its_reader_is_not_running_here(db, page):
+    db.execute("UPDATE scan.scan_sessions SET reader = 'claude' WHERE id = (SELECT session_id FROM scan.scan_pages WHERE id = %s)", (page,))
+
+    def ocr(image, hint):
+        raise AssertionError("the OCR must not read a page its scan sent to Claude")
+
+    # Other queued pages in the dev database may be picked; this one never is.
+    for _ in range(5):
+        step = read_next_page(_Connection(db), {"ocr": ocr})
+        if step is None:
+            break
+        assert step[0] != page
+    assert _state(db, page)[0] == "queued"

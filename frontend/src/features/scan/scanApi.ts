@@ -7,6 +7,13 @@ export type FormType = "fabrication" | "conditionnement" | "bobines";
 export type Verdict = "this_shift" | "other_shift" | "unknown";
 export type SessionStatus = "open" | "applied" | "discarded";
 export type Choice = "replace" | "keep";
+/** Who reads the photos: the local OCR container (they stay on the server) or Claude (sent to the Anthropic API). */
+export type Reader = "ocr" | "claude";
+
+export interface ReadersInfo {
+  default: Reader;
+  available: Record<Reader, boolean>;
+}
 
 export interface ReadHeader {
   date: string | null;
@@ -27,6 +34,7 @@ export interface ScanPage {
   error: string | null;
   created_at: string;
   read_at: string | null;
+  read_by: Reader | null;
   attribution: { verdict: Verdict; reasons: string[]; read: ReadHeader } | null;
 }
 
@@ -76,6 +84,7 @@ export interface ScanSession {
   created_by: string;
   created_at: string;
   applied_at: string | null;
+  reader: Reader;
   page_count?: number;
 }
 
@@ -159,13 +168,25 @@ export type VocabularyOptions = Record<string, { value: string; label: string }[
 export const SCAN_QUERY_KEY = ["scan"] as const;
 export const SCAN_SESSIONS_QUERY_KEY = ["scan", "sessions"] as const;
 export const SCAN_ALIASES_QUERY_KEY = ["scan", "aliases"] as const;
+export const SCAN_READERS_QUERY_KEY = ["scan", "readers"] as const;
 export const scanSessionKey = (id: string) => ["scan", "session", id] as const;
 export const scanProposalPrefix = (id: string) => ["scan", "proposal", id] as const;
 
 const base = "/scan";
 
-export function createSession(token: string, body: { work_center_id: string; report_date: string; shift: string; default_of_id: string | null }) {
+export function createSession(
+  token: string,
+  body: { work_center_id: string; report_date: string; shift: string; default_of_id: string | null; reader: Reader },
+) {
   return apiFetch<ScanSession>(`${base}/sessions`, { method: "POST", body: { kind: "shift", ...body }, token });
+}
+
+export function getReaders(token: string) {
+  return apiFetch<ReadersInfo>(`${base}/readers`, { token });
+}
+
+export function setReader(token: string, id: string, reader: Reader, rereadAll: boolean) {
+  return apiFetch<ScanSession>(`${base}/sessions/${id}/reader`, { method: "PUT", body: { reader, reread_all: rereadAll }, token });
 }
 
 export function listSessions(token: string) {

@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Camera, ImagePlus, RotateCw, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../lib/api";
@@ -13,11 +13,12 @@ import { useLabel } from "../production/shift/shiftText";
 import { CameraDialog } from "./CameraDialog";
 import { prepareImage, UPLOAD_BUDGETS } from "./imagePrep";
 import { PageImage } from "./PageImage";
+import { ReaderPicker } from "./ReaderPicker";
 import {
-  deletePage, rereadPage, scanProposalPrefix, scanSessionKey, uploadPages,
-  type FormType, type ScanPage, type SessionDetail,
+  deletePage, getReaders, rereadPage, SCAN_READERS_QUERY_KEY, SCAN_SESSIONS_QUERY_KEY, scanProposalPrefix, scanSessionKey,
+  setReader, uploadPages, type FormType, type Reader, type ScanPage, type SessionDetail,
 } from "./scanApi";
-import { FORM_LABELS, PAGE_STATUS, S, VERDICT_REASONS } from "./scanText";
+import { FORM_LABELS, PAGE_STATUS, READER_LABELS, S, VERDICT_REASONS } from "./scanText";
 
 const STATUS_VARIANT = { queued: "default", reading: "primary", read: "success", unrecognized: "warning", failed: "destructive" } as const;
 
@@ -67,6 +68,18 @@ export function PhotosPanel({
     onSuccess: refresh,
     onError: (e) => fail(e),
   });
+  const readers = useQuery({ queryKey: SCAN_READERS_QUERY_KEY, queryFn: () => getReaders(token) });
+  const switchReader = useMutation({
+    mutationFn: ({ reader, rereadAll }: { reader: Reader; rereadAll: boolean }) => setReader(token, session.id, reader, rereadAll),
+    onSuccess: (_, { rereadAll }) => {
+      refresh();
+      queryClient.invalidateQueries({ queryKey: SCAN_SESSIONS_QUERY_KEY });
+      if (rereadAll) toast.success(label(S.rereadAllDone));
+    },
+    onError: (e) => fail(e),
+  });
+  // Pages already read by the other engine: worth offering to read them again after a switch.
+  const readByOther = session.pages.some((p) => p.read_by && p.read_by !== session.reader && p.status !== "queued");
   const pick = (files: FileList | null) => {
     if (files && files.length) upload.mutate(Array.from(files));
   };
@@ -95,6 +108,25 @@ export function PhotosPanel({
                 {preparing ? `${label(S.preparing)} ${preparing}…` : label(S.addPhotos)}
               </Button>
             </div>
+          )}
+        </div>
+        <div className="flex flex-wrap items-start gap-3">
+          <ReaderPicker
+            value={session.reader}
+            readers={readers.data}
+            disabled={disabled || switchReader.isPending}
+            onChange={(reader) => switchReader.mutate({ reader, rereadAll: false })}
+          />
+          {!disabled && session.pages.length > 0 && (
+            <Button
+              size="sm"
+              variant={readByOther ? "default" : "outline"}
+              disabled={switchReader.isPending}
+              onClick={() => switchReader.mutate({ reader: session.reader, rereadAll: true })}
+            >
+              <RotateCw className="h-3.5 w-3.5" />
+              {`${label(S.rereadAll)} (${label(READER_LABELS[session.reader])})`}
+            </Button>
           )}
         </div>
         {serviceDown && <p className="text-sm text-warning">{label(S.serviceDown)}</p>}
@@ -137,6 +169,9 @@ function PageCard({
       <div className="flex flex-wrap gap-1">
         <Badge variant={STATUS_VARIANT[page.status]}>{label(PAGE_STATUS[page.status])}</Badge>
         {page.form_type && <Badge variant="outline">{label(FORM_LABELS[page.form_type])}</Badge>}
+        {page.read_by && page.status !== "queued" && (
+          <Badge variant="outline" title={label(S.readBy)}>{label(READER_LABELS[page.read_by])}</Badge>
+        )}
         {page.form_type === "bobines" && <Badge variant="warning">{label(S.notImportable)}</Badge>}
         {verdict === "unknown" && <Badge variant="warning">{label(S.unknownShift)}</Badge>}
       </div>

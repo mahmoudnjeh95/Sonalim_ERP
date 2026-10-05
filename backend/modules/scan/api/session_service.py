@@ -11,6 +11,7 @@ from __future__ import annotations
 import base64
 import binascii
 import datetime
+import os
 from typing import Any
 
 import psycopg
@@ -39,17 +40,30 @@ IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
 FORM_HINTS = frozenset({"fabrication", "conditionnement", "bobines"})
 HEADER_FIELDS = ("team", "conducteur", "agent_fabrication", "machiniste", "aide_machiniste")
 APPLY_REASON = "Import depuis photos"
+READERS = ("ocr", "claude")
 
 _SESSION_NAMES = (
     "id", "kind", "work_center_id", "report_date", "shift", "default_of_id", "shift_report_id", "status",
-    "review_state", "created_by", "created_at", "applied_at",
+    "review_state", "created_by", "created_at", "applied_at", "reader",
 )
 _PAGE_NAMES = (
-    "id", "status", "form_type", "form_hint", "rotation", "width", "height", "attempts", "error", "created_at", "read_at", "ocr_result",
+    "id", "status", "form_type", "form_hint", "rotation", "width", "height", "attempts", "error", "created_at", "read_at", "read_by", "ocr_result",
 )
 _SESSION_NOT_FOUND = Err("NOT_FOUND", "scan session not found", "session de scan introuvable")
 _PAGE_NOT_FOUND = Err("NOT_FOUND", "photo not found", "photo introuvable")
 _SESSION_CLOSED = Err("SESSION_CLOSED", "this scan is already applied or discarded", "ce scan est déjà enregistré ou abandonné")
+
+
+def available_readers() -> dict:
+    """Which readers this server can run, and the one a new scan starts with.
+
+    The OCR container keeps the photos on the server; Claude sends them to the Anthropic
+    API. SCAN_READER picks the default when both are configured.
+    """
+    available = {"ocr": bool(os.environ.get("OCR_URL")), "claude": bool(os.environ.get("CLAUDE_API_KEY", "").strip())}
+    wanted = os.environ.get("SCAN_READER", "ocr").strip().lower()
+    default = wanted if available.get(wanted) else next((r for r in READERS if available[r]), "ocr")
+    return {"default": default, "available": available}
 
 
 def _iso(value: Any) -> Any:
@@ -270,8 +284,11 @@ class ScanSessionService:
 
     def create_session(
         self, *, tenant_id: str, actor_id: str, kind: str, work_center_id: str, report_date: datetime.date,
-        shift: str, default_of_id: str | None,
+        shift: str, default_of_id: str | None, reader: str | None = None,
     ) -> Result[dict]:
+        reader = reader or available_readers()["default"]
+        if reader not in READERS:
+            return Err("INVALID_VALUE", f"unknown reader {reader!r}", f"lecteur inconnu {reader!r}")
         if kind != "shift":
             return Err("NOT_SUPPORTED_YET", "only shift fiches can be scanned for now", "seules les fiches de shift peuvent être scannées pour l'instant")
         if self._window(tenant_id, shift or "") is None:
@@ -285,13 +302,13 @@ class ScanSessionService:
         session_id = str(ULID())
         self._connection.execute(
             """
-            INSERT INTO scan.scan_sessions (id, tenant_id, kind, work_center_id, report_date, shift, default_of_id, created_by)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO scan.scan_sessions (id, tenant_id, kind, work_center_id, report_date, shift, default_of_id, created_by, reader)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (session_id, tenant_id, kind, work_center_id, report_date, shift.strip(), default_of_id, actor_id),
+            (session_id, tenant_id, kind, work_center_id, report_date, shift.strip(), default_of_id, actor_id, reader),
         )
         self._audit(tenant_id, actor_id, "scan_session.created", session_id,
-                    {"work_center_id": work_center_id, "report_date": report_date.isoformat(), "shift": shift.strip()})
+                    {"work_center_id": work_center_id, "report_date": report_date.isoformat(), "shift": shift.strip(), "reader": reader})
         return Ok(self._session_row(tenant_id, session_id))
 
     def add_pages(self, *, tenant_id: str, actor_id: str, session_id: str, files: list[dict]) -> Result[list[dict]]:
@@ -364,6 +381,30 @@ class ScanSessionService:
         )
         self._audit(tenant_id, actor_id, "scan_session.page_reread", session_id, {"page_id": page_id, "form_hint": form_hint})
         return Ok(self._page_summary(self._page(tenant_id, session_id, page_id), None))
+
+    def set_reader(self, *, tenant_id: str, actor_id: str, session_id: str, reader: str, reread_all: bool) -> Result[dict]:
+        """Switch the scan between the local OCR and Claude. Photos still waiting are read by
+        the new reader; with `reread_all` the photos already read are queued again too (their
+        current reading stays until the new one replaces it)."""
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        if reader not in READERS:
+            return Err("INVALID_VALUE", f"unknown reader {reader!r}", f"lecteur inconnu {reader!r}")
+        self._connection.execute(
+            "UPDATE scan.scan_sessions SET reader = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+            (reader, session_id, tenant_id),
+        )
+        requeued = 0
+        if reread_all:
+            requeued = self._connection.execute(
+                "UPDATE scan.scan_pages SET status = 'queued', attempts = 0, error = NULL "
+                "WHERE tenant_id = %s AND session_id = %s AND status IN ('read', 'unrecognized', 'failed')",
+                (tenant_id, session_id),
+            ).rowcount
+        self._audit(tenant_id, actor_id, "scan_session.reader_changed", session_id,
+                    {"from": found.value["reader"], "to": reader, "pages_requeued": requeued})
+        return Ok(self._session_row(tenant_id, session_id))
 
     def discard_session(self, *, tenant_id: str, actor_id: str, session_id: str) -> Result[dict]:
         found = self._open_session(tenant_id, session_id)

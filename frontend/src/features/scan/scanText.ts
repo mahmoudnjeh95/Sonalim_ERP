@@ -44,6 +44,11 @@ export const S = {
   unknownShift: L("Shift not confirmed", "Shift non confirmé"),
   includeAnyway: L("Use it anyway", "Inclure quand même"),
   notImportable: L("Recognised — not imported yet", "Fiche reconnue — pas encore importée"),
+  reader: L("Reading engine", "Moteur de lecture"),
+  readerUnavailable: L("Not configured on this server", "Non configuré sur ce serveur"),
+  rereadAll: L("Read all photos again", "Relire toutes les photos"),
+  rereadAllDone: L("The photos are queued to be read again", "Les photos sont en file pour être relues"),
+  readBy: L("Read by", "Lue par"),
   serviceDown: L("Reading service unavailable — retrying automatically", "Service de lecture indisponible — nouvel essai automatique"),
   review: L("Check what was read", "Vérifier la lecture"),
   reviewHint: L(
@@ -165,6 +170,16 @@ export const FORM_LABELS: Record<string, Label> = {
   fabrication: L("Production fiche", "Fiche fabrication"),
   conditionnement: L("Packing fiche", "Fiche conditionnement"),
   bobines: L("Reel changes", "Changement bobines"),
+};
+
+export const READER_LABELS: Record<string, Label> = {
+  ocr: L("Local OCR", "OCR local"),
+  claude: L("Cloud (Claude)", "Cloud (Claude)"),
+};
+
+export const READER_HINTS: Record<string, Label> = {
+  ocr: L("Read on the plant's server; the photos never leave it.", "Lecture sur le serveur de l'usine ; les photos n'en sortent pas."),
+  claude: L("Read by Claude (Anthropic); the photos are sent to the cloud.", "Lecture par Claude (Anthropic) ; les photos sont envoyées dans le cloud."),
 };
 
 export const PAGE_STATUS: Record<string, Label> = {

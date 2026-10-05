@@ -2,7 +2,7 @@
 
 The server runs this loop inside `worker/main.py`, which also needs a broker for the
 event consumers. Locally there is usually no RabbitMQ, so this script runs the same
-`read_next_page` step against the same OCR container and nothing else. Stop it with
+`read_next_page` step with the same readers (OCR container and/or Claude) and nothing else. Stop it with
 Ctrl+C; a page interrupted mid-read is put back in the queue on the next start.
 """
 from __future__ import annotations
@@ -21,6 +21,7 @@ load_dotenv(_BACKEND_DIR / ".env")
 load_dotenv(_BACKEND_DIR.parent / ".env", override=True)
 
 from core.db import get_connection
+from modules.scan.api.claude_reader import ClaudeReader
 from modules.scan.api.ocr_client import OcrClient
 from modules.scan.api.reader import read_next_page, requeue_stale_reads
 
@@ -29,11 +30,15 @@ RETRY_SECONDS = 15
 
 
 def main() -> None:
-    ocr_url = os.environ.get("OCR_URL")
-    if not ocr_url:
-        raise SystemExit("OCR_URL is not set: start the OCR service and set OCR_URL in .env")
-    client = OcrClient(ocr_url)
-    print(f"Scan reader started against {ocr_url}", flush=True)
+    # Each scan picks its reader in the UI; this runs whichever are configured.
+    readers = {}
+    if os.environ.get("OCR_URL"):
+        readers["ocr"] = OcrClient(os.environ["OCR_URL"]).read
+    if os.environ.get("CLAUDE_API_KEY", "").strip():
+        readers["claude"] = ClaudeReader(os.environ["CLAUDE_API_KEY"].strip()).read
+    if not readers:
+        raise SystemExit("Set OCR_URL (start the OCR service) and/or CLAUDE_API_KEY in .env")
+    print(f"Scan reader started ({', '.join(readers)})", flush=True)
     try:
         with get_connection() as db_connection:
             requeued = requeue_stale_reads(db_connection)
@@ -44,7 +49,7 @@ def main() -> None:
     while True:
         try:
             with get_connection() as db_connection:
-                step = read_next_page(db_connection, client.read)
+                step = read_next_page(db_connection, readers)
         except Exception as error:  # retried next tick, never kills the loop
             print(f"Scan reader failed: {error}", flush=True)
             step = ("", "retry")

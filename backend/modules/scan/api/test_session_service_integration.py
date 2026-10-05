@@ -174,3 +174,36 @@ def test_pages_uploaded_together_keep_the_order_they_were_sent_in(db, world):
     # The listing comes back in the order the pages were sent, which is the fiche's order.
     listed = ok(service.get_session(tenant_id=TENANT, session_id=session["id"]))["pages"]
     assert [p["id"] for p in listed] == [p["id"] for p in pages]
+
+
+def test_a_scan_starts_with_the_default_reader_and_can_switch(db, world, monkeypatch):
+    monkeypatch.setenv("OCR_URL", "http://ocr:8100")
+    monkeypatch.setenv("CLAUDE_API_KEY", "key")
+    monkeypatch.setenv("SCAN_READER", "claude")
+    service = ScanSessionService(db)
+    session = _session(db, world)
+    assert session["reader"] == "claude"
+    [first, second] = ok(service.add_pages(tenant_id=TENANT, actor_id=world["actor"], session_id=session["id"], files=[JPEG, JPEG]))
+    db.execute("UPDATE scan.scan_pages SET status = 'read', attempts = 1, read_by = 'claude' WHERE id = %s", (first["id"],))
+
+    switched = ok(service.set_reader(tenant_id=TENANT, actor_id=world["actor"], session_id=session["id"], reader="ocr", reread_all=False))
+    assert switched["reader"] == "ocr"
+    assert db.execute("SELECT status FROM scan.scan_pages WHERE id = %s", (first["id"],)).fetchone()[0] == "read"
+
+    ok(service.set_reader(tenant_id=TENANT, actor_id=world["actor"], session_id=session["id"], reader="claude", reread_all=True))
+    pages = {p["id"]: p for p in ok(service.get_session(tenant_id=TENANT, session_id=session["id"]))["pages"]}
+    assert (pages[first["id"]]["status"], pages[first["id"]]["attempts"], pages[first["id"]]["read_by"]) == ("queued", 0, "claude")
+    assert pages[second["id"]]["status"] == "queued"
+    assert service.set_reader(tenant_id=TENANT, actor_id=world["actor"], session_id=session["id"], reader="gpt", reread_all=False).code == "INVALID_VALUE"
+    actions = [r[0] for r in db.execute(
+        "SELECT action FROM core.audit_log WHERE entity_id = %s ORDER BY occurred_at", (session["id"],)).fetchall()]
+    assert actions.count("scan_session.reader_changed") == 2
+
+
+def test_the_default_reader_falls_back_to_one_that_is_configured(monkeypatch):
+    from modules.scan.api.session_service import available_readers
+
+    monkeypatch.delenv("OCR_URL", raising=False)
+    monkeypatch.setenv("CLAUDE_API_KEY", "key")
+    monkeypatch.setenv("SCAN_READER", "ocr")
+    assert available_readers() == {"default": "claude", "available": {"ocr": False, "claude": True}}

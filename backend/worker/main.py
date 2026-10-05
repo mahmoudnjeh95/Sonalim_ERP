@@ -13,6 +13,7 @@ from core.events.dispatcher import EXCHANGE, dispatch_pending
 from core.exchange_rate_rollover import roll_forward_missing_rates
 from core.migrations.runner import migrate_on_startup
 from modules.maintenance.api.program_service import ProgramService
+from modules.scan.api.claude_reader import ClaudeReader
 from modules.scan.api.ocr_client import OcrClient
 from modules.scan.api.reader import read_next_page, requeue_stale_reads
 from modules.warehouse.api.replenishment_service import ReplenishmentService
@@ -124,11 +125,10 @@ def run_maintenance_programs() -> None:
         time.sleep(MAINTENANCE_SWEEP_INTERVAL_SECONDS)
 
 
-def run_scan_reader(ocr_url: str) -> None:
-    """Has the OCR container read the queued photos, one at a time, in their own thread
-    so a slow page never holds up the event consumers."""
-    client = OcrClient(ocr_url)
-    print("Scan reader started", flush=True)
+def run_scan_reader(readers: dict) -> None:
+    """Has each scan's reader (the OCR container or Claude) read the queued photos, one at a
+    time, in their own thread so a slow page never holds up the event consumers."""
+    print(f"Scan reader started ({', '.join(readers)})", flush=True)
     try:
         with get_connection() as db_connection:
             requeued = requeue_stale_reads(db_connection)
@@ -139,7 +139,7 @@ def run_scan_reader(ocr_url: str) -> None:
     while True:
         try:
             with get_connection() as db_connection:
-                step = read_next_page(db_connection, client.read)
+                step = read_next_page(db_connection, readers)
         except Exception as error:  # retried next tick, never kills the thread
             print(f"Scan reader failed: {error}", flush=True)
             step = ("", "retry")
@@ -157,11 +157,17 @@ def run() -> None:
     threading.Thread(target=run_reservation_expiry, daemon=True).start()
     threading.Thread(target=run_replenishment, daemon=True).start()
     threading.Thread(target=run_maintenance_programs, daemon=True).start()
-    ocr_url = os.environ.get("OCR_URL")
-    if ocr_url:
-        threading.Thread(target=run_scan_reader, args=(ocr_url,), daemon=True).start()
+    # Each scan picks its reader in the UI: the local OCR container (OCR_URL) or Claude
+    # (CLAUDE_API_KEY, the photos are sent to the Anthropic API). Both run when configured.
+    readers = {}
+    if os.environ.get("OCR_URL"):
+        readers["ocr"] = OcrClient(os.environ["OCR_URL"]).read
+    if os.environ.get("CLAUDE_API_KEY", "").strip():
+        readers["claude"] = ClaudeReader(os.environ["CLAUDE_API_KEY"].strip()).read
+    if readers:
+        threading.Thread(target=run_scan_reader, args=(readers,), daemon=True).start()
     else:
-        print("OCR_URL not set: scanned photos stay queued until it is", flush=True)
+        print("Neither OCR_URL nor CLAUDE_API_KEY set: scanned photos stay queued until one is", flush=True)
     event_consumers.consume_forever(rabbitmq_url)
 
 
