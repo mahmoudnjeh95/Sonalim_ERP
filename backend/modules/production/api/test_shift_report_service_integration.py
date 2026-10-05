@@ -503,3 +503,56 @@ def test_a_packing_waste_section_needs_no_item(db, env):
     shift_id = _open(db, env)
     _ok(_save(db, env, shift_id, "waste_packing", {"waste_lines": [{"category": "packaging", "quantity": 2.5, "note": "torn film"}]}))
     assert isinstance(_submit(db, env, shift_id, "waste_packing"), Ok)
+
+
+# ---- deleting ---------------------------------------------------------------
+
+
+def test_deleting_an_open_shift_removes_it_and_its_sections(db, env):
+    shift_id = _open(db, env)
+    _save(db, env, shift_id, "energy", {"energy": {"fuel_quantity": 5}})
+
+    deleted = _ok(ShiftReportService(db).delete_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id))
+
+    assert deleted == {"deleted": True, "id": shift_id}
+    assert isinstance(ShiftReportService(db).get_shift(tenant_id=TENANT, shift_report_id=shift_id), Err)
+    remaining = db.execute(
+        "SELECT count(*) FROM production.shift_report_sections WHERE shift_report_id = %s", (shift_id,)
+    ).fetchone()[0]
+    assert remaining == 0
+
+
+def test_deleting_a_returned_shift_is_allowed(db, env):
+    """A validated shift that was reversed lands on 'returned' with its stock already
+    undone, so there is nothing left to unpost."""
+    shift_id = _open(db, env)
+    db.execute("UPDATE production.shift_reports SET status = 'returned' WHERE id = %s", (shift_id,))
+
+    assert isinstance(ShiftReportService(db).delete_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id), Ok)
+
+
+def test_a_submitted_or_validated_shift_cannot_be_deleted(db, env):
+    shift_id = _open(db, env)
+    for blocked_status in ("submitted", "validated"):
+        db.execute("UPDATE production.shift_reports SET status = %s WHERE id = %s", (blocked_status, shift_id))
+
+        result = ShiftReportService(db).delete_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id)
+
+        assert isinstance(result, Err) and result.code == "DELETE_NOT_ALLOWED", blocked_status
+        assert result.message_fr
+
+
+def test_deleting_a_shift_is_audited(db, env):
+    shift_id = _open(db, env)
+
+    assert isinstance(ShiftReportService(db).delete_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id), Ok)
+
+    [(payload,)] = db.execute(
+        "SELECT payload FROM core.audit_log WHERE entity_id = %s AND action = 'shift_report.deleted'", (shift_id,)
+    ).fetchall()
+    assert payload["status"] == "open" and payload["shift"]
+
+
+def test_deleting_an_unknown_shift_is_not_found(db, env):
+    result = ShiftReportService(db).delete_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id="nope")
+    assert isinstance(result, Err) and result.code == "NOT_FOUND"

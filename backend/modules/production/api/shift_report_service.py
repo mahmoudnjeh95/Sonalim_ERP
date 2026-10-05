@@ -238,6 +238,48 @@ class ShiftReportService:
             )
         return Ok(self._load_header(tenant_id, shift_report_id))
 
+    def delete_shift(self, *, tenant_id: str, actor_id: str, shift_report_id: str) -> Result[dict]:
+        """Remove a shift report that was never fully submitted.
+
+        Nothing has posted to stock while a shift is 'open' or 'returned' -- validating a
+        shift is what posts it (ShiftStockService is only ever called from
+        ShiftValidationService), and a validated shift that was later reversed lands back on
+        'returned' with its stock already undone. So the row and everything under it can
+        simply be removed; the schema cascades sections, revisions, runs, packing rows,
+        waste, stops and energy (0047, 0048).
+        """
+        header = self._load_header(tenant_id, shift_report_id)
+        if header is None:
+            return Err(
+                "NOT_FOUND",
+                f"shift report {shift_report_id} not found",
+                f"rapport de poste {shift_report_id} introuvable",
+            )
+        if header["status"] not in ("open", "returned"):
+            return Err(
+                "DELETE_NOT_ALLOWED",
+                f"a shift that is {header['status']} cannot be deleted",
+                f"un poste {header['status']} ne peut pas être supprimé",
+            )
+        self._connection.execute(
+            "DELETE FROM production.shift_reports WHERE id = %s AND tenant_id = %s", (shift_report_id, tenant_id)
+        )
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="shift_report.deleted",
+            entity_type="shift_report",
+            entity_id=shift_report_id,
+            payload={
+                "work_center_id": header["work_center_id"],
+                "report_date": header["report_date"],
+                "shift": header["shift"],
+                "status": header["status"],
+            },
+        )
+        return Ok({"deleted": True, "id": shift_report_id})
+
     # ---- sections ----------------------------------------------------------
 
     def _editable_section(

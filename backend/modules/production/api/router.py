@@ -1923,6 +1923,7 @@ def _report_err_status(code: str) -> int:
         "OPEN_STOP",
         "NOTHING_TO_VALIDATE",
         "ALREADY_POSTED",
+        "DELETE_NOT_ALLOWED",
     ):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
@@ -3118,6 +3119,20 @@ def list_shift_report_section_revisions(
                 tenant_id=tenant.tenant_id, shift_report_id=shift_report_id, section_key=section_key
             ),
         )
+
+
+@router.delete("/shift-reports/{shift_report_id}")
+def delete_shift_report(
+    shift_report_id: str,
+    tenant: TenantContext = Depends(require_permission("production.shift.delete")),
+) -> dict:
+    """Delete a shift report that was never fully submitted -- while it is 'open' or
+    'returned'. Anything further along has posted to stock and is refused (409)."""
+    with get_connection() as connection:
+        result = ShiftReportService(connection).delete_shift(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, shift_report_id=shift_report_id
+        )
+        return _shift_result(connection, result)
 
 
 # --- validating a shift -------------------------------------------------------
