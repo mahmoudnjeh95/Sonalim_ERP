@@ -388,7 +388,42 @@ _TOOL_HANDLERS = {
 
 # OpenAI-style tool wrapper (Groq's chat-completions API is OpenAI-compatible)
 # around the same TOOL_DECLARATIONS used to build the handler table above.
-_TOOLS = [{"type": "function", "function": declaration} for declaration in TOOL_DECLARATIONS]
+_TOOLS = [
+    {
+        "type": "function",
+        "function": {"name": d["name"], "description": d["description"], "parameters": d["input_schema"]},
+    }
+    for d in TOOL_DECLARATIONS
+]
+
+
+def _to_claude_messages(messages: list[dict]) -> list[dict]:
+    """The tool loop keeps an OpenAI-style transcript (shared with Groq); Claude wants
+    tool calls as tool_use blocks and their results as tool_result blocks in a user turn."""
+    converted: list[dict] = []
+    for msg in messages:
+        role = msg.get("role")
+        if role == "tool":
+            block = {"type": "tool_result", "tool_use_id": msg["tool_call_id"], "content": msg["content"]}
+            if converted and converted[-1]["role"] == "user" and isinstance(converted[-1]["content"], list):
+                converted[-1]["content"].append(block)
+            else:
+                converted.append({"role": "user", "content": [block]})
+        elif role == "assistant" and msg.get("tool_calls"):
+            blocks: list[dict] = []
+            if msg.get("content"):
+                blocks.append({"type": "text", "text": msg["content"]})
+            for call in msg["tool_calls"]:
+                blocks.append({
+                    "type": "tool_use",
+                    "id": call["id"],
+                    "name": call["function"]["name"],
+                    "input": json.loads(call["function"].get("arguments") or "{}"),
+                })
+            converted.append({"role": "assistant", "content": blocks})
+        else:
+            converted.append({"role": role, "content": msg.get("content") or ""})
+    return converted
 
 
 def _call_llm(messages: list[dict]) -> dict:
@@ -430,7 +465,7 @@ def _call_claude(api_key: str, messages: list[dict]) -> dict:
             temperature=0.2,
             system=system_msg or SYSTEM_INSTRUCTION_TEMPLATE.format(language="English"),
             tools=TOOL_DECLARATIONS,
-            messages=filtered_messages,
+            messages=_to_claude_messages(filtered_messages),
         )
 
         # Extract text content and tool uses from Claude's response
