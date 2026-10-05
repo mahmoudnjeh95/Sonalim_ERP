@@ -100,7 +100,7 @@ def api(db, monkeypatch):
     def acting_as(user_id: str) -> None:
         current["user"] = user_id
 
-    return SimpleNamespace(client=TestClient(app), acting_as=acting_as, sup=sup, valuer=valuer, nobody=nobody, machine=machine, job=job_id)
+    return SimpleNamespace(client=TestClient(app), acting_as=acting_as, sup=sup, valuer=valuer, nobody=nobody, machine=machine, job=job_id, db=db)
 
 
 PERIOD = f"from={TODAY.replace(month=1, day=1).isoformat()}&to={TODAY.isoformat()}"
@@ -156,3 +156,28 @@ def test_the_excel_journal_holds_the_rows_and_hides_costs_without_the_right(api)
     api.acting_as(api.valuer)
     valued = load_workbook(io.BytesIO(api.client.get(f"/maintenance/history/journal/export?{PERIOD}&lang=en").content)).active
     assert "Cost (XOF)" in [cell.value for cell in valued[2]]
+
+
+def test_the_excel_journal_cannot_smuggle_a_formula_into_a_cell(api):
+    """A job title is free text typed by a user. Excel treats a cell starting with = + - @
+    as a formula, so an exported title like "=1+1" would run on whoever opens the file.
+    The text has to come back as text."""
+    api.acting_as(api.sup)
+    jobs = JobService(api.db)
+    for title in ("=1+1", "+34", "-7", "@SUM(A1)"):
+        job_id = jobs.create_job(
+            tenant_id=TENANT, actor_id=api.sup, equipment_id=api.machine, title=title, description=None,
+            kind="corrective", priority="normal", due_date=TODAY, stops_machine=False, checkpoint_ids=[],
+            tasks=[{"label": "Tâche", "action": "clean"}], chef_user_id=api.sup,
+        ).value
+        api.db.execute(
+            "UPDATE maintenance.jobs SET status = 'closed', closed_at = NOW() WHERE id = %s", (job_id,)
+        )
+
+    sheet = load_workbook(io.BytesIO(api.client.get(f"/maintenance/history/journal/export?{PERIOD}").content)).active
+
+    titles = [row[4].value for row in sheet.iter_rows(min_row=3) if row[4].value]
+    for dangerous in ("=1+1", "+34", "-7", "@SUM(A1)"):
+        assert f"'{dangerous}" in titles, f"{dangerous!r} is not neutralised: {titles}"
+    # openpyxl also marks a cell it would treat as a formula; none should be left.
+    assert [c.data_type for row in sheet.iter_rows(min_row=3) for c in row if c.value].count("f") == 0
