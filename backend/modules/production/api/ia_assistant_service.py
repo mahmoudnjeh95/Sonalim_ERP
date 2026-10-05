@@ -1,4 +1,4 @@
-"""The production floor's "Assistance IA" chat: a Groq (Llama) conversation grounded in
+"""The production floor's "Assistance IA" chat: a Claude or Groq (Llama) conversation grounded in
 this tenant's own production statistics via function-calling, never free-form.
 
 The model never sees raw data up front. Each turn it chooses from a small set of
@@ -16,6 +16,8 @@ Conversations are private per user (tenant_id AND user_id on every row) -- there
 is no "team" or "shared" view of this data, by design; see the migration's own
 comment. tool_calls on each assistant message is kept for audit (what real
 figures backed this answer), mirroring core.audit_log for mutations.
+
+Set CLAUDE_API_KEY to use Claude, or GROQ_API_KEY for Groq (Llama).
 """
 from __future__ import annotations
 
@@ -24,6 +26,7 @@ import os
 import urllib.error
 import urllib.request
 
+import anthropic
 import psycopg
 from psycopg.types.json import Jsonb
 from ulid import ULID
@@ -36,6 +39,7 @@ from modules.production.api.team_performance_service import TeamPerformanceServi
 from modules.production.api.work_order_yield_service import WorkOrderYieldService
 from modules.warehouse.api.service import StockService
 
+CLAUDE_MODEL = "claude-opus-4-1"
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 GROQ_API_URL = "https://api.groq.com/openai/v1/chat/completions"
 REQUEST_TIMEOUT_SECONDS = 20
@@ -384,6 +388,68 @@ _TOOL_HANDLERS = {
 _TOOLS = [{"type": "function", "function": declaration} for declaration in TOOL_DECLARATIONS]
 
 
+def _call_llm(messages: list[dict]) -> dict:
+    """Call Claude or Groq based on configured API key."""
+    claude_key = os.environ.get("CLAUDE_API_KEY")
+    groq_key = os.environ.get("GROQ_API_KEY")
+
+    if claude_key:
+        return _call_claude(claude_key, messages)
+    elif groq_key:
+        return _call_groq(groq_key, messages)
+    else:
+        raise IaAssistantUnavailable("neither CLAUDE_API_KEY nor GROQ_API_KEY is configured")
+
+
+def _call_claude(api_key: str, messages: list[dict]) -> dict:
+    """Call Claude API with tool support."""
+    client = anthropic.Anthropic(api_key=api_key)
+    try:
+        # Extract system message from messages if present
+        system_msg = ""
+        filtered_messages = messages
+        if messages and messages[0].get("role") == "system":
+            system_msg = messages[0]["content"]
+            filtered_messages = messages[1:]
+
+        response = client.messages.create(
+            model=CLAUDE_MODEL,
+            max_tokens=1024,
+            temperature=0.2,
+            system=system_msg or SYSTEM_INSTRUCTION_TEMPLATE.format(language="English"),
+            tools=TOOL_DECLARATIONS,
+            messages=filtered_messages,
+        )
+
+        # Extract text content and tool uses from Claude's response
+        text_content = ""
+        tool_uses = []
+        for block in response.content:
+            if hasattr(block, 'text'):
+                text_content = block.text
+            elif block.type == "tool_use":
+                tool_uses.append({
+                    "id": block.id,
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input),
+                    }
+                })
+
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": text_content or None,
+                        "tool_calls": tool_uses if tool_uses else None,
+                    }
+                }
+            ]
+        }
+    except anthropic.APIError as exc:
+        raise IaAssistantUnavailable(f"Claude request failed: {exc}") from exc
+
+
 def _call_groq(api_key: str, messages: list[dict]) -> dict:
     body = json.dumps(
         {
@@ -408,7 +474,7 @@ def _call_groq(api_key: str, messages: list[dict]) -> dict:
 
 
 def _run_turn(
-    connection: psycopg.Connection, *, tenant_id: str, api_key: str, history: list[dict], user_text: str, language: str
+    connection: psycopg.Connection, *, tenant_id: str, history: list[dict], user_text: str, language: str
 ) -> tuple[str, list[dict]]:
     messages = [
         {"role": "system", "content": SYSTEM_INSTRUCTION_TEMPLATE.format(language=language)},
@@ -418,7 +484,7 @@ def _run_turn(
     tool_trace: list[dict] = []
 
     for _ in range(MAX_TOOL_ITERATIONS):
-        payload = _call_groq(api_key, messages)
+        payload = _call_llm(messages)
         try:
             message = payload["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
@@ -574,14 +640,13 @@ def send_message(
     if _count_recent_user_messages(connection, tenant_id=tenant_id, user_id=user_id) >= MAX_MESSAGES_PER_USER_PER_DAY:
         raise IaAssistantRateLimited(f"{MAX_MESSAGES_PER_USER_PER_DAY} messages/day reached for this user")
 
-    api_key = os.environ.get("GROQ_API_KEY")
-    if not api_key:
-        raise IaAssistantUnavailable("GROQ_API_KEY is not configured")
+    if not os.environ.get("CLAUDE_API_KEY") and not os.environ.get("GROQ_API_KEY"):
+        raise IaAssistantUnavailable("neither CLAUDE_API_KEY nor GROQ_API_KEY is configured")
 
     history = _load_history_for_groq(connection, tenant_id=tenant_id, conversation_id=conversation_id)
     language = "French" if locale == "fr" else "English"
     answer_text, tool_trace = _run_turn(
-        connection, tenant_id=tenant_id, api_key=api_key, history=history, user_text=user_text, language=language
+        connection, tenant_id=tenant_id, history=history, user_text=user_text, language=language
     )
 
     _insert_message(connection, tenant_id=tenant_id, conversation_id=conversation_id, role="user", content=user_text, tool_calls=None)
