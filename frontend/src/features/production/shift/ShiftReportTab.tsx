@@ -18,6 +18,7 @@ import { FullscreenOverlay } from "./FullscreenOverlay";
 import { ShiftRail } from "./ShiftRail";
 import { DateNavigator } from "./DateNavigator";
 import { UnfinishedStrip } from "./UnfinishedStrip";
+import { ShiftDayList } from "./ShiftDayList";
 import { LineCardsSelector } from "./LineCardsSelector";
 import { ShiftCardsSelector } from "./ShiftCardsSelector";
 import type { OptionMap } from "./ShiftGrid";
@@ -100,6 +101,7 @@ export function ShiftReportTab() {
   const [openKeys, setOpenKeys] = useState<Set<SectionKey>>(new Set());
   const [wholeMaximized, setWholeMaximized] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [dayOpen, setDayOpen] = useState(false);
 
   // ---- reference data -------------------------------------------------------
   const reference = useShiftReferenceData(canView);
@@ -288,6 +290,30 @@ export function ShiftReportTab() {
 
             {/* Shift selection */}
             <ShiftCardsSelector value={shiftName} onChange={setShiftName} windows={windows} />
+
+            {/* Every line and shift of this date at once -- what the paper folder for the
+                day would show, including who last touched each report. */}
+            <div>
+              <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setDayOpen((v) => !v)}>
+                <CalendarDays className="h-4 w-4" />
+                {label(dayOpen ? T.hideDayOverview : T.dayOverview)}
+              </Button>
+              {dayOpen && (
+                <div className="mt-2">
+                  <ShiftDayList
+                    date={date}
+                    workCenters={(workCenters.data ?? []).map((w) => ({ id: w.id, name: w.code }))}
+                    windows={windows}
+                    currentShiftName={date === todayIso() ? currentShift(windows) : ""}
+                    onOpen={(line, name) => {
+                      setWorkCenterId(line);
+                      setShiftName(name);
+                      setDayOpen(false);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
 
             {/* Status badge */}
             {shift && <ShiftStatusBadge status={shift.status} />}

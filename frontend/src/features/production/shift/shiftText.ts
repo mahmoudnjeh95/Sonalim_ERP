@@ -216,4 +216,7 @@ export const T = {
   continueShift: L("Current shift", "Poste en cours"),
   newShift: L("New", "Nouveau"),
   backToDay: L("Back to the day", "Retour à la journée"),
+  dayOverview: L("The whole day", "Toute la journée"),
+  sectionsHandedIn: L("sections handed in", "sections rendues"),
+  hideDayOverview: L("Hide the day", "Masquer la journée"),
 } as const;
