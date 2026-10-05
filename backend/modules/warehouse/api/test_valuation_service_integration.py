@@ -121,3 +121,37 @@ def test_a_production_withdrawal_beyond_the_books_records_an_unvalued_shortfall(
     cost = ValuationService(db).cost_of_reference(tenant_id=TENANT, reference="production_report:X")
     assert (cost["cost"], cost["unvalued_quantity"]) == (400, 2)
     assert not [v for v in ValuationService(db).get_valuation(tenant_id=TENANT) if v.product_id == env["product"]]
+
+
+def test_two_receipts_in_one_transaction_do_not_share_a_timestamp(db, env):
+    """FIFO order is `received_at` then id. NOW() is the transaction's start time, so two
+    receipts in one transaction shared it and the order fell to the ULID tie-break, which
+    is not ordered inside a millisecond -- the newer layer could be drawn first."""
+    _receive(db, env, 10, unit_cost=100)
+    _receive(db, env, 10, unit_cost=150)
+
+    times = [
+        row[0]
+        for row in db.execute(
+            "SELECT received_at FROM warehouse.cost_layers WHERE tenant_id = %s AND product_id = %s ORDER BY received_at, id",
+            (TENANT, env["product"]),
+        ).fetchall()
+    ]
+
+    assert len(times) == 2
+    assert times[0] < times[1], "both layers share a timestamp: FIFO then depends on the id tie-break"
+
+
+def test_the_oldest_layer_is_drawn_first_whatever_the_ids(db, env):
+    """The ids decide nothing once the timestamps differ: 10 at 100 then 5 at 150."""
+    _receive(db, env, 10, unit_cost=100)
+    _receive(db, env, 10, unit_cost=150)
+    issued = StockService(db).issue_stock(
+        tenant_id=TENANT, product_id=env["product"], location_id=env["a"], quantity=15,
+        reference="shipment:TIE", actor_id=env["actor"], move_type="shipment",
+    )
+    assert isinstance(issued, Ok), issued
+
+    cost = ValuationService(db).cost_of_reference(tenant_id=TENANT, reference="shipment:TIE")
+    assert cost["cost"] == 10 * 100 + 5 * 150
+    assert _valuation(db, env["product"]).value == 5 * 150

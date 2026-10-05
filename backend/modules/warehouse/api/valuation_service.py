@@ -63,7 +63,11 @@ class ValuationService:
         self._connection.execute(
             f"""
             INSERT INTO warehouse.cost_layers ({_LAYER_COLUMNS})
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            -- clock_timestamp(), not NOW(): NOW() is the transaction's start time, so two
+            -- receipts in one transaction shared it and FIFO order fell to the `id`
+            -- tie-break -- and ULIDs are not ordered inside a millisecond, which could draw
+            -- the newer layer first and misprice what left stock.
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
             """,
             (str(ULID()), tenant_id, product_id, reference, move_type, quantity, quantity, cost),
         )
