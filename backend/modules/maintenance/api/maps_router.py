@@ -7,6 +7,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.maintenance.api.map_service import MapService
+from modules.maintenance.domain.uploads import read_capped
 
 # No prefix: included into modules/maintenance/api/router.py, which carries /maintenance.
 router = APIRouter(tags=["maintenance.maps"])
@@ -77,7 +78,7 @@ def create_view(
     tenant: TenantContext = Depends(require_permission("maintenance.manage_checkpoints")),
 ) -> dict:
     # A plain `def` (thread pool) like every other handler: the database work must not hold the event loop.
-    data = image.file.read()
+    data = read_capped(image.file)
     with get_connection() as connection:
         return _result(
             connection,
@@ -100,7 +101,12 @@ def update_view(
     image: UploadFile | None = File(default=None),
     tenant: TenantContext = Depends(require_permission("maintenance.manage_checkpoints")),
 ) -> dict:
-    data = image.file.read() if image is not None else None
+    # An empty multipart part (a form that always sends its file field) is refused by
+    # FastAPI's own validation before this runs, with a 422. Typing the parameter
+    # `UploadFile | str` would let it through, but FastAPI then reads the stream to decide
+    # which side of the union it is and a real upload arrives empty -- so the frontend
+    # leaves the field out instead (see updateEquipmentView in features/maintenance/api.ts).
+    data = read_capped(image.file) if image is not None else None
     mime = image.content_type if image is not None else None
     with get_connection() as connection:
         return _result(

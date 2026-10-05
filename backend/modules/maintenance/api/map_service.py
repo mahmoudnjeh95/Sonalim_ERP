@@ -7,11 +7,10 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.maintenance.api.spare_parts_service import checkpoint_parts, save_checkpoint_parts, validate_parts
 from modules.maintenance.domain.jobs import CHECK_ACTIONS
+from modules.maintenance.domain.uploads import ALLOWED_IMAGE_MIME, MAX_IMAGE_BYTES
 
+# Re-exported: both were defined here before they were shared with the routers' capped read.
 __all__ = ["MapService", "ALLOWED_IMAGE_MIME", "MAX_IMAGE_BYTES"]
-
-ALLOWED_IMAGE_MIME = {"image/jpeg", "image/png", "image/webp"}
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
 
 _VIEW_COLUMNS = "id, equipment_id, label, sort_order, image_mime, updated_at"
 _CHECKPOINT_COLUMNS = (

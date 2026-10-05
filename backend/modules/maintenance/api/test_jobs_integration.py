@@ -862,3 +862,49 @@ def test_no_job_is_raised_on_an_archived_machine(db, ctx):
 
     assert isinstance(refused, Err)
     assert refused.code == "EQUIPMENT_ARCHIVED"
+
+
+def test_cancelling_both_stopping_jobs_puts_a_broken_machine_back_down(db, ctx):
+    """Two jobs stopped the same broken machine. The second found it already in
+    maintenance and moved nothing, but it must still remember the machine was down:
+    cancelling both leaves it down, never shown as running on the production board."""
+    EquipmentService(db).transition_status(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, new_status="down")
+    jobs = JobService(db)
+    first = _create(jobs, ctx, stops_machine=True).value
+    second = _create(jobs, ctx, stops_machine=True).value
+    for job_id in (first, second):
+        check_id = job_detail(db, T, job_id, TODAY)["checks"][0]["id"]
+        assert isinstance(_entry(jobs, ctx, job_id, check_id), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+
+    # The first cancel releases nothing: the other job still holds the machine.
+    assert isinstance(jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=first, reason="Doublon"), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+
+    assert isinstance(jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=second, reason="Mauvaise équipe"), Ok)
+
+    assert _equipment_status(db, ctx.machine) == "down"
+    cancelled = job_detail(db, T, second, TODAY)["timeline"][-1]
+    assert (cancelled["payload"]["equipment_restarted"], cancelled["payload"]["equipment_status"]) == (False, "down")
+
+
+def test_cancel_claims_only_the_machine_move_it_really_made(db, ctx):
+    """Someone released the machine by hand while the job ran (maintenance -> operational,
+    the one exit the status rules allow). The cancel then moves nothing, and the timeline
+    and the audit must not claim it put the machine back down."""
+    EquipmentService(db).transition_status(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, new_status="down")
+    jobs = JobService(db)
+    job_id = _create(jobs, ctx, stops_machine=True).value
+    check_id = job_detail(db, T, job_id, TODAY)["checks"][0]["id"]
+    assert isinstance(_entry(jobs, ctx, job_id, check_id), Ok)
+    assert _equipment_status(db, ctx.machine) == "maintenance"
+    # Released by hand: the cancel's own release then finds nothing to put back.
+    EquipmentService(db).transition_status(tenant_id=T, actor_id=ctx.sup, equipment_id=ctx.machine, new_status="operational")
+
+    assert isinstance(jobs.cancel(tenant_id=T, actor_id=ctx.sup, job_id=job_id, reason="Mauvaise équipe"), Ok)
+
+    assert _equipment_status(db, ctx.machine) == "operational"
+    [cancelled] = [e for e in job_detail(db, T, job_id, TODAY)["timeline"] if e["kind"] == "cancelled"]
+    # This cancel neither restarted nor downed it -- someone else had already moved it.
+    assert cancelled["payload"]["equipment_restarted"] is False
+    assert cancelled["payload"]["equipment_status"] is None

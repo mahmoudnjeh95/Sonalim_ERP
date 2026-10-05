@@ -7,6 +7,12 @@ from core.domain.result import Err, Ok, Result
 
 INTERVAL_UNITS = ("day", "week", "month")
 
+# A machine's round every 100 years is already past any plant's horizon, and beyond this the
+# date math runs out of year (date's maximum is 9999), which would surface as an opaque 500
+# instead of a refusal the user can read. Same ceiling for every unit, the strictest case
+# being "month" (1200 months = 100 years from a start date near the end of date's range).
+MAX_INTERVAL_VALUE = 1200
+
 
 def validate_program(*, interval_value: int, interval_unit: str, lead_days: int, name: str) -> Result[None]:
     if interval_value < 1:
@@ -14,6 +20,12 @@ def validate_program(*, interval_value: int, interval_unit: str, lead_days: int,
             "INVALID_INTERVAL",
             "interval_value must be at least 1",
             "l'intervalle doit être d'au moins 1",
+        )
+    if interval_value > MAX_INTERVAL_VALUE:
+        return Err(
+            "INVALID_INTERVAL",
+            f"interval_value cannot exceed {MAX_INTERVAL_VALUE}",
+            f"l'intervalle ne peut pas dépasser {MAX_INTERVAL_VALUE}",
         )
     if interval_unit not in INTERVAL_UNITS:
         return Err(

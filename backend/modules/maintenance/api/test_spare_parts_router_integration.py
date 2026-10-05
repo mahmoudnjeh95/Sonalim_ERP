@@ -221,3 +221,4 @@ def test_a_view_photo_is_added_and_replaced_over_http(api):
     )
     assert replaced.status_code == 200, replaced.text
     assert api.client.get(f"/maintenance/views/{view_id}/image").content == JPEG_BYTES + b"1"
+

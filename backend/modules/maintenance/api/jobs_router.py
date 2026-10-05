@@ -11,6 +11,7 @@ from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.maintenance.api.job_queries import entry_photo, job_detail, list_jobs
 from modules.maintenance.api.job_service import JobService
 from modules.maintenance.api.notifications import PLAN_PERMISSION
+from modules.maintenance.domain.uploads import read_capped
 
 # No prefix: included into modules/maintenance/api/router.py, which carries /maintenance.
 router = APIRouter(tags=["maintenance.jobs"])
@@ -204,7 +205,8 @@ def record_check_entry(
 
     A plain `def`, run in the thread pool: the database work (and the job detail it
     returns) must not hold the event loop while a photo comes in."""
-    photo_part = (photo.file.read(), photo.content_type or "") if photo is not None else None
+    # Capped: a body far over the limit is refused by the service without ever being held whole.
+    photo_part = (read_capped(photo.file), photo.content_type or "") if photo is not None else None
     with get_connection() as connection:
         result = JobService(connection).record_entry(
             tenant_id=tenant.tenant_id,

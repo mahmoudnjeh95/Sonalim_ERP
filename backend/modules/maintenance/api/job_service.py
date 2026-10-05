@@ -489,13 +489,21 @@ class JobService:
                 if isinstance(moved, Err):
                     return moved
                 stopped = moved.value
-            # The status the job took the machine from: a cancel puts a broken machine back down.
+                if not stopped:
+                    # Another stopping job already holds the machine in `maintenance`, so that
+                    # is all this one can see. What matters on cancel is the status the machine
+                    # was really taken from, which the job that stopped it recorded.
+                    status_before = self._status_before_other_stop(tenant_id, job)
+            # The status the job found the machine in: a cancel puts a broken machine back down.
+            # Recorded even when this job moved nothing (another stopping job already held the
+            # machine in `maintenance`), because cancelling the last of them still has to know
+            # the machine was down -- `status_before` then names what that earlier job found.
             self._event(
                 tenant_id,
                 job.id,
                 actor_id,
                 "started",
-                {"equipment_stopped": stopped, "equipment_status_before": status_before if stopped else None},
+                {"equipment_stopped": stopped, "equipment_status_before": status_before},
             )
 
         payload = {
@@ -657,6 +665,9 @@ class JobService:
         if restarted and self._status_before_stop(job.id) == "down":
             # Cancelled, the job repaired nothing: the machine it took down is down again
             # (through operational -- maintenance cannot go straight to down).
+            # It always moves: the release above just put it to `operational`, under the
+            # machine's row lock held for the rest of this transaction, so nothing can sit
+            # between the two moves.
             downed = self._move_equipment(tenant_id, actor_id, job.equipment_id, to_status="down", only_from=("operational",))
             if isinstance(downed, Err):
                 return downed
@@ -871,6 +882,25 @@ class JobService:
     def _equipment_status(self, tenant_id: str, equipment_id: str) -> str | None:
         row = self._connection.execute(
             "SELECT status FROM maintenance.equipment WHERE id = %s AND tenant_id = %s", (equipment_id, tenant_id)
+        ).fetchone()
+        return row[0] if row is not None else None
+
+    def _status_before_other_stop(self, tenant_id: str, job: _Job) -> str | None:
+        """What the other open stopping job on this machine found when it took it, so a job
+        that stopped nothing still knows whether the machine was `down`. None when no such
+        job recorded one (a job started before this was recorded, or a plain `operational`)."""
+        row = self._connection.execute(
+            """
+            SELECT e.payload->>'equipment_status_before'
+            FROM maintenance.job_events e
+            JOIN maintenance.jobs j ON j.id = e.job_id
+            WHERE e.kind = 'started' AND e.payload->>'equipment_status_before' IS NOT NULL
+              AND j.tenant_id = %s AND j.equipment_id = %s AND j.id <> %s
+              AND j.stops_machine AND j.status NOT IN ('closed', 'cancelled')
+            ORDER BY e.at DESC, e.id DESC
+            LIMIT 1
+            """,
+            (tenant_id, job.equipment_id, job.id),
         ).fetchone()
         return row[0] if row is not None else None
 
