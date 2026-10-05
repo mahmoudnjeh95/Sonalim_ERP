@@ -76,9 +76,12 @@ class ShiftReportService:
 
     # ---- reading -----------------------------------------------------------
 
-    def _load_header(self, tenant_id: str, shift_report_id: str) -> dict | None:
+    def _load_header(self, tenant_id: str, shift_report_id: str, *, for_update: bool = False) -> dict | None:
+        """The shift's header. `for_update` locks the row for the rest of the transaction,
+        for a caller whose decision must still hold when it writes (see delete_shift)."""
         row = self._connection.execute(
-            f"SELECT {_HEADER} FROM production.shift_reports WHERE id = %s AND tenant_id = %s",
+            f"SELECT {_HEADER} FROM production.shift_reports WHERE id = %s AND tenant_id = %s"
+            + (" FOR UPDATE" if for_update else ""),
             (shift_report_id, tenant_id),
         ).fetchone()
         return _header_dict(row) if row else None
@@ -245,10 +248,15 @@ class ShiftReportService:
         shift is what posts it (ShiftStockService is only ever called from
         ShiftValidationService), and a validated shift that was later reversed lands back on
         'returned' with its stock already undone. So the row and everything under it can
-        simply be removed; the schema cascades sections, revisions, runs, packing rows,
-        waste, stops and energy (0047, 0048).
+        simply be removed: every table under a shift report cascades (sections, revisions,
+        runs, packing rows, waste, stops, energy, staffing, silo states, mould washes,
+        packet checks, versements and rebroyat versements), which
+        `test_deleting_a_shift_leaves_nothing_behind` holds to.
         """
-        header = self._load_header(tenant_id, shift_report_id)
+        # Locked for the rest of the transaction, like the validation service's own reads:
+        # the status this check sees must still be the status at the DELETE, or a shift
+        # validated in between -- which posts to stock -- would be removed anyway.
+        header = self._load_header(tenant_id, shift_report_id, for_update=True)
         if header is None:
             return Err(
                 "NOT_FOUND",

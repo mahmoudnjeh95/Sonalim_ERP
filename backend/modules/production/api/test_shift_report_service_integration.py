@@ -556,3 +556,53 @@ def test_deleting_a_shift_is_audited(db, env):
 def test_deleting_an_unknown_shift_is_not_found(db, env):
     result = ShiftReportService(db).delete_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id="nope")
     assert isinstance(result, Err) and result.code == "NOT_FOUND"
+
+
+def test_delete_reads_the_shift_status_under_a_row_lock(db, env):
+    """The status check and the DELETE must see the same row. Without `FOR UPDATE` a
+    concurrent validation -- which posts to stock -- could land between them, and the
+    delete would remove a shift whose stock has already moved. Asserted by capturing the
+    statement the delete runs, because a second connection cannot join this test's
+    rolled-back transaction."""
+    shift_id = _open(db, env)
+    statements: list[str] = []
+    real_execute = db.execute
+
+    def spy(query, params=None, *args, **kwargs):
+        statements.append(str(query))
+        return real_execute(query, params, *args, **kwargs) if params is not None else real_execute(query, *args, **kwargs)
+
+    db.execute = spy  # type: ignore[method-assign]
+    try:
+        assert isinstance(
+            ShiftReportService(db).delete_shift(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id), Ok
+        )
+    finally:
+        db.execute = real_execute  # type: ignore[method-assign]
+
+    reads = [q for q in statements if "FROM production.shift_reports" in q and "DELETE" not in q]
+    assert reads, "the delete never read the shift header"
+    assert all("FOR UPDATE" in q for q in reads), f"the header was read without FOR UPDATE: {reads}"
+
+
+def test_deleting_a_shift_leaves_nothing_behind(db, env):
+    """delete_shift relies entirely on the schema's cascades. A table added under a shift
+    report without ON DELETE CASCADE (or SET NULL) would silently orphan its rows or block
+    the delete, so the rule is asserted here rather than left to the next reader."""
+    blocking = db.execute(
+        """
+        WITH RECURSIVE under_a_shift(child, delete_rule) AS (
+            SELECT conrelid::regclass::text, confdeltype
+            FROM pg_constraint
+            WHERE contype = 'f' AND confrelid = 'production.shift_reports'::regclass
+            UNION
+            SELECT c.conrelid::regclass::text, c.confdeltype
+            FROM pg_constraint c
+            JOIN under_a_shift u ON c.confrelid = u.child::regclass
+            WHERE c.contype = 'f'
+        )
+        SELECT child, delete_rule FROM under_a_shift WHERE delete_rule NOT IN ('c', 'n')
+        """
+    ).fetchall()
+
+    assert blocking == [], f"these tables would block or orphan a shift delete: {blocking}"
