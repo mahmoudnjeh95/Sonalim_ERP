@@ -105,7 +105,7 @@ TOOL_DECLARATIONS = [
             "shifts dosed outside their recipe's water range. Use for any question "
             "about yield, rendement, water dosage or semolina flow rate."
         ),
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
@@ -121,7 +121,7 @@ TOOL_DECLARATIONS = [
             "waste, totalled per team (or across all teams). Use for questions comparing "
             "or evaluating team output, waste or downtime."
         ),
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
@@ -136,7 +136,7 @@ TOOL_DECLARATIONS = [
             "Output totals and downtime share, per machine, over a period. Use for "
             "questions about which machine ran well or lost time."
         ),
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
@@ -147,7 +147,7 @@ TOOL_DECLARATIONS = [
     {
         "name": "get_downtime_reasons",
         "description": "Minutes of stoppage per stated reason, across validated shifts. Use for questions about why the line stopped.",
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "date_from": {"type": "string", "description": "ISO date (YYYY-MM-DD), inclusive lower bound. Omit for no lower bound."},
@@ -164,7 +164,7 @@ TOOL_DECLARATIONS = [
             "date_from/date_to for this one. Use for any question about how much of a "
             "finished product is in stock, available to ship, or reserved."
         ),
-        "parameters": {
+        "input_schema": {
             "type": "object",
             "properties": {
                 "product_name": {
