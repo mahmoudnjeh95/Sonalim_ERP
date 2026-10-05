@@ -226,3 +226,31 @@ def test_a_validator_edit_needs_the_validate_right_and_a_reason(world):
     revisions = client.get(f"/production/shift-reports/{shift_id}/sections/energy/revisions").json()
     assert revisions[0]["edited_by_validator"] is True and revisions[0]["reason"] == "decimal slipped"
     assert revisions[1]["edited_by_validator"] is False
+
+
+# ---- deleting ----------------------------------------------------------
+
+
+def test_delete_needs_its_own_permission_and_only_works_before_submission(world):
+    world["grant"]("production.shift.view", "production.shift.edit.energy")
+    shift_id = _open(world)
+    client = world["client"]
+
+    forbidden = client.delete(f"/production/shift-reports/{shift_id}")
+    assert forbidden.status_code == 403
+
+    world["grant"]("production.shift.delete")
+    world["db"].execute("UPDATE production.shift_reports SET status = 'submitted' WHERE id = %s", (shift_id,))
+    blocked = client.delete(f"/production/shift-reports/{shift_id}")
+    assert blocked.status_code == 409 and blocked.json()["detail"]["code"] == "DELETE_NOT_ALLOWED"
+
+    world["db"].execute("UPDATE production.shift_reports SET status = 'open' WHERE id = %s", (shift_id,))
+    ok = client.delete(f"/production/shift-reports/{shift_id}")
+    assert ok.status_code == 200 and ok.json()["deleted"] is True
+    assert client.get(f"/production/shift-reports/{shift_id}").status_code == 404
+
+
+def test_deleting_an_unknown_shift_is_a_404(world):
+    world["grant"]("production.shift.delete")
+    response = world["client"].delete("/production/shift-reports/nope")
+    assert response.status_code == 404

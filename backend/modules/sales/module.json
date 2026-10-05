@@ -1,11 +1,11 @@
 {
   "name": "sales",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "depends": ["core", "warehouse"],
   "optional_depends": [],
   "provides_api": ["SalesOrderService"],
   "publishes_events": ["sales.order.confirmed"],
-  "subscribes_events": [],
+  "subscribes_events": ["warehouse.shipment.shipped"],
   "migrations_path": "./migrations",
   "permissions": ["sales.view_orders", "sales.manage_orders", "sales.admin_orders"]
 }

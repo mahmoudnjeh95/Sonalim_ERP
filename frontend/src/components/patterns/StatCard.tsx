@@ -1,9 +1,10 @@
-import { useEffect, useRef, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { animate, motion, useMotionValue, useTransform } from "framer-motion";
 import { Card } from "../ui/card";
 import { cn } from "../../lib/utils";
 import { currentLocale } from "../../lib/i18n";
 import { pluralizeUnit } from "../../lib/units";
+import { FIGURE_STEPS, fitFigureStep } from "./statCardFit";
 
 function AnimatedNumber({ value, decimals = 0 }: { value: number; decimals?: number }) {
   const motionValue = useMotionValue(0);
@@ -23,6 +24,44 @@ function AnimatedNumber({ value, decimals = 0 }: { value: number; decimals?: num
   }, [value, motionValue]);
 
   return <motion.span>{rounded}</motion.span>;
+}
+
+/**
+ * Shrinks the figure's type until it fits the card, so a long amount is never
+ * cut off or rounded away. Without this the figure -- one unbreakable line --
+ * spills past the card's right edge and clips its unit on narrow cards
+ * (measured at +52px on a 1280px window, +35px at 1366px).
+ */
+function useFigureFit(deps: unknown[]) {
+  const boxRef = useRef<HTMLParagraphElement>(null);
+  const [step, setStep] = useState(0);
+  // Read in the measure effect without making it re-run on every step change,
+  // which would otherwise loop: measure -> setStep -> measure.
+  const stepRef = useRef(step);
+  stepRef.current = step;
+
+  useLayoutEffect(() => {
+    const box = boxRef.current;
+    if (!box) return;
+
+    const measure = () => {
+      // scrollWidth is the figure's full width even while it overflows; the
+      // parent's clientWidth is the room it actually has.
+      const available = box.parentElement?.clientWidth ?? 0;
+      const next = fitFigureStep(box.scrollWidth, available, stepRef.current);
+      setStep((current) => (current === next ? current : next));
+    };
+
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(box);
+    if (box.parentElement) observer.observe(box.parentElement);
+    return () => observer.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, deps);
+
+  return { boxRef, step };
 }
 
 export function StatCard({
@@ -46,6 +85,9 @@ export function StatCard({
   /** Fraction digits to display. Defaults to 0 — a whole-number count or amount. */
   decimals?: number;
 }) {
+  const { boxRef, step } = useFigureFit([value, prefix, unit, decimals, label]);
+  const atSmallestStep = step === FIGURE_STEPS.length - 1;
+
   return (
     <Card className="flex items-center gap-4 p-4">
       <div
@@ -60,8 +102,19 @@ export function StatCard({
       >
         {icon}
       </div>
-      <div>
-        <p className="text-2xl font-semibold tabular-nums tracking-tight">
+      {/* min-w-0 lets this column shrink instead of pushing the figure out of the
+          card -- a flex item's automatic minimum size is its content otherwise. */}
+      <div className="min-w-0 flex-1">
+        <p
+          ref={boxRef}
+          className={cn(
+            "font-semibold tabular-nums tracking-tight",
+            FIGURE_STEPS[step].className,
+            // Down to the smallest step the figure stays on one line; at that point
+            // the unit is allowed to wrap rather than the number being cut off.
+            atSmallestStep ? "whitespace-normal" : "whitespace-nowrap",
+          )}
+        >
           {value === null ? (
             "—"
           ) : (
@@ -72,7 +125,9 @@ export function StatCard({
             </>
           )}
         </p>
-        <p className="text-xs text-muted-foreground">{label}</p>
+        <p className="truncate text-xs text-muted-foreground" title={label}>
+          {label}
+        </p>
       </div>
     </Card>
   );

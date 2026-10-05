@@ -18,14 +18,31 @@ MODULE_LABELS = {
     "finance": "Finance",
     "hr": "Ressources humaines",
     "maintenance": "Maintenance",
+    "payroll": "Paie",
     "procurement": "Achats",
     "production": "Production",
     "qc": "Qualité",
+    "scan": "Numérisation",
     "sales": "Ventes",
     "warehouse": "Entrepôt",
 }
 
 ADMINISTRATOR_ROLE_CODE = "administrateur"
+
+# Permissions held back from their module's everyday role, for the same reason admin_*
+# codes are: they're granted one at a time, deliberately. The admin_* prefix rule below
+# can't express these, and renaming them to admin_* isn't worth it here: the permission
+# string is what's stored in core.role_permissions, so a rename needs a migration to
+# carry the existing grants over (see production/0070 for one that did).
+#
+#   hr.view_sensitive        personal data: salary, national id, bank details.
+#   hr.view/manage_payroll   running payroll is the payroll role's job, not everyday HR's;
+#                            anyone who does both jobs gets both roles.
+DELIBERATE_GRANT_PERMISSIONS = {
+    "hr.view_sensitive",
+    "hr.view_payroll",
+    "hr.manage_payroll",
+}
 
 # Permissions core itself defines that aren't tied to any business module.
 CORE_PERMISSIONS = [
@@ -75,7 +92,9 @@ def default_role_catalog() -> list[dict[str, object]]:
         permissions = [
             entry["permission"]
             for entry in catalog
-            if entry["module"] == module and not entry["permission"].split(".", 1)[1].startswith("admin_")
+            if entry["module"] == module
+            and not entry["permission"].split(".", 1)[1].startswith("admin_")
+            and entry["permission"] not in DELIBERATE_GRANT_PERMISSIONS
         ]
         if not permissions:
             continue

@@ -32,7 +32,7 @@ export function DataCoveragePanel() {
           </span>
           <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180" aria-hidden />
         </summary>
-        <ul className="grid gap-4 border-t border-border p-5 sm:grid-cols-2">
+        <ul className="grid grid-cols-1 gap-4 border-t border-border p-5 sm:grid-cols-2">
           {ITEMS.map(({ key, illustration: Illustration, title, reason }) => (
             <li key={key} className="flex items-start gap-3">
               <Illustration aria-hidden className="h-auto w-28 shrink-0" />

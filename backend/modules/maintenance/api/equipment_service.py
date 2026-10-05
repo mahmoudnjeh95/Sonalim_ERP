@@ -225,6 +225,22 @@ class EquipmentService:
                 "UPDATE maintenance.equipment SET archived_at = NOW() WHERE id = %s RETURNING archived_at",
                 (equipment_id,),
             ).fetchone()[0]
+            # A retired machine gets no more preventive jobs. Un-archiving does not restart
+            # its programs: switching one back on by hand skips the occurrences missed.
+            paused = self._connection.execute(
+                "UPDATE maintenance.programs SET active = false WHERE tenant_id = %s AND equipment_id = %s AND active RETURNING id",
+                (tenant_id, equipment_id),
+            ).fetchall()
+            for (program_id,) in paused:
+                record_audit(
+                    self._connection,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    action="program.updated",
+                    entity_type="maintenance_program",
+                    entity_id=program_id,
+                    payload={"active": False, "reason": "equipment_archived"},
+                )
         else:
             self._connection.execute("UPDATE maintenance.equipment SET archived_at = NULL WHERE id = %s", (equipment_id,))
             archived_at = None

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
-import { useSearchParams } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion, useReducedMotion } from "framer-motion";
-import { CalendarDays, ClipboardList, Lock, Maximize2, RotateCcw, ShieldCheck } from "lucide-react";
+import { CalendarDays, ClipboardList, Lock, Maximize2, RotateCcw, ScanLine, ShieldCheck, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
@@ -10,31 +10,42 @@ import { cn } from "../../../lib/utils";
 import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent } from "../../../components/ui/card";
-import { Input } from "../../../components/ui/input";
+import { Select } from "../../../components/ui/select";
+import { REPORT_OPTIONS_QUERY_KEY, listReportOptions, optionsFor } from "../../../lib/reportOptions";
 import { Label as FieldLabel } from "../../../components/ui/label";
 import { SectionCard } from "./SectionCard";
 import { FullscreenOverlay } from "./FullscreenOverlay";
 import { ShiftRail } from "./ShiftRail";
 import { DateNavigator } from "./DateNavigator";
+import { UnfinishedStrip } from "./UnfinishedStrip";
+import { ShiftDayList } from "./ShiftDayList";
 import { LineCardsSelector } from "./LineCardsSelector";
 import { ShiftCardsSelector } from "./ShiftCardsSelector";
 import type { OptionMap } from "./ShiftGrid";
 import { useShiftReferenceData } from "./useShiftReferenceData";
 import type { ShiftWindowRow } from "../board/api";
 import { SECTIONS } from "./sectionConfig";
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../../components/ui/dialog";
+import { shiftContext } from "./shiftDerived";
 import {
   SECTION_KEYS,
   SHIFT_REPORTS_QUERY_KEY,
   getShiftReport,
   listShiftReports,
+  deleteShiftReport,
   openShiftReport,
   updateShiftHeader,
+  SHIFT_ROLE_PEOPLE_QUERY_KEY,
+  listShiftRolePeople,
   type HeaderFields,
+  type Row,
   type SectionKey,
   type ShiftReport,
 } from "./shiftApi";
 import { T, useLabel } from "./shiftText";
 import { AppLoader } from "../../../components/patterns/AppLoader";
+import { ShiftPaperPages } from "../../scan/ShiftPaperPages";
+import { S as SCAN_TEXT } from "../../scan/scanText";
 
 const DONE = new Set(["submitted", "nothing_to_report"]);
 
@@ -60,12 +71,18 @@ function currentShift(windows: ShiftWindowRow[]): string {
   return (inside ?? windows[0])?.shift ?? "";
 }
 
-const HEADER_FIELDS: { key: keyof HeaderFields; label: typeof T.team }[] = [
+/**
+ * The names on the paper header. Each is chosen from a list rather than typed: the team from
+ * the tenant's teams (Report options), the four jobs from the people HR has in the positions
+ * mapped to that role (Production settings). A name a report already carries stays on its
+ * list, so opening an old shift never silently blanks who ran it.
+ */
+const HEADER_FIELDS: { key: keyof HeaderFields; label: typeof T.team; role?: string }[] = [
   { key: "team", label: T.team },
-  { key: "conducteur", label: T.conducteur },
-  { key: "agent_fabrication", label: T.agentFabrication },
-  { key: "machiniste", label: T.machiniste },
-  { key: "aide_machiniste", label: T.aideMachiniste },
+  { key: "conducteur", label: T.conducteur, role: "conducteur" },
+  { key: "agent_fabrication", label: T.agentFabrication, role: "agent_fabrication" },
+  { key: "machiniste", label: T.machiniste, role: "machiniste" },
+  { key: "aide_machiniste", label: T.aideMachiniste, role: "aide_machiniste" },
 ];
 
 export function ShiftReportTab() {
@@ -73,6 +90,7 @@ export function ShiftReportTab() {
   const token = session!.token;
   const label = useLabel();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const canView = hasPermission("production.shift.view");
 
   // A link from an OF page names the line, date and shift to open; without one it opens on today and the clock's shift.
@@ -82,6 +100,8 @@ export function ShiftReportTab() {
   const [shiftName, setShiftName] = useState(() => params.get("shift") ?? "");
   const [openKeys, setOpenKeys] = useState<Set<SectionKey>>(new Set());
   const [wholeMaximized, setWholeMaximized] = useState(false);
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const [dayOpen, setDayOpen] = useState(false);
 
   // ---- reference data -------------------------------------------------------
   const reference = useShiftReferenceData(canView);
@@ -112,6 +132,18 @@ export function ShiftReportTab() {
   });
   const shift = detail.data;
 
+  // What the sections work out from each other: the OF production ran (the packing lots start on
+  // it) and the shift's semoule flow (the versements over the hours the stops left). Read from the
+  // saved sections, so a section card never has to know about the others.
+  const context = useMemo(() => {
+    const rowsOf = (key: string, part: string) => {
+      const payload = shift?.sections.find((section) => section.key === key)?.payload;
+      return Array.isArray(payload?.[part]) ? (payload![part] as Row[]) : [];
+    };
+    const window = windows.find((w) => w.shift.trim().toLowerCase() === shiftName.trim().toLowerCase());
+    return shiftContext(rowsOf, window?.length_minutes ?? null);
+  }, [shift, windows, shiftName]);
+
   const refresh = () => queryClient.invalidateQueries({ queryKey: SHIFT_REPORTS_QUERY_KEY });
 
   // Prefetch the shift report when inputs change, so it's ready by the time the user needs it
@@ -134,6 +166,18 @@ export function ShiftReportTab() {
 
   const fail = (error: unknown) =>
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
+
+  // Removing a report opened by mistake, or returned and not worth redoing. The server
+  // refuses anything submitted or validated (409): that has posted to stock.
+  const remove = useMutation({
+    mutationFn: () => deleteShiftReport(token, shift!.id),
+    onSuccess: () => {
+      toast.success(label(T.deleted));
+      setConfirmDelete(false);
+      refresh();
+    },
+    onError: fail,
+  });
 
   const open = useMutation({
     mutationFn: () => openShiftReport(token, { work_center_id: workCenterId, report_date: date, shift: shiftName }),
@@ -184,17 +228,50 @@ export function ShiftReportTab() {
 
   return (
     <div className="space-y-5">
-      <div>
-        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
-          <ClipboardList className="h-5 w-5 text-primary" />
-          {label(T.title)}
-        </h2>
-        <p className="text-sm text-muted-foreground">{label(T.subtitle)}</p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight">
+            <ClipboardList className="h-5 w-5 text-primary" />
+            {label(T.title)}
+          </h2>
+          <p className="text-sm text-muted-foreground">{label(T.subtitle)}</p>
+        </div>
+        <div className="flex gap-2">
+          {shift && (shift.status === "open" || shift.status === "returned") && hasPermission("production.shift.delete") && (
+            <Button variant="outline" size="sm" onClick={() => setConfirmDelete(true)} disabled={remove.isPending}>
+              <Trash2 className="h-4 w-4" />
+              {label(T.deleteShift)}
+            </Button>
+          )}
+          {shift && (hasPermission("scan.view_scans") || hasPermission("scan.use_scanner")) && <ShiftPaperPages shiftReportId={shift.id} />}
+          {hasPermission("scan.use_scanner") && shift?.status !== "validated" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                navigate(`/production?tab=scan&line=${encodeURIComponent(workCenterId)}&date=${date}&shift=${encodeURIComponent(shiftName)}`)
+              }
+            >
+              <ScanLine className="h-4 w-4" />
+              {label(SCAN_TEXT.importFromPhotos)}
+            </Button>
+          )}
+        </div>
       </div>
 
       <Card>
         <CardContent className="space-y-4 py-4">
           <div className="space-y-3">
+            {/* A way back into work left unfinished on any date, before picking one by hand. */}
+            <UnfinishedStrip
+              workCenterName={(id) => workCenters.data?.find((w) => w.id === id)?.code ?? id}
+              onPick={(picked) => {
+                setDate(picked.report_date.slice(0, 10));
+                setWorkCenterId(picked.work_center_id);
+                setShiftName(picked.shift);
+              }}
+            />
+
             {/* Date with arrows + modal picker */}
             <div>
               <p className="mb-2 text-xs text-muted-foreground">{label(T.date)}</p>
@@ -213,6 +290,30 @@ export function ShiftReportTab() {
 
             {/* Shift selection */}
             <ShiftCardsSelector value={shiftName} onChange={setShiftName} windows={windows} />
+
+            {/* Every line and shift of this date at once -- what the paper folder for the
+                day would show, including who last touched each report. */}
+            <div>
+              <Button variant="ghost" size="sm" className="-ml-2" onClick={() => setDayOpen((v) => !v)}>
+                <CalendarDays className="h-4 w-4" />
+                {label(dayOpen ? T.hideDayOverview : T.dayOverview)}
+              </Button>
+              {dayOpen && (
+                <div className="mt-2">
+                  <ShiftDayList
+                    date={date}
+                    workCenters={(workCenters.data ?? []).map((w) => ({ id: w.id, name: w.code }))}
+                    windows={windows}
+                    currentShiftName={date === todayIso() ? currentShift(windows) : ""}
+                    onOpen={(line, name) => {
+                      setWorkCenterId(line);
+                      setShiftName(name);
+                      setDayOpen(false);
+                    }}
+                  />
+                </div>
+              )}
+            </div>
 
             {/* Status badge */}
             {shift && <ShiftStatusBadge status={shift.status} />}
@@ -279,6 +380,7 @@ export function ShiftReportTab() {
                   open={openKeys.has(def.key)}
                   onToggle={() => toggle(def.key)}
                   onChanged={refresh}
+                  context={context}
                 />
               );
             })}
@@ -312,6 +414,7 @@ export function ShiftReportTab() {
                     open={openKeys.has(def.key)}
                     onToggle={() => toggle(def.key)}
                     onChanged={refresh}
+                    context={context}
                   />
                 );
               })}
@@ -319,6 +422,24 @@ export function ShiftReportTab() {
           </div>
         </FullscreenOverlay>
       )}
+
+      <Dialog open={confirmDelete} onOpenChange={setConfirmDelete}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{label(T.deleteShift)}</DialogTitle>
+            <DialogDescription>{label(T.confirmDeleteShift)}</DialogDescription>
+          </DialogHeader>
+          <div className="flex justify-end gap-2">
+            <Button variant="outline" onClick={() => setConfirmDelete(false)} disabled={remove.isPending}>
+              {label(T.cancel)}
+            </Button>
+            <Button variant="destructive" onClick={() => remove.mutate()} disabled={remove.isPending}>
+              <Trash2 className="h-4 w-4" />
+              {label(T.deleteShift)}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -350,24 +471,29 @@ function HeaderNames({
   const [values, setValues] = useState<Record<string, string>>(() =>
     Object.fromEntries(HEADER_FIELDS.map((f) => [f.key, shift[f.key] ?? ""])),
   );
-  // What earlier shifts put in each field, most used first, offered as suggestions.
-  const earlier = useQuery({
-    queryKey: [...SHIFT_REPORTS_QUERY_KEY, "names"],
-    queryFn: () => listShiftReports(session!.token),
+  // The teams the tenant has configured, and the people HR has in each role's positions.
+  const reportOptions = useQuery({
+    queryKey: REPORT_OPTIONS_QUERY_KEY,
+    queryFn: () => listReportOptions(session!.token),
     staleTime: 5 * 60 * 1000,
   });
-  const suggestions = useMemo(() => {
-    const out: Record<string, string[]> = {};
-    for (const field of HEADER_FIELDS) {
-      const counts = new Map<string, number>();
-      for (const past of earlier.data ?? []) {
-        const value = past[field.key]?.trim();
-        if (value) counts.set(value, (counts.get(value) ?? 0) + 1);
-      }
-      out[field.key] = [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])).map(([v]) => v);
-    }
-    return out;
-  }, [earlier.data]);
+  const rolePeople = useQuery({
+    queryKey: SHIFT_ROLE_PEOPLE_QUERY_KEY,
+    queryFn: () => listShiftRolePeople(session!.token),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  /**
+   * What one field may be set to. A name the shift already carries is kept at the head of its
+   * list even when HR no longer offers it -- somebody who has left still ran that shift, and
+   * dropping them would rewrite what the report says.
+   */
+  const choicesFor = (field: (typeof HEADER_FIELDS)[number]): string[] => {
+    const current = (shift[field.key] ?? "").trim();
+    if (!field.role) return optionsFor(reportOptions.data ?? [], "team", current || null);
+    const names = (rolePeople.data?.people[field.role] ?? []).map((person) => person.name);
+    return current && !names.includes(current) ? [current, ...names] : names;
+  };
 
   const save = useMutation({
     mutationFn: (fields: HeaderFields) => updateShiftHeader(session!.token, shift.id, fields),
@@ -379,28 +505,32 @@ function HeaderNames({
   });
 
   return (
-    <div className="grid gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-5">
+    <div className="grid grid-cols-1 gap-3 border-t border-border pt-4 sm:grid-cols-2 lg:grid-cols-5">
       {HEADER_FIELDS.map((field) => (
         <div key={field.key} className="space-y-1">
           <FieldLabel htmlFor={`shift-${field.key}`} className="text-xs text-muted-foreground">
             {label(field.label)}
           </FieldLabel>
-          <Input
+          <Select
             id={`shift-${field.key}`}
-            list={`shift-${field.key}-suggestions`}
-            autoComplete="off"
             value={values[field.key]}
             disabled={locked}
-            onChange={(e) => setValues((current) => ({ ...current, [field.key]: e.target.value }))}
-            onBlur={() => {
-              if ((shift[field.key] ?? "") !== values[field.key].trim()) save.mutate({ [field.key]: values[field.key].trim() || null });
+            onChange={(e) => {
+              const chosen = e.target.value;
+              setValues((current) => ({ ...current, [field.key]: chosen }));
+              if ((shift[field.key] ?? "") !== chosen) save.mutate({ [field.key]: chosen || null });
             }}
-          />
-          <datalist id={`shift-${field.key}-suggestions`}>
-            {suggestions[field.key].map((value) => (
-              <option key={value} value={value} />
+          >
+            <option value="">—</option>
+            {choicesFor(field).map((value) => (
+              <option key={value} value={value}>
+                {value}
+              </option>
             ))}
-          </datalist>
+          </Select>
+          {choicesFor(field).length === 0 && !locked && (
+            <p className="text-xs text-muted-foreground">{label(field.role ? T.noRolePeople : T.noTeams)}</p>
+          )}
         </div>
       ))}
     </div>

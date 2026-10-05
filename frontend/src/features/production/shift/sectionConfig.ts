@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 import type { Option, OptionMap } from "./ShiftGrid";
 import type { Row, SectionKey } from "./shiftApi";
+import { stopMinutes } from "./shiftDerived";
 import { L, type Label } from "./shiftText";
 
 /**
@@ -60,7 +61,8 @@ export type OptionSource =
   | "partners"
   | "finishedProducts"
   | "shiftOrders"
-  | "packingTypes";
+  | "packingTypes"
+  | "shiftDerived";
 
 export interface Column {
   key: string;
@@ -164,6 +166,28 @@ export function packingWasteUnitFor(row: Row, options: OptionMap): string | null
   return options.itemUnits.find((option) => option.value === row.product_id)?.label || null;
 }
 
+/**
+ * The shift's semoule flow, in tonnes an hour: everything poured in over the hours the line ran.
+ *
+ * One figure for the whole shift -- the versements are recorded once, not per run -- so every run
+ * row shows the same rate. Blank until the shift's hours are configured and something is poured in.
+ */
+export function semolinaFlowFor(row: Row, options: OptionMap): string | null {
+  // What the screen works out from the sections as they stand, so the cell answers while the
+  // versements and stops are still being typed. Once saved, the server's figure is the one stored
+  // and the two agree; a saved row falls back to it if the shift's hours cannot be read here.
+  const live = options.shiftDerived.find((option) => option.value === "semolina_flow_rate")?.label;
+  if (live) return live;
+  const saved = Number(row.semolina_flow_rate);
+  return Number.isFinite(saved) && saved > 0 ? String(saved) : null;
+}
+
+/** How long a stop lasted, worked out from its two times rather than typed a third time. */
+export function stopDurationFor(row: Row): string | null {
+  const minutes = stopMinutes(row);
+  return minutes === null ? null : String(minutes);
+}
+
 /** The packing type of the row's chosen product, read from the option list built from the products. */
 export function packingTypeFor(row: Row, options: OptionMap): string | null {
   return options.packingTypes.find((option) => option.value === row.product_id)?.label ?? null;
@@ -210,6 +234,8 @@ export const SECTIONS: SectionDef[] = [
         // worked out by the server.
         serverDerived: [
           "semolina_lines", "dough_quantity", "regrind_input_quantity", "regrind_input_product_id", "raw_material_location_id",
+          // The débit is the shift's versements over the hours its stops left; the server works it out.
+          "semolina_flow_rate",
         ],
         columns: [
           pick("of_id", L("Work order", "OF"), "orders", true),
@@ -222,7 +248,10 @@ export const SECTIONS: SectionDef[] = [
           num("regrind_quantity", L("Regrind made (kg)", "Rebroyat produit (kg)"), 1000),
           num("water_percentage", L("Water %", "% eau")),
           num("humidity_percentage", L("Humidity %", "Humidité %")),
-          num("semolina_flow_rate", L("Semoule flow (t/h)", "Débit semoule (t/h)")),
+          {
+            ...derived("semolina_flow_rate", L("Semoule flow (t/h)", "Débit semoule (t/h)")),
+            valueFor: semolinaFlowFor,
+          },
         ],
       },
     ],
@@ -282,6 +311,7 @@ export const SECTIONS: SectionDef[] = [
           pick("equipment_id", L("Machine", "Machine"), "equipment"),
           when("started_at", L("From", "De"), true),
           when("ended_at", L("To", "À")),
+          { ...derived("duration_minutes", L("Duration (min)", "Durée d'arrêt (min)")), valueFor: stopDurationFor },
           pick("downtime_type", L("Type", "Type"), "stopTypes"),
           pick("classification", L("System", "Système"), "classifications"),
           pick("motif", L("Reason", "Motif"), "motifs"),
@@ -350,7 +380,8 @@ export const SECTIONS: SectionDef[] = [
         payloadKey: "rows",
         shape: "rows",
         serverDerived: [
-          "run_id", "packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id", "waste_carton_quantity",
+          "run_id", "packing_type", "packets_counted", "finished_goods_location_id", "packaging_location_id",
+          "film_location_id", "carton_location_id", "scotch_location_id", "ruban_location_id", "waste_carton_quantity",
         ],
         addLabel: L("Add a lot", "Ajouter un lot"),
         columns: [

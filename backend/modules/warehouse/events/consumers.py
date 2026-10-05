@@ -4,11 +4,13 @@ import psycopg
 
 from core.domain.result import Err
 from core.events.consumers import register
+from modules.warehouse.api.fulfillment_service import FulfillmentService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.service import StockService
 
 CONSUMER_NAME = "warehouse.purchase_order_receipt_confirmed"
 PRODUCT_CREATED_CONSUMER_NAME = "warehouse.product_created"
+SALES_ORDER_CONFIRMED_CONSUMER_NAME = "warehouse.sales_order_confirmed"
 FINISHED_GOODS_LOCATION_CODE = "produits-finis"
 
 
@@ -79,5 +81,31 @@ def _handle_product_created(connection: psycopg.Connection, envelope: dict) -> N
     )
 
 
+def _handle_sales_order_confirmed(connection: psycopg.Connection, envelope: dict) -> None:
+    """Opens the pick list for a confirmed order. Sales already reserved the
+    stock in its own transaction, so this only records what to pick, from
+    where, and under which reservation reference.
+
+    A 1.0 event (published before location_id/lines were added to the
+    payload) carries nothing to build a pick list from; it is acknowledged
+    and skipped rather than dead-lettered, since redelivering it would never
+    make it any richer."""
+    payload = envelope["payload"]
+    if "lines" not in payload or "location_id" not in payload:
+        return
+    order_id = payload["order_id"]
+    result = FulfillmentService(connection).create_pick_list_for_order(
+        tenant_id=envelope["tenant_id"],
+        order_id=order_id,
+        partner_id=payload.get("partner_id"),
+        location_id=payload["location_id"],
+        lines=payload["lines"],
+        reservation_reference=payload.get("reservation_reference", f"sales_order:{order_id}"),
+    )
+    if isinstance(result, Err) and result.code != "EMPTY_ORDER":
+        raise RuntimeError(f"failed to open a pick list for sales order {order_id}: {result.message}")
+
+
 register(CONSUMER_NAME, "procurement.purchase_order_receipt.confirmed", _handle_purchase_order_receipt_confirmed)
 register(PRODUCT_CREATED_CONSUMER_NAME, "core.product.created", _handle_product_created)
+register(SALES_ORDER_CONFIRMED_CONSUMER_NAME, "sales.order.confirmed", _handle_sales_order_confirmed)

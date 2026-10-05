@@ -2,7 +2,7 @@
   "name": "production",
   "version": "0.15.0",
   "depends": ["core"],
-  "optional_depends": ["warehouse", "qc", "maintenance", "procurement"],
+  "optional_depends": ["warehouse", "qc", "maintenance", "procurement", "hr"],
   "provides_api": [
     "WorkOrderService",
     "ProductClassificationService",
@@ -25,7 +25,8 @@
     "WasteTypeService",
     "DaySheetService",
     "LotSuggestionService",
-    "ShiftReportService"
+    "ShiftReportService",
+    "ShiftRoleService"
   ],
   "publishes_events": [
     "production.work_order.closed",
@@ -65,6 +66,7 @@
     "production.manage_waste_types",
     "production.shift.view",
     "production.shift.validate",
+    "production.shift.delete",
     "production.shift.edit.runs",
     "production.shift.edit.waste_production",
     "production.shift.edit.stops",
@@ -74,7 +76,7 @@
     "production.shift.edit.packet_checks",
     "production.shift.edit.waste_packing",
     "production.shift.edit.energy",
-    "production.shift.unlock_validated",
+    "production.admin_unlock_validated",
     "production.admin_reports",
     "production.use_ia_assistant"
   ]

@@ -292,10 +292,10 @@ def test_qc_validated_conforming_counts_cartons_of_the_packing_rows_frozen_size(
     assert QualityReportService(db).get_validated_conforming(tenant_id=TENANT, day=DAY + datetime.timedelta(days=1)) == {}
 
 
-def test_a_product_with_no_qc_report_yet_is_all_pending(db, env, stores):
+def test_a_product_with_no_qc_report_yet_is_all_awaiting_qc(db, env, stores):
     _validate(db, env, _submitted_shift(db, env))
     [item] = _list(db)["items"]
-    assert (item["packed"], item["remaining"], item["releasable"], item["pending_qc"]) == (120, 120, 0, 120)
+    assert (item["packed"], item["remaining"], item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (120, 120, 0, 120, 0)
 
 
 def test_a_qc_report_not_yet_validated_releases_nothing(db, env, stores):
@@ -303,18 +303,44 @@ def test_a_qc_report_not_yet_validated_releases_nothing(db, env, stores):
     _validate(db, env, shift_id)
     _qc_report(db, env, shift_id, conforming=ALL_PACKED_CARTONS, validate=False)  # submitted only
     [item] = _list(db)["items"]
-    assert (item["releasable"], item["pending_qc"]) == (0, 120)
+    assert (item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (0, 120, 0)
     refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 1}])
     assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
 
 
-def test_qc_validated_conforming_becomes_releasable_and_the_rest_stays_pending(db, env, stores):
+def test_qc_validated_conforming_becomes_releasable_and_the_rest_is_rejected(db, env, stores):
     shift_id = _submitted_shift(db, env)
     _validate(db, env, shift_id)
     _qc_report(db, env, shift_id, conforming=8, non_conforming=2, defect_details="soudure")
     [item] = _list(db)["items"]
-    # 8 conforming cartons of 12 = 96 pieces; the 2 non-conforming cartons (24 pieces) never become releasable.
-    assert (item["packed"], item["remaining"], item["releasable"], item["pending_qc"]) == (120, 120, 96, 24)
+    # 8 conforming cartons of 12 = 96 pieces; the 2 non-conforming cartons (24 pieces) never become
+    # releasable, so they are rejected rather than left to release.
+    assert (item["packed"], item["remaining"], item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (120, 96, 96, 0, 24)
+
+
+def test_a_day_whose_only_leftovers_qc_rejected_is_not_pending(db, env, stores):
+    today = DAY + datetime.timedelta(days=1)
+    shift_id = _submitted_shift(db, env)
+    _validate(db, env, shift_id)
+    _qc_report(db, env, shift_id, conforming=8, non_conforming=2, defect_details="soudure")
+    _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 96}]))  # everything QC cleared
+    [item] = _list(db)["items"]
+    assert (item["released"], item["remaining"], item["releasable"], item["rejected_qc"]) == (96, 0, 0, 24)
+    # Neither the default opening on yesterday nor the backlog holds on to the rejected 24.
+    opened = StockReleaseService(db).get_release_list(tenant_id=TENANT, day=None, today=today)
+    assert opened["day"] == today.isoformat()
+    assert opened["backlog"] == []
+
+
+def test_qc_rejection_is_judged_per_packing_row(db, env, stores):
+    # The morning is cleared in full, the afternoon half rejected: the morning's verdict does not
+    # cover the afternoon's rejected goods, and the afternoon's rejection is not "awaiting QC".
+    _validated_and_cleared(db, env, shift="morning")
+    afternoon = _submitted_shift(db, env, shift="afternoon")
+    _validate(db, env, afternoon)
+    _qc_report(db, env, afternoon, conforming=5, non_conforming=5, defect_details="soudure")
+    [item] = _list(db)["items"]
+    assert (item["packed"], item["remaining"], item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (240, 180, 180, 0, 60)
 
 
 def test_release_is_refused_above_the_qc_validated_cap_even_within_on_hand(db, env, stores):
@@ -335,8 +361,9 @@ def test_what_was_already_released_counts_against_the_qc_cap(db, env, stores):
     _qc_report(db, env, shift_id, conforming=5)  # 60 pieces cleared
     _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 50}]))
     [item] = _list(db)["items"]
-    # 120 packed, 50 released: 70 remain and 70 are in the line store, but only 60 - 50 = 10 are cleared and unreleased.
-    assert (item["remaining"], item["releasable"], item["pending_qc"]) == (70, 10, 60)
+    # 120 packed, 50 released, 60 not cleared by the validated verdict (rejected): 10 remain, and
+    # those 10 are exactly what is cleared and unreleased.
+    assert (item["remaining"], item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (10, 10, 0, 60)
     refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 11}])
     assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
     _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 10}]))
@@ -363,7 +390,8 @@ def test_a_packing_row_recorded_again_under_a_new_id_no_longer_counts_as_cleared
 
     assert QualityReportService(db).get_validated_conforming(tenant_id=TENANT, day=DAY) == {env["pasta"]: 120.0}
     [item] = _list(db)["items"]
-    assert (item["packed"], item["releasable"], item["pending_qc"]) == (240, 120, 120)
+    # The re-saved row has no verdict of its own yet: awaiting QC, not rejected.
+    assert (item["packed"], item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (240, 120, 120, 0)
     refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 121}])
     assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
     _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 120}]))
@@ -468,6 +496,6 @@ def test_a_reversed_shifts_qc_verdict_clears_no_other_shifts_goods(db, env, stor
     # The morning's packing rows keep their ids and product, but its shift is no longer validated.
     assert QualityReportService(db).get_validated_conforming(tenant_id=TENANT, day=DAY) == {}
     [item] = _list(db)["items"]
-    assert (item["packed"], item["releasable"], item["pending_qc"]) == (120, 0, 120)
+    assert (item["packed"], item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (120, 0, 120, 0)
     refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 1}])
     assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"

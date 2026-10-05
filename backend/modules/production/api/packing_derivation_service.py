@@ -18,11 +18,16 @@ from modules.production.domain.packaging_estimate import finished_quantity_from_
 from modules.production.domain.packing_derivation import (
     carton_waste_owners,
     packing_type_label,
-    pick_packaging_location,
     resolve_packing_order,
 )
 
-_PACKAGING_PRODUCTS = ("film_product_id", "carton_product_id", "tape_product_id", "scotch_product_id", "ruban_product_id")
+# Each packaging item posts from its own default storage location, not a store shared by the row.
+_PACKAGING_LOCATIONS = {
+    "film_product_id": "film_location_id",
+    "carton_product_id": "carton_location_id",
+    "scotch_product_id": "scotch_location_id",
+    "ruban_product_id": "ruban_location_id",
+}
 
 _ORDER_PROBLEMS = {
     "PRODUCTION_FIRST": (
@@ -103,22 +108,24 @@ def derive_packing_rows(connection: psycopg.Connection, *, tenant_id: str, shift
             if not row["finished_goods_location_id"]:
                 row["finished_goods_location_id"] = line_store or product.default_location_id
 
-        if not row["packaging_location_id"]:
-            stores = []
-            for column in _PACKAGING_PRODUCTS:
-                item = core.get_product(tenant_id, row[column]) if row[column] else None
-                if item is not None:
-                    stores.append(item.default_location_id)
-            location, conflict = pick_packaging_location(stores)
-            if conflict:
-                return Err(
-                    "PACKAGING_STORES_DIFFER",
-                    f"packing row {index}: its packaging items have different default storage locations; "
-                    "packaging is taken from one store per row",
-                    f"ligne de conditionnement {index} : ses articles d'emballage ont des emplacements par défaut différents ; "
-                    "l'emballage est pris dans un seul magasin par ligne",
-                )
-            row["packaging_location_id"] = location
+        if row.get("packaging_location_id"):
+            # The team typed one store for the whole row: every item with no store of its
+            # own follows it, exactly as a single shared store used to work.
+            for location_column in _PACKAGING_LOCATIONS.values():
+                if not row.get(location_column):
+                    row[location_column] = row["packaging_location_id"]
+        else:
+            first_location = None
+            for product_column, location_column in _PACKAGING_LOCATIONS.items():
+                if not row.get(location_column) and row.get(product_column):
+                    item = core.get_product(tenant_id, row[product_column])
+                    if item is not None and item.default_location_id:
+                        row[location_column] = item.default_location_id
+                first_location = first_location or row.get(location_column)
+            # Kept for old readers that still expect one store on the row (e.g. the
+            # shortfall display); stock is actually issued from each item's own
+            # *_location_id above, which may each differ.
+            row["packaging_location_id"] = first_location
     return Ok(None)
 
 

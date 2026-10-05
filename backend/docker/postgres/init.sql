@@ -18,9 +18,10 @@ CREATE TABLE IF NOT EXISTS events.outbox (
 );
 
 CREATE TABLE IF NOT EXISTS events.processed_events (
-    event_id TEXT PRIMARY KEY,
+    event_id TEXT NOT NULL,
     consumer TEXT NOT NULL,
-    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    processed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (event_id, consumer)
 );
 
 CREATE TABLE IF NOT EXISTS core.module_migrations (

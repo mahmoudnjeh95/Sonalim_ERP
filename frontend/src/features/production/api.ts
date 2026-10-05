@@ -1,4 +1,4 @@
-import { apiFetch, apiErrorFromResponse, networkError } from "../../lib/api";
+import { apiFetch, apiErrorFromResponse, networkError, BASE_URL } from "../../lib/api";
 
 // --- Products & units of measure -----------------------------------------
 
@@ -807,8 +807,6 @@ export function listConsumptionBySupplier(
   return apiFetch<ConsumptionRow[]>(`/production/reports/consumption-by-supplier${suffix}`, { token });
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
-
 /** Downloads the same data as an .xlsx workbook laid out like the original
  * spreadsheets — bypasses apiFetch since that always parses JSON. */
 export async function exportConsumptionBySupplier(
@@ -819,7 +817,7 @@ export async function exportConsumptionBySupplier(
   const suffix = query.toString() ? `?${query.toString()}` : "";
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/production/reports/consumption-by-supplier/export${suffix}`, {
+    response = await fetch(`${BASE_URL}/production/reports/consumption-by-supplier/export${suffix}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch {
@@ -843,7 +841,7 @@ export async function exportProductionRecap(
   const query = new URLSearchParams({ date: params.date, period: params.period });
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/production/reports/daily-recap/export?${query.toString()}`, {
+    response = await fetch(`${BASE_URL}/production/reports/daily-recap/export?${query.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch {
@@ -1500,7 +1498,7 @@ export async function exportMonthRecapWorkbook(token: string, params: { month: s
   const query = new URLSearchParams({ month: params.month });
   let response: Response;
   try {
-    response = await fetch(`${API_BASE_URL}/production/month-recap/export?${query.toString()}`, {
+    response = await fetch(`${BASE_URL}/production/month-recap/export?${query.toString()}`, {
       headers: { Authorization: `Bearer ${token}` },
     });
   } catch {

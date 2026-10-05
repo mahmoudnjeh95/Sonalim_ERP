@@ -66,10 +66,10 @@ def seed() -> None:
 
         employee_ids: dict[str, str] = {}
         demo_employees = [
-            ("EMP-001", "Amina", "Diallo", "amina.diallo@sonalim.local", "Sales Manager", "SALES", "2023-02-06", "active", 1800),
-            ("EMP-002", "Moussa", "Traore", "moussa.traore@sonalim.local", "Production Supervisor", "OPS", "2022-09-12", "active", 1650),
-            ("EMP-003", "Fatou", "Coulibaly", "fatou.coulibaly@sonalim.local", "Accountant", "FIN", "2024-01-15", "on_leave", 1500),
-            ("EMP-004", "Ibrahim", "Keita", "ibrahim.keita@sonalim.local", "Sales Representative", "SALES", "2024-05-20", "active", 1200),
+            ("EMP-001", "Amina", "Diallo", "amina.diallo@sonalim.local", "Sales Manager", "SALES", "2023-02-06", "active", 650000),
+            ("EMP-002", "Moussa", "Traore", "moussa.traore@sonalim.local", "Production Supervisor", "OPS", "2022-09-12", "active", 480000),
+            ("EMP-003", "Fatou", "Coulibaly", "fatou.coulibaly@sonalim.local", "Accountant", "FIN", "2024-01-15", "on_leave", 420000),
+            ("EMP-004", "Ibrahim", "Keita", "ibrahim.keita@sonalim.local", "Sales Representative", "SALES", "2024-05-20", "active", 250000),
         ]
         for employee_no, first_name, last_name, email, title, department, hire_date, employee_status, salary in demo_employees:
             connection.execute(
@@ -87,11 +87,11 @@ def seed() -> None:
             employee_ids[employee_no] = employee_id
             connection.execute(
                 """
-                INSERT INTO hr.contracts (id, tenant_id, employee_id, contract_type, start_date, salary, currency, status)
-                SELECT %s, %s, %s, 'permanent', %s, %s, 'USD', 'active'
+                INSERT INTO hr.contracts (id, tenant_id, employee_id, contract_type, start_date, base_salary, salary, currency, status)
+                SELECT %s, %s, %s, 'cdi', %s, %s, %s, 'XOF', 'active'
                 WHERE NOT EXISTS (SELECT 1 FROM hr.contracts WHERE tenant_id = %s AND employee_id = %s)
                 """,
-                (str(ULID()), DEMO_TENANT_ID, employee_id, hire_date, salary, DEMO_TENANT_ID, employee_id),
+                (str(ULID()), DEMO_TENANT_ID, employee_id, hire_date, salary, salary, DEMO_TENANT_ID, employee_id),
             )
 
         attendance_date = datetime.date.today() - datetime.timedelta(days=1)
@@ -128,12 +128,12 @@ def seed() -> None:
             )
         else:
             payroll_run_id = payroll_run_id[0]
-        for employee_no, salary in [("EMP-001", 1800), ("EMP-002", 1650), ("EMP-003", 1500), ("EMP-004", 1200)]:
-            bonuses, deductions, taxes = (150, 50, 180) if employee_no == "EMP-001" else (0, 25, 120)
+        for employee_no, salary in [("EMP-001", 650000), ("EMP-002", 480000), ("EMP-003", 420000), ("EMP-004", 250000)]:
+            bonuses, deductions, taxes = (25000, 10000, 60000) if employee_no == "EMP-001" else (0, 5000, 30000)
             connection.execute(
                 """
                 INSERT INTO hr.payroll_items (id, tenant_id, payroll_run_id, employee_id, base_salary, bonuses, deductions, taxes, net_salary, currency)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'USD')
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'XOF')
                 ON CONFLICT (payroll_run_id, employee_id) DO UPDATE SET base_salary = EXCLUDED.base_salary, bonuses = EXCLUDED.bonuses, deductions = EXCLUDED.deductions, taxes = EXCLUDED.taxes, net_salary = EXCLUDED.net_salary
                 """,
                 (str(ULID()), DEMO_TENANT_ID, payroll_run_id, employee_ids[employee_no], salary, bonuses, deductions, taxes, salary + bonuses - deductions - taxes),
@@ -160,14 +160,26 @@ def seed() -> None:
             (str(ULID()), DEMO_TENANT_ID),
         )
 
+        # Matches the id the 0012 migration's backfill would assign, so seeding
+        # stays consistent whether it runs on a fresh DB or one migrated from
+        # pre-multi-site data.
+        demo_site_id = "default-site-" + DEMO_TENANT_ID
+        connection.execute(
+            """
+            INSERT INTO warehouse.sites (id, tenant_id, code, name)
+            VALUES (%s, %s, 'main', 'Site principal')
+            ON CONFLICT (tenant_id, code) DO NOTHING
+            """,
+            (demo_site_id, DEMO_TENANT_ID),
+        )
         for code, name in [("raw-materials", "Matières premières"), ("spare-parts", "Pièces de rechange")]:
             connection.execute(
                 """
-                INSERT INTO warehouse.locations (id, tenant_id, code, name)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO warehouse.locations (id, tenant_id, code, name, site_id)
+                VALUES (%s, %s, %s, %s, %s)
                 ON CONFLICT (tenant_id, code) DO NOTHING
                 """,
-                (str(ULID()), DEMO_TENANT_ID, code, name),
+                (str(ULID()), DEMO_TENANT_ID, code, name, demo_site_id),
             )
 
         # --- CRM demo data -----------------------------------------------

@@ -1,11 +1,25 @@
 {
   "name": "hr",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "depends": ["core"],
   "optional_depends": [],
-  "provides_api": ["EmployeeService", "DepartmentService", "LeaveService", "HrDashboardService"],
-  "publishes_events": [],
-  "subscribes_events": [],
+  "provides_api": [
+    "EmployeeService",
+    "DepartmentService",
+    "PositionService",
+    "GradeService",
+    "ContractService",
+    "LeaveService",
+    "HrDashboardService",
+    "HrAlertService",
+    "PayrollSnapshotService",
+    "PresenceService",
+    "ScheduleService",
+    "LeaveRequestService",
+    "LeaveBalanceService"
+  ],
+  "publishes_events": ["hr.presence_month.closed"],
+  "subscribes_events": ["payroll.run.approved", "payroll.run.reversed"],
   "migrations_path": "./migrations",
   "permissions": [
     "hr.view_employees",
@@ -20,11 +34,20 @@
     "hr.view_leave",
     "hr.manage_leave",
     "hr.admin_leave",
-    "hr.view_dashboard"
-    ,"hr.view_attendance"
-    ,"hr.manage_attendance"
-    ,"hr.view_payroll"
-    ,"hr.manage_payroll"
-    ,"hr.admin_payroll"
+    "hr.view_dashboard",
+    "hr.view_attendance",
+    "hr.manage_attendance",
+    "hr.view_payroll",
+    "hr.manage_payroll",
+    "hr.admin_payroll",
+    "hr.view_presence",
+    "hr.manage_presence",
+    "hr.import_clock",
+    "hr.close_presence",
+    "hr.admin_presence",
+    "hr.view_positions",
+    "hr.manage_positions",
+    "hr.admin_positions",
+    "hr.view_sensitive"
   ]
 }

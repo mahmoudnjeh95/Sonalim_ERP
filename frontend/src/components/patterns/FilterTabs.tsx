@@ -24,7 +24,9 @@ export function FilterTabs<T extends string>({
             type="button"
             onClick={() => onChange(option.value)}
             className={cn(
-              "relative inline-flex items-center gap-1.5 rounded-md px-3 py-1 text-xs font-medium transition-colors",
+              // py-2 gives these filter pills a usable touch target on a phone
+              // (they are 24px tall otherwise); sm: keeps the desktop size.
+              "relative inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-xs font-medium transition-colors sm:py-1",
               active ? "text-foreground" : "text-muted-foreground hover:text-foreground",
             )}
           >

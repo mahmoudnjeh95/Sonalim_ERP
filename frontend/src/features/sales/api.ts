@@ -1,6 +1,6 @@
 import { apiFetch } from "../../lib/api";
 
-export type SalesOrderStatus = "draft" | "confirmed";
+export type SalesOrderStatus = "draft" | "confirmed" | "shipped";
 
 export interface OrderLine {
   product_id: string;

@@ -131,8 +131,10 @@ export interface ReleaseItem {
   released: number;
   remaining: number;
   releasable: number;
-  /** What was packed but is not yet cleared by quality control (pending or non-conforming), in the product's own unit. */
-  pending_qc: number;
+  /** Packed but not judged by a validated QC report yet, in the product's own unit. */
+  awaiting_qc: number;
+  /** Judged by a validated QC report and not cleared as conforming: never released, and not counted in `remaining`. */
+  rejected_qc: number;
   /** null when the product has no default storage location: it cannot be released until one is set. */
   destination: { id: string; name: string | null } | null;
 }

@@ -4,7 +4,8 @@ import { ArrowLeft, Mail, Pencil, Phone, Plus, Tag as TagIcon, UserRound } from 
 import { Link, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
-import { currentLocale, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
+import { formatXofWithCode } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -103,7 +104,7 @@ export function PartnerDetailsPage() {
         </div>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
         <Card>
           <CardHeader>
             <CardTitle>{t("partners.details.accountDetails")}</CardTitle>
@@ -149,14 +150,14 @@ export function PartnerDetailsPage() {
             <CardTitle>{t("partners.details.openPipeline")}</CardTitle>
           </CardHeader>
           <CardContent className="text-2xl font-semibold">
-            {new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(
+            {formatXofWithCode(
               opportunities.filter((o) => !["won", "lost"].includes(o.stage)).reduce((sum, o) => sum + o.amount, 0),
             )}
           </CardContent>
         </Card>
       </div>
 
-      <div className="grid gap-4 lg:grid-cols-2">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
         <Card>
           <CardHeader className="flex-row items-center justify-between space-y-0">
             <CardTitle>{t("partners.details.contacts")}</CardTitle>
@@ -257,7 +258,7 @@ export function PartnerDetailsPage() {
         </Card>
       </div>
       {(partner.kind === "supplier" || partner.kind === "both") && <PartnerTagsCard partnerId={partnerId!} />}
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">
         <RecordList
           title={t("partners.details.opportunities")}
           emptyLabel={t("partners.details.none")}

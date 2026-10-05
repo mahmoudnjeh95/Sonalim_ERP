@@ -33,6 +33,11 @@ class WarehouseAnalyticsService:
     Quantities are never summed across units of measure: 3 t of semolina and
     3,000 film reels are not "3,003 of stock". Every quantity figure is returned
     per product or per unit; only *value* (F CFA) and *counts* are summed.
+
+    An optional `site_id` scopes every figure to one site's locations -- omit it
+    for the tenant-wide view. It is a filter on `warehouse.locations`, not a
+    warehouse.stock_moves/stock_items column, so every query below joins
+    locations only when a site was actually asked for.
     """
 
     def __init__(self, connection: psycopg.Connection) -> None:
@@ -47,6 +52,7 @@ class WarehouseAnalyticsService:
         consumption_window_days: int = 30,
         dormant_after_days: int = 60,
         today: datetime.date | None = None,
+        site_id: str | None = None,
     ) -> dict:
         if date_to < date_from:
             date_from, date_to = date_to, date_from
@@ -56,10 +62,10 @@ class WarehouseAnalyticsService:
         window_start = datetime.datetime.combine(today - datetime.timedelta(days=consumption_window_days), datetime.time.min)
 
         products = self._product_rows(tenant_id)
-        self._apply_stock_levels(tenant_id, products)
-        self._apply_consumption_window(tenant_id, products, window_start)
-        self._apply_last_movement(tenant_id, products, today)
-        self._apply_period_flows(tenant_id, products, period_start, period_end)
+        self._apply_stock_levels(tenant_id, products, site_id)
+        self._apply_consumption_window(tenant_id, products, window_start, site_id)
+        self._apply_last_movement(tenant_id, products, today, site_id)
+        self._apply_period_flows(tenant_id, products, period_start, period_end, site_id)
 
         rows: list[dict] = []
         for product in products.values():
@@ -98,10 +104,10 @@ class WarehouseAnalyticsService:
             )
         rows.sort(key=lambda r: (r["name"] or "", r["sku"] or ""))
 
-        moves_by_type, flow_by_uom = self._period_totals(tenant_id, period_start, period_end)
-        daily = self._daily_flows(tenant_id, period_start, period_end)
-        corrections = self._recent_corrections(tenant_id, period_start, period_end)
-        expiring_lots = self._expiring_lots(tenant_id, today)
+        moves_by_type, flow_by_uom = self._period_totals(tenant_id, period_start, period_end, site_id)
+        daily = self._daily_flows(tenant_id, period_start, period_end, site_id)
+        corrections = self._recent_corrections(tenant_id, period_start, period_end, site_id)
+        expiring_lots = self._expiring_lots(tenant_id, today, site_id)
 
         below_threshold = [
             r for r in rows if r["stock_alert_threshold"] is not None and 0 < r["on_hand"] < r["stock_alert_threshold"]
@@ -181,16 +187,18 @@ class WarehouseAnalyticsService:
             for pid, sku, name, uom_id, purchase_price, threshold in rows
         }
 
-    def _apply_stock_levels(self, tenant_id: str, products: dict[str, dict]) -> None:
+    def _apply_stock_levels(self, tenant_id: str, products: dict[str, dict], site_id: str | None = None) -> None:
+        site_clause = "AND l.site_id = %s" if site_id is not None else ""
+        params = (tenant_id, site_id) if site_id is not None else (tenant_id,)
         rows = self._connection.execute(
-            """
+            f"""
             SELECT si.product_id, si.quantity_on_hand, si.quantity_reserved, si.quantity_in_production,
                    COALESCE(l.is_blocked, FALSE)
             FROM warehouse.stock_items si
             LEFT JOIN warehouse.locations l ON l.id = si.location_id AND l.tenant_id = si.tenant_id
-            WHERE si.tenant_id = %s
+            WHERE si.tenant_id = %s {site_clause}
             """,
-            (tenant_id,),
+            params,
         ).fetchall()
         for product_id, on_hand, reserved, in_production, is_blocked in rows:
             product = products.get(product_id)
@@ -202,25 +210,37 @@ class WarehouseAnalyticsService:
             if is_blocked:
                 product["blocked_on_hand"] += float(on_hand)
 
-    def _apply_consumption_window(self, tenant_id: str, products: dict[str, dict], window_start: datetime.datetime) -> None:
+    def _apply_consumption_window(
+        self, tenant_id: str, products: dict[str, dict], window_start: datetime.datetime, site_id: str | None = None
+    ) -> None:
+        join, site_clause, extra = self._site_join("sm", site_id)
         rows = self._connection.execute(
-            """
-            SELECT product_id, SUM(quantity)
-            FROM warehouse.stock_moves
-            WHERE tenant_id = %s AND move_type = ANY(%s) AND created_at >= %s
-            GROUP BY product_id
+            f"""
+            SELECT sm.product_id, SUM(sm.quantity)
+            FROM warehouse.stock_moves sm
+            {join}
+            WHERE sm.tenant_id = %s AND sm.move_type = ANY(%s) AND sm.created_at >= %s {site_clause}
+            GROUP BY sm.product_id
             """,
-            (tenant_id, list(CONSUMPTION_MOVE_TYPES), window_start),
+            [tenant_id, list(CONSUMPTION_MOVE_TYPES), window_start, *extra],
         ).fetchall()
         for product_id, consumed in rows:
             product = products.get(product_id)
             if product is not None:
                 product["window_consumed"] = float(consumed)
 
-    def _apply_last_movement(self, tenant_id: str, products: dict[str, dict], today: datetime.date) -> None:
+    def _apply_last_movement(
+        self, tenant_id: str, products: dict[str, dict], today: datetime.date, site_id: str | None = None
+    ) -> None:
+        join, site_clause, extra = self._site_join("sm", site_id)
         rows = self._connection.execute(
-            "SELECT product_id, MAX(created_at) FROM warehouse.stock_moves WHERE tenant_id = %s GROUP BY product_id",
-            (tenant_id,),
+            f"""
+            SELECT sm.product_id, MAX(sm.created_at) FROM warehouse.stock_moves sm
+            {join}
+            WHERE sm.tenant_id = %s {site_clause}
+            GROUP BY sm.product_id
+            """,
+            [tenant_id, *extra],
         ).fetchall()
         for product_id, last_move_at in rows:
             product = products.get(product_id)
@@ -230,16 +250,23 @@ class WarehouseAnalyticsService:
             product["idle_days"] = max((today - last_move_at.date()).days, 0)
 
     def _apply_period_flows(
-        self, tenant_id: str, products: dict[str, dict], period_start: datetime.datetime, period_end: datetime.datetime
+        self,
+        tenant_id: str,
+        products: dict[str, dict],
+        period_start: datetime.datetime,
+        period_end: datetime.datetime,
+        site_id: str | None = None,
     ) -> None:
+        join, site_clause, extra = self._site_join("sm", site_id)
         rows = self._connection.execute(
-            """
-            SELECT product_id, move_type, COUNT(*), SUM(quantity)
-            FROM warehouse.stock_moves
-            WHERE tenant_id = %s AND created_at >= %s AND created_at < %s
-            GROUP BY product_id, move_type
+            f"""
+            SELECT sm.product_id, sm.move_type, COUNT(*), SUM(sm.quantity)
+            FROM warehouse.stock_moves sm
+            {join}
+            WHERE sm.tenant_id = %s AND sm.created_at >= %s AND sm.created_at < %s {site_clause}
+            GROUP BY sm.product_id, sm.move_type
             """,
-            (tenant_id, period_start, period_end),
+            [tenant_id, period_start, period_end, *extra],
         ).fetchall()
         for product_id, move_type, count, quantity in rows:
             product = products.get(product_id)
@@ -258,17 +285,23 @@ class WarehouseAnalyticsService:
                 product["period_corrections_count"] += int(count)
 
     def _period_totals(
-        self, tenant_id: str, period_start: datetime.datetime, period_end: datetime.datetime
+        self,
+        tenant_id: str,
+        period_start: datetime.datetime,
+        period_end: datetime.datetime,
+        site_id: str | None = None,
     ) -> tuple[list[dict], list[dict]]:
+        join, site_clause, extra = self._site_join("sm", site_id)
         rows = self._connection.execute(
-            """
+            f"""
             SELECT sm.move_type, p.uom_id, COUNT(*), SUM(sm.quantity)
             FROM warehouse.stock_moves sm
             JOIN core.products p ON p.id = sm.product_id
-            WHERE sm.tenant_id = %s AND sm.created_at >= %s AND sm.created_at < %s
+            {join}
+            WHERE sm.tenant_id = %s AND sm.created_at >= %s AND sm.created_at < %s {site_clause}
             GROUP BY sm.move_type, p.uom_id
             """,
-            (tenant_id, period_start, period_end),
+            [tenant_id, period_start, period_end, *extra],
         ).fetchall()
         by_type: dict[str, dict] = {}
         by_uom: dict[str, dict] = {}
@@ -291,17 +324,25 @@ class WarehouseAnalyticsService:
         flow_by_uom = sorted(by_uom.values(), key=lambda f: -(f["inbound"] + f["outbound"]))
         return moves_by_type, flow_by_uom
 
-    def _daily_flows(self, tenant_id: str, period_start: datetime.datetime, period_end: datetime.datetime) -> list[dict]:
+    def _daily_flows(
+        self,
+        tenant_id: str,
+        period_start: datetime.datetime,
+        period_end: datetime.datetime,
+        site_id: str | None = None,
+    ) -> list[dict]:
+        join, site_clause, extra = self._site_join("sm", site_id)
         rows = self._connection.execute(
-            """
+            f"""
             SELECT sm.created_at::date AS day, p.uom_id, sm.move_type, SUM(sm.quantity)
             FROM warehouse.stock_moves sm
             JOIN core.products p ON p.id = sm.product_id
-            WHERE sm.tenant_id = %s AND sm.created_at >= %s AND sm.created_at < %s
+            {join}
+            WHERE sm.tenant_id = %s AND sm.created_at >= %s AND sm.created_at < %s {site_clause}
             GROUP BY 1, 2, 3
             ORDER BY 1
             """,
-            (tenant_id, period_start, period_end),
+            [tenant_id, period_start, period_end, *extra],
         ).fetchall()
         daily: dict[tuple[datetime.date, str], dict] = {}
         for day, uom_id, move_type, quantity in rows:
@@ -314,17 +355,23 @@ class WarehouseAnalyticsService:
         return [daily[key] for key in sorted(daily)]
 
     def _recent_corrections(
-        self, tenant_id: str, period_start: datetime.datetime, period_end: datetime.datetime
+        self,
+        tenant_id: str,
+        period_start: datetime.datetime,
+        period_end: datetime.datetime,
+        site_id: str | None = None,
     ) -> list[dict]:
+        join, site_clause, extra = self._site_join("sm", site_id)
         rows = self._connection.execute(
-            """
-            SELECT id, product_id, location_id, quantity, move_type, reason, reference, actor_id, created_at
-            FROM warehouse.stock_moves
-            WHERE tenant_id = %s AND move_type = ANY(%s) AND created_at >= %s AND created_at < %s
-            ORDER BY created_at DESC
+            f"""
+            SELECT sm.id, sm.product_id, sm.location_id, sm.quantity, sm.move_type, sm.reason, sm.reference, sm.actor_id, sm.created_at
+            FROM warehouse.stock_moves sm
+            {join}
+            WHERE sm.tenant_id = %s AND sm.move_type = ANY(%s) AND sm.created_at >= %s AND sm.created_at < %s {site_clause}
+            ORDER BY sm.created_at DESC
             LIMIT %s
             """,
-            (tenant_id, list(CORRECTION_MOVE_TYPES), period_start, period_end, RECENT_CORRECTIONS_LIMIT),
+            [tenant_id, list(CORRECTION_MOVE_TYPES), period_start, period_end, *extra, RECENT_CORRECTIONS_LIMIT],
         ).fetchall()
         return [
             {
@@ -341,18 +388,20 @@ class WarehouseAnalyticsService:
             for move_id, product_id, location_id, quantity, move_type, reason, reference, actor_id, created_at in rows
         ]
 
-    def _expiring_lots(self, tenant_id: str, today: datetime.date) -> list[dict]:
+    def _expiring_lots(self, tenant_id: str, today: datetime.date, site_id: str | None = None) -> list[dict]:
         horizon = today + datetime.timedelta(days=EXPIRY_HORIZON_DAYS)
+        join, site_clause, extra = self._site_join("ls", site_id)
         rows = self._connection.execute(
-            """
+            f"""
             SELECT l.id, l.product_id, l.lot_number, l.expiry_date, COALESCE(SUM(ls.quantity_on_hand), 0)
             FROM warehouse.lots l
             LEFT JOIN warehouse.lot_stock ls ON ls.lot_id = l.id AND ls.tenant_id = l.tenant_id
-            WHERE l.tenant_id = %s AND l.status = 'active' AND l.expiry_date IS NOT NULL AND l.expiry_date <= %s
+            {join}
+            WHERE l.tenant_id = %s AND l.status = 'active' AND l.expiry_date IS NOT NULL AND l.expiry_date <= %s {site_clause}
             GROUP BY l.id, l.product_id, l.lot_number, l.expiry_date
             ORDER BY l.expiry_date, l.lot_number
             """,
-            (tenant_id, horizon),
+            [tenant_id, horizon, *extra],
         ).fetchall()
         return [
             {
@@ -365,3 +414,14 @@ class WarehouseAnalyticsService:
             }
             for lot_id, product_id, lot_number, expiry_date, quantity in rows
         ]
+
+    @staticmethod
+    def _site_join(move_alias: str, site_id: str | None) -> tuple[str, str, list[object]]:
+        """A location join + WHERE fragment + its bind params, built only when a
+        site filter was actually asked for -- every caller passes the join
+        straight into an f-string and the params straight into the bind list,
+        so a tenant-wide call (site_id=None) runs the exact query it always did."""
+        if site_id is None:
+            return "", "", []
+        join = f"JOIN warehouse.locations loc ON loc.id = {move_alias}.location_id AND loc.tenant_id = {move_alias}.tenant_id"
+        return join, "AND loc.site_id = %s", [site_id]

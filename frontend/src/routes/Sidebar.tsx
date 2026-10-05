@@ -3,8 +3,10 @@ import { NavLink, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertOctagon,
+  BookOpen,
   Boxes,
   Building2,
+  CalendarCheck,
   CalendarClock,
   CalendarDays,
   ChevronDown,
@@ -16,18 +18,23 @@ import {
   Factory,
   FileSpreadsheet,
   FileText,
+  Fingerprint,
   FlaskConical,
   Gauge,
+  GitBranch,
+  ListTree,
   HeartPulse,
   History,
   KeyRound,
   LayoutDashboard,
   LineChart,
+  ListChecks,
   BriefcaseBusiness,
-  LogOut,
   PackageSearch,
   Recycle,
+  ScanLine,
   Settings as SettingsIcon,
+  Settings2,
   ShieldCheck,
   ShoppingCart,
   Sparkles,
@@ -35,16 +42,20 @@ import {
   Target,
   TrendingUp,
   Truck,
-  UserCircle,
   Users,
   Wallet,
   Zap,
+  Scale,
+  BookText,
+  CalendarRange,
 } from "lucide-react";
 import { useAuth } from "../lib/auth";
 import { useI18n, type TranslationKey } from "../lib/i18n";
 import { LanguageToggle } from "../components/patterns/LanguageToggle";
 import { cn } from "../lib/utils";
 import { outlineIcon } from "../components/patterns/outlineIcon";
+import { SidebarUserMenu } from "./SidebarUserMenu";
+import { NotificationBell } from "../features/notifications/NotificationBell";
 import ProductionIcon from "../assets/icons/production/line.svg?react";
 import QualityIcon from "../assets/icons/quality/check.svg?react";
 import MaintenanceIcon from "../assets/icons/maintenance/wrench.svg?react";
@@ -54,6 +65,8 @@ import ExtrusionIcon from "../assets/icons/production/extrusion.svg?react";
 import LabIcon from "../assets/icons/quality/lab.svg?react";
 import PlanningIcon from "../assets/icons/production/planning.svg?react";
 import WorkOrderIcon from "../assets/icons/production/work-order.svg?react";
+import logoTile64 from "../assets/icons/brand/logo-3d-64.png";
+import logoTile96 from "../assets/icons/brand/logo-3d-96.png";
 
 const COLLAPSED_STORAGE_KEY = "sonalim-erp.sidebar-collapsed";
 
@@ -112,6 +125,7 @@ const PRODUCTION_TABS: NavChild[] = [
   { tab: "work-orders", labelKey: "production.tabs.workOrders", icon: outlineIcon(WorkOrderIcon) },
   { tab: "planning", labelKey: "production.tabs.planning", icon: outlineIcon(PlanningIcon) },
   { tab: "shift-report", labelKey: "production.tabs.shiftReport", icon: ClipboardList },
+  { tab: "scan", labelKey: "production.tabs.scan", icon: ScanLine },
   { tab: "day-sheet", labelKey: "production.tabs.daySheet", icon: FileSpreadsheet },
   { tab: "validation", labelKey: "production.tabs.validation", icon: outlineIcon(ApprovalIcon) },
   { tab: "recipes", labelKey: "production.tabs.recipes", icon: outlineIcon(LabIcon) },
@@ -133,7 +147,23 @@ const QUALITY_TABS: NavChild[] = [
 const NAV_GROUPS: NavGroup[] = [
   {
     labelKey: "nav.hr",
-    items: [{ to: "/hr", labelKey: "nav.hr", icon: BriefcaseBusiness }],
+    items: [
+      { to: "/hr/employees", labelKey: "nav.hrEmployees", icon: Users, permission: "hr.view_employees" },
+      { to: "/hr/organisation", labelKey: "nav.hrOrganisation", icon: Building2 },
+      { to: "/hr", labelKey: "nav.hrLegacy", icon: BriefcaseBusiness, exact: true },
+      { to: "/hr/presence", labelKey: "nav.hrPresence", icon: CalendarCheck, exact: true, permission: "hr.view_presence" },
+      { to: "/hr/presence/imports", labelKey: "nav.hrClockImports", icon: Fingerprint, permission: "hr.view_presence" },
+      { to: "/hr/leave", labelKey: "nav.hrLeave", icon: CalendarDays, permission: "hr.view_leave" },
+      { to: "/hr/schedules", labelKey: "nav.hrSchedules", icon: CalendarClock, permission: "hr.view_presence" },
+    ],
+  },
+  {
+    labelKey: "nav.payroll",
+    items: [
+      { to: "/payroll/runs", labelKey: "payroll.tabs.runs", icon: Wallet, permission: "payroll.view_runs" },
+      { to: "/payroll/inputs", labelKey: "payroll.tabs.inputs", icon: ListChecks, permission: "payroll.view_runs" },
+      { to: "/payroll/rules", labelKey: "payroll.tabs.rules", icon: Settings2, permission: "payroll.view_rules" },
+    ],
   },
   {
     labelKey: "nav.crm",
@@ -180,14 +210,25 @@ const NAV_GROUPS: NavGroup[] = [
     labelKey: "nav.commerce",
     items: [
       { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart },
-      { to: "/finance", labelKey: "nav.finance", icon: Wallet },
+      { to: "/finance", labelKey: "nav.finance", icon: Wallet, exact: true },
+    ],
+  },
+  {
+    labelKey: "nav.accounting",
+    items: [
+      { to: "/finance/entries", labelKey: "nav.ledgerEntries", icon: BookOpen, permission: "finance.view_ledger" },
+      { to: "/finance/accounts", labelKey: "nav.chartOfAccounts", icon: ListTree, permission: "finance.view_ledger" },
+      { to: "/finance/posting-rules", labelKey: "nav.postingRules", icon: GitBranch, permission: "finance.view_ledger" },
+      { to: "/finance/trial-balance", labelKey: "nav.trialBalance", icon: Scale, permission: "finance.view_ledger" },
+      { to: "/finance/ledger", labelKey: "nav.generalLedger", icon: BookText, permission: "finance.view_ledger" },
+      { to: "/finance/periods", labelKey: "nav.accountingPeriods", icon: CalendarRange, permission: "finance.view_ledger" },
     ],
   },
   {
     labelKey: "nav.administration",
     items: [
-      { to: "/admin/users", labelKey: "nav.users", icon: ShieldCheck },
-      { to: "/admin/roles", labelKey: "nav.roles", icon: KeyRound },
+      { to: "/admin/users", labelKey: "nav.users", icon: ShieldCheck, permission: "core.manage_permissions" },
+      { to: "/admin/roles", labelKey: "nav.roles", icon: KeyRound, permission: "core.manage_permissions" },
       { to: "/admin/activity-log", labelKey: "nav.activityLog", icon: History, permission: "core.view_audit_log" },
     ],
   },
@@ -197,12 +238,15 @@ function isItemActive(item: NavItem, pathname: string): boolean {
   return item.exact ? pathname === item.to : pathname.startsWith(item.to);
 }
 
-export function Sidebar() {
-  const { session, logout, hasPermission } = useAuth();
+export function Sidebar({ isMobile = false, onNavigate }: { isMobile?: boolean; onNavigate?: () => void } = {}) {
+  const { session, hasPermission } = useAuth();
   const { t, language, setLanguage } = useI18n();
   const location = useLocation();
   const reduceMotion = useReducedMotion();
-  const [collapsed, setCollapsed] = useState(() => readStoredCollapsed());
+  const [desktopCollapsed, setCollapsed] = useState(() => readStoredCollapsed());
+  // The drawer is always the full menu: the desktop collapse preference is kept
+  // (so it is still there when the window widens) but not applied on mobile.
+  const collapsed = isMobile ? false : desktopCollapsed;
   // Which expandable items the person opened or closed by hand; an item on the
   // current page is open unless they closed it, and closes again on leaving.
   const [toggled, setToggled] = useState<Record<string, boolean>>({});
@@ -210,11 +254,13 @@ export function Sidebar() {
 
   useEffect(() => {
     try {
-      localStorage.setItem(COLLAPSED_STORAGE_KEY, collapsed ? "1" : "0");
+      // The desktop preference, not the mobile-forced value -- otherwise opening
+      // the drawer on a phone would silently un-collapse the desktop sidebar.
+      localStorage.setItem(COLLAPSED_STORAGE_KEY, desktopCollapsed ? "1" : "0");
     } catch {
       // private browsing / storage blocked — collapsed state just won't persist
     }
-  }, [collapsed]);
+  }, [desktopCollapsed]);
 
   useEffect(() => {
     setToggled({});
@@ -230,14 +276,22 @@ export function Sidebar() {
   return (
     <aside
       className={cn(
-        "flex h-full shrink-0 flex-col border-r border-border bg-background transition-[width] duration-200",
-        collapsed ? "w-16" : "w-64",
+        "flex h-full shrink-0 flex-col border-r border-border bg-background",
+        // In the mobile drawer the width is the drawer's, and the desktop
+        // collapse preference is deliberately not applied -- a 64px rail is not
+        // a useful phone menu.
+        isMobile ? "w-full" : cn("transition-[width] duration-200", collapsed ? "w-16" : "w-64"),
       )}
     >
       <div className={cn("flex items-center gap-2.5 py-5", collapsed ? "justify-center px-2" : "px-5")}>
-        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-gradient-to-br from-primary to-accent text-sm font-bold text-primary-foreground shadow-glow">
-          SE
-        </div>
+        <img
+          src={logoTile64}
+          srcSet={`${logoTile64} 2x, ${logoTile96} 3x`}
+          alt={collapsed ? "Sonalim ERP" : ""}
+          width={32}
+          height={32}
+          className="h-8 w-8 shrink-0 rounded-lg shadow-glow"
+        />
         {!collapsed && (
           <div className="min-w-0 flex-1">
             <p className="truncate text-sm font-semibold leading-tight">Sonalim ERP</p>
@@ -270,7 +324,7 @@ export function Sidebar() {
                   return (
                     <div key={item.to}>
                       <div className="relative flex items-center">
-                        <NavLink to={item.to} title={collapsed ? t(item.labelKey) : undefined} className={cn(linkClass(active), "min-w-0 flex-1")}>
+                        <NavLink to={item.to} onClick={onNavigate} title={collapsed ? t(item.labelKey) : undefined} className={cn(linkClass(active), "min-w-0 flex-1")}>
                           {active && (
                             <motion.span
                               layoutId="sidebar-active"
@@ -316,6 +370,7 @@ export function Sidebar() {
                                 <li key={child.tab} className="py-px">
                                   <NavLink
                                     to={`${item.to}?tab=${child.tab}`}
+                                    onClick={onNavigate}
                                     className={cn(
                                       "relative flex items-center gap-2 rounded-md px-2 py-1 text-[13px] text-muted-foreground transition-colors hover:text-foreground",
                                       childActive && "font-medium text-primary",
@@ -347,36 +402,14 @@ export function Sidebar() {
       </nav>
 
       <div className="border-t border-border p-3">
-        <NavLink to="/settings" title={collapsed ? t("nav.settings") : undefined} className={cn(linkClass(location.pathname.startsWith("/settings")), "mb-1")}>
-          {location.pathname.startsWith("/settings") && (
-            <motion.span
-              layoutId="sidebar-active"
-              className="absolute inset-0 rounded-md bg-primary/10"
-              transition={{ type: "spring", stiffness: 500, damping: 40 }}
-            />
-          )}
-          <SettingsIcon className={cn("relative h-4 w-4 shrink-0", location.pathname.startsWith("/settings") && "text-primary")} />
-          {!collapsed && <span className="relative truncate">{t("nav.settings")}</span>}
-        </NavLink>
-
-        <div className={cn("flex items-center gap-2.5 rounded-md py-2", collapsed ? "justify-center px-1.5" : "px-2.5")}>
-          <UserCircle className="h-7 w-7 shrink-0 text-muted-foreground" />
-          {!collapsed && (
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-xs font-medium">{session?.email ?? session?.userId ?? "—"}</p>
-              <p className="truncate text-[11px] text-muted-foreground">{t("nav.signedIn")}</p>
-            </div>
-          )}
-          <button
-            onClick={logout}
-            aria-label={t("nav.signOut")}
-            title={collapsed ? t("nav.signOut") : undefined}
-            className="shrink-0 rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
-          >
-            <LogOut className="h-4 w-4" />
-          </button>
+        <div className={cn("flex items-center gap-1", collapsed ? "flex-col" : "flex-row")}>
+          <div className="min-w-0 flex-1">
+            <SidebarUserMenu collapsed={collapsed} onNavigate={onNavigate} />
+          </div>
+          <NotificationBell collapsed={collapsed} />
         </div>
 
+        {!isMobile && (
         <button
           onClick={() => setCollapsed((prev) => !prev)}
           aria-label={collapsed ? t("nav.expandSidebar") : t("nav.collapseSidebar")}
@@ -389,6 +422,7 @@ export function Sidebar() {
           {collapsed ? <ChevronsRight className="h-4 w-4 shrink-0" /> : <ChevronsLeft className="h-4 w-4 shrink-0" />}
           {!collapsed && <span>{t("nav.collapseSidebar")}</span>}
         </button>
+        )}
       </div>
     </aside>
   );

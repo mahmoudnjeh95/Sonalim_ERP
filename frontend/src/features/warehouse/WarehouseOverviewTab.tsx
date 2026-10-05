@@ -15,6 +15,7 @@ import { Bar, BarChart, CartesianGrid, Legend, Tooltip, XAxis, YAxis } from "rec
 import { InteractiveChart } from "../../components/charts/InteractiveChart";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
+import { formatXof } from "../../lib/currency";
 import { Badge } from "../../components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { Table, TableBody, TableCell, TableHeader, TableRow, ResizableTableHead } from "../../components/ui/table";
@@ -132,10 +133,6 @@ function daysAgo(days: number) {
 
 function formatQty(amount: number) {
   return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 1 }).format(amount);
-}
-
-function formatMoney(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { maximumFractionDigits: 0 }).format(amount);
 }
 
 function formatDate(iso: string) {
@@ -424,7 +421,7 @@ export function WarehouseOverviewTab() {
         </span>
       ),
       defaultWidth: 140,
-      cell: (row) => (row.value === null ? <span className="text-muted-foreground">—</span> : <span className="tabular-nums">{formatMoney(row.value)}</span>),
+      cell: (row) => (row.value === null ? <span className="text-muted-foreground">—</span> : <span className="tabular-nums">{formatXof(row.value)}</span>),
       sortValue: (row) => row.value ?? -1,
     },
   ];
@@ -540,9 +537,9 @@ export function WarehouseOverviewTab() {
       <div className={cn("space-y-6 transition-opacity duration-200", isPlaceholderData && "opacity-60")} aria-busy={isPlaceholderData}>
       <motion.section {...sectionMotion(0)} className="space-y-2">
         <h2 className="text-sm font-medium text-muted-foreground">{t("warehouse.overview.section.today")}</h2>
-        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile>
-            <StatCard label={t("warehouse.overview.stat.stockValue")} value={summary.stock_value} icon={<Coins className="h-5 w-5" />} unit="F CFA" accent="primary" />
+            <StatCard label={t("warehouse.overview.stat.stockValue")} value={summary.stock_value} icon={<Coins className="h-5 w-5" />} unit="XOF" accent="primary" />
           </KpiTile>
           <KpiTile>
             <StatCard
@@ -595,7 +592,7 @@ export function WarehouseOverviewTab() {
         <h2 className="text-sm font-medium text-muted-foreground">
           {fill(t("warehouse.overview.section.period"), { from: formatDate(overview.period.from), to: formatDate(overview.period.to) })}
         </h2>
-        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <motion.div variants={gridVariants} initial="hidden" animate="show" className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <KpiTile>
             <UnitBreakdownStat label={t("warehouse.overview.stat.inbound")} icon={<MovementInIcon className="h-5 w-5" />} accent="primary" breakdown={inboundBreakdown} />
           </KpiTile>

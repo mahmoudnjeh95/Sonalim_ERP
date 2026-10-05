@@ -15,6 +15,7 @@ env:
   IMAGE_OWNER: smarttoolsagro
   BACKEND_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-backend
   FRONTEND_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-frontend
+  OCR_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-ocr
 
 jobs:
   build:
@@ -51,6 +52,16 @@ jobs:
             ${{ env.FRONTEND_IMAGE }}:latest
             ${{ env.FRONTEND_IMAGE }}:${{ github.sha }}
 
+      - name: Build and push OCR image
+        uses: docker/build-push-action@v6
+        continue-on-error: true
+        with:
+          context: ./ocr
+          push: true
+          tags: |
+            ${{ env.OCR_IMAGE }}:latest
+            ${{ env.OCR_IMAGE }}:${{ github.sha }}
+
   deploy:
     needs: build
     runs-on: ubuntu-latest
@@ -81,4 +92,5 @@ jobs:
             echo "${{ secrets.SECRET_SONALIM }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
             docker compose pull app worker web
             docker compose up -d app worker web
+            docker compose pull ocr && docker compose up -d ocr || echo "::warning::OCR image not pulled or started; scanned photos stay queued"
             docker image prune -f

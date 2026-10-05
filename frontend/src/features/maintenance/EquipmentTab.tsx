@@ -1,12 +1,14 @@
 import { useState } from "react";
+import { Link } from "react-router-dom";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { AlertTriangle, Archive, ArchiveRestore, CheckCircle2, Pencil, Plus, Settings2, Wrench } from "lucide-react";
+import { AlertTriangle, Archive, ArchiveRestore, CheckCircle2, History, MapPin, Pencil, Plus, Settings2, Wrench } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
+import { useHasPermission } from "./hooks";
 import { useI18n } from "../../lib/i18n";
 import { ApiError } from "../../lib/api";
 import { Badge, type BadgeProps } from "../../components/ui/badge";
@@ -82,6 +84,8 @@ export function EquipmentTab() {
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+  const canManageCheckpoints = useHasPermission("maintenance.manage_checkpoints");
+  const canViewJobs = useHasPermission("maintenance.view_jobs");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingEquipment, setEditingEquipment] = useState<Equipment | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -268,27 +272,47 @@ export function EquipmentTab() {
     {
       key: "action",
       header: t("maintenance.equipment.column.action"),
-      defaultWidth: 260,
+      defaultWidth: 350,
       alwaysVisible: true,
       headerClassName: "text-right",
       cellClassName: "space-x-2 text-right",
-      cell: (item) =>
-        item.archived_at ? (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => unarchiveMutation.mutate(item.id)}
-            disabled={unarchiveMutation.isPending && unarchiveMutation.variables === item.id}
-          >
-            <ArchiveRestore className="h-3.5 w-3.5" />
-            {t("maintenance.equipment.unarchive")}
+      cell: (item) => {
+        const historyButton = canViewJobs && (
+          <Button size="sm" variant="outline" asChild>
+            <Link to={`/maintenance/equipment/${item.id}`}>
+              <History className="h-3.5 w-3.5" />
+              {t("maintenance.equipment.history")}
+            </Link>
           </Button>
+        );
+        return item.archived_at ? (
+          <>
+            {historyButton}
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => unarchiveMutation.mutate(item.id)}
+              disabled={unarchiveMutation.isPending && unarchiveMutation.variables === item.id}
+            >
+              <ArchiveRestore className="h-3.5 w-3.5" />
+              {t("maintenance.equipment.unarchive")}
+            </Button>
+          </>
         ) : (
           <>
+            {historyButton}
             <Button size="sm" variant="outline" onClick={() => openEditDialog(item)}>
               <Pencil className="h-3.5 w-3.5" />
               {t("maintenance.equipment.edit")}
             </Button>
+            {canManageCheckpoints && (
+              <Button size="sm" variant="outline" asChild>
+                <Link to={`/maintenance/equipment/${item.id}/map`}>
+                  <MapPin className="h-3.5 w-3.5" />
+                  {t("maintenance.equipment.checkpointMap")}
+                </Link>
+              </Button>
+            )}
             {NEXT_STATUS[item.status].map((status) => (
               <Button
                 key={status}
@@ -310,7 +334,8 @@ export function EquipmentTab() {
               {t("maintenance.equipment.archive")}
             </Button>
           </>
-        ),
+        );
+      },
     },
   ];
   const { visibleColumns, colWidths, isVisible, toggleVisible, getWidth, setWidth, resetAll, sortDirectionFor, toggleSort, sortRows } =

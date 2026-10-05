@@ -7,6 +7,7 @@ type Status =
   | "in_progress"
   | "active"
   | "confirmed"
+  | "shipped"
   | "completed"
   | "issued"
   | "paid"
@@ -43,6 +44,7 @@ const STATUS_VARIANT: Record<Status, BadgeProps["variant"]> = {
   in_progress: "warning",
   active: "success",
   confirmed: "success",
+  shipped: "primary",
   completed: "success",
   issued: "primary",
   paid: "success",

@@ -106,14 +106,17 @@ def test_a_row_with_no_production_on_the_shift_is_refused_on_save(db, env):
     )
 
 
-def test_packaging_kept_in_different_stores_is_refused(db, env):
+def test_packaging_items_in_different_stores_each_keep_their_own(db, env):
+    # film and carton default to different stores; the row draws each item from its own,
+    # it no longer has to funnel every item through one shared store.
     service, shift_id, _, run_id = _shift_with_run(db, env)
     db.execute("UPDATE core.products SET default_location_id = %s WHERE id = %s", (env["other"], env["carton"]))
-    refused = _save_packing(service, env, shift_id, [{
+    _ok(_save_packing(service, env, shift_id, [{
         "run_id": run_id, "film_product_id": env["film"], "carton_product_id": env["carton"], "film_quantity": 1, "carton_quantity": 1,
-    }])
-    assert isinstance(refused, Err) and refused.code == "PACKAGING_STORES_DIFFER"
-    assert refused.message_fr.startswith("ligne de conditionnement 1 : ")
+    }]))
+    row = _saved_row(service, shift_id)
+    assert row["film_location_id"] == env["pack"]
+    assert row["carton_location_id"] == env["other"]
 
 
 def test_submitting_needs_a_product(db, env):

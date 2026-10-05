@@ -145,23 +145,30 @@ class ShiftStockService:
         return Ok({"scrap_record_id": scrap.value.id, "regrind_work_order_id": batch.value["work_order"].id})
 
     @staticmethod
-    def _packing_lines(packing_row: dict) -> list[tuple[float, str]]:
+    def _packing_lines(packing_row: dict) -> list[tuple[float, str, str | None]]:
+        """Everything a packing row's packaging takes out of stock, one line per item.
+
+        Each item draws from its own default store (film/carton/scotch/ruban may each sit
+        in a different warehouse); a line with no store of its own falls back to the row's
+        shared packaging_location_id, kept for rows saved before items had their own.
+        """
+        shared = packing_row.get("packaging_location_id")
         lines = [
-            (float(packing_row.get("film_quantity") or 0), packing_row.get("film_product_id")),
-            (float(packing_row.get("carton_quantity") or 0), packing_row.get("carton_product_id")),
-            (float(packing_row.get("scotch_quantity") or 0), packing_row.get("scotch_product_id")),
-            (float(packing_row.get("ruban_quantity") or 0), packing_row.get("ruban_product_id")),
+            (float(packing_row.get("film_quantity") or 0), packing_row.get("film_product_id"), packing_row.get("film_location_id") or shared),
+            (float(packing_row.get("carton_quantity") or 0), packing_row.get("carton_product_id"), packing_row.get("carton_location_id") or shared),
+            (float(packing_row.get("scotch_quantity") or 0), packing_row.get("scotch_product_id"), packing_row.get("scotch_location_id") or shared),
+            (float(packing_row.get("ruban_quantity") or 0), packing_row.get("ruban_product_id"), packing_row.get("ruban_location_id") or shared),
         ]
-        return [(quantity, product_id) for quantity, product_id in lines if quantity > 0 and product_id]
+        return [(quantity, product_id, location_id) for quantity, product_id, location_id in lines if quantity > 0 and product_id]
 
     def packing_shortfalls(self, *, tenant_id: str, packing_row: dict) -> list[dict]:
         shortfalls: list[dict] = []
-        for quantity, product_id in self._packing_lines(packing_row):
+        for quantity, product_id, location_id in self._packing_lines(packing_row):
             if self._stock.would_go_negative(
                 tenant_id=tenant_id, product_id=product_id,
-                location_id=packing_row["packaging_location_id"], quantity=quantity,
+                location_id=location_id, quantity=quantity,
             ):
-                shortfalls.append({"product_id": product_id, "location_id": packing_row["packaging_location_id"], "quantity": quantity})
+                shortfalls.append({"product_id": product_id, "location_id": location_id, "quantity": quantity})
         return shortfalls
 
     def finished_goods_store(self, *, tenant_id: str, packing_row: dict, finished_product_id: str | None) -> str | None:
@@ -243,16 +250,16 @@ class ShiftStockService:
                 return received
             movements.append({"direction": direction_in, "product_id": finished_product_id, "location_id": packing_row["finished_goods_location_id"], "quantity": finished_quantity})
 
-        for quantity, product_id in self._packing_lines(packing_row):
+        for quantity, product_id, location_id in self._packing_lines(packing_row):
             issued = self._stock.post_production_movement(
-                tenant_id=tenant_id, product_id=product_id, location_id=packing_row["packaging_location_id"],
+                tenant_id=tenant_id, product_id=product_id, location_id=location_id,
                 quantity=quantity, direction=direction_out, correlation_id=correlation_id,
                 reference=f"shift_packing_row:{packing_row['id']}", move_type="production_consumption", actor_id=actor_id,
                 source_type="production.shift_packing_row", source_id=packing_row["id"], of_id=packing_row["of_id"],
             )
             if isinstance(issued, Err):
                 return issued
-            movements.append({"direction": direction_out, "product_id": product_id, "location_id": packing_row["packaging_location_id"], "quantity": quantity})
+            movements.append({"direction": direction_out, "product_id": product_id, "location_id": location_id, "quantity": quantity})
 
         return Ok({"movements": movements})
 

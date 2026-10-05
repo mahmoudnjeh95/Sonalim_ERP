@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import { currentLocale, useI18n } from "../../../lib/i18n";
 import { formatDuration } from "../../../lib/units";
+import { CURRENCY_CODE } from "../../../lib/currency";
 import { downtimeLabel } from "../../production/downtimeOptions";
 import type { WasteCategory } from "../../production/api";
 import { useWasteTypes } from "../../production/wasteTypes";
@@ -34,7 +35,7 @@ export function useFormatters(machineLabel: (equipmentId: string) => string): Fo
       tonnes: (value) => `${formatNumber(value, value < 10 ? 2 : 1)} t`,
       kg: (value) => `${formatNumber(value, value < 10 ? 1 : 0)} kg`,
       duration: formatDuration,
-      money: (value) => `${formatNumber(value, 0)} CFA`,
+      money: (value) => `${formatNumber(value, 0)} ${CURRENCY_CODE}`,
       machine: machineLabel,
       stage: (stage: WasteCategory) => wasteLabel(stage),
       motif: (motif: string) => downtimeLabel(t, "motif", motif),

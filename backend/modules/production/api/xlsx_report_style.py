@@ -21,9 +21,24 @@ BORDER = Border(left=THIN, right=THIN, top=THIN, bottom=THIN)
 CENTER = Alignment(horizontal="center", vertical="center")
 
 
+# Excel and LibreOffice read a cell whose text starts with one of these as a formula, so an
+# exported product name, motif or note typed as "=1+1" -- or something far worse -- would run
+# on whoever opens the file. Guarded here, once, for every report built on these helpers.
+_FORMULA_STARTS = ("=", "+", "-", "@", "\t", "\r")
+
+
+def safe_text(value):
+    """A cell's value, with text a user typed kept as text. The leading apostrophe is the
+    spreadsheet's own "this is literal" marker: it is not shown in the cell and is dropped
+    on copy. Numbers, dates and None are returned untouched."""
+    if isinstance(value, str) and value.startswith(_FORMULA_STARTS):
+        return f"'{value}"
+    return value
+
+
 def title_row(ws: Worksheet, row: int, span: int, text: str) -> None:
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=span)
-    cell = ws.cell(row=row, column=1, value=text)
+    cell = ws.cell(row=row, column=1, value=safe_text(text))
     cell.font = TITLE_FONT
     cell.fill = TITLE_FILL
     cell.alignment = CENTER
@@ -33,7 +48,7 @@ def title_row(ws: Worksheet, row: int, span: int, text: str) -> None:
 
 def header_row(ws: Worksheet, row: int, headers: list[str]) -> None:
     for col, label in enumerate(headers, start=1):
-        cell = ws.cell(row=row, column=col, value=label)
+        cell = ws.cell(row=row, column=col, value=safe_text(label))
         cell.font = HEADER_FONT
         cell.fill = HEADER_FILL
         cell.border = BORDER
@@ -42,7 +57,7 @@ def header_row(ws: Worksheet, row: int, headers: list[str]) -> None:
 
 def data_row(ws: Worksheet, row: int, values: list, *, money_cols: set[int] = frozenset()) -> None:
     for col, value in enumerate(values, start=1):
-        cell = ws.cell(row=row, column=col, value=value)
+        cell = ws.cell(row=row, column=col, value=safe_text(value))
         cell.border = BORDER
         if col in money_cols and isinstance(value, (int, float)):
             cell.number_format = "#,##0"
@@ -50,7 +65,7 @@ def data_row(ws: Worksheet, row: int, values: list, *, money_cols: set[int] = fr
 
 def total_row(ws: Worksheet, row: int, span: int, label: str, label_span: int, values: list, *, money_cols: set[int]) -> None:
     ws.merge_cells(start_row=row, start_column=1, end_row=row, end_column=label_span)
-    label_cell = ws.cell(row=row, column=1, value=label)
+    label_cell = ws.cell(row=row, column=1, value=safe_text(label))
     label_cell.font = BOLD
     label_cell.fill = SUBTOTAL_FILL
     label_cell.alignment = CENTER
@@ -59,7 +74,7 @@ def total_row(ws: Worksheet, row: int, span: int, label: str, label_span: int, v
         ws.cell(row=row, column=col).border = BORDER
     for offset, value in enumerate(values):
         col = label_span + 1 + offset
-        cell = ws.cell(row=row, column=col, value=value)
+        cell = ws.cell(row=row, column=col, value=safe_text(value))
         cell.font = BOLD
         cell.fill = SUBTOTAL_FILL
         cell.border = BORDER

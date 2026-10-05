@@ -4,6 +4,7 @@ import { useNavigate, useSearchParams } from "react-router-dom";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../components/ui/card";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
+import { CURRENCY_CODE } from "../../lib/currency";
 import { cn } from "../../lib/utils";
 import { FINISHED_GOODS_LOT_SOURCE, listLots } from "../warehouse/api";
 import { AnalyticsEmptyState, AnalyticsErrorState, AnalyticsLoadingState } from "./AnalyticsStates";
@@ -242,7 +243,7 @@ export function AnalyticsOverviewSection() {
                 icon={CostIcon}
                 label={t("analytics.kpi.cost")}
                 value={costUnavailable ? null : (cost?.costPerTonne ?? null)}
-                format={(value) => `${formatNumber(value, 0)} CFA`}
+                format={(value) => `${formatNumber(value, 0)} ${CURRENCY_CODE}`}
                 comparison={costComparison}
                 deltaText={deltaText(costComparison)}
                 previousText={
@@ -253,7 +254,7 @@ export function AnalyticsOverviewSection() {
               />
             </div>
 
-            <div className="grid gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+            <div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
               <Card>
                 <CardHeader>
                   <div>
@@ -273,7 +274,7 @@ export function AnalyticsOverviewSection() {
               <YieldWasteFlowPanel current={ops} previous={previousOps} fmt={fmt} />
             </div>
 
-            <div className="grid gap-4 lg:grid-cols-2">
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
               {sources.machinePerformance.isError ? (
                 <Card>
                   <AnalyticsErrorState

@@ -7,6 +7,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.maintenance.api.equipment_service import UNSET, EquipmentService
+from modules.maintenance.api import history_router, jobs_router, maps_router, parts_router, programs_router, spare_parts_router, teams_router
 from modules.maintenance.domain.equipment import Equipment
 
 router = APIRouter(prefix="/maintenance", tags=["maintenance"])
@@ -154,7 +155,7 @@ def unarchive_equipment(
     return _serialize_equipment(result.value)
 
 
-@router.delete("/equipment/{equipment_id}", status_code=status.HTTP_204_NO_CONTENT)
+@router.delete("/equipment/{equipment_id}", status_code=status.HTTP_204_NO_CONTENT, response_model=None)
 def delete_equipment(
     equipment_id: str,
     tenant: TenantContext = Depends(require_permission("maintenance.delete_equipment")),
@@ -166,3 +167,12 @@ def delete_equipment(
             connection.rollback()
             raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(result))
         connection.commit()
+
+
+router.include_router(teams_router.router)
+router.include_router(maps_router.router)
+router.include_router(jobs_router.router)
+router.include_router(programs_router.router)
+router.include_router(parts_router.router)
+router.include_router(spare_parts_router.router)
+router.include_router(history_router.router)

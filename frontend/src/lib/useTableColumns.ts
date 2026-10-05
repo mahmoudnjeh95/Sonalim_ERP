@@ -16,14 +16,25 @@ export interface ColumnDef<Row> {
   cell: (row: Row) => ReactNode;
   /** Starting column width in px. Falls back to DEFAULT_WIDTH. */
   defaultWidth?: number;
+  /** Floor this column may shrink to before others give up their space instead. Falls back to MIN_WIDTH (72). */
+  minWidth?: number;
   /** Actions/buttons columns that must always stay visible. */
   alwaysVisible?: boolean;
+  /** Hidden until the user opts in via the column menu, for lower-priority columns on wide tables. */
+  hiddenByDefault?: boolean;
   headerClassName?: string;
   cellClassName?: string;
   /** For tables with a <ColumnFilterRow> — the per-column filter control, if any. */
   filterCell?: FilterCell;
   /** Raw value to compare when sorting by this column. Omit to keep the header unclickable. */
   sortValue?: (row: Row) => string | number | boolean | null | undefined;
+  /**
+   * What this column becomes when the row is drawn as a card on a phone.
+   * Optional: left out, the card layout falls back to `alwaysVisible` and then
+   * to column order, which is right for most tables. Set it where that guess
+   * picks a poor headline, or to keep a controls column out of the detail list.
+   */
+  mobileRole?: "title" | "subtitle" | "detail" | "actions";
 }
 
 const DEFAULT_WIDTH = 160;
@@ -62,7 +73,7 @@ export function useTableColumns<Row>(tableKey: string, columns: ColumnDef<Row>[]
   });
 
   function defaultsFor(column: ColumnDef<Row>): StoredColumnPreference {
-    return { visible: true, width: column.defaultWidth ?? DEFAULT_WIDTH };
+    return { visible: !column.hiddenByDefault, width: column.defaultWidth ?? DEFAULT_WIDTH };
   }
 
   function preferenceFor(column: ColumnDef<Row>): StoredColumnPreference {
@@ -111,7 +122,7 @@ export function useTableColumns<Row>(tableKey: string, columns: ColumnDef<Row>[]
   );
 
   const colWidths = useMemo(
-    () => visibleColumns.map((column) => preferenceFor(column).width),
+    () => visibleColumns.map((column) => ({ width: preferenceFor(column).width, minWidth: column.minWidth ?? MIN_WIDTH })),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [visibleColumns, overrides],
   );
