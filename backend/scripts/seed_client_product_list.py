@@ -15,9 +15,12 @@ What it does, in one transaction:
     Each new product copies its unit, default store, carton specs and production
     classification from a named TEMPLATE product of the same kind and weight.
   * Creates the missing suppliers (matched case-insensitively, aliases below) and tags
-    every film/carton supplier FILM and CARTON so they are suggested on those items.
+    every carton supplier CARTON and every film supplier FILM, so they are suggested on
+    those items.
+  * DELETES the old film items made from the carton list (before the plant's own film
+    list, 2026-10-05) when nothing references them; any still in use are kept and listed.
 
-Nothing is deleted. Products that are not on the list (Spaghetti 1,1, Pate courte,
+Nothing else is deleted. Products that are not on the list (Spaghetti 1,1, Pate courte,
 Doman..., Annelini/Long oiseau 4540g, the old Film ... Laize / Carton PL 500g B|C
 items) are left untouched. Running it twice changes nothing the second time.
 
@@ -97,8 +100,8 @@ TEMPLATES: dict[str, str] = {
 FILM_TEMPLATE = "film-pc-laize-390mm"  # kg, raw-materials store, packaging_component / film
 CARTON_TEMPLATE = "carton-pc-500g"  # pieces, raw-materials store, packaging_component / carton
 
-# --- Film and carton types ---------------------------------------------------------
-# (supplier as written on the list, format, PL|PC). The list is the same for film and carton.
+# --- Carton types ------------------------------------------------------------------
+# (supplier as written on the list, format, PL|PC).
 PACKAGING: tuple[tuple[str, str, str], ...] = (
     ("SCS", "Spaghetti 1.2 Pasta Douman 500 g", "PL"),
     ("Rochette", "Spaghetti 1.2 Pasta Douman 500 g", "PL"),
@@ -124,13 +127,52 @@ PACKAGING: tuple[tuple[str, str, str], ...] = (
     ("Rochette", "Torsade,Esc,Coq7 200 g", "PC"),
 )
 
+# --- Film types (the plant's "Type de Film" table, 2026-10-05) -------------------------
+# (supplier as written on the table, format, film width in mm, PL|PC).
+FILMS: tuple[tuple[str, str, int, str], ...] = (
+    ("Ronzulli (Active print)", "Spaghetti 1.2 Pasta Douman 500 g", 230, "PL"),
+    ("Ronzulli", "Spaghetti 1.2 Pasta Douman 500 g", 230, "PL"),
+    ("TRB", "Spaghetti 1.2 Pasta Douman 500 g", 230, "PL"),
+    ("CNP", "Spaghetti 1.2 Pasta Douman 500 g", 230, "PL"),
+    ("DEVPAC", "Spaghetti 1.2 Pasta Douman 500 g", 230, "PL"),
+    ("Ronzulli", "Spaghetti 1.2 Pasta Douman 500 g", 170, "PL"),
+    ("Ronzulli", "Spaghetti 1.2 Pasta Prima 500 g", 230, "PL"),
+    ("Ronzulli", "Spaghetti 1.2 Pasta Prima 200 g", 170, "PL"),
+    ("Vee Dee", "Spaghetti 1.2 Pasta Prima 200 g", 170, "PL"),
+    ("Ronzulli (Active print)", "Torsade, Esc, etc. Pasta Douman 500 g", 390, "PC"),
+    ("Ronzulli", "Torsade, Esc, etc. Pasta Douman 500 g", 390, "PC"),
+    ("TRB", "Torsade, Esc, etc. Pasta Douman 500 g", 390, "PC"),
+    ("CNP", "Torsade, Esc, etc. Pasta Douman 500 g", 390, "PC"),
+    ("DEVPAC", "Torsade, Esc, etc. Pasta Douman 500 g", 390, "PC"),
+    ("Printo Pack", "Torsade, Esc, etc. Pasta Douman 200 g", 310, "PC"),
+    ("Ronzulli", "Torsade, Esc, etc. Pasta Douman 200 g", 230, "PC"),
+    ("Ronzulli", "Torsade, Esc, etc. Pasta Douman 4540 g", 730, "PC"),
+    ("Ronzulli", "Torsade, Esc, etc. Pasta Douman 4540 g", 790, "PC"),
+)
+
+# Columns holding a product id with no foreign key behind them (the shift form's rows and
+# a few others), checked before an old film item is deleted. A foreign-keyed reference
+# makes the delete itself fail.
+UNKEYED_PRODUCT_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("production.shift_packing_rows", "film_product_id"),
+    ("production.shift_waste_lines", "product_id"),
+    ("production.shift_versements", "product_id"),
+    ("production.shift_rebroyat_versements", "product_id"),
+    ("production.shift_run_semolina_lines", "product_id"),
+    ("qc.quality_conformity_lines", "product_id"),
+    ("maintenance.part_request_lines", "product_id"),
+)
+
 # Supplier on the list -> partner names to look for, in order (case-insensitive). The first
 # one is used when none exists. "SCS" is the partner "SCS MDC": the bare "SCS" duplicate
-# was kept off the server by sync_master_data.
+# was kept off the server by sync_master_data. Ronzulli films printed by Active Print are
+# still bought from Ronzulli.
 SUPPLIER_ALIASES: dict[str, tuple[str, ...]] = {
     "SCS": ("SCS MDC", "SCS"),
+    "Ronzulli (Active print)": ("RONZULLI",),
+    "Ronzulli": ("RONZULLI",),
+    "TRB": ("TRB Group", "TRB"),
 }
-PACKAGING_TAGS = ("FILM", "CARTON")
 
 
 @dataclass
@@ -140,6 +182,8 @@ class Report:
     unchanged: int = 0
     suppliers_created: list[str] = field(default_factory=list)
     suppliers_tagged: list[str] = field(default_factory=list)
+    deleted: list[str] = field(default_factory=list)
+    kept_in_use: list[str] = field(default_factory=list)
 
 
 def _slug(text: str) -> str:
@@ -148,6 +192,14 @@ def _slug(text: str) -> str:
 
 def _packaging_sku(kind: str, supplier: str, fmt: str) -> str:
     return f"{kind}-{_slug(supplier)}-{_slug(fmt)}"
+
+
+def _film_sku(supplier: str, fmt: str, width_mm: int) -> str:
+    return f"film-{_slug(supplier)}-{_slug(fmt)}-{width_mm}mm"
+
+
+class _InUse(Exception):
+    """Undoes one old film's delete (its savepoint) when a foreign key still points at it."""
 
 
 class Seeder:
@@ -252,19 +304,48 @@ class Seeder:
                                            tag_ids=sorted(current | set(tag_ids))))
             self.report.suppliers_tagged.append(listed)
 
+    def delete_old_film(self, sku: str) -> None:
+        """An old film item made from the carton list goes when nothing points at it."""
+        product = self._product(sku)
+        if product is None:
+            return
+        used = [
+            f"{table}.{column}" for table, column in UNKEYED_PRODUCT_COLUMNS
+            if self.conn.execute(f"SELECT 1 FROM {table} WHERE {column} = %s LIMIT 1", (product.id,)).fetchone()
+        ]
+        if not used:
+            try:
+                with self.conn.transaction():  # savepoint: an in-use product undoes only its own delete
+                    # Its own rows go with it: tags and production classification.
+                    self.conn.execute("DELETE FROM core.product_tag_links WHERE product_id = %s", (product.id,))
+                    self.conn.execute("DELETE FROM production.product_classifications WHERE product_id = %s", (product.id,))
+                    result = self.core.delete_product(tenant_id=self.tenant, actor_id=self.actor, product_id=product.id)
+                    if isinstance(result, Err):
+                        raise _InUse(result.code)
+            except _InUse as error:
+                used = [str(error)]
+        if used:
+            self.report.kept_in_use.append(f"{product.name}  ({', '.join(used)})")
+        else:
+            self.report.deleted.append(f"{sku}  {product.name}")
+
     def run(self) -> Report:
         for sku, name, family in FINISHED:
             self.rename_or_create(sku, name, family, TEMPLATES.get(sku))
         for sku, name in RAW:
             self.rename_or_create(sku, name, None, TEMPLATES.get(sku))
-        for kind, template, tag in (("film", FILM_TEMPLATE, "FILM"), ("carton", CARTON_TEMPLATE, "CARTON")):
-            for supplier, fmt, line_type in PACKAGING:
-                name = f"{kind.capitalize()} {supplier} - {fmt}"
-                self.rename_or_create(_packaging_sku(kind, supplier, fmt), name, line_type, template,
-                                      product_type=line_type, tag=tag)
-        tag_ids = [self._tag_id(tag) for tag in PACKAGING_TAGS]
-        for supplier in dict.fromkeys(s for s, _, _ in PACKAGING):
-            self.supplier(supplier, tag_ids)
+        for supplier, fmt, line_type in PACKAGING:
+            self.rename_or_create(_packaging_sku("carton", supplier, fmt), f"Carton {supplier} - {fmt}", line_type,
+                                  CARTON_TEMPLATE, product_type=line_type, tag="CARTON")
+        for supplier, fmt, width_mm, line_type in FILMS:
+            self.rename_or_create(_film_sku(supplier, fmt, width_mm), f"Film {supplier} - {fmt} - {width_mm} mm",
+                                  line_type, FILM_TEMPLATE, product_type=line_type, tag="FILM")
+        for supplier, fmt, _ in PACKAGING:
+            self.delete_old_film(_packaging_sku("film", supplier, fmt))
+        for tag, suppliers in (("CARTON", [s for s, _, _ in PACKAGING]), ("FILM", [s for s, _, _, _ in FILMS])):
+            tag_ids = [self._tag_id(tag)]
+            for supplier in dict.fromkeys(suppliers):
+                self.supplier(supplier, tag_ids)
         return self.report
 
 
@@ -301,7 +382,13 @@ def main() -> int:
             print(f"  {line}")
         print(f"Already up to date: {report.unchanged}")
         print(f"Suppliers created: {', '.join(report.suppliers_created) or '(none)'}")
-        print(f"Suppliers tagged FILM+CARTON: {', '.join(report.suppliers_tagged) or '(none)'}")
+        print(f"Suppliers tagged: {', '.join(report.suppliers_tagged) or '(none)'}")
+        print(f"Old film items deleted {len(report.deleted)}:")
+        for line in report.deleted:
+            print(f"  {line}")
+        print(f"Old film items kept (still in use) {len(report.kept_in_use)}:")
+        for line in report.kept_in_use:
+            print(f"  {line}")
 
         if args.commit:
             conn.commit()
