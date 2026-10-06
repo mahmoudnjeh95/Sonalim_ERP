@@ -38,11 +38,25 @@ ADMINISTRATOR_ROLE_CODE = "administrateur"
 #   hr.view_sensitive        personal data: salary, national id, bank details.
 #   hr.view/manage_payroll   running payroll is the payroll role's job, not everyday HR's;
 #                            anyone who does both jobs gets both roles.
+#   scan.use_cloud_reader    reading fiches with Claude sends the photos (workers' names
+#                            on them) to the Anthropic API; it has a role of its own below.
 DELIBERATE_GRANT_PERMISSIONS = {
     "hr.view_sensitive",
     "hr.view_payroll",
     "hr.manage_payroll",
+    "scan.use_cloud_reader",
 }
+
+# Single-purpose roles for deliberate grants, so an admin hands one out by role instead of
+# per user. scan/0003 creates this one on the tenants that already have the default roles.
+DELIBERATE_GRANT_ROLES = [
+    {
+        "code": "scan_cloud",
+        "name": "Numérisation cloud (Claude)",
+        "description": "Lire les fiches papier avec Claude : les photos sont envoyées à l'API Anthropic.",
+        "permissions": ["scan.use_cloud_reader"],
+    },
+]
 
 # Permissions core itself defines that aren't tied to any business module.
 CORE_PERMISSIONS = [
@@ -107,6 +121,7 @@ def default_role_catalog() -> list[dict[str, object]]:
             }
         )
 
+    roles.extend(DELIBERATE_GRANT_ROLES)
     roles.append(
         {
             "code": ADMINISTRATOR_ROLE_CODE,

@@ -79,6 +79,9 @@ export function PhotosPanel({
     onError: (e) => fail(e),
   });
   // Pages already read by the other engine: worth offering to read them again after a switch.
+  // A scan someone else sent to Claude: this user may move it back to the local OCR, but
+  // nothing that sends a photo to Claude (the server refuses it too).
+  const cloudLocked = session.reader === "claude" && readers.data?.allowed.claude === false;
   const readByOther = session.pages.some((p) => p.read_by && p.read_by !== session.reader && p.status !== "queued");
   const pick = (files: FileList | null) => {
     if (files && files.length) upload.mutate(Array.from(files));
@@ -99,11 +102,11 @@ export function PhotosPanel({
             <div className="flex flex-wrap gap-2">
               <input ref={pickRef} type="file" accept="image/*" multiple hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
               <input ref={cameraRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => { pick(e.target.files); e.target.value = ""; }} />
-              <Button variant="outline" onClick={() => setCameraOpen(true)} disabled={upload.isPending}>
+              <Button variant="outline" onClick={() => setCameraOpen(true)} disabled={upload.isPending || cloudLocked}>
                 <Camera className="h-4 w-4" />
                 {label(S.camera)}
               </Button>
-              <Button onClick={() => pickRef.current?.click()} disabled={upload.isPending}>
+              <Button onClick={() => pickRef.current?.click()} disabled={upload.isPending || cloudLocked}>
                 <ImagePlus className="h-4 w-4" />
                 {preparing ? `${label(S.preparing)} ${preparing}…` : label(S.addPhotos)}
               </Button>
@@ -121,7 +124,7 @@ export function PhotosPanel({
             <Button
               size="sm"
               variant={readByOther ? "default" : "outline"}
-              disabled={switchReader.isPending}
+              disabled={switchReader.isPending || cloudLocked}
               onClick={() => switchReader.mutate({ reader: session.reader, rereadAll: true })}
             >
               <RotateCw className="h-3.5 w-3.5" />
@@ -129,6 +132,7 @@ export function PhotosPanel({
             </Button>
           )}
         </div>
+        {cloudLocked && !disabled && <p className="text-sm text-warning">{label(S.cloudScanLocked)}</p>}
         {serviceDown && <p className="text-sm text-warning">{label(S.serviceDown)}</p>}
         <CameraDialog
           open={cameraOpen}
@@ -143,6 +147,7 @@ export function PhotosPanel({
             key={page.id}
             page={page}
             disabled={disabled}
+            rereadLocked={cloudLocked}
             included={included.has(page.id)}
             onInclude={(on) => onInclude(page.id, on)}
             onRemove={() => remove.mutate(page.id)}
@@ -155,9 +160,9 @@ export function PhotosPanel({
 }
 
 function PageCard({
-  page, disabled, included, onInclude, onRemove, onReread,
+  page, disabled, rereadLocked, included, onInclude, onRemove, onReread,
 }: {
-  page: ScanPage; disabled: boolean; included: boolean; onInclude: (on: boolean) => void; onRemove: () => void; onReread: (hint: FormType | null) => void;
+  page: ScanPage; disabled: boolean; rereadLocked: boolean; included: boolean; onInclude: (on: boolean) => void; onRemove: () => void; onReread: (hint: FormType | null) => void;
 }) {
   const label = useLabel();
   const [hint, setHint] = useState<FormType | "">(page.form_hint ?? "");
@@ -196,7 +201,7 @@ function PageCard({
               <option key={form} value={form}>{label(FORM_LABELS[form])}</option>
             ))}
           </Select>
-          <Button size="sm" variant="outline" onClick={() => onReread(hint || null)}>
+          <Button size="sm" variant="outline" disabled={rereadLocked} onClick={() => onReread(hint || null)}>
             <RotateCw className="h-3.5 w-3.5" />
             {label(S.reread)}
           </Button>

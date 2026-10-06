@@ -9,7 +9,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, require_session, user_has_permission
 from modules.scan.api.alias_service import ScanAliasService
-from modules.scan.api.session_service import ScanSessionService, available_readers
+from modules.scan.api.session_service import CLOUD_PERMISSION, ScanSessionService, available_readers
 from modules.scan.api.vocabulary_service import build_vocabulary, vocabulary_options
 from modules.scan.domain.review import APPLY_ORDER
 
@@ -21,6 +21,7 @@ _STATUS_BY_CODE = {
     "SHIFT_VALIDATED": status.HTTP_409_CONFLICT,
     "SECTION_CHANGED": status.HTTP_409_CONFLICT,
     "SESSION_CLOSED": status.HTTP_409_CONFLICT,
+    "FORBIDDEN_READER": status.HTTP_403_FORBIDDEN,
 }
 
 
@@ -83,6 +84,11 @@ def _scanner_or_viewer(tenant: TenantContext = Depends(require_session)) -> Tena
     return tenant
 
 
+def _cloud_allowed(connection, tenant: TenantContext) -> bool:
+    """May this user have photos read by Claude (sent to the Anthropic API)?"""
+    return user_has_permission(connection, user_id=tenant.user_id, permission=CLOUD_PERMISSION)
+
+
 def _result(connection, result):
     if isinstance(result, Err):
         connection.rollback()
@@ -100,12 +106,14 @@ def create_session(body: CreateSessionRequest, tenant: TenantContext = Depends(U
         return _result(connection, ScanSessionService(connection).create_session(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, kind=body.kind, work_center_id=body.work_center_id,
             report_date=body.report_date, shift=body.shift, default_of_id=body.default_of_id, reader=body.reader,
+            cloud_allowed=_cloud_allowed(connection, tenant),
         ))
 
 
 @router.get("/readers")
 def readers(tenant: TenantContext = Depends(USE)) -> dict:
-    return available_readers()
+    with get_connection() as connection:
+        return available_readers(_cloud_allowed(connection, tenant))
 
 
 @router.put("/sessions/{session_id}/reader")
@@ -113,7 +121,7 @@ def set_reader(session_id: str, body: ReaderRequest, tenant: TenantContext = Dep
     with get_connection() as connection:
         return _result(connection, ScanSessionService(connection).set_reader(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, session_id=session_id,
-            reader=body.reader, reread_all=body.reread_all,
+            reader=body.reader, reread_all=body.reread_all, cloud_allowed=_cloud_allowed(connection, tenant),
         ))
 
 
@@ -134,7 +142,7 @@ def add_pages(session_id: str, body: UploadPagesRequest, tenant: TenantContext =
     with get_connection() as connection:
         return _result(connection, ScanSessionService(connection).add_pages(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, session_id=session_id,
-            files=[upload.model_dump() for upload in body.files],
+            files=[upload.model_dump() for upload in body.files], cloud_allowed=_cloud_allowed(connection, tenant),
         ))
 
 
@@ -152,6 +160,7 @@ def reread_page(session_id: str, page_id: str, body: RereadRequest, tenant: Tena
     with get_connection() as connection:
         return _result(connection, ScanSessionService(connection).reread_page(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, session_id=session_id, page_id=page_id, form_hint=body.form_hint,
+            cloud_allowed=_cloud_allowed(connection, tenant),
         ))
 
 

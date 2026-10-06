@@ -54,16 +54,27 @@ _PAGE_NOT_FOUND = Err("NOT_FOUND", "photo not found", "photo introuvable")
 _SESSION_CLOSED = Err("SESSION_CLOSED", "this scan is already applied or discarded", "ce scan est déjà enregistré ou abandonné")
 
 
-def available_readers() -> dict:
-    """Which readers this server can run, and the one a new scan starts with.
+CLOUD_PERMISSION = "scan.use_cloud_reader"
+_CLOUD_FORBIDDEN = Err(
+    "FORBIDDEN_READER", f"reading with Claude sends the photos to the cloud and needs the {CLOUD_PERMISSION} permission",
+    f"la lecture par Claude envoie les photos dans le cloud et demande la permission {CLOUD_PERMISSION}",
+)
+
+
+def available_readers(cloud_allowed: bool = True) -> dict:
+    """Which readers this server can run, which this user may use, and the one a new scan
+    starts with.
 
     The OCR container keeps the photos on the server; Claude sends them to the Anthropic
-    API. SCAN_READER picks the default when both are configured.
+    API, so it also needs the user's scan.use_cloud_reader. SCAN_READER picks the default
+    among the readers both available and allowed.
     """
     available = {"ocr": bool(os.environ.get("OCR_URL")), "claude": bool(os.environ.get("CLAUDE_API_KEY", "").strip())}
+    allowed = {"ocr": True, "claude": cloud_allowed}
+    usable = {r: available[r] and allowed[r] for r in READERS}
     wanted = os.environ.get("SCAN_READER", "ocr").strip().lower()
-    default = wanted if available.get(wanted) else next((r for r in READERS if available[r]), "ocr")
-    return {"default": default, "available": available}
+    default = wanted if usable.get(wanted) else next((r for r in READERS if usable[r]), "ocr")
+    return {"default": default, "available": available, "allowed": allowed}
 
 
 def _iso(value: Any) -> Any:
@@ -284,11 +295,13 @@ class ScanSessionService:
 
     def create_session(
         self, *, tenant_id: str, actor_id: str, kind: str, work_center_id: str, report_date: datetime.date,
-        shift: str, default_of_id: str | None, reader: str | None = None,
+        shift: str, default_of_id: str | None, reader: str | None = None, cloud_allowed: bool = True,
     ) -> Result[dict]:
-        reader = reader or available_readers()["default"]
+        reader = reader or available_readers(cloud_allowed)["default"]
         if reader not in READERS:
             return Err("INVALID_VALUE", f"unknown reader {reader!r}", f"lecteur inconnu {reader!r}")
+        if reader == "claude" and not cloud_allowed:
+            return _CLOUD_FORBIDDEN
         if kind != "shift":
             return Err("NOT_SUPPORTED_YET", "only shift fiches can be scanned for now", "seules les fiches de shift peuvent être scannées pour l'instant")
         if self._window(tenant_id, shift or "") is None:
@@ -311,10 +324,14 @@ class ScanSessionService:
                     {"work_center_id": work_center_id, "report_date": report_date.isoformat(), "shift": shift.strip(), "reader": reader})
         return Ok(self._session_row(tenant_id, session_id))
 
-    def add_pages(self, *, tenant_id: str, actor_id: str, session_id: str, files: list[dict]) -> Result[list[dict]]:
+    def add_pages(
+        self, *, tenant_id: str, actor_id: str, session_id: str, files: list[dict], cloud_allowed: bool = True,
+    ) -> Result[list[dict]]:
         found = self._open_session(tenant_id, session_id)
         if isinstance(found, Err):
             return found
+        if found.value["reader"] == "claude" and not cloud_allowed:  # the new photos would go to Claude
+            return _CLOUD_FORBIDDEN
         held = self._connection.execute(
             "SELECT count(*) FROM scan.scan_pages WHERE tenant_id = %s AND session_id = %s", (tenant_id, session_id)
         ).fetchone()[0]
@@ -366,11 +383,14 @@ class ScanSessionService:
         return Ok(None)
 
     def reread_page(
-        self, *, tenant_id: str, actor_id: str, session_id: str, page_id: str, form_hint: str | None
+        self, *, tenant_id: str, actor_id: str, session_id: str, page_id: str, form_hint: str | None,
+        cloud_allowed: bool = True,
     ) -> Result[dict]:
         found = self._open_session(tenant_id, session_id)
         if isinstance(found, Err):
             return found
+        if found.value["reader"] == "claude" and not cloud_allowed:
+            return _CLOUD_FORBIDDEN
         if form_hint is not None and form_hint not in FORM_HINTS:
             return Err("INVALID_VALUE", f"unknown fiche type {form_hint!r}", f"type de fiche inconnu {form_hint!r}")
         if self._page(tenant_id, session_id, page_id) is None:
@@ -382,7 +402,9 @@ class ScanSessionService:
         self._audit(tenant_id, actor_id, "scan_session.page_reread", session_id, {"page_id": page_id, "form_hint": form_hint})
         return Ok(self._page_summary(self._page(tenant_id, session_id, page_id), None))
 
-    def set_reader(self, *, tenant_id: str, actor_id: str, session_id: str, reader: str, reread_all: bool) -> Result[dict]:
+    def set_reader(
+        self, *, tenant_id: str, actor_id: str, session_id: str, reader: str, reread_all: bool, cloud_allowed: bool = True,
+    ) -> Result[dict]:
         """Switch the scan between the local OCR and Claude. Photos still waiting are read by
         the new reader; with `reread_all` the photos already read are queued again too (their
         current reading stays until the new one replaces it)."""
@@ -391,6 +413,8 @@ class ScanSessionService:
             return found
         if reader not in READERS:
             return Err("INVALID_VALUE", f"unknown reader {reader!r}", f"lecteur inconnu {reader!r}")
+        if reader == "claude" and not cloud_allowed:
+            return _CLOUD_FORBIDDEN
         self._connection.execute(
             "UPDATE scan.scan_sessions SET reader = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
             (reader, session_id, tenant_id),

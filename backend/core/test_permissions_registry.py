@@ -4,6 +4,7 @@ from __future__ import annotations
 from core.permissions_registry import (
     ADMINISTRATOR_ROLE_CODE,
     DELIBERATE_GRANT_PERMISSIONS,
+    DELIBERATE_GRANT_ROLES,
     MODULE_LABELS,
     default_role_catalog,
     permission_catalog,
@@ -24,6 +25,14 @@ PHASE_ONE_HR_CODES = {
 
 def _role(code: str) -> dict:
     return next(role for role in default_role_catalog() if role["code"] == code)
+
+
+_SINGLE_PURPOSE = {role["code"] for role in DELIBERATE_GRANT_ROLES}
+
+
+def _everyday_roles() -> list[dict]:
+    """The per-module roles: not administrateur, not a single-purpose deliberate-grant role."""
+    return [r for r in default_role_catalog() if r["code"] != ADMINISTRATOR_ROLE_CODE and r["code"] not in _SINGLE_PURPOSE]
 
 
 def test_hr_declares_every_code_the_spec_lists():
@@ -57,9 +66,7 @@ def _tail(permission: str) -> str:
 
 def test_every_module_role_excludes_exactly_its_admin_codes_and_nothing_else():
     catalog = permission_catalog()
-    for role in default_role_catalog():
-        if role["code"] == ADMINISTRATOR_ROLE_CODE:
-            continue
+    for role in _everyday_roles():
         declared = {e["permission"] for e in catalog if e["module"] == role["code"]}
         bundled = set(role["permissions"])
         expected = {
@@ -70,9 +77,7 @@ def test_every_module_role_excludes_exactly_its_admin_codes_and_nothing_else():
 
 
 def test_no_everyday_role_bundles_an_admin_code():
-    for role in default_role_catalog():
-        if role["code"] == ADMINISTRATOR_ROLE_CODE:
-            continue
+    for role in _everyday_roles():
         leaked = sorted(p for p in role["permissions"] if _tail(p).startswith("admin_"))
         assert not leaked, f"{role['code']} role bundles admin codes: {leaked}"
 
@@ -86,9 +91,7 @@ def test_held_back_codes_reach_administrateur_but_no_everyday_role():
     admin = set(_role(ADMINISTRATOR_ROLE_CODE)["permissions"])
     for permission in DELIBERATE_GRANT_PERMISSIONS:
         assert permission in admin, f"{permission} must stay grantable via administrateur"
-        for role in default_role_catalog():
-            if role["code"] == ADMINISTRATOR_ROLE_CODE:
-                continue
+        for role in _everyday_roles():
             assert permission not in role["permissions"], f"{role['code']} bundles {permission}"
 
 
@@ -118,3 +121,17 @@ def test_every_module_with_permissions_has_a_default_role():
     roles = {r["code"] for r in default_role_catalog()}
     assert modules <= roles, f"no default role for: {sorted(modules - roles)}"
     assert modules <= set(MODULE_LABELS), f"missing MODULE_LABELS entry for: {sorted(modules - set(MODULE_LABELS))}"
+
+
+def test_reading_with_claude_is_granted_through_its_own_role_only():
+    """Claude gets the photos (workers' names on them): never bundled into the scan role."""
+    assert "scan.use_cloud_reader" in {e["permission"] for e in permission_catalog()}
+    assert "scan.use_cloud_reader" not in _role("scan")["permissions"]
+    assert _role("scan_cloud")["permissions"] == ["scan.use_cloud_reader"]
+    assert "scan.use_cloud_reader" in _role(ADMINISTRATOR_ROLE_CODE)["permissions"]
+
+
+def test_single_purpose_roles_hold_only_declared_deliberate_codes():
+    declared = {e["permission"] for e in permission_catalog()}
+    for role in DELIBERATE_GRANT_ROLES:
+        assert set(role["permissions"]) <= declared & DELIBERATE_GRANT_PERMISSIONS, role["code"]

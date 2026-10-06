@@ -7,5 +7,5 @@
   "publishes_events": [],
   "subscribes_events": [],
   "migrations_path": "./migrations",
-  "permissions": ["scan.use_scanner", "scan.view_scans", "scan.admin_aliases"]
+  "permissions": ["scan.use_scanner", "scan.view_scans", "scan.admin_aliases", "scan.use_cloud_reader"]
 }

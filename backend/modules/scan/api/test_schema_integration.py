@@ -23,4 +23,4 @@ def test_scan_tables_exist(db):
 
 def test_scan_permissions_are_in_the_catalog():
     codes = {entry["permission"] for entry in permission_catalog() if entry["module"] == "scan"}
-    assert codes == {"scan.use_scanner", "scan.view_scans", "scan.admin_aliases"}
+    assert codes == {"scan.use_scanner", "scan.view_scans", "scan.admin_aliases", "scan.use_cloud_reader"}

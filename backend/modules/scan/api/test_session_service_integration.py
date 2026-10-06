@@ -206,4 +206,41 @@ def test_the_default_reader_falls_back_to_one_that_is_configured(monkeypatch):
     monkeypatch.delenv("OCR_URL", raising=False)
     monkeypatch.setenv("CLAUDE_API_KEY", "key")
     monkeypatch.setenv("SCAN_READER", "ocr")
-    assert available_readers() == {"default": "claude", "available": {"ocr": False, "claude": True}}
+    assert available_readers() == {"default": "claude", "available": {"ocr": False, "claude": True}, "allowed": {"ocr": True, "claude": True}}
+
+
+def test_without_the_cloud_permission_no_photo_goes_to_claude(db, world, monkeypatch):
+    monkeypatch.setenv("OCR_URL", "http://ocr:8100")
+    monkeypatch.setenv("CLAUDE_API_KEY", "key")
+    monkeypatch.setenv("SCAN_READER", "claude")
+    service = ScanSessionService(db)
+    common = dict(tenant_id=TENANT, actor_id=world["actor"], kind="shift", work_center_id=world["work_center"],
+                  report_date=world["day"], shift="Matin", default_of_id=None)
+
+    # The server default is Claude, but this user falls back to the local OCR.
+    assert ok(service.create_session(**common, cloud_allowed=False))["reader"] == "ocr"
+    assert service.create_session(**common, reader="claude", cloud_allowed=False).code == "FORBIDDEN_READER"
+
+    session_id = ok(service.create_session(**common, reader="claude"))["id"]  # someone allowed started it
+    assert service.add_pages(tenant_id=TENANT, actor_id=world["actor"], session_id=session_id, files=[JPEG],
+                             cloud_allowed=False).code == "FORBIDDEN_READER"
+    [page] = ok(service.add_pages(tenant_id=TENANT, actor_id=world["actor"], session_id=session_id, files=[JPEG]))
+    assert service.reread_page(tenant_id=TENANT, actor_id=world["actor"], session_id=session_id, page_id=page["id"],
+                               form_hint=None, cloud_allowed=False).code == "FORBIDDEN_READER"
+    assert service.set_reader(tenant_id=TENANT, actor_id=world["actor"], session_id=session_id, reader="claude",
+                              reread_all=True, cloud_allowed=False).code == "FORBIDDEN_READER"
+    # Moving the scan back to the local OCR is always allowed.
+    moved = ok(service.set_reader(tenant_id=TENANT, actor_id=world["actor"], session_id=session_id, reader="ocr",
+                                  reread_all=False, cloud_allowed=False))
+    assert moved["reader"] == "ocr"
+
+
+def test_readers_report_what_this_user_may_use(monkeypatch):
+    from modules.scan.api.session_service import available_readers
+
+    monkeypatch.setenv("OCR_URL", "http://ocr:8100")
+    monkeypatch.setenv("CLAUDE_API_KEY", "key")
+    monkeypatch.setenv("SCAN_READER", "claude")
+    assert available_readers(cloud_allowed=False) == {
+        "default": "ocr", "available": {"ocr": True, "claude": True}, "allowed": {"ocr": True, "claude": False},
+    }

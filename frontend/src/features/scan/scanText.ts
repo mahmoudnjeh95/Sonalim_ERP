@@ -46,6 +46,14 @@ export const S = {
   notImportable: L("Recognised — not imported yet", "Fiche reconnue — pas encore importée"),
   reader: L("Reading engine", "Moteur de lecture"),
   readerUnavailable: L("Not configured on this server", "Non configuré sur ce serveur"),
+  readerForbidden: L(
+    "Not authorised: ask an administrator for the \"Numérisation cloud (Claude)\" role",
+    "Non autorisé : demandez à un administrateur le rôle « Numérisation cloud (Claude) »",
+  ),
+  cloudScanLocked: L(
+    "This scan is read by Claude, which you are not authorised to use: switch it to the local OCR to add or re-read photos.",
+    "Ce scan est lu par Claude, que vous n'êtes pas autorisé à utiliser : passez-le en OCR local pour ajouter ou relire des photos.",
+  ),
   rereadAll: L("Read all photos again", "Relire toutes les photos"),
   rereadAllDone: L("The photos are queued to be read again", "Les photos sont en file pour être relues"),
   readBy: L("Read by", "Lue par"),

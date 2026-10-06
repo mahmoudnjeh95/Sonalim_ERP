@@ -117,3 +117,18 @@ def test_vocabulary_lists_the_kinds(api):
     api["grant"]("scan.use_scanner")
     body = api["client"].get("/scan/vocabulary", params={"work_center_id": api["world"]["work_center"]}).json()
     assert {"raw_material", "finished_product", "waste_production", "line_state"} <= set(body)
+
+
+def test_claude_needs_the_cloud_permission(api, monkeypatch):
+    monkeypatch.setenv("OCR_URL", "http://ocr:8100")
+    monkeypatch.setenv("CLAUDE_API_KEY", "key")
+    api["grant"]("scan.use_scanner")
+    client, world = api["client"], api["world"]
+    assert client.get("/scan/readers").json()["allowed"] == {"ocr": True, "claude": False}
+    body = {"work_center_id": world["work_center"], "report_date": world["day"].isoformat(), "shift": "Matin", "reader": "claude"}
+    refused = client.post("/scan/sessions", json=body)
+    assert refused.status_code == 403 and refused.json()["detail"]["code"] == "FORBIDDEN_READER"
+
+    api["grant"]("scan.use_cloud_reader")
+    assert client.get("/scan/readers").json()["allowed"]["claude"] is True
+    assert client.post("/scan/sessions", json=body).json()["reader"] == "claude"

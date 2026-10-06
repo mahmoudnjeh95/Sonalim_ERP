@@ -13,6 +13,8 @@ export type Reader = "ocr" | "claude";
 export interface ReadersInfo {
   default: Reader;
   available: Record<Reader, boolean>;
+  /** What this user may use: Claude needs scan.use_cloud_reader (the "Numérisation cloud" role). */
+  allowed: Record<Reader, boolean>;
 }
 
 export interface ReadHeader {

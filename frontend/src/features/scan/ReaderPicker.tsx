@@ -18,6 +18,7 @@ export function ReaderPicker({
         {READERS.map((reader) => {
           const Icon = ICONS[reader];
           const available = readers?.available[reader] ?? false;
+          const allowed = readers?.allowed[reader] ?? false;
           const selected = value === reader;
           return (
             <button
@@ -25,8 +26,8 @@ export function ReaderPicker({
               type="button"
               role="radio"
               aria-checked={selected}
-              disabled={disabled || !available}
-              title={available ? label(READER_HINTS[reader]) : label(S.readerUnavailable)}
+              disabled={disabled || !available || !allowed}
+              title={!available ? label(S.readerUnavailable) : !allowed ? label(S.readerForbidden) : label(READER_HINTS[reader])}
               onClick={() => !selected && onChange(reader)}
               className={cn(
                 "inline-flex h-8 items-center gap-1.5 rounded px-3 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50",
