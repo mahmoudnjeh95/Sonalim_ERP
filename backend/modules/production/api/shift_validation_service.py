@@ -141,11 +141,7 @@ class ShiftValidationService:
                     ))
 
                 stock = ShiftStockService(self._connection)
-                shortfalls: list[dict] = []
-                for run in runs:
-                    shortfalls += stock.run_shortfalls(tenant_id=tenant_id, run=run)
-                for row in packing:
-                    shortfalls += stock.packing_shortfalls(tenant_id=tenant_id, packing_row=row)
+                shortfalls = stock.shift_shortfalls(tenant_id=tenant_id, runs=runs, packing_rows=packing)
                 if shortfalls and not (shortfall_comment or "").strip():
                     raise _Abort(Err(
                         "SHORTFALL_COMMENT_REQUIRED",

@@ -605,16 +605,21 @@ class StockService:
             return into
         return Ok(None)
 
-    def would_go_negative(self, *, tenant_id: str, product_id: str, location_id: str, quantity: float) -> bool:
+    def would_go_negative(
+        self, *, tenant_id: str, product_id: str, location_id: str, quantity: float, lock: bool = False
+    ) -> bool:
         """Whether withdrawing `quantity` here would drive on-hand below zero.
 
         Used by report validation to decide up front whether the validator must
-        explain a shortfall, before anything is written.
+        explain a shortfall, before anything is written. `lock` holds the row until
+        the caller's transaction ends, so a concurrent withdrawal cannot slip in
+        between this answer and the posting it decides.
         """
         row = self._connection.execute(
-            """
+            f"""
             SELECT quantity_on_hand FROM warehouse.stock_items
             WHERE tenant_id = %s AND product_id = %s AND location_id = %s
+            {"FOR UPDATE" if lock else ""}
             """,
             (tenant_id, product_id, location_id),
         ).fetchone()

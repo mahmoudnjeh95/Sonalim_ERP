@@ -46,15 +46,27 @@ class ShiftStockService:
             if quantity > 0 and product_id and location_id
         ]
 
-    def run_shortfalls(self, *, tenant_id: str, run: dict) -> list[dict]:
-        """Withdrawals this run would drive below zero."""
-        shortfalls: list[dict] = []
-        for quantity, product_id, location_id in self._run_lines(run):
+    def shift_shortfalls(self, *, tenant_id: str, runs: list[dict], packing_rows: list[dict]) -> list[dict]:
+        """Items the whole shift would drive below zero, each store's withdrawals added up.
+
+        Judged on the shift's total per item and store, not line by line: the semoule
+        poured is shared out across the runs, and several packing rows draw on the same
+        cartons, so lines that each fit on their own can together take more than the
+        shelf holds. The stock rows are locked, in a fixed order, until the posting that
+        follows in the same transaction.
+        """
+        totals: dict[tuple[str, str], float] = {}
+        lines = [line for run in runs for line in self._run_lines(run)]
+        lines += [line for row in packing_rows for line in self._packing_lines(row) if line[2]]
+        for quantity, product_id, location_id in lines:
+            totals[(product_id, location_id)] = totals.get((product_id, location_id), 0.0) + quantity
+        return [
+            {"product_id": product_id, "location_id": location_id, "quantity": quantity}
+            for (product_id, location_id), quantity in sorted(totals.items())
             if self._stock.would_go_negative(
-                tenant_id=tenant_id, product_id=product_id, location_id=location_id, quantity=quantity
-            ):
-                shortfalls.append({"product_id": product_id, "location_id": location_id, "quantity": quantity})
-        return shortfalls
+                tenant_id=tenant_id, product_id=product_id, location_id=location_id, quantity=quantity, lock=True
+            )
+        ]
 
     def post_run(
         self, *, tenant_id: str, actor_id: str, run: dict, correlation_id: str, reverse: bool = False
@@ -160,16 +172,6 @@ class ShiftStockService:
             (float(packing_row.get("ruban_quantity") or 0), packing_row.get("ruban_product_id"), packing_row.get("ruban_location_id") or shared),
         ]
         return [(quantity, product_id, location_id) for quantity, product_id, location_id in lines if quantity > 0 and product_id]
-
-    def packing_shortfalls(self, *, tenant_id: str, packing_row: dict) -> list[dict]:
-        shortfalls: list[dict] = []
-        for quantity, product_id, location_id in self._packing_lines(packing_row):
-            if self._stock.would_go_negative(
-                tenant_id=tenant_id, product_id=product_id,
-                location_id=location_id, quantity=quantity,
-            ):
-                shortfalls.append({"product_id": product_id, "location_id": location_id, "quantity": quantity})
-        return shortfalls
 
     def finished_goods_store(self, *, tenant_id: str, packing_row: dict, finished_product_id: str | None) -> str | None:
         """Where a packing row's finished goods are posted.

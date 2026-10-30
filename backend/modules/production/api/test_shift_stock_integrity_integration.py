@@ -106,3 +106,30 @@ def test_reversing_takes_the_finished_goods_out_of_the_layer_validation_opened(d
 
     open_layers = ValuationService(db).list_layers(tenant_id=TENANT, product_id=env["product"])
     assert [(layer.reference, layer.quantity_remaining) for layer in open_layers] == [("older", 50)]
+
+
+# ---- #3: the shortfall is judged on the whole shift --------------------------------
+
+
+def _drain_semolina_to(db, env, quantity: float) -> None:
+    StockService(db).adjust_stock(
+        tenant_id=TENANT, product_id=env["semolina"], location_id=env["location"],
+        delta=quantity - _on_hand(db, env, "semolina"), reason="test", actor_id=env["actor"],
+    )
+
+
+def test_runs_that_each_fit_but_together_overdraw_need_a_shortfall_comment(db, env):
+    from modules.production.api.test_shift_validation_integration import _of, _run
+
+    of_id = _of(db, env)
+    shift_id = _submitted_shift(
+        db, env, packing=False,
+        runs=[_run(env, of_id, minutes=240, semolina=600), _run(env, of_id, minutes=240, semolina=600)],
+    )
+    _drain_semolina_to(db, env, 1000)  # each run's 600 fits; the shift's 1200 does not
+
+    refused = _validate(db, env, shift_id)
+    assert isinstance(refused, Err) and refused.code == "SHORTFALL_COMMENT_REQUIRED"
+
+    _ok(_validate(db, env, shift_id, shortfall_comment="silo count was behind"))
+    assert _on_hand(db, env, "semolina") == pytest.approx(-200)
