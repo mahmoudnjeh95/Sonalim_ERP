@@ -139,3 +139,32 @@ def test_each_change_is_audited(db, env):
         "SELECT count(*) FROM core.audit_log WHERE tenant_id = %s AND action = 'equipment.status_changed'", (TENANT,)
     ).fetchone()[0]
     assert audited == 2
+
+
+def _reverse(db, env, shift_id):
+    return _ok(ShiftValidationService(db).reverse_shift(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="wrong shift"
+    ))
+
+
+def test_reversing_the_newest_shift_gives_the_line_back_to_the_previous_reading(db, env):
+    earlier = _submitted_shift(db, env, silo_rows=[{"side": "production", "phase": "end", "line_state": "running"}])
+    _validate(db, env, earlier)
+    later = _submitted_shift(db, env, day=DAY + datetime.timedelta(days=1), silo_rows=SILO_STOPPED)
+    _validate(db, env, later)
+    assert _status(db, env["machines"]["extrusion"]) == "down"
+
+    _reverse(db, env, later)
+
+    assert _status(db, env["machines"]["extrusion"]) == "operational", "the reversed reading no longer holds the line"
+
+
+def test_reversing_an_older_shift_leaves_the_newer_reading_in_place(db, env):
+    earlier = _submitted_shift(db, env, silo_rows=[{"side": "production", "phase": "end", "line_state": "running"}])
+    _validate(db, env, earlier)
+    later = _submitted_shift(db, env, day=DAY + datetime.timedelta(days=1), silo_rows=SILO_STOPPED)
+    _validate(db, env, later)
+
+    _reverse(db, env, earlier)
+
+    assert _status(db, env["machines"]["extrusion"]) == "down"

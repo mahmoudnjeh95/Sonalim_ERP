@@ -65,3 +65,37 @@ def apply_silo_machine_status(
             equipment.transition_status(
                 tenant_id=tenant_id, actor_id=actor_id, equipment_id=machine_id, new_status=new_status
             )
+
+
+def reapply_latest_silo_status(
+    connection: psycopg.Connection, *, tenant_id: str, actor_id: str, reversed_shift_report_id: str
+) -> None:
+    """After a shift's validation is undone, the line's newest word is the latest shift still validated.
+
+    When the reversed shift was the newest word, the latest one still validated has its silo
+    reading applied again, so the reversed reading does not keep the machines where it put
+    them. A later shift already validated had the last word anyway, and with nothing
+    validated left on the line the machines stay as they are.
+    """
+    work_center_id, report_date, shift = connection.execute(
+        "SELECT work_center_id, report_date, shift FROM production.shift_reports WHERE id = %s AND tenant_id = %s",
+        (reversed_shift_report_id, tenant_id),
+    ).fetchone()
+    if _later_shift_validated(
+        connection, tenant_id=tenant_id, work_center_id=work_center_id, report_date=report_date, shift=shift,
+        shift_report_id=reversed_shift_report_id,
+    ):
+        return
+    latest = connection.execute(
+        """
+        SELECT s.id
+        FROM production.shift_reports s
+        LEFT JOIN production.shift_windows w ON w.tenant_id = s.tenant_id AND w.shift = s.shift
+        WHERE s.tenant_id = %s AND s.work_center_id = %s AND s.status = 'validated'
+        ORDER BY s.report_date DESC, COALESCE(w.start_time, TIME '00:00') DESC, s.id DESC
+        LIMIT 1
+        """,
+        (tenant_id, work_center_id),
+    ).fetchone()
+    if latest is not None:
+        apply_silo_machine_status(connection, tenant_id=tenant_id, actor_id=actor_id, shift_report_id=latest[0])

@@ -251,6 +251,39 @@ class LotService:
         )
         return Ok(lot)
 
+    def withdraw_registration(
+        self, *, tenant_id: str, actor_id: str, product_id: str, lot_number: str, source_type: str
+    ) -> Result[bool]:
+        """Remove a lot `register_lot` filed for a record that no longer stands (a reversed
+        production report). Only a lot that record type created, and that no stock was ever
+        received into, is removed -- anything else is left as it is. True when removed.
+        """
+        row = self._connection.execute(
+            f"SELECT {_LOT_COLUMNS} FROM warehouse.lots WHERE tenant_id = %s AND product_id = %s AND lot_number = %s FOR UPDATE",
+            (tenant_id, product_id, lot_number),
+        ).fetchone()
+        if row is None:
+            return Ok(False)
+        lot = _row_to_lot(row)
+        if lot.source_type != source_type:
+            return Ok(False)
+        held = self._connection.execute(
+            "SELECT 1 FROM warehouse.lot_stock WHERE tenant_id = %s AND lot_id = %s LIMIT 1", (tenant_id, lot.id)
+        ).fetchone()
+        if held is not None:
+            return Ok(False)
+        self._connection.execute("DELETE FROM warehouse.lots WHERE id = %s AND tenant_id = %s", (lot.id, tenant_id))
+        record_audit(
+            self._connection,
+            tenant_id=tenant_id,
+            actor_id=actor_id,
+            action="lot.withdrawn",
+            entity_type="lot",
+            entity_id=lot.id,
+            payload={"product_id": product_id, "lot_number": lot_number, "source_type": lot.source_type, "source_id": lot.source_id},
+        )
+        return Ok(True)
+
     def set_expiry(
         self, *, tenant_id: str, actor_id: str, lot_id: str, expiry_date: datetime.date
     ) -> Result[Lot]:

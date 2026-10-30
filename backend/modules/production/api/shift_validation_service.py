@@ -28,9 +28,11 @@ from modules.production.api.report_product import stamp_order_products
 from modules.production.api.shift_report_service import ShiftReportService
 from modules.production.api.shift_sections import load_section, save_section_rows
 from modules.production.api.shift_stock_service import ShiftStockService
-from modules.production.api.silo_machine_status import apply_silo_machine_status
+from modules.production.api.silo_machine_status import apply_silo_machine_status, reapply_latest_silo_status
+from modules.production.api.stock_release_service import StockReleaseService
 from modules.production.api.waste_type_service import custom_waste_categories
 from modules.production.domain.shift_report import SECTION_KEYS, split_proportionally
+from modules.warehouse.api.lot_service import LotService
 
 
 class _Abort(Exception):
@@ -330,17 +332,62 @@ class ShiftValidationService:
         return costs
 
     def _reverse_packing_rows(
-        self, stock: ShiftStockService, *, tenant_id: str, actor_id: str, packing: list[dict], correlation_id: str
+        self, stock: ShiftStockService, *, tenant_id: str, actor_id: str, packing: list[dict], correlation_id: str,
+        force: bool = False,
     ) -> None:
         order_products = self._order_products(tenant_id, packing)
         for row in packing:
             finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
             result = stock.reverse_packing(
                 tenant_id=tenant_id, actor_id=actor_id, packing_row=row,
-                finished_product_id=finished_product_id, correlation_id=correlation_id,
+                finished_product_id=finished_product_id, correlation_id=correlation_id, force=force,
             )
             if isinstance(result, Err):
                 raise _Abort(result)
+
+    def _check_releases(self, tenant_id: str, shift_date, force: bool) -> None:
+        """Refuse a change that leaves the day with more released than it now packed (see `overreleased`)."""
+        if force:
+            return
+        over = StockReleaseService(self._connection).overreleased(tenant_id=tenant_id, day=shift_date)
+        if over:
+            raise _Abort(Err(
+                "GOODS_ALREADY_RELEASED",
+                "packed goods of this day were already released to the final store; this change would leave"
+                f" more released than packed for {len(over)} product(s) -- confirm to force it",
+                "des produits conditionnés de ce jour ont déjà été libérés vers le magasin final ; ce changement"
+                f" laisserait plus de libéré que de conditionné pour {len(over)} produit(s) — confirmez pour forcer",
+            ))
+
+    def _withdraw_orphan_lots(self, tenant_id: str, actor_id: str, old_packing: list[dict]) -> None:
+        """Remove the lots these rows filed that no validated packing row names any more.
+
+        Read after the change: a lot a corrected or another validated row still names stays.
+        """
+        order_products = self._order_products(tenant_id, old_packing)
+        lots = LotService(self._connection)
+        for row in old_packing:
+            product_id = row.get("product_id") or order_products.get(row["of_id"])
+            if not row.get("lot_number") or product_id is None:
+                continue
+            still_named = self._connection.execute(
+                """
+                SELECT 1 FROM production.shift_packing_rows p
+                JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
+                JOIN production.work_orders w ON w.id = p.of_id AND w.tenant_id = p.tenant_id
+                WHERE p.tenant_id = %s AND p.lot_number = %s AND COALESCE(p.product_id, w.product_id) = %s
+                  AND s.status = 'validated'
+                LIMIT 1
+                """,
+                (tenant_id, row["lot_number"], product_id),
+            ).fetchone()
+            if still_named is None:
+                withdrawn = lots.withdraw_registration(
+                    tenant_id=tenant_id, actor_id=actor_id, product_id=product_id, lot_number=row["lot_number"],
+                    source_type="production.shift_packing_row",
+                )
+                if isinstance(withdrawn, Err):
+                    raise _Abort(withdrawn)
 
     def _drop_legacy_copy(self, tenant_id: str, report_ids: list[str]) -> None:
         # The copy is validated, not submitted, so _delete_old_rows' own guard (refusing to
@@ -404,7 +451,9 @@ class ShiftValidationService:
 
         # The packed goods are re-posted on a runs correction too: they are valued at the runs'
         # material cost, which has just changed. Their quantities do not move.
-        self._reverse_packing_rows(stock, tenant_id=tenant_id, actor_id=actor_id, packing=old_packing, correlation_id=correlation_id)
+        self._reverse_packing_rows(
+            stock, tenant_id=tenant_id, actor_id=actor_id, packing=old_packing, correlation_id=correlation_id, force=force,
+        )
         new_packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
         if section_key not in _RUN_SECTIONS:
             shortfalls = stock.shift_shortfalls(tenant_id=tenant_id, runs=[], packing_rows=new_packing)
@@ -421,6 +470,8 @@ class ShiftValidationService:
             stock, tenant_id=tenant_id, actor_id=actor_id, packing=new_packing, shift_date=shift_date,
             correlation_id=correlation_id, frozen=frozen,
         )
+        self._check_releases(tenant_id, shift_date, force)
+        self._withdraw_orphan_lots(tenant_id, actor_id, old_packing)
         return shortfalls
 
     # ---- a validator's own correction ----------------------------------------
@@ -656,12 +707,19 @@ class ShiftValidationService:
         force: bool = False,
         correlation_id: str | None = None,
     ) -> Result[dict]:
-        """Undo a validated shift: stock goes back, sections that had data return to their team."""
+        """Undo a validated shift: stock goes back, sections that had data return to their team.
+
+        Refused, unless `force` is set, when what the shift posted has moved on: its rebroyat
+        already ground, its packed goods released, shipped, moved or reserved. The lots it filed
+        and no other validated row names are withdrawn, and the line's machines take the silo
+        reading of the latest shift still validated.
+        """
         if not (reason or "").strip():
             return Err("MISSING_REASON", "reversing a shift must record why", "annuler un shift doit enregistrer pourquoi")
-        status = self._locked_status(tenant_id, shift_report_id)
-        if status is None:
+        locked = self._locked_status_and_date(tenant_id, shift_report_id)
+        if locked is None:
             return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
+        status, shift_date = locked
         if status != "validated":
             return Err("INVALID_TRANSITION", f"a shift that is {status} has nothing to reverse", f"un shift {status} n'a rien à annuler")
 
@@ -672,7 +730,9 @@ class ShiftValidationService:
                 packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
                 runs = _runs(self._connection, tenant_id, shift_report_id)
                 # Packing first: mirrors the old ordering ("a packing report points at the daily report it drew from").
-                self._reverse_packing_rows(stock, tenant_id=tenant_id, actor_id=actor_id, packing=packing, correlation_id=correlation_id)
+                self._reverse_packing_rows(
+                    stock, tenant_id=tenant_id, actor_id=actor_id, packing=packing, correlation_id=correlation_id, force=force,
+                )
                 for run in runs:
                     result = stock.reverse_run(
                         tenant_id=tenant_id, actor_id=actor_id, run=run, correlation_id=correlation_id, force=force,
@@ -691,6 +751,12 @@ class ShiftValidationService:
                     "UPDATE production.shift_reports SET status = 'returned', validated_by = NULL, validated_at = NULL, "
                     "rejection_reason = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
                     (f"reversed: {reason.strip()}", shift_report_id, tenant_id),
+                )
+                # Judged with the shift no longer validated: the day as it stands after the reversal.
+                self._check_releases(tenant_id, shift_date, force)
+                self._withdraw_orphan_lots(tenant_id, actor_id, packing)
+                reapply_latest_silo_status(
+                    self._connection, tenant_id=tenant_id, actor_id=actor_id, reversed_shift_report_id=shift_report_id
                 )
                 record_audit(
                     self._connection,

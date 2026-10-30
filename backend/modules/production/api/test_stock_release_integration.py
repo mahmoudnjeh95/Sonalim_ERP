@@ -499,3 +499,51 @@ def test_a_reversed_shifts_qc_verdict_clears_no_other_shifts_goods(db, env, stor
     assert (item["packed"], item["releasable"], item["awaiting_qc"], item["rejected_qc"]) == (120, 0, 120, 0)
     refused = _release(db, env, [{"product_id": env["pasta"], "quantity": 1}])
     assert isinstance(refused, Err) and refused.code == "EXCEEDS_QC_VALIDATED"
+
+
+# ---- reversing a shift whose goods moved on ------------------------------------------
+
+
+def _reverse(db, env, shift_id, force=False):
+    from modules.production.api.shift_validation_service import ShiftValidationService
+
+    return ShiftValidationService(db).reverse_shift(
+        tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, reason="wrong day", force=force
+    )
+
+
+def test_a_shift_whose_goods_all_left_the_line_store_cannot_be_reversed_blind(db, env, stores):
+    shift_id = _validated_and_cleared(db, env)
+    _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 120}]))
+
+    refused = _reverse(db, env, shift_id)
+
+    assert isinstance(refused, Err) and refused.code == "FINISHED_GOODS_NOT_IN_STORE"
+    assert _on_hand(db, env["pasta"], stores["line"]) == 0, "the refusal leaves the store as it was"
+
+
+def test_goods_released_from_the_day_block_reversing_it_even_when_the_line_store_is_topped_up(db, env, stores):
+    shift_id = _validated_and_cleared(db, env)
+    _ok(_release(db, env, [{"product_id": env["pasta"], "quantity": 50}]))
+    # Other pasta lands in the line store, so the store alone would not notice.
+    StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=env["pasta"], location_id=stores["line"], quantity=500,
+        correlation_id=str(ULID()), reference="other", actor_id=env["actor"],
+    )
+
+    refused = _reverse(db, env, shift_id)
+
+    assert isinstance(refused, Err) and refused.code == "GOODS_ALREADY_RELEASED"
+    _ok(_reverse(db, env, shift_id, force=True))
+
+
+def test_reserved_goods_block_reversing_the_shift(db, env, stores):
+    shift_id = _validated_and_cleared(db, env)
+    _ok(StockService(db).reserve_stock(
+        tenant_id=TENANT, product_id=env["pasta"], location_id=stores["line"], quantity=30,
+        correlation_id=str(ULID()), reference="sales_order:x", actor_id=env["actor"],
+    ))
+
+    refused = _reverse(db, env, shift_id)
+
+    assert isinstance(refused, Err) and refused.code == "FINISHED_GOODS_RESERVED"

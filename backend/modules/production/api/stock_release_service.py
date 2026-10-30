@@ -103,6 +103,21 @@ class StockReleaseService:
         ).fetchall()
         return {product_id: float(total) for product_id, total in rows}
 
+    def overreleased(self, *, tenant_id: str, day: datetime.date) -> list[dict]:
+        """Products of `day` with more released than its validated packing now brings in.
+
+        A reversal or a correction that lowers what a day packed must not leave behind goods
+        that were released from it: they have already moved on to the final store, and the
+        release list would carry a balance below zero. Read after the change, so it judges
+        the day as it now stands.
+        """
+        packed = self._packed_on(tenant_id, day)
+        return [
+            {"product_id": product_id, "packed": packed.get(product_id, 0.0), "released": released}
+            for product_id, released in sorted(self._released_on(tenant_id, day).items())
+            if released > packed.get(product_id, 0.0) + _EPSILON
+        ]
+
     def _qc_validated_on(self, tenant_id: str, day: datetime.date) -> dict[str, float]:
         """Conforming pieces per product that validated QC reports of `day` cleared -- asked of qc."""
         from modules.qc.api.quality_service import QualityReportService

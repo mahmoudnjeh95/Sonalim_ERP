@@ -353,6 +353,19 @@ class ShiftStockService:
         )
         if isinstance(lot, Err):
             return lot
+        # The lot already existed: when this very row filed it, a DLC it now states (a
+        # correction) wins over the one first filed. A lot another record filed keeps its own.
+        dlc = packing_row.get("dlc_date")
+        if (
+            dlc is not None and lot.value.source_id == packing_row["id"]
+            and lot.value.expiry_date != (dlc.isoformat() if hasattr(dlc, "isoformat") else str(dlc))
+        ):
+            updated = LotService(self._connection).set_expiry(
+                tenant_id=tenant_id, actor_id=actor_id, lot_id=lot.value.id,
+                expiry_date=dlc if isinstance(dlc, _dt.date) else _dt.date.fromisoformat(str(dlc)),
+            )
+            if isinstance(updated, Err):
+                return updated
         return Ok(lot.value.id)
 
     def reverse_run(
@@ -382,13 +395,44 @@ class ShiftStockService:
 
     def reverse_packing(
         self, *, tenant_id: str, actor_id: str, packing_row: dict, finished_product_id: str, correlation_id: str,
+        force: bool = False,
     ) -> Result[dict]:
+        """Take back what validating this packing row posted.
+
+        The goods must still be where validation put them, and not promised: taking back
+        goods already shipped or moved on would drive the store negative, and taking back
+        reserved goods would break a promise made to a customer order. Both are refused
+        unless `force` is set.
+        """
         undone = self.post_packing(
             tenant_id=tenant_id, actor_id=actor_id, packing_row=packing_row,
             finished_product_id=finished_product_id, correlation_id=correlation_id, reverse=True,
         )
         if isinstance(undone, Err):
             return undone
+        if not force and self.finished_quantity(packing_row) > 0:
+            location_id = packing_row["finished_goods_location_id"]
+            on_hand, reserved = self._connection.execute(
+                "SELECT quantity_on_hand, quantity_reserved FROM warehouse.stock_items "
+                "WHERE tenant_id = %s AND product_id = %s AND location_id = %s",
+                (tenant_id, finished_product_id, location_id),
+            ).fetchone()
+            if float(on_hand) < -1e-9:
+                return Err(
+                    "FINISHED_GOODS_NOT_IN_STORE",
+                    "the packed goods have already left the store they were posted to (released, moved or"
+                    " shipped); taking them back would drive it negative -- confirm to force it",
+                    "les produits conditionnés ont déjà quitté le magasin où ils ont été versés (libérés, déplacés"
+                    " ou expédiés) ; les reprendre le rendrait négatif — confirmez pour forcer",
+                )
+            if float(on_hand) < float(reserved) - 1e-9:
+                return Err(
+                    "FINISHED_GOODS_RESERVED",
+                    "the packed goods are reserved for a customer order; taking them back would break that"
+                    " reservation -- confirm to force it",
+                    "les produits conditionnés sont réservés pour une commande client ; les reprendre romprait"
+                    " cette réservation — confirmez pour forcer",
+                )
         return Ok({"reversed_movements": undone.value})
 
     def _unwind_regrind(

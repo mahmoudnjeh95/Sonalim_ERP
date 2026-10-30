@@ -292,3 +292,39 @@ def test_correcting_the_runs_revalues_the_packed_goods(db, env):
     ]
     assert [layer.quantity_remaining for layer in open_layers] == [pytest.approx(1600)]
     assert open_layers[0].unit_cost == pytest.approx((1200 * 500 + 1430) / 1600)
+
+
+# ---- #6: the lots a shift filed follow it --------------------------------------------
+
+
+def _lot(db, env, lot_number):
+    return db.execute(
+        "SELECT lot_number, expiry_date FROM warehouse.lots WHERE tenant_id = %s AND product_id = %s AND lot_number = %s",
+        (TENANT, env["product"], lot_number),
+    ).fetchone()
+
+
+def test_reversing_withdraws_the_lot_the_shift_filed(db, env):
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+    assert _lot(db, env, "B6261SNL") is not None
+
+    _ok(_reverse(db, env, shift_id))
+
+    assert _lot(db, env, "B6261SNL") is None
+
+
+def test_correcting_the_lot_number_and_dlc_files_the_corrected_lot(db, env):
+    import datetime
+
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+
+    _ok(_unlocked_edit(db, env, shift_id, "packing", _packing_payload(db, shift_id, lot_number="B6262SNL", dlc_date="2032-01-31")))
+
+    assert _lot(db, env, "B6261SNL") is None, "the mistyped lot is withdrawn"
+    assert _lot(db, env, "B6262SNL")[1] == datetime.date(2032, 1, 31)
+
+    _ok(_unlocked_edit(db, env, shift_id, "packing", _packing_payload(db, shift_id, dlc_date="2032-02-29")))
+
+    assert _lot(db, env, "B6262SNL")[1] == datetime.date(2032, 2, 29), "a corrected DLC reaches the lot this row filed"
