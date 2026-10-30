@@ -59,6 +59,13 @@ def _runs(connection: psycopg.Connection, tenant_id: str, shift_report_id: str) 
     return runs
 
 
+# Sections whose rows are what validation posted to stock. Correcting one after validation
+# takes back what the old rows posted and posts the new ones; any other section moves no stock.
+_RUN_SECTIONS = frozenset({"runs"})
+# The packing-waste section feeds each packing row's empty cartons, hence its packets.
+_PACKING_SECTIONS = frozenset({"packing", "waste_packing"})
+
+
 class ShiftValidationService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
@@ -157,49 +164,11 @@ class ShiftValidationService:
                     if isinstance(regrind, Err):
                         raise _Abort(regrind)
 
-                order_products = {
-                    row[0]: row[1]
-                    for row in self._connection.execute(
-                        "SELECT id, product_id FROM production.work_orders WHERE tenant_id = %s AND id = ANY(%s)",
-                        (tenant_id, list({p["of_id"] for p in packing})),
-                    ).fetchall()
-                } if packing else {}
-                for row in packing:
-                    finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
-                    if finished_product_id is None:
-                        raise _Abort(Err(
-                            "NOT_FOUND",
-                            f"work order {row['of_id']} has no product to pack",
-                            f"l'OF {row['of_id']} n'a pas de produit à conditionner",
-                        ))
-                    # The store is settled once, here, and kept on the row: reversal reads it back
-                    # and must hand the goods back from exactly where they were posted.
-                    row["finished_goods_location_id"] = stock.finished_goods_store(
-                        tenant_id=tenant_id, packing_row=row, finished_product_id=finished_product_id
-                    )
-                    self._connection.execute(
-                        "UPDATE production.shift_packing_rows SET finished_goods_location_id = %s WHERE id = %s AND tenant_id = %s",
-                        (row["finished_goods_location_id"], row["id"], tenant_id),
-                    )
-                    snapshot = stock.freeze_packing_snapshot(tenant_id=tenant_id, packing_row=row, finished_product_id=finished_product_id)
-                    row["snapshot_packets_per_carton"] = snapshot["packets_per_carton"]
-                    posted = stock.post_packing(tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id, correlation_id=correlation_id)
-                    if isinstance(posted, Err):
-                        raise _Abort(posted)
-                    lot = stock.register_lot(tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id, report_date=shift_date)
-                    if isinstance(lot, Err):
-                        raise _Abort(lot)
-
-                materialized = materialize_shift(
-                    self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id, actor_id=actor_id,
+                self._post_packing_rows(
+                    stock, tenant_id=tenant_id, actor_id=actor_id, packing=packing, shift_date=shift_date,
+                    correlation_id=correlation_id,
                 )
-                if isinstance(materialized, Err):
-                    raise _Abort(materialized)
-                self._connection.execute(
-                    "UPDATE production.production_reports SET status = 'validated', validated_by = %s, validated_at = NOW() "
-                    "WHERE tenant_id = %s AND id = ANY(%s)",
-                    (actor_id, tenant_id, [report_id for report_id, _report_type in materialized.value]),
-                )
+                self._write_legacy_copy(tenant_id, actor_id, shift_report_id)
 
                 self._connection.execute(
                     "UPDATE production.shift_reports SET status = 'validated', validated_by = %s, validated_at = NOW(), "
@@ -255,6 +224,153 @@ class ShiftValidationService:
             "VALUES (%s, %s, %s, '*', %s, %s, 'validated', %s)",
             (str(ULID()), tenant_id, shift_report_id, revision, Jsonb(snapshot), actor_id),
         )
+
+    # ---- posting helpers, shared by validation, correction and reversal -------
+
+    def _order_products(self, tenant_id: str, packing: list[dict]) -> dict[str, str | None]:
+        if not packing:
+            return {}
+        return {
+            row[0]: row[1]
+            for row in self._connection.execute(
+                "SELECT id, product_id FROM production.work_orders WHERE tenant_id = %s AND id = ANY(%s)",
+                (tenant_id, list({p["of_id"] for p in packing})),
+            ).fetchall()
+        }
+
+    def _post_packing_rows(
+        self, stock: ShiftStockService, *, tenant_id: str, actor_id: str, packing: list[dict], shift_date,
+        correlation_id: str, frozen: dict[str, tuple] | None = None,
+    ) -> None:
+        """Post every packing row: settle its store, pin its packaging, move the stock, register its lot.
+
+        `frozen` maps a row id to the packaging an earlier validation already pinned on it.
+        """
+        order_products = self._order_products(tenant_id, packing)
+        for row in packing:
+            finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
+            if finished_product_id is None:
+                raise _Abort(Err(
+                    "NOT_FOUND",
+                    f"work order {row['of_id']} has no product to pack",
+                    f"l'OF {row['of_id']} n'a pas de produit à conditionner",
+                ))
+            # The store is settled once, here, and kept on the row: reversal reads it back
+            # and must hand the goods back from exactly where they were posted.
+            row["finished_goods_location_id"] = stock.finished_goods_store(
+                tenant_id=tenant_id, packing_row=row, finished_product_id=finished_product_id
+            )
+            self._connection.execute(
+                "UPDATE production.shift_packing_rows SET finished_goods_location_id = %s WHERE id = %s AND tenant_id = %s",
+                (row["finished_goods_location_id"], row["id"], tenant_id),
+            )
+            snapshot = stock.freeze_packing_snapshot(
+                tenant_id=tenant_id, packing_row=row, finished_product_id=finished_product_id,
+                frozen=(frozen or {}).get(row["id"]),
+            )
+            row["snapshot_net_weight_grams"] = snapshot["net_weight_grams"]
+            row["snapshot_packets_per_carton"] = snapshot["packets_per_carton"]
+            posted = stock.post_packing(
+                tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id,
+                correlation_id=correlation_id,
+            )
+            if isinstance(posted, Err):
+                raise _Abort(posted)
+            lot = stock.register_lot(
+                tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id,
+                report_date=shift_date,
+            )
+            if isinstance(lot, Err):
+                raise _Abort(lot)
+
+    def _reverse_packing_rows(
+        self, stock: ShiftStockService, *, tenant_id: str, actor_id: str, packing: list[dict], correlation_id: str
+    ) -> None:
+        order_products = self._order_products(tenant_id, packing)
+        for row in packing:
+            finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
+            result = stock.reverse_packing(
+                tenant_id=tenant_id, actor_id=actor_id, packing_row=row,
+                finished_product_id=finished_product_id, correlation_id=correlation_id,
+            )
+            if isinstance(result, Err):
+                raise _Abort(result)
+
+    def _drop_legacy_copy(self, tenant_id: str, report_ids: list[str]) -> None:
+        # The copy is validated, not submitted, so _delete_old_rows' own guard (refusing to
+        # delete a validated row out from under a caller) would trip on our own rows here;
+        # reversal and correction are the callers allowed to remove a validated copy.
+        for table in ("report_waste_lines", "report_semolina_lines", "report_downtime_lines"):
+            self._connection.execute(f"DELETE FROM production.{table} WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+        self._connection.execute("DELETE FROM production.conditionnement_reports WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+        self._connection.execute("DELETE FROM production.daily_reports WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+        self._connection.execute("DELETE FROM production.report_revisions WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
+        self._connection.execute("DELETE FROM production.production_reports WHERE tenant_id = %s AND id = ANY(%s)", (tenant_id, report_ids))
+
+    def _write_legacy_copy(self, tenant_id: str, actor_id: str, shift_report_id: str) -> None:
+        materialized = materialize_shift(
+            self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id, actor_id=actor_id,
+        )
+        if isinstance(materialized, Err):
+            raise _Abort(materialized)
+        self._connection.execute(
+            "UPDATE production.production_reports SET status = 'validated', validated_by = %s, validated_at = NOW() "
+            "WHERE tenant_id = %s AND id = ANY(%s)",
+            (actor_id, tenant_id, [report_id for report_id, _report_type in materialized.value]),
+        )
+
+    def _repost_after_correction(
+        self, stock: ShiftStockService, *, tenant_id: str, actor_id: str, shift_report_id: str, shift_date,
+        section_key: str, old_runs: list[dict], old_packing: list[dict], force: bool, reason: str | None,
+        correlation_id: str,
+    ) -> list[dict]:
+        """Take back what the old rows posted and post the corrected ones; return any shortfalls.
+
+        Only the side the section feeds moves: a runs correction re-posts the runs (and settles
+        their rebroyat against what was already ground, see `_reconcile_closed_regrind_batch`),
+        a packing one the packing rows -- keeping the packaging each surviving row had pinned.
+        """
+        if section_key in _RUN_SECTIONS:
+            new_runs = _runs(self._connection, tenant_id, shift_report_id)
+            new_regrind = {run["id"]: float(run.get("regrind_quantity") or 0) for run in new_runs}
+            regrind_kept: set[str] = set()
+            for run in old_runs:
+                undone = stock.reverse_run(
+                    tenant_id=tenant_id, actor_id=actor_id, run=run, correlation_id=correlation_id, force=force,
+                    new_regrind_quantity=new_regrind.get(run["id"], 0.0), reason=reason or "shift correction after validation",
+                )
+                if isinstance(undone, Err):
+                    raise _Abort(undone)
+                if undone.value["skip_regrind_rebuild"]:
+                    regrind_kept.add(run["id"])
+            shortfalls = stock.shift_shortfalls(tenant_id=tenant_id, runs=new_runs, packing_rows=[])
+            for run in new_runs:
+                posted = stock.post_run(tenant_id=tenant_id, actor_id=actor_id, run=run, correlation_id=correlation_id)
+                if isinstance(posted, Err):
+                    raise _Abort(posted)
+                if run["id"] not in regrind_kept:
+                    regrind = stock.record_regrind(tenant_id=tenant_id, actor_id=actor_id, run=run)
+                    if isinstance(regrind, Err):
+                        raise _Abort(regrind)
+            return shortfalls
+
+        self._reverse_packing_rows(stock, tenant_id=tenant_id, actor_id=actor_id, packing=old_packing, correlation_id=correlation_id)
+        new_packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
+        shortfalls = stock.shift_shortfalls(tenant_id=tenant_id, runs=[], packing_rows=new_packing)
+        frozen = {
+            row["id"]: tuple(
+                float(value) if value is not None else None
+                for value in (row.get("snapshot_net_weight_grams"), row.get("snapshot_packets_per_carton"))
+            )
+            for row in old_packing
+            # A row validated before packaging was pinned has nothing frozen to keep.
+            if row.get("snapshot_net_weight_grams") is not None or row.get("snapshot_packets_per_carton") is not None
+        }
+        self._post_packing_rows(
+            stock, tenant_id=tenant_id, actor_id=actor_id, packing=new_packing, shift_date=shift_date,
+            correlation_id=correlation_id, frozen=frozen,
+        )
+        return shortfalls
 
     # ---- a validator's own correction ----------------------------------------
 
@@ -340,18 +456,28 @@ class ShiftValidationService:
         section_key: str,
         payload: dict,
         reason: str | None,
+        force: bool = False,
+        correlation_id: str | None = None,
     ) -> Result[dict]:
         """An admin's in-place fix to a section after the shift was already validated.
 
         Gated by `production.admin_unlock_validated` at the router, not here. The shift
         and section keep their status (this corrects data, it does not reopen a workflow);
         the revision it freezes is tagged `edited_after_validation` at write time.
+
+        Stock follows the correction, all or nothing: a section validation posted from (runs,
+        packing, packing waste) has its old rows' movements taken back and the corrected rows
+        posted, and the read-only report copy is rewritten. Otherwise stock would keep the old
+        figures, and a later reversal -- which reads the corrected rows -- would take back a
+        quantity validation never posted. `force` confirms opening a second rebroyat order when
+        the corrected rebroyat exceeds a batch already ground.
         """
         if section_key not in SECTION_KEYS:
             return Err("INVALID_SECTION", f"unknown section {section_key!r}", f"section {section_key!r} inconnue")
-        status = self._locked_status(tenant_id, shift_report_id)
-        if status is None:
+        locked = self._locked_status_and_date(tenant_id, shift_report_id)
+        if locked is None:
             return Err("NOT_FOUND", f"shift report {shift_report_id} not found", f"shift {shift_report_id} introuvable")
+        status, shift_date = locked
         if status != "validated":
             return Err(
                 "INVALID_TRANSITION",
@@ -359,38 +485,71 @@ class ShiftValidationService:
                 f"un shift {status} n'a pas besoin d'être déverrouillé pour être modifié",
             )
 
-        saved = save_section_rows(
-            self._connection,
-            tenant_id=tenant_id,
-            shift_report_id=shift_report_id,
-            section_key=section_key,
-            payload=payload,
-            custom_waste_categories={
-                report_type: custom_waste_categories(self._connection, tenant_id=tenant_id, report_type=report_type)
-                for report_type in ("daily", "conditionnement")
-            },
-        )
-        if isinstance(saved, Err):
-            return saved
-
         clean_reason = (reason or "").strip() or None
-        revision = self._shifts._freeze_revision(
-            tenant_id, actor_id, shift_report_id, section_key, clean_reason, edited_after_validation=True
-        )
-        self._connection.execute(
-            "UPDATE production.shift_report_sections SET revision = %s, updated_at = NOW() "
-            "WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s",
-            (revision, shift_report_id, tenant_id, section_key),
-        )
-        record_audit(
-            self._connection,
-            tenant_id=tenant_id,
-            actor_id=actor_id,
-            action="shift_report.section_edited_after_validation",
-            entity_type="shift_report",
-            entity_id=shift_report_id,
-            payload={"section": section_key, "revision": revision, "reason": clean_reason},
-        )
+        correlation_id = correlation_id or str(ULID())
+        moves_stock = section_key in _RUN_SECTIONS | _PACKING_SECTIONS
+        try:
+            with self._connection.transaction():
+                old_runs = _runs(self._connection, tenant_id, shift_report_id)
+                old_packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
+
+                saved = save_section_rows(
+                    self._connection,
+                    tenant_id=tenant_id,
+                    shift_report_id=shift_report_id,
+                    section_key=section_key,
+                    payload=payload,
+                    custom_waste_categories={
+                        report_type: custom_waste_categories(self._connection, tenant_id=tenant_id, report_type=report_type)
+                        for report_type in ("daily", "conditionnement")
+                    },
+                )
+                if isinstance(saved, Err):
+                    raise _Abort(saved)
+
+                shortfalls: list[dict] = []
+                if moves_stock:
+                    shortfalls = self._repost_after_correction(
+                        ShiftStockService(self._connection), tenant_id=tenant_id, actor_id=actor_id,
+                        shift_report_id=shift_report_id, shift_date=shift_date, section_key=section_key,
+                        old_runs=old_runs, old_packing=old_packing, force=force, reason=clean_reason,
+                        correlation_id=correlation_id,
+                    )
+                self._drop_legacy_copy(tenant_id, [r["id"] for r in old_runs] + [p["id"] for p in old_packing])
+                self._write_legacy_copy(tenant_id, actor_id, shift_report_id)
+                if section_key == "silo":
+                    apply_silo_machine_status(
+                        self._connection, tenant_id=tenant_id, actor_id=actor_id, shift_report_id=shift_report_id
+                    )
+
+                revision = self._shifts._freeze_revision(
+                    tenant_id, actor_id, shift_report_id, section_key, clean_reason, edited_after_validation=True
+                )
+                self._connection.execute(
+                    "UPDATE production.shift_report_sections SET revision = %s, updated_at = NOW() "
+                    "WHERE shift_report_id = %s AND tenant_id = %s AND section_key = %s",
+                    (revision, shift_report_id, tenant_id, section_key),
+                )
+                record_audit(
+                    self._connection,
+                    tenant_id=tenant_id,
+                    actor_id=actor_id,
+                    action="shift_report.section_edited_after_validation",
+                    entity_type="shift_report",
+                    entity_id=shift_report_id,
+                    payload={
+                        "section": section_key, "revision": revision, "reason": clean_reason,
+                        "stock_reposted": moves_stock, "forced": force, "shortfalls": shortfalls,
+                    },
+                )
+        except _Abort as abort:
+            return abort.err
+        except psycopg.errors.IntegrityError as exc:
+            return Err(
+                "INVALID_VALUE",
+                f"the correction cannot be posted as entered: {exc.diag.message_primary or exc}",
+                f"la correction ne peut pas être versée en stock telle que saisie : {exc.diag.message_primary or exc}",
+            )
         return Ok(self._shifts._section_result(tenant_id, shift_report_id, section_key))
 
     # ---- reject ------------------------------------------------------------
@@ -461,22 +620,8 @@ class ShiftValidationService:
                 stock = ShiftStockService(self._connection)
                 packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
                 runs = _runs(self._connection, tenant_id, shift_report_id)
-                order_products = {
-                    row[0]: row[1]
-                    for row in self._connection.execute(
-                        "SELECT id, product_id FROM production.work_orders WHERE tenant_id = %s AND id = ANY(%s)",
-                        (tenant_id, list({p["of_id"] for p in packing})),
-                    ).fetchall()
-                } if packing else {}
                 # Packing first: mirrors the old ordering ("a packing report points at the daily report it drew from").
-                for row in packing:
-                    finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
-                    result = stock.reverse_packing(
-                        tenant_id=tenant_id, actor_id=actor_id, packing_row=row,
-                        finished_product_id=finished_product_id, correlation_id=correlation_id,
-                    )
-                    if isinstance(result, Err):
-                        raise _Abort(result)
+                self._reverse_packing_rows(stock, tenant_id=tenant_id, actor_id=actor_id, packing=packing, correlation_id=correlation_id)
                 for run in runs:
                     result = stock.reverse_run(
                         tenant_id=tenant_id, actor_id=actor_id, run=run, correlation_id=correlation_id, force=force,
@@ -484,16 +629,7 @@ class ShiftValidationService:
                     if isinstance(result, Err):
                         raise _Abort(result)
 
-                report_ids = [r["id"] for r in runs] + [p["id"] for p in packing]
-                # The copy is validated, not submitted, so _delete_old_rows' own guard (refusing to
-                # delete a validated row out from under a caller) would trip on our own rows here;
-                # this reversal is the one caller allowed to remove a validated copy.
-                for table in ("report_waste_lines", "report_semolina_lines", "report_downtime_lines"):
-                    self._connection.execute(f"DELETE FROM production.{table} WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
-                self._connection.execute("DELETE FROM production.conditionnement_reports WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
-                self._connection.execute("DELETE FROM production.daily_reports WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
-                self._connection.execute("DELETE FROM production.report_revisions WHERE tenant_id = %s AND report_id = ANY(%s)", (tenant_id, report_ids))
-                self._connection.execute("DELETE FROM production.production_reports WHERE tenant_id = %s AND id = ANY(%s)", (tenant_id, report_ids))
+                self._drop_legacy_copy(tenant_id, [r["id"] for r in runs] + [p["id"] for p in packing])
 
                 self._connection.execute(
                     "UPDATE production.shift_report_sections SET status = 'returned', return_reason = %s, updated_at = NOW() "

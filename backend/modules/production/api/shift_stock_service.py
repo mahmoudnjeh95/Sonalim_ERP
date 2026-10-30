@@ -193,16 +193,25 @@ class ShiftStockService:
         product = CoreService(self._connection).get_product(tenant_id, finished_product_id) if finished_product_id else None
         return line_store if product is not None and stored == product.default_location_id else stored
 
-    def freeze_packing_snapshot(self, *, tenant_id: str, packing_row: dict, finished_product_id: str) -> dict:
+    def freeze_packing_snapshot(
+        self, *, tenant_id: str, packing_row: dict, finished_product_id: str, frozen: tuple | None = None
+    ) -> dict:
         """Pin the packaging parameters a packing row is judged on, once, at
         validation. Ports conditionnement_service.freeze_packaging_parameters.
+
+        `frozen` is (net_weight_grams, packets_per_carton) already pinned by an earlier
+        validation of the same row: a correction after validation keeps them, so a
+        catalog change since does not quietly change what the row posts.
         """
         from core.api.service import CoreService
         from modules.production.domain.packaging_estimate import tonnage_from_count
 
-        product = CoreService(self._connection).get_product(tenant_id, finished_product_id)
-        net_weight_grams = product.net_weight_grams if product else None
-        packets_per_carton = product.packets_per_carton if product else None
+        if frozen is not None:
+            net_weight_grams, packets_per_carton = frozen
+        else:
+            product = CoreService(self._connection).get_product(tenant_id, finished_product_id)
+            net_weight_grams = product.net_weight_grams if product else None
+            packets_per_carton = product.packets_per_carton if product else None
         finished_product_quantity = tonnage_from_count(
             net_weight_grams=net_weight_grams, packets_per_carton=packets_per_carton,
             carton_quantity=float(packing_row.get("carton_quantity") or 0),

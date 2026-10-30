@@ -169,13 +169,18 @@ export function SectionCard({
     setRestoreAvailable(false);
   };
 
+  // The corrected rebroyat exceeds a batch already ground: saving again with `force` opens a
+  // second rebroyat order for the difference (see unlockedEditSection).
+  const regrindDeltaConfirmRequired = (error: unknown) =>
+    error instanceof ApiError && error.code === "REGRIND_DELTA_REQUIRES_NEW_ORDER";
+
   const fail = (error: unknown) =>
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
 
   const save = useMutation({
-    mutationFn: (_opts?: { silent?: boolean }) =>
+    mutationFn: (opts?: { silent?: boolean; force?: boolean }) =>
       unlocked
-        ? unlockedEditSection(token, shift.id, def.key, toPayload(def, draft), unlockReason.trim() || undefined)
+        ? unlockedEditSection(token, shift.id, def.key, toPayload(def, draft), unlockReason.trim() || undefined, opts?.force)
         : saveShiftSection(token, shift.id, def.key, toPayload(def, draft)),
     onSuccess: (_data, opts) => {
       forgetBackup();
@@ -305,6 +310,11 @@ export function SectionCard({
             <Save className="h-3.5 w-3.5" />
             {label(T.saveUnlockedEdit)}
           </Button>
+          {regrindDeltaConfirmRequired(save.error) && (
+            <Button size="sm" variant="outline" onClick={() => save.mutate({ force: true })} disabled={!dirty || busy}>
+              {label(T.confirmRegrindDelta)}
+            </Button>
+          )}
         </div>
       )}
 

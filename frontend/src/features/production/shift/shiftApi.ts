@@ -110,9 +110,15 @@ export function validatorEditSection(token: string, id: string, key: SectionKey,
   return apiFetch<SectionState>(`${base}/${id}/sections/${key}/validator-edit`, { method: "PUT", body: { payload, reason }, token });
 }
 
-/** An admin's correction to a section after the shift is already validated; the reason is optional. */
-export function unlockedEditSection(token: string, id: string, key: SectionKey, payload: SectionPayload, reason?: string) {
-  return apiFetch<SectionState>(`${base}/${id}/sections/${key}/unlocked-edit`, { method: "PUT", body: { payload, reason }, token });
+/**
+ * An admin's correction to a section after the shift is already validated; the reason is optional.
+ * Stock follows the correction. `force` confirms a REGRIND_DELTA_REQUIRES_NEW_ORDER refusal: the
+ * corrected rebroyat exceeds a batch already ground, so a second order opens for the difference.
+ */
+export function unlockedEditSection(
+  token: string, id: string, key: SectionKey, payload: SectionPayload, reason?: string, force = false,
+) {
+  return apiFetch<SectionState>(`${base}/${id}/sections/${key}/unlocked-edit`, { method: "PUT", body: { payload, reason, force }, token });
 }
 
 export function submitShiftSection(token: string, id: string, key: SectionKey) {

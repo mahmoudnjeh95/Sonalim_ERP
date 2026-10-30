@@ -147,6 +147,7 @@ export const T = {
   unlockReason: L("Why are you correcting this? (optional)", "Pourquoi corrigez-vous ceci ? (facultatif)"),
   saveUnlockedEdit: L("Save correction", "Enregistrer la correction"),
   unlockedEditSaved: L("Correction saved", "Correction enregistrée"),
+  confirmRegrindDelta: L("Confirm: open a rebroyat order for the difference", "Confirmer : ouvrir un OF de rebroyat pour la différence"),
   editedAfterValidation: L("Edited after validation", "Modifié après validation"),
   shortfallTitle: L("Stock is short for this shift", "Le stock est insuffisant pour ce shift"),
   shortfallHint: L(

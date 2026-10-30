@@ -3074,6 +3074,8 @@ def validator_edit_shift_report_section(
 class UnlockedEditSectionRequest(BaseModel):
     payload: dict
     reason: str | None = None
+    # Confirms opening a second rebroyat order when the corrected rebroyat exceeds a batch already ground.
+    force: bool = False
 
 
 @router.put("/shift-reports/{shift_report_id}/sections/{section_key}/unlocked-edit")
@@ -3091,6 +3093,7 @@ def edit_shift_report_section_after_validation(
             section_key=section_key,
             payload=body.payload,
             reason=body.reason,
+            force=body.force,
         )
         return _shift_result(connection, result)
 
