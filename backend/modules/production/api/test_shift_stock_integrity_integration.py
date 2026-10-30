@@ -234,3 +234,61 @@ def test_a_correction_above_a_ground_rebroyat_batch_needs_force_and_changes_noth
         (TENANT,),
     ).fetchall()
     assert [float(b[0]) for b in batches] == [10, 40], "the ground batch stays, a second one opens for the 10 kg more"
+
+
+# ---- #4: finished goods are valued at what went into them --------------------------
+
+
+def _price_the_seeded_layers(db, env, **unit_costs) -> None:
+    for key, unit_cost in unit_costs.items():
+        db.execute(
+            "UPDATE warehouse.cost_layers SET unit_cost = %s WHERE tenant_id = %s AND product_id = %s",
+            (unit_cost, TENANT, env[key]),
+        )
+
+
+def _finished_layer_cost(db, packing_id) -> float | None:
+    row = db.execute(
+        "SELECT unit_cost FROM warehouse.cost_layers WHERE tenant_id = %s AND reference = %s AND move_type = 'production'",
+        (TENANT, f"shift_packing_row:{packing_id}"),
+    ).fetchone()
+    return float(row[0]) if row and row[0] is not None else None
+
+
+def test_packed_goods_are_valued_at_the_semoule_and_packaging_they_consumed(db, env):
+    _price_the_seeded_layers(db, env, semolina=500, film=10, carton=10, scotch=10, ruban=10)
+    shift_id = _submitted_shift(db, env)
+    _, packing_id = _ids(db, shift_id)
+
+    _ok(_validate(db, env, shift_id))
+
+    material = 1000 * 500
+    packaging = (40 + 100 + 2 + 1) * 10
+    assert _finished_layer_cost(db, packing_id) == pytest.approx((material + packaging) / 1600)  # 1600 packets
+
+
+def test_without_a_known_material_cost_the_catalog_fallback_values_the_goods(db, env):
+    _price_the_seeded_layers(db, env, film=10, carton=10, scotch=10, ruban=10)  # semoule left unvalued
+    db.execute("UPDATE core.products SET purchase_price = 77 WHERE id = %s", (env["product"],))
+    shift_id = _submitted_shift(db, env)
+    _, packing_id = _ids(db, shift_id)
+
+    _ok(_validate(db, env, shift_id))
+
+    assert _finished_layer_cost(db, packing_id) == pytest.approx(77), "not a packaging-only figure that looks real"
+
+
+def test_correcting_the_runs_revalues_the_packed_goods(db, env):
+    _price_the_seeded_layers(db, env, semolina=500, film=10, carton=10, scotch=10, ruban=10)
+    shift_id = _submitted_shift(db, env)
+    _, packing_id = _ids(db, shift_id)
+    _ok(_validate(db, env, shift_id))
+
+    _ok(_unlocked_edit(db, env, shift_id, "runs", _runs_payload(db, shift_id, semolina=1200)))
+
+    open_layers = [
+        layer for layer in ValuationService(db).list_layers(tenant_id=TENANT, product_id=env["product"])
+        if layer.reference == f"shift_packing_row:{packing_id}"
+    ]
+    assert [layer.quantity_remaining for layer in open_layers] == [pytest.approx(1600)]
+    assert open_layers[0].unit_cost == pytest.approx((1200 * 500 + 1430) / 1600)

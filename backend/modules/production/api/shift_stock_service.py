@@ -223,54 +223,115 @@ class ShiftStockService:
             "snapshot_packets_per_carton = %s, finished_product_quantity = %s WHERE id = %s AND tenant_id = %s",
             (net_weight_grams, packets_per_carton, finished_product_quantity, packing_row["id"], tenant_id),
         )
-        return {"net_weight_grams": net_weight_grams, "packets_per_carton": packets_per_carton}
+        return {
+            "net_weight_grams": net_weight_grams, "packets_per_carton": packets_per_carton,
+            "finished_product_quantity": finished_product_quantity,
+        }
 
-    def post_packing(
-        self, *, tenant_id: str, actor_id: str, packing_row: dict, finished_product_id: str,
-        correlation_id: str, reverse: bool = False,
-    ) -> Result[dict]:
-        """Finished product in, packaging out. Ports ReportStockService.post_conditionnement_report.
-
-        packets_per_carton comes from the row's own frozen snapshot (set by
-        freeze_packing_snapshot at validation), never the product's current
-        value, so reversing or correcting an old row always posts the same
-        quantity it originally did.
-        """
+    @staticmethod
+    def finished_quantity(packing_row: dict) -> float:
+        """The finished-goods units a packing row posts, read through its frozen snapshot."""
         from modules.production.domain.packaging_estimate import finished_quantity_from_count
 
-        direction_in = "in" if not reverse else "out"
-        direction_out = "out" if not reverse else "in"
-        movements: list[dict] = []
-
         per_carton = packing_row.get("snapshot_packets_per_carton")
-        finished_quantity = finished_quantity_from_count(
+        return finished_quantity_from_count(
             packets_per_carton=float(per_carton) if per_carton is not None else None,
             carton_quantity=float(packing_row.get("carton_quantity") or 0),
             packets_counted=float(packing_row.get("packets_counted") or 0),
             waste_carton_quantity=float(packing_row.get("waste_carton_quantity") or 0),
         )
-        if finished_quantity > 0:
-            received = self._stock.post_production_movement(
-                tenant_id=tenant_id, product_id=finished_product_id,
-                location_id=packing_row["finished_goods_location_id"], quantity=finished_quantity,
-                direction=direction_in, correlation_id=correlation_id,
-                reference=f"shift_packing_row:{packing_row['id']}", move_type="production", actor_id=actor_id,
-                source_type="production.shift_packing_row", source_id=packing_row["id"], of_id=packing_row["of_id"],
-            )
-            if isinstance(received, Err):
-                return received
-            movements.append({"direction": direction_in, "product_id": finished_product_id, "location_id": packing_row["finished_goods_location_id"], "quantity": finished_quantity})
+
+    def consumed_cost(self, *, tenant_id: str, references: list[str]) -> dict:
+        """What is still consumed under these references (net of any reversal), at FIFO cost."""
+        from modules.warehouse.api.valuation_service import ValuationService
+
+        if not references:
+            return {"cost": 0.0, "unvalued_quantity": 0.0, "quantity": 0.0}
+        return ValuationService(self._connection).consumption_cost(
+            tenant_id=tenant_id, references=references,
+            move_types=["production_consumption", "production_consumption_reversal"],
+        )
+
+    def order_material_cost_per_tonne(self, *, tenant_id: str, of_id: str, exclude_shift_report_id: str) -> float | None:
+        """An order's raw-material cost per tonne packed, over its other validated shifts.
+
+        For a packing row whose order ran on no run of this shift (extruded on one shift,
+        packed on the next): the material it was made of was consumed elsewhere, so it takes
+        the order's own running average rather than nothing.
+        """
+        run_ids = [
+            row[0] for row in self._connection.execute(
+                "SELECT r.id FROM production.shift_runs r JOIN production.shift_reports s ON s.id = r.shift_report_id "
+                "WHERE r.tenant_id = %s AND r.of_id = %s AND s.status = 'validated' AND s.id <> %s",
+                (tenant_id, of_id, exclude_shift_report_id),
+            ).fetchall()
+        ]
+        packed = self._connection.execute(
+            "SELECT COALESCE(SUM(p.finished_product_quantity), 0) FROM production.shift_packing_rows p "
+            "JOIN production.shift_reports s ON s.id = p.shift_report_id "
+            "WHERE p.tenant_id = %s AND p.of_id = %s AND s.status = 'validated' AND s.id <> %s",
+            (tenant_id, of_id, exclude_shift_report_id),
+        ).fetchone()[0]
+        cost = self.consumed_cost(tenant_id=tenant_id, references=[f"shift_run:{run_id}" for run_id in run_ids])["cost"]
+        if not packed or float(packed) <= 0 or cost <= 0:
+            return None
+        return cost / float(packed)
+
+    def post_packing(
+        self, *, tenant_id: str, actor_id: str, packing_row: dict, finished_product_id: str,
+        correlation_id: str, reverse: bool = False, material_cost: float | None = None,
+    ) -> Result[dict]:
+        """Packaging out, finished product in. Ports ReportStockService.post_conditionnement_report.
+
+        packets_per_carton comes from the row's own frozen snapshot (set by
+        freeze_packing_snapshot at validation), never the product's current
+        value, so reversing or correcting an old row always posts the same
+        quantity it originally did.
+
+        The finished goods are valued at what went into them: this row's packaging, at the
+        FIFO cost it just left stock at, plus `material_cost` -- its share of the raw material
+        the runs consumed. Packaging is therefore posted first. Without a known material cost
+        the warehouse's catalog fallback applies, as for any inflow without a cost.
+        """
+        direction_in = "in" if not reverse else "out"
+        direction_out = "out" if not reverse else "in"
+        movements: list[dict] = []
+        reference = f"shift_packing_row:{packing_row['id']}"
 
         for quantity, product_id, location_id in self._packing_lines(packing_row):
             issued = self._stock.post_production_movement(
                 tenant_id=tenant_id, product_id=product_id, location_id=location_id,
                 quantity=quantity, direction=direction_out, correlation_id=correlation_id,
-                reference=f"shift_packing_row:{packing_row['id']}", move_type="production_consumption", actor_id=actor_id,
+                reference=reference, move_type="production_consumption", actor_id=actor_id,
                 source_type="production.shift_packing_row", source_id=packing_row["id"], of_id=packing_row["of_id"],
             )
             if isinstance(issued, Err):
                 return issued
             movements.append({"direction": direction_out, "product_id": product_id, "location_id": location_id, "quantity": quantity})
+
+        finished_quantity = self.finished_quantity(packing_row)
+        if finished_quantity > 0:
+            unit_cost = None
+            # Without the material's cost (the bulk of it) a packaging-only figure would look
+            # authoritative and be badly low; the layer is left to the catalog fallback instead.
+            if not reverse and material_cost:
+                packaging = self.consumed_cost(tenant_id=tenant_id, references=[reference])
+                unit_cost = (packaging["cost"] + material_cost) / finished_quantity
+            received = self._stock.post_production_movement(
+                tenant_id=tenant_id, product_id=finished_product_id,
+                location_id=packing_row["finished_goods_location_id"], quantity=finished_quantity,
+                direction=direction_in, correlation_id=correlation_id,
+                reference=reference, move_type="production", actor_id=actor_id,
+                source_type="production.shift_packing_row", source_id=packing_row["id"], of_id=packing_row["of_id"],
+                unit_cost=unit_cost,
+            )
+            if isinstance(received, Err):
+                return received
+            movements.append({
+                "direction": direction_in, "product_id": finished_product_id,
+                "location_id": packing_row["finished_goods_location_id"], "quantity": finished_quantity,
+                "unit_cost": unit_cost,
+            })
 
         return Ok({"movements": movements})
 

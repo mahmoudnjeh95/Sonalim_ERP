@@ -30,7 +30,7 @@ from modules.production.api.shift_sections import load_section, save_section_row
 from modules.production.api.shift_stock_service import ShiftStockService
 from modules.production.api.silo_machine_status import apply_silo_machine_status
 from modules.production.api.waste_type_service import custom_waste_categories
-from modules.production.domain.shift_report import SECTION_KEYS
+from modules.production.domain.shift_report import SECTION_KEYS, split_proportionally
 
 
 class _Abort(Exception):
@@ -247,6 +247,7 @@ class ShiftValidationService:
         `frozen` maps a row id to the packaging an earlier validation already pinned on it.
         """
         order_products = self._order_products(tenant_id, packing)
+        products: dict[str, str] = {}
         for row in packing:
             finished_product_id = row.get("product_id") or order_products.get(row["of_id"])
             if finished_product_id is None:
@@ -255,6 +256,7 @@ class ShiftValidationService:
                     f"work order {row['of_id']} has no product to pack",
                     f"l'OF {row['of_id']} n'a pas de produit à conditionner",
                 ))
+            products[row["id"]] = finished_product_id
             # The store is settled once, here, and kept on the row: reversal reads it back
             # and must hand the goods back from exactly where they were posted.
             row["finished_goods_location_id"] = stock.finished_goods_store(
@@ -270,9 +272,15 @@ class ShiftValidationService:
             )
             row["snapshot_net_weight_grams"] = snapshot["net_weight_grams"]
             row["snapshot_packets_per_carton"] = snapshot["packets_per_carton"]
+            row["finished_product_quantity"] = snapshot["finished_product_quantity"]
+
+        # Every row's tonnage is settled above before any is costed: rows share their order's material by it.
+        material_costs = self._material_costs(stock, tenant_id=tenant_id, packing=packing)
+        for row in packing:
+            finished_product_id = products[row["id"]]
             posted = stock.post_packing(
                 tenant_id=tenant_id, actor_id=actor_id, packing_row=row, finished_product_id=finished_product_id,
-                correlation_id=correlation_id,
+                correlation_id=correlation_id, material_cost=material_costs.get(row["id"]),
             )
             if isinstance(posted, Err):
                 raise _Abort(posted)
@@ -282,6 +290,44 @@ class ShiftValidationService:
             )
             if isinstance(lot, Err):
                 raise _Abort(lot)
+
+    def _material_costs(self, stock: ShiftStockService, *, tenant_id: str, packing: list[dict]) -> dict[str, float | None]:
+        """Each packing row's share of the raw material its order consumed, at FIFO cost.
+
+        An order's runs on this shift are what its packed goods were made of, so their net
+        consumption is shared across the order's packing rows by tonnage (by units when no
+        row has a net weight). An order packed on a shift where it did not run takes its
+        running cost per tonne from its other validated shifts instead.
+        """
+        if not packing:
+            return {}
+        shift_report_id = packing[0]["shift_report_id"]
+        runs_of_order: dict[str, list[str]] = {}
+        for run_id, of_id in self._connection.execute(
+            "SELECT id, of_id FROM production.shift_runs WHERE tenant_id = %s AND shift_report_id = %s",
+            (tenant_id, shift_report_id),
+        ).fetchall():
+            runs_of_order.setdefault(of_id, []).append(run_id)
+        rows_of_order: dict[str, list[dict]] = {}
+        for row in packing:
+            rows_of_order.setdefault(row["of_id"], []).append(row)
+
+        costs: dict[str, float | None] = {}
+        for of_id, rows in rows_of_order.items():
+            tonnages = [float(row.get("finished_product_quantity") or 0) for row in rows]
+            if runs_of_order.get(of_id):
+                total = stock.consumed_cost(
+                    tenant_id=tenant_id, references=[f"shift_run:{run_id}" for run_id in runs_of_order[of_id]]
+                )["cost"]
+                weights = tonnages if sum(tonnages) > 0 else [stock.finished_quantity(row) for row in rows]
+                shares = split_proportionally(total, weights) if sum(weights) > 0 else [0.0 for _ in rows]
+                costs.update({row["id"]: share for row, share in zip(rows, shares)})
+            else:
+                per_tonne = stock.order_material_cost_per_tonne(
+                    tenant_id=tenant_id, of_id=of_id, exclude_shift_report_id=shift_report_id
+                )
+                costs.update({row["id"]: per_tonne * tonnage if per_tonne else None for row, tonnage in zip(rows, tonnages)})
+        return costs
 
     def _reverse_packing_rows(
         self, stock: ShiftStockService, *, tenant_id: str, actor_id: str, packing: list[dict], correlation_id: str
@@ -326,9 +372,10 @@ class ShiftValidationService:
     ) -> list[dict]:
         """Take back what the old rows posted and post the corrected ones; return any shortfalls.
 
-        Only the side the section feeds moves: a runs correction re-posts the runs (and settles
-        their rebroyat against what was already ground, see `_reconcile_closed_regrind_batch`),
-        a packing one the packing rows -- keeping the packaging each surviving row had pinned.
+        A runs correction re-posts the runs (settling their rebroyat against what was already
+        ground, see `_reconcile_closed_regrind_batch`) and then the packing rows, whose value
+        follows the runs' material; a packing correction re-posts the packing rows only. Each
+        surviving packing row keeps the packaging it had pinned.
         """
         if section_key in _RUN_SECTIONS:
             new_runs = _runs(self._connection, tenant_id, shift_report_id)
@@ -352,11 +399,15 @@ class ShiftValidationService:
                     regrind = stock.record_regrind(tenant_id=tenant_id, actor_id=actor_id, run=run)
                     if isinstance(regrind, Err):
                         raise _Abort(regrind)
-            return shortfalls
+            if not old_packing:
+                return shortfalls
 
+        # The packed goods are re-posted on a runs correction too: they are valued at the runs'
+        # material cost, which has just changed. Their quantities do not move.
         self._reverse_packing_rows(stock, tenant_id=tenant_id, actor_id=actor_id, packing=old_packing, correlation_id=correlation_id)
         new_packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
-        shortfalls = stock.shift_shortfalls(tenant_id=tenant_id, runs=[], packing_rows=new_packing)
+        if section_key not in _RUN_SECTIONS:
+            shortfalls = stock.shift_shortfalls(tenant_id=tenant_id, runs=[], packing_rows=new_packing)
         frozen = {
             row["id"]: tuple(
                 float(value) if value is not None else None
