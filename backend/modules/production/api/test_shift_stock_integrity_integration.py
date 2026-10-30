@@ -328,3 +328,34 @@ def test_correcting_the_lot_number_and_dlc_files_the_corrected_lot(db, env):
     _ok(_unlocked_edit(db, env, shift_id, "packing", _packing_payload(db, shift_id, dlc_date="2032-02-29")))
 
     assert _lot(db, env, "B6262SNL")[1] == datetime.date(2032, 2, 29), "a corrected DLC reaches the lot this row filed"
+
+
+# ---- #7: other modules hear about it -------------------------------------------------
+
+
+def _events(db, event_type, shift_id) -> list[dict]:
+    rows = db.execute(
+        "SELECT payload->'payload' FROM events.outbox "
+        "WHERE tenant_id = %s AND event_type = %s AND payload->'payload'->>'shift_report_id' = %s",
+        (TENANT, event_type, shift_id),
+    ).fetchall()
+    return [row[0] for row in rows]
+
+
+def test_validating_correcting_and_reversing_a_shift_each_publish_an_event(db, env):
+    shift_id = _submitted_shift(db, env)
+    _, packing_id = _ids(db, shift_id)
+
+    _ok(_validate(db, env, shift_id))
+    [validated] = _events(db, "production.shift.validated", shift_id)
+    assert validated["packed"][0]["packing_row_id"] == packing_id
+    assert validated["packed"][0]["quantity"] == pytest.approx(1600)
+    assert validated["packed"][0]["location_id"] == env["fg_location"]
+
+    _ok(_unlocked_edit(db, env, shift_id, "packing", _packing_payload(db, shift_id, packets_counted=1500)))
+    [corrected] = _events(db, "production.shift.corrected", shift_id)
+    assert corrected["stock_reposted"] is True and corrected["packed"][0]["quantity"] == pytest.approx(1500)
+
+    _ok(_reverse(db, env, shift_id, reason="wrong line"))
+    [reversed_] = _events(db, "production.shift.reversed", shift_id)
+    assert reversed_["reason"] == "wrong line" and reversed_["packed"][0]["quantity"] == pytest.approx(1500)

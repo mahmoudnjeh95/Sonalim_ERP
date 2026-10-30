@@ -31,7 +31,10 @@
   "publishes_events": [
     "production.work_order.closed",
     "production.report.validated",
-    "production.report.rejected"
+    "production.report.rejected",
+    "production.shift.validated",
+    "production.shift.corrected",
+    "production.shift.reversed"
   ],
   "subscribes_events": ["qc.non_conformity.dispositioned"],
   "migrations_path": "./migrations",

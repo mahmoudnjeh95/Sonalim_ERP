@@ -16,6 +16,9 @@
 | `production.work_order.closed` | 2.0 | production | — | `work_order_id`, `product_id`, `planned_quantity` — fires when an OF is closed. Closure is archival and posts no stock, so this carries what was planned, not what was produced. Replaces `production.work_order.completed`, which no longer exists: the OF stopped meaning "completed with output" in Phase 1. |
 | `production.report.validated` | 1.0 | production | — | `report_id`, `of_id`, `report_type`, `report_date` — the event that means stock moved. |
 | `production.report.rejected` | 1.0 | production | — | `report_id`, `of_id`, `report_type`, `reason` |
+| `production.shift.validated` | 1.0 | production | — | `shift_report_id`, `work_center_id`, `report_date`, `shift`, `of_ids`, `packed` (`packing_row_id`, `of_id`, `product_id`, `location_id`, `quantity`, `lot_number`) — a shift was approved and its stock posted (raw material and packaging out, finished goods in). The per-shift successor of `production.report.validated`, which the legacy report flow still emits. |
+| `production.shift.corrected` | 1.0 | production | — | same as `production.shift.validated`, plus `section`, `stock_reposted` — an admin corrected a validated shift; when `stock_reposted`, the section's old movements were taken back and the corrected ones posted, and `packed` is what now stands |
+| `production.shift.reversed` | 1.0 | production | — | same as `production.shift.validated`, plus `reason`, `forced` — the shift's stock was taken back and its sections returned to the team; `packed` is what was taken back |
 | `crm.lead.qualified` | 1.0 | crm | — | `lead_id`, `email` |
 | `crm.lead.converted` | 1.0 | crm | — | `lead_id`, `partner_id`, `opportunity_id` |
 | `crm.opportunity.won` | 1.1 | crm | — | `opportunity_id`, `partner_id`, `name`, `amount`, `sales_order_id` — a draft sales order is created synchronously in the same transaction as the win, so `sales_order_id` is always populated |

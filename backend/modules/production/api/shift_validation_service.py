@@ -22,6 +22,7 @@ from psycopg.types.json import Jsonb
 from ulid import ULID
 
 from core.audit import record_audit
+from core.events.outbox import publish_event
 from core.domain.result import Err, Ok, Result
 from modules.production.api.legacy_report_ledger import materialize_shift
 from modules.production.api.report_product import stamp_order_products
@@ -186,6 +187,10 @@ class ShiftValidationService:
                     (shift_report_id, tenant_id),
                 )
                 self._freeze_shift(tenant_id, actor_id, shift_report_id)
+                self._publish(
+                    "production.shift.validated", tenant_id=tenant_id, shift_report_id=shift_report_id,
+                    correlation_id=correlation_id,
+                )
                 record_audit(
                     self._connection,
                     tenant_id=tenant_id,
@@ -225,6 +230,44 @@ class ShiftValidationService:
             "(id, tenant_id, shift_report_id, section_key, revision, snapshot, reason, actor_id) "
             "VALUES (%s, %s, %s, '*', %s, %s, 'validated', %s)",
             (str(ULID()), tenant_id, shift_report_id, revision, Jsonb(snapshot), actor_id),
+        )
+
+    # ---- events ----------------------------------------------------------------
+
+    def _publish(self, event_type: str, *, tenant_id: str, shift_report_id: str, correlation_id: str, **extra) -> None:
+        """A shift event, carrying what the shift now stands for in stock (see events/CATALOG.md)."""
+        work_center_id, report_date, shift = self._connection.execute(
+            "SELECT work_center_id, report_date, shift FROM production.shift_reports WHERE id = %s AND tenant_id = %s",
+            (shift_report_id, tenant_id),
+        ).fetchone()
+        runs = _rows(self._connection, tenant_id, shift_report_id, "shift_runs")
+        packing = _rows(self._connection, tenant_id, shift_report_id, "shift_packing_rows")
+        order_products = self._order_products(tenant_id, packing)
+        publish_event(
+            self._connection,
+            event_type=event_type,
+            producer="production",
+            tenant_id=tenant_id,
+            correlation_id=correlation_id,
+            payload={
+                "shift_report_id": shift_report_id,
+                "work_center_id": work_center_id,
+                "report_date": report_date.isoformat(),
+                "shift": shift,
+                "of_ids": sorted({r["of_id"] for r in runs} | {p["of_id"] for p in packing}),
+                "packed": [
+                    {
+                        "packing_row_id": row["id"],
+                        "of_id": row["of_id"],
+                        "product_id": row.get("product_id") or order_products.get(row["of_id"]),
+                        "location_id": row.get("finished_goods_location_id"),
+                        "quantity": ShiftStockService.finished_quantity(row),
+                        "lot_number": row.get("lot_number"),
+                    }
+                    for row in packing
+                ],
+                **extra,
+            },
         )
 
     # ---- posting helpers, shared by validation, correction and reversal -------
@@ -624,6 +667,10 @@ class ShiftValidationService:
                         self._connection, tenant_id=tenant_id, actor_id=actor_id, shift_report_id=shift_report_id
                     )
 
+                self._publish(
+                    "production.shift.corrected", tenant_id=tenant_id, shift_report_id=shift_report_id,
+                    correlation_id=correlation_id, section=section_key, stock_reposted=moves_stock,
+                )
                 revision = self._shifts._freeze_revision(
                     tenant_id, actor_id, shift_report_id, section_key, clean_reason, edited_after_validation=True
                 )
@@ -757,6 +804,11 @@ class ShiftValidationService:
                 self._withdraw_orphan_lots(tenant_id, actor_id, packing)
                 reapply_latest_silo_status(
                     self._connection, tenant_id=tenant_id, actor_id=actor_id, reversed_shift_report_id=shift_report_id
+                )
+                # `packed` lists what validation had posted and this reversal took back.
+                self._publish(
+                    "production.shift.reversed", tenant_id=tenant_id, shift_report_id=shift_report_id,
+                    correlation_id=correlation_id, reason=reason.strip(), forced=force,
                 )
                 record_audit(
                     self._connection,
