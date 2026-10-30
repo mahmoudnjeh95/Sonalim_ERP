@@ -37,6 +37,7 @@ import {
 } from "../production/api";
 import { PackagingVariancePanel } from "../production/PackagingVariancePanel";
 import { AppLoader } from "../../components/patterns/AppLoader";
+import { signedMoveQuantity } from "../../lib/stockMoveTypes";
 
 const CHART_COLORS = {
   primary: "hsl(217 91% 45%)",
@@ -132,25 +133,29 @@ export function FinishedGoodsAnalysisTab() {
   // (adjustment / admin_correction) is a different thing: it doesn't represent
   // output, so it's tracked and shown separately rather than folded into it,
   // which would silently inflate or deflate what the line actually produced.
-  const productionMoves = finishedGoodMoves.filter((move) => move.move_type === "production");
+  // A reversed report's "production_reversal" takes its output back, so it nets against it.
+  const productionMoves = finishedGoodMoves.filter(
+    (move) => move.move_type === "production" || move.move_type === "production_reversal",
+  );
   const adjustmentMoves = finishedGoodMoves.filter((move) => ADJUSTMENT_MOVE_TYPES.has(move.move_type));
 
   const byDay = new Map<string, { packet: number; carton: number; other: number; tonnage: number }>();
   const byFinishedProduct = new Map<string, number>();
   let hasMissingWeight = false;
   for (const move of productionMoves) {
+    const quantity = signedMoveQuantity(move);
     const day = move.created_at.slice(0, 10);
     const unit = packagingUnit.get(move.product_id) ?? "other";
     const dayBucket = byDay.get(day) ?? { packet: 0, carton: 0, other: 0, tonnage: 0 };
-    dayBucket[unit] += move.quantity;
+    dayBucket[unit] += quantity;
     const product = products.find((p) => p.id === move.product_id);
     if (product?.net_weight_grams != null) {
-      dayBucket.tonnage += (move.quantity * product.net_weight_grams) / 1_000_000;
+      dayBucket.tonnage += (quantity * product.net_weight_grams) / 1_000_000;
     } else {
       hasMissingWeight = true;
     }
     byDay.set(day, dayBucket);
-    byFinishedProduct.set(move.product_id, (byFinishedProduct.get(move.product_id) ?? 0) + move.quantity);
+    byFinishedProduct.set(move.product_id, (byFinishedProduct.get(move.product_id) ?? 0) + quantity);
   }
 
   const byDayAdjustment = new Map<string, number>();

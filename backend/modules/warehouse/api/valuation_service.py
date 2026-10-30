@@ -104,6 +104,115 @@ class ValuationService:
             )
         return allocations
 
+    def restore_outflow(
+        self, *, tenant_id: str, product_id: str, quantity: float, reference: str, move_type: str
+    ) -> None:
+        """Undo an earlier outflow under `reference`: the quantity goes back into the
+        very layers that outflow drew from, at their own cost and FIFO position, rather
+        than opening a new layer at today's catalog price at the back of the queue.
+
+        Each put-back is recorded as a negative consumption, so the reference's cost
+        (`cost_of_reference`) nets to what is still really consumed. Anything beyond what
+        the reference still has drawn opens a new layer, as a plain inflow would.
+        """
+        if move_type in NEUTRAL_MOVE_TYPES or quantity <= 0:
+            return
+        drawn = self._connection.execute(
+            """
+            SELECT layer_id, unit_cost, SUM(quantity) AS net
+            FROM warehouse.cost_layer_consumptions
+            WHERE tenant_id = %s AND product_id = %s AND reference = %s
+            GROUP BY layer_id, unit_cost
+            HAVING SUM(quantity) > 0
+            ORDER BY MAX(consumed_at) DESC, layer_id NULLS FIRST
+            """,
+            (tenant_id, product_id, reference),
+        ).fetchall()
+        left = quantity
+        for layer_id, unit_cost, net in drawn:
+            if left <= 1e-9:
+                break
+            put_back = min(float(net), left)
+            if layer_id is not None:
+                self._connection.execute(
+                    "UPDATE warehouse.cost_layers SET quantity_remaining = quantity_remaining + %s WHERE id = %s",
+                    (put_back, layer_id),
+                )
+            # A layer-less draw was a shortfall nobody valued; undoing it restores no layer.
+            self._connection.execute(
+                """
+                INSERT INTO warehouse.cost_layer_consumptions
+                    (id, tenant_id, product_id, layer_id, reference, move_type, quantity, unit_cost, consumed_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
+                """,
+                (str(ULID()), tenant_id, product_id, layer_id, reference, move_type, -put_back, unit_cost),
+            )
+            left -= put_back
+        if left > 1e-9:
+            self.record_inflow(tenant_id=tenant_id, product_id=product_id, quantity=left, reference=reference, move_type=move_type)
+
+    def reverse_inflow(
+        self, *, tenant_id: str, product_id: str, quantity: float, reference: str, move_type: str
+    ) -> list[Allocation]:
+        """Undo an earlier inflow under `reference`: the quantity leaves the layers that
+        inflow opened, newest first, instead of the oldest stock on the shelf -- so taking
+        back a production receipt removes exactly the cost it brought in. Whatever those
+        layers no longer hold (already drawn by later outflows) is drawn FIFO as usual.
+        """
+        if move_type in NEUTRAL_MOVE_TYPES or quantity <= 0:
+            return []
+        rows = self._connection.execute(
+            """
+            SELECT id, quantity_remaining, unit_cost FROM warehouse.cost_layers
+            WHERE tenant_id = %s AND product_id = %s AND reference = %s AND quantity_remaining > 0
+            ORDER BY received_at DESC, id DESC
+            FOR UPDATE
+            """,
+            (tenant_id, product_id, reference),
+        ).fetchall()
+        allocations: list[Allocation] = []
+        left = quantity
+        for layer_id, remaining, unit_cost in rows:
+            if left <= 1e-9:
+                break
+            taken = min(float(remaining), left)
+            allocations.append(Allocation(layer_id=layer_id, quantity=taken, unit_cost=float(unit_cost) if unit_cost is not None else None))
+            left -= taken
+        for allocation in allocations:
+            self._connection.execute(
+                "UPDATE warehouse.cost_layers SET quantity_remaining = quantity_remaining - %s WHERE id = %s",
+                (allocation.quantity, allocation.layer_id),
+            )
+            self._connection.execute(
+                """
+                INSERT INTO warehouse.cost_layer_consumptions
+                    (id, tenant_id, product_id, layer_id, reference, move_type, quantity, unit_cost)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (str(ULID()), tenant_id, product_id, allocation.layer_id, reference, move_type, allocation.quantity, allocation.unit_cost),
+            )
+        if left > 1e-9:
+            allocations += self.record_outflow(tenant_id=tenant_id, product_id=product_id, quantity=left, reference=reference, move_type=move_type)
+        return allocations
+
+    def consumption_cost(self, *, tenant_id: str, references: list[str], move_types: list[str]) -> dict:
+        """What is still consumed under `references`, counting only `move_types` --
+        an outflow's cost net of any put-backs (`restore_outflow`). `unvalued_quantity`
+        is the part drawn with no known cost."""
+        rows = self._connection.execute(
+            """
+            SELECT layer_id, quantity, unit_cost FROM warehouse.cost_layer_consumptions
+            WHERE tenant_id = %s AND reference = ANY(%s) AND move_type = ANY(%s)
+            """,
+            (tenant_id, list(references), list(move_types)),
+        ).fetchall()
+        allocations = [
+            Allocation(layer_id=row[0], quantity=float(row[1]), unit_cost=float(row[2]) if row[2] is not None else None)
+            for row in rows
+        ]
+        cost, unvalued = allocation_cost(allocations)
+        return {"cost": cost, "unvalued_quantity": unvalued, "quantity": sum(a.quantity for a in allocations)}
+
     def record_delta(
         self, *, tenant_id: str, product_id: str, delta: float, reference: str, move_type: str, unit_cost: float | None = None
     ) -> None:

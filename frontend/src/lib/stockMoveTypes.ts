@@ -11,6 +11,8 @@ export const MOVE_TYPE_VARIANT: Record<StockMoveType, BadgeProps["variant"]> = {
   production: "primary",
   send_to_production: "primary",
   production_consumption: "primary",
+  production_consumption_reversal: "outline",
+  production_reversal: "outline",
   transfer_out: "warning",
   transfer_in: "success",
   admin_correction: "destructive",
@@ -29,6 +31,8 @@ export function useMoveTypeLabels(): Record<StockMoveType, string> {
     production: t("warehouse.stockHistory.type.production"),
     send_to_production: t("warehouse.stockHistory.type.sendToProduction"),
     production_consumption: t("warehouse.stockHistory.type.productionConsumption"),
+    production_consumption_reversal: t("warehouse.stockHistory.type.productionConsumptionReversal"),
+    production_reversal: t("warehouse.stockHistory.type.productionReversal"),
     transfer_out: t("warehouse.stockHistory.type.transferOut"),
     transfer_in: t("warehouse.stockHistory.type.transferIn"),
     admin_correction: t("warehouse.stockHistory.type.adminCorrection"),
@@ -109,15 +113,17 @@ export function relatedWorkOrderId(move: StockMove): string | null {
  * A move's own `quantity` is stored unsigned; direction comes from
  * `move_type` instead. `adjustment` and `admin_correction` carry their own
  * signed delta already. The rest leave stock ("issue", "production_consumption",
- * "transfer_out", "send_to_production" -- see the matching `post_*`/`issue_stock`
+ * "transfer_out", "send_to_production", "production_reversal" -- see the matching `post_*`/`issue_stock`
  * calls in modules/warehouse/api/service.py, which all subtract from
  * `quantity_on_hand` even though the move row only ever stores the unsigned
- * amount) or arrive ("receipt", "production", "transfer_in", the two
- * reservation types). Shared here so the moves table, the detail dialog and
+ * amount) or arrive ("receipt", "production", "production_consumption_reversal",
+ * "transfer_in", the two reservation types). Shared here so the moves table, the detail dialog and
  * any added/used rollup (e.g. a per-product history chart) agree on the same
  * sign instead of each re-deriving it.
  */
-const OUT_MOVE_TYPES = new Set<StockMoveType>(["issue", "production_consumption", "transfer_out", "send_to_production", "shipment"]);
+const OUT_MOVE_TYPES = new Set<StockMoveType>([
+  "issue", "production_consumption", "transfer_out", "send_to_production", "shipment", "production_reversal",
+]);
 
 export function signedMoveQuantity(move: StockMove): number {
   if (move.move_type === "adjustment" || move.move_type === "admin_correction") return move.quantity;

@@ -143,6 +143,8 @@ export type StockMoveType =
   | "production"
   | "send_to_production"
   | "production_consumption"
+  | "production_consumption_reversal"
+  | "production_reversal"
   | "transfer_out"
   | "transfer_in"
   | "admin_correction"

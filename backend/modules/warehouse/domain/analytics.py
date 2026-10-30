@@ -17,12 +17,16 @@ from dataclasses import dataclass
 CONSUMPTION_MOVE_TYPES = frozenset({"issue", "production_consumption", "send_to_production", "shipment"})
 
 # Movements that bring stock in from outside the plant or out of production.
-INBOUND_MOVE_TYPES = frozenset({"receipt", "production"})
+# `production_consumption_reversal` is material a reversed production report put
+# back: it arrives, but it is not consumption going negative -- it is its own type
+# so the unsigned row is never misread as one more consumption.
+INBOUND_MOVE_TYPES = frozenset({"receipt", "production", "production_consumption_reversal"})
 
 # Movements that leave the location they are recorded on. `transfer_out` is
 # included here (and not above): it does leave *this* location, it just does
-# not leave the plant.
-OUTBOUND_MOVE_TYPES = CONSUMPTION_MOVE_TYPES | frozenset({"transfer_out"})
+# not leave the plant. `production_reversal` is finished goods (or a regrind
+# receipt) a reversal took back out.
+OUTBOUND_MOVE_TYPES = CONSUMPTION_MOVE_TYPES | frozenset({"transfer_out", "production_reversal"})
 
 # Movements a human keyed in to make the books match the shelf. Their volume
 # is the inventory-accuracy signal: a warehouse that needs many corrections

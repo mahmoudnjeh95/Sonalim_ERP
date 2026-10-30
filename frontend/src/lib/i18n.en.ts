@@ -2794,6 +2794,8 @@ export const en = {
   "warehouse.stockHistory.type.production": "Production",
   "warehouse.stockHistory.type.sendToProduction": "Sent to production",
   "warehouse.stockHistory.type.productionConsumption": "Consumed in production",
+  "warehouse.stockHistory.type.productionConsumptionReversal": "Consumption reversed",
+  "warehouse.stockHistory.type.productionReversal": "Production reversed",
   "warehouse.stockHistory.type.transferOut": "Transfer out",
   "warehouse.stockHistory.type.transferIn": "Transfer in",
   "warehouse.stockHistory.type.adminCorrection": "Admin correction",

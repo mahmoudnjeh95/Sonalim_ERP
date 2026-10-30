@@ -25,6 +25,13 @@ from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.domain.reservation import validate_reservation_expiry
 
 
+# (move type, direction against its natural one) -> the type the reversing row is stored as.
+_REVERSAL_MOVE_TYPES = {
+    ("production_consumption", "in"): "production_consumption_reversal",
+    ("production", "out"): "production_reversal",
+}
+
+
 class StockService:
     """Public API for the warehouse module. Callers commit; this class only executes writes."""
 
@@ -310,6 +317,7 @@ class StockService:
         source_type: str | None = None,
         source_id: str | None = None,
         of_id: str | None = None,
+        unit_cost: float | None = None,
     ) -> Result[StockLevel]:
         """Post a movement that records what physically happened, shortfall or not.
 
@@ -324,6 +332,16 @@ class StockService:
 
         `source_type`, `source_id` and `of_id` are what let a number in inventory
         be traced back to the report and OF that produced it.
+
+        Posting a move type against its natural direction (`production_consumption`
+        in, `production` out) is undoing an earlier movement under the same
+        `reference`. The row is then stored as its reversal type, because a move row's
+        quantity is unsigned and every reader takes the sign from the type -- stored as
+        the original type, a returned consumption would read as one more consumption.
+        Its valuation goes back through the layers the original movement touched.
+
+        `unit_cost` prices an inflow's cost layer (XOF per unit), e.g. finished goods at
+        what their materials cost; without it the catalog fallback applies.
         """
         if quantity <= 0:
             return Err("INVALID_QUANTITY", "movement quantity must be positive", "la quantité du mouvement doit être positive")
@@ -347,6 +365,9 @@ class StockService:
 
         delta = quantity if direction == "in" else -quantity
         new_on_hand = current_on_hand + delta
+        reversal_type = _REVERSAL_MOVE_TYPES.get((move_type, direction))
+        if reversal_type is not None:
+            move_type = reversal_type
 
         self._connection.execute(
             """
@@ -378,9 +399,19 @@ class StockService:
                 of_id,
             ),
         )
-        self._valuation.record_delta(
-            tenant_id=tenant_id, product_id=product_id, delta=delta, reference=reference, move_type=move_type
-        )
+        if reversal_type == "production_consumption_reversal":
+            self._valuation.restore_outflow(
+                tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type=move_type
+            )
+        elif reversal_type == "production_reversal":
+            self._valuation.reverse_inflow(
+                tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type=move_type
+            )
+        else:
+            self._valuation.record_delta(
+                tenant_id=tenant_id, product_id=product_id, delta=delta, reference=reference, move_type=move_type,
+                unit_cost=unit_cost,
+            )
         publish_event(
             self._connection,
             event_type="warehouse.stock.received" if direction == "in" else "warehouse.stock.issued",
