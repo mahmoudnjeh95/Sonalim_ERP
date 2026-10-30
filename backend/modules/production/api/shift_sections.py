@@ -872,6 +872,32 @@ def _wrap_packing_check(index: int, checked: Err) -> Err:
                f"ligne de conditionnement {index} : {checked.message_fr or checked.message}")
 
 
+def _poured_without_run() -> Err:
+    """What a run takes in is its share of the shift's versements (`_derive_run_inputs`), so
+    material poured on a shift with no run would never leave stock."""
+    return Err(
+        "POURED_WITHOUT_RUN",
+        "material was poured (versement or rebroyat) but no production run records it; add the run it went into",
+        "de la matière a été versée (versement ou rebroyat) mais aucun passage de production ne l'enregistre ;"
+        " ajoutez le passage qui l'a reçue",
+    )
+
+
+def poured_without_run(connection: psycopg.Connection, *, tenant_id: str, shift_report_id: str) -> Err | None:
+    """The refusal for a shift whose versements no run takes in, else None."""
+    row = connection.execute(
+        """
+        SELECT
+            EXISTS (SELECT 1 FROM production.shift_runs WHERE tenant_id = %s AND shift_report_id = %s),
+            EXISTS (SELECT 1 FROM production.shift_versements WHERE tenant_id = %s AND shift_report_id = %s AND quantity > 0)
+            OR EXISTS (SELECT 1 FROM production.shift_rebroyat_versements WHERE tenant_id = %s AND shift_report_id = %s AND quantity > 0)
+        """,
+        (tenant_id, shift_report_id) * 3,
+    ).fetchone()
+    has_runs, poured = row
+    return _poured_without_run() if poured and not has_runs else None
+
+
 def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
     """The completeness the old flow demanded when a report left the team.
 
@@ -908,6 +934,13 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
             checked = validate_daily_stock_targets(detail)
             if isinstance(checked, Err):
                 return _wrap_run_check(index, checked)
+        poured = any(
+            float(row.get("quantity") or 0) > 0
+            for key in ("versements", "rebroyat_versements")
+            for row in payload.get(key) or []
+        )
+        if poured and not payload.get("runs"):
+            return _poured_without_run()
     elif section_key in _WASTE_REPORT_TYPE:
         # The shift's waste lines track a quantity per kind; the form has no product column and
         # nothing is posted to stock from them, so a line need not name what was lost.

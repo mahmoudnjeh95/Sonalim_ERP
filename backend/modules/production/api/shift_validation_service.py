@@ -27,7 +27,7 @@ from core.domain.result import Err, Ok, Result
 from modules.production.api.legacy_report_ledger import materialize_shift
 from modules.production.api.report_product import stamp_order_products
 from modules.production.api.shift_report_service import ShiftReportService
-from modules.production.api.shift_sections import load_section, save_section_rows
+from modules.production.api.shift_sections import load_section, poured_without_run, save_section_rows
 from modules.production.api.shift_stock_service import ShiftStockService
 from modules.production.api.silo_machine_status import apply_silo_machine_status, reapply_latest_silo_status
 from modules.production.api.stock_release_service import StockReleaseService
@@ -138,6 +138,10 @@ class ShiftValidationService:
                         "the shift has no production run and no packing row to validate",
                         "le shift n'a ni passage de production ni ligne de conditionnement à valider",
                     ))
+
+                unconsumed = poured_without_run(self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id)
+                if unconsumed is not None:
+                    raise _Abort(unconsumed)
 
                 open_stop = self._connection.execute(
                     "SELECT 1 FROM production.machine_stops WHERE shift_report_id = %s AND tenant_id = %s AND ended_at IS NULL LIMIT 1",
@@ -651,6 +655,9 @@ class ShiftValidationService:
                 )
                 if isinstance(saved, Err):
                     raise _Abort(saved)
+                unconsumed = poured_without_run(self._connection, tenant_id=tenant_id, shift_report_id=shift_report_id)
+                if unconsumed is not None:
+                    raise _Abort(unconsumed)
 
                 shortfalls: list[dict] = []
                 if moves_stock:

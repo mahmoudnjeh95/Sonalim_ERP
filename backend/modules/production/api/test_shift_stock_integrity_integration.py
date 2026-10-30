@@ -9,6 +9,7 @@ from ulid import ULID
 from core.domain.result import Err
 from modules.production.api.shift_validation_service import ShiftValidationService
 from modules.production.api.test_shift_validation_integration import (  # noqa: F401 -- `env` is a fixture
+    DAY,
     TENANT,
     _ok,
     _on_hand,
@@ -359,3 +360,33 @@ def test_validating_correcting_and_reversing_a_shift_each_publish_an_event(db, e
     _ok(_reverse(db, env, shift_id, reason="wrong line"))
     [reversed_] = _events(db, "production.shift.reversed", shift_id)
     assert reversed_["reason"] == "wrong line" and reversed_["packed"][0]["quantity"] == pytest.approx(1500)
+
+
+# ---- semoule poured with no run to take it in --------------------------------------
+
+
+def test_semoule_poured_with_no_run_cannot_be_submitted_or_validated(db, env):
+    from modules.production.api.shift_report_service import ShiftReportService
+
+    service = ShiftReportService(db)
+    shift_id = _ok(service.open_shift(
+        tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"],
+        report_date=DAY, shift="night",
+    ))["id"]
+    poured = {"runs": [], "versements": [{"product_id": env["semolina"], "location_id": env["location"], "quantity": 500}]}
+    _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload=poured))
+
+    refused = service.submit_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs")
+
+    assert isinstance(refused, Err) and refused.code == "POURED_WITHOUT_RUN"
+
+
+def test_a_correction_cannot_remove_the_runs_the_semoule_went_into(db, env):
+    shift_id = _submitted_shift(db, env)
+    _ok(_validate(db, env, shift_id))
+    payload = _runs_payload(db, shift_id)
+    payload["runs"] = []
+
+    refused = _unlocked_edit(db, env, shift_id, "runs", payload)
+
+    assert isinstance(refused, Err) and refused.code == "POURED_WITHOUT_RUN"
