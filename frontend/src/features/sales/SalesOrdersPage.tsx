@@ -36,6 +36,8 @@ import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listLocations, listUoms } from "../warehouse/api";
+import { listPickLists, PICK_LISTS_QUERY_KEY } from "../warehouse/fulfillment/api";
+import { listReservations, RESERVATIONS_QUERY_KEY } from "../warehouse/reservations/api";
 import { listPartners } from "../partners/api";
 import { ProductSelect } from "../../components/patterns/ProductSelect";
 import { useProductCatalog } from "../products/catalog";
@@ -80,6 +82,31 @@ export function SalesOrdersPage() {
   const { data: orders = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listOrders(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
+  // An issue voucher is only for an order fulfillment isn't handling: shipping issues the stock
+  // too, so a voucher on top would take it out twice. Without this data we can't tell, so no button.
+  const canSeeFulfillmentHolds =
+    hasPermission("warehouse.manage_vouchers") && hasPermission("warehouse.view_moves") && hasPermission("warehouse.view_fulfillment");
+  const reservationsQuery = useQuery({
+    queryKey: RESERVATIONS_QUERY_KEY,
+    queryFn: () => listReservations(token),
+    enabled: canSeeFulfillmentHolds,
+  });
+  const pickListsQuery = useQuery({
+    queryKey: PICK_LISTS_QUERY_KEY,
+    queryFn: () => listPickLists(token),
+    enabled: canSeeFulfillmentHolds,
+  });
+  const canIssueVoucher = (order: SalesOrder) => {
+    if (order.status !== "confirmed" || !canSeeFulfillmentHolds) return false;
+    if (!reservationsQuery.data || !pickListsQuery.data || reservationsQuery.isFetching || pickListsQuery.isFetching) return false;
+    const heldByReservation = reservationsQuery.data.some(
+      (reservation) => reservation.status === "active" && reservation.reference === `sales_order:${order.id}`,
+    );
+    const heldByPickList = pickListsQuery.data.some(
+      (pickList) => pickList.source_type === "sales_order" && pickList.source_id === order.id && pickList.status !== "cancelled",
+    );
+    return !heldByReservation && !heldByPickList;
+  };
   const { catalog } = useProductCatalog();
   const allProducts = catalog;
   const { data: uoms = [] } = useQuery({ queryKey: ["core", "uoms"], queryFn: () => listUoms(token) });
@@ -145,6 +172,8 @@ export function SalesOrdersPage() {
     mutationFn: (orderId: string) => confirmOrder(token, orderId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: RESERVATIONS_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: PICK_LISTS_QUERY_KEY });
       toast.success(t("sales.confirmedToast"), { description: t("sales.confirmedDesc") });
     },
     onError: (error) => {
@@ -270,7 +299,7 @@ export function SalesOrdersPage() {
             <Pencil className="h-3.5 w-3.5" />
             {t("sales.edit")}
           </Button>
-          {order.status === "confirmed" && hasPermission("warehouse.manage_vouchers") && (
+          {canIssueVoucher(order) && (
             <Button
               size="sm"
               variant="outline"
