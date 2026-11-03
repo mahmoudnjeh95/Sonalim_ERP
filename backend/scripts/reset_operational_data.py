@@ -51,6 +51,7 @@ PURGE_TABLES = [
     "crm.leads",
     "crm.opportunities",
     "finance.invoices",
+    "finance.invoice_payment_deltas",
     "hr.attendance_records",
     "hr.contracts",
     "hr.departments",
@@ -62,6 +63,10 @@ PURGE_TABLES = [
     "procurement.purchase_order_receipt_lines",
     "procurement.purchase_order_receipts",
     "procurement.purchase_orders",
+    "procurement.purchase_invoices",
+    "procurement.purchase_invoice_lines",
+    "procurement.invoice_counters",
+    "procurement.invoice_payment_deltas",
     "sales.order_lines",
     "sales.orders",
     "qc.nc_dispositions",
@@ -104,6 +109,23 @@ PURGE_TABLES = [
     "warehouse.stock_moves",
     "warehouse.lot_stock",
     "warehouse.lots",
+    "warehouse.vouchers",
+    "warehouse.voucher_lines",
+    "warehouse.voucher_counters",
+    "warehouse.inventories",
+    "warehouse.inventory_lines",
+    "treasury.documents",
+    "treasury.document_allocations",
+    "treasury.document_payments",
+    "treasury.document_counters",
+    "treasury.instruments",
+    "treasury.deposit_slips",
+    "treasury.deposit_slip_items",
+    "treasury.payment_orders",
+    "treasury.user_notifications",
+    "treasury.account_movements",
+    "treasury.bank_statement_lines",
+    "treasury.statement_imports",
 ]
 
 # Tables that are edited in place rather than emptied (see purge()).
@@ -112,6 +134,7 @@ EDITED_TABLES = [
     "core.partner_tag_links",
     "core.sequences",
     "warehouse.stock_items",
+    "treasury.accounts",
 ]
 
 # Master data and configuration: never touched.
@@ -154,6 +177,13 @@ KEPT_TABLES = [
     "production.waste_type_builtin_settings",
     "production.work_centers",
     "warehouse.locations",
+    "warehouse.stock_valuation",
+    "treasury.banks",
+    "treasury.bank_branches",
+    "treasury.settings",
+    "treasury.alert_rules",
+    "treasury.account_format_rules",
+    "treasury.statement_profiles",
 ]
 
 # Numbering counters restarted so the first real OF is OF-1, not OF-58.
@@ -238,6 +268,14 @@ def purge(connection, tenant_id: str, *, keep_customers: bool = False) -> dict[s
         (tenant_id,),
     )
     report["warehouse.stock_items (zeroed)"] = cursor.rowcount
+
+    if "treasury.accounts" in live:
+        # The movements are gone, so each account goes back to its opening balance.
+        cursor = connection.execute(
+            "UPDATE treasury.accounts SET balance = opening_balance WHERE tenant_id = %s AND balance <> opening_balance",
+            (tenant_id,),
+        )
+        report["treasury.accounts (balance reset)"] = cursor.rowcount
 
     cursor = connection.execute(
         "UPDATE core.sequences SET next_value = 0 WHERE tenant_id = %s AND name = ANY(%s) AND next_value <> 0",
