@@ -1,4 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
- fill="none" stroke="#123B6D" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-<path d="M18 47h28l-4-7V27c0-7-4-12-10-12s-10 5-10 12v13Z"/><path d="M27 53h10"/><circle cx="48" cy="16" r="7" fill="#E5484D" stroke="none"><animate attributeName="r" values="5;8;5" dur="1s" repeatCount="indefinite"/></circle>
-</svg>

@@ -3794,6 +3794,21 @@ const en = {
   "valuation.noCost": "No cost",
   "valuation.catalog": "catalog price",
   "valuation.exportError": "Could not export the report",
+  "treasury.tabs.orders": "Payment orders",
+  "treasury.order.title": "Payment orders",
+  "treasury.order.create": "Payment order",
+  "treasury.order.created": "Payment order created:",
+  "treasury.order.createError": "Could not create the payment order",
+  "treasury.order.disbursement": "Disbursement",
+  "treasury.order.view": "View",
+  "treasury.order.fromAccount": "Account debited",
+  "treasury.order.print": "Print",
+  "treasury.order.notifyUser": "Notify a colleague",
+  "treasury.order.notify": "Notify",
+  "treasury.order.notified": "Notification sent",
+  "treasury.order.notifyError": "Could not send the notification",
+  "treasury.order.empty.title": "No payment orders",
+  "treasury.order.empty.description": "Create one from a disbursement paid by bank transfer.",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -7588,6 +7603,21 @@ const fr: Record<TranslationKey, string> = {
   "valuation.noCost": "Sans coût",
   "valuation.catalog": "prix catalogue",
   "valuation.exportError": "Impossible d'exporter l'état",
+  "treasury.tabs.orders": "Ordres de virement",
+  "treasury.order.title": "Ordres de virement",
+  "treasury.order.create": "Ordre de virement",
+  "treasury.order.created": "Ordre de virement créé :",
+  "treasury.order.createError": "Impossible de créer l'ordre de virement",
+  "treasury.order.disbursement": "Décaissement",
+  "treasury.order.view": "Voir",
+  "treasury.order.fromAccount": "Compte débité",
+  "treasury.order.print": "Imprimer",
+  "treasury.order.notifyUser": "Notifier un collègue",
+  "treasury.order.notify": "Notifier",
+  "treasury.order.notified": "Notification envoyée",
+  "treasury.order.notifyError": "Impossible d'envoyer la notification",
+  "treasury.order.empty.title": "Aucun ordre de virement",
+  "treasury.order.empty.description": "Créez-en un depuis un décaissement payé par virement.",
 };
 
 const dictionaries: Record<Language, Record<TranslationKey, string>> = { en, fr };

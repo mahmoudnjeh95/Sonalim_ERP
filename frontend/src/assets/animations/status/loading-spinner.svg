@@ -1,4 +1,0 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64"
- fill="none" stroke="#123B6D" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
-<g transform="translate(32 32)"><circle r="22" stroke="#D9E2EC" stroke-width="6"/><path d="M0-22A22 22 0 0 1 22 0" stroke="#F5B51B" stroke-width="6" stroke-linecap="round"><animateTransform attributeName="transform" type="rotate" from="0" to="360" dur="0.9s" repeatCount="indefinite"/></path></g>
-</svg>

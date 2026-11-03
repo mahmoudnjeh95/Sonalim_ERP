@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Plus, Trash2, Wallet } from "lucide-react";
+import { Ban, FileText, Plus, Trash2, Wallet } from "lucide-react";
+import { createPaymentOrder } from "./paymentOrdersApi";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { ApiError } from "../../lib/api";
@@ -117,6 +118,15 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
     onError: fail("treasury.document.cancelError"),
   });
 
+  const orderMutation = useMutation({
+    mutationFn: (id: string) => createPaymentOrder(token, id),
+    onSuccess: (order) => {
+      queryClient.invalidateQueries({ queryKey: ["treasury", "payment-orders"] });
+      toast.success(`${t("treasury.order.created")} ${order.number}`);
+    },
+    onError: fail("treasury.order.createError"),
+  });
+
   const updatePayment = (index: number, patch: Partial<PaymentInput>) =>
     setPayments((list) => list.map((p, i) => (i === index ? { ...p, ...patch } : p)));
 
@@ -166,13 +176,21 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                   <TableCell>
                     <StatusBadge status={doc.status === "posted" ? "confirmed" : "cancelled"} />
                   </TableCell>
-                  <TableCell className="text-right">
-                    {canManage && doc.status === "posted" && (
-                      <Button size="sm" variant="outline" onClick={() => cancelMutation.mutate(doc.id)} disabled={cancelMutation.isPending}>
-                        <Ban className="h-3.5 w-3.5" />
-                        {t("treasury.document.cancel")}
-                      </Button>
-                    )}
+                  <TableCell>
+                    <div className="flex justify-end gap-2">
+                      {canManage && direction === "out" && doc.status === "posted" && (
+                        <Button size="sm" variant="outline" onClick={() => orderMutation.mutate(doc.id)} disabled={orderMutation.isPending}>
+                          <FileText className="h-3.5 w-3.5" />
+                          {t("treasury.order.create")}
+                        </Button>
+                      )}
+                      {canManage && doc.status === "posted" && (
+                        <Button size="sm" variant="outline" onClick={() => cancelMutation.mutate(doc.id)} disabled={cancelMutation.isPending}>
+                          <Ban className="h-3.5 w-3.5" />
+                          {t("treasury.document.cancel")}
+                        </Button>
+                      )}
+                    </div>
                   </TableCell>
                 </TableRow>
               ))}

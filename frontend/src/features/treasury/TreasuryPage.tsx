@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { ArrowDownToLine, ArrowUpFromLine, Banknote, BarChart3, BookOpen, FileSpreadsheet, Landmark, Settings as SettingsIcon, Wallet } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Banknote, BarChart3, BookOpen, FileSpreadsheet, FileText, Landmark, Settings as SettingsIcon, Wallet } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n } from "../../lib/i18n";
@@ -9,6 +9,7 @@ import { BanksTab } from "./BanksTab";
 import { TreasurySettingsTab } from "./TreasurySettingsTab";
 import { PaymentsTab } from "./PaymentsTab";
 import { InstrumentsTab } from "./InstrumentsTab";
+import { PaymentOrdersTab } from "./PaymentOrdersTab";
 import { CashJournalTab } from "./CashJournalTab";
 import { BankJournalTab } from "./BankJournalTab";
 import { InvoiceReportsTab } from "./InvoiceReportsTab";
@@ -20,6 +21,7 @@ const TABS = [
   { value: "accounts", labelKey: "treasury.tabs.accounts", icon: Wallet, Component: AccountsTab },
   { value: "receipts", labelKey: "treasury.tabs.receipts", icon: ArrowDownToLine, Component: ReceiptsTab },
   { value: "disbursements", labelKey: "treasury.tabs.disbursements", icon: ArrowUpFromLine, Component: DisbursementsTab },
+  { value: "orders", labelKey: "treasury.tabs.orders", icon: FileText, Component: PaymentOrdersTab },
   { value: "instruments", labelKey: "treasury.tabs.instruments", icon: Banknote, Component: InstrumentsTab },
   { value: "journal", labelKey: "treasury.tabs.journal", icon: BookOpen, Component: CashJournalTab },
   { value: "bankJournal", labelKey: "treasury.tabs.bankJournal", icon: FileSpreadsheet, Component: BankJournalTab },
