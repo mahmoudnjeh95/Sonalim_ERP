@@ -284,3 +284,30 @@ def get_disbursement(document_id: str, tenant: TenantContext = Depends(require_p
 @router.post("/disbursements/{document_id}/cancel")
 def cancel_disbursement(document_id: str, tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
     return _cancel_document("out", document_id, tenant)
+
+
+@router.get("/open-invoices")
+def list_open_invoices(direction: str, partner_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    """Invoices a receipt (direction=in) or disbursement (direction=out) can still be allocated to,
+    read through the owning modules' public services so treasury never touches their tables."""
+    if direction not in ("in", "out"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": "INVALID_DIRECTION", "message": "direction must be in or out",
+                                                          "message_fr": "le sens doit être in ou out"})
+    with get_connection() as connection:
+        if direction == "in":
+            from modules.finance.api.service import InvoiceService
+
+            service = InvoiceService(connection)
+            rows = []
+            for invoice in service.list_invoices(tenant.tenant_id):
+                if invoice.partner_id == partner_id and invoice.status in ("issued", "partially_paid"):
+                    detail = service.get_invoice(tenant_id=tenant.tenant_id, invoice_id=invoice.id)
+                    if not isinstance(detail, Err):
+                        rows.append(detail.value)
+            return rows
+        from modules.procurement.api.invoice_service import PurchaseInvoiceService
+
+        return [
+            i for status_name in ("validated", "partially_paid")
+            for i in PurchaseInvoiceService(connection).list_invoices(tenant_id=tenant.tenant_id, status=status_name, partner_id=partner_id)
+        ]

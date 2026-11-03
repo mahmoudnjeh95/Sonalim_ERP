@@ -1,15 +1,21 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { Landmark, Settings as SettingsIcon, Wallet } from "lucide-react";
+import { ArrowDownToLine, ArrowUpFromLine, Landmark, Settings as SettingsIcon, Wallet } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n } from "../../lib/i18n";
 import { AccountsTab } from "./AccountsTab";
 import { BanksTab } from "./BanksTab";
 import { TreasurySettingsTab } from "./TreasurySettingsTab";
+import { PaymentsTab } from "./PaymentsTab";
+
+const ReceiptsTab = () => <PaymentsTab direction="in" />;
+const DisbursementsTab = () => <PaymentsTab direction="out" />;
 
 const TABS = [
   { value: "accounts", labelKey: "treasury.tabs.accounts", icon: Wallet, Component: AccountsTab },
+  { value: "receipts", labelKey: "treasury.tabs.receipts", icon: ArrowDownToLine, Component: ReceiptsTab },
+  { value: "disbursements", labelKey: "treasury.tabs.disbursements", icon: ArrowUpFromLine, Component: DisbursementsTab },
   { value: "banks", labelKey: "treasury.tabs.banks", icon: Landmark, Component: BanksTab },
   { value: "settings", labelKey: "treasury.tabs.settings", icon: SettingsIcon, Component: TreasurySettingsTab },
 ] as const;
