@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChart3, Boxes, History as HistoryIcon, LayoutDashboard, ListTree, Package } from "lucide-react";
+import { BarChart3, Boxes, ClipboardList, Coins, FileText, History as HistoryIcon, LayoutDashboard, ListTree, Package } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n } from "../../lib/i18n";
@@ -10,6 +10,9 @@ import { AnalysisTab } from "./AnalysisTab";
 import { FinishedGoodsAnalysisTab } from "./FinishedGoodsAnalysisTab";
 import { HistoryTab } from "./HistoryTab";
 import { StockHistoryTab } from "./StockHistoryTab";
+import { VouchersTab } from "./VouchersTab";
+import { InventoryTab } from "./InventoryTab";
+import { ValuedStockTab } from "./ValuedStockTab";
 
 const TABS = [
   { value: "overview", labelKey: "warehouse.tabs.overview", icon: LayoutDashboard, Component: WarehouseOverviewTab },
@@ -18,6 +21,9 @@ const TABS = [
   { value: "finished-goods-analysis", labelKey: "warehouse.tabs.finishedGoodsAnalysis", icon: Package, Component: FinishedGoodsAnalysisTab },
   { value: "history", labelKey: "warehouse.tabs.history", icon: HistoryIcon, Component: HistoryTab },
   { value: "stock-history", labelKey: "warehouse.tabs.stockHistory", icon: ListTree, Component: StockHistoryTab },
+  { value: "vouchers", labelKey: "warehouse.tabs.vouchers", icon: FileText, Component: VouchersTab },
+  { value: "inventory", labelKey: "warehouse.tabs.inventory", icon: ClipboardList, Component: InventoryTab },
+  { value: "valuation", labelKey: "warehouse.tabs.valuation", icon: Coins, Component: ValuedStockTab },
 ] as const;
 
 type TabValue = (typeof TABS)[number]["value"];
