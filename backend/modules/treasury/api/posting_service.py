@@ -1,0 +1,58 @@
+from __future__ import annotations
+
+from typing import Any
+
+import psycopg
+
+from core.domain.result import Err, Ok, Result
+
+
+class TreasuryPostingService:
+    """Public read for the ledger. When finance posts treasury activity to the general ledger it asks
+    for plain dicts here and never reads treasury tables itself. Nothing is written."""
+
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self._connection = connection
+
+    def document_lines(self, *, tenant_id: str, document_id: str) -> Result[dict[str, Any]]:
+        """A posted receipt or disbursement: one line per payment with the ledger code of the account it
+        moved, plus the part not tied to any invoice (an advance), which the ledger books differently."""
+        head = self._connection.execute(
+            "SELECT direction, number, partner_id, doc_date, currency, status, unallocated "
+            "FROM treasury.documents WHERE id = %s AND tenant_id = %s",
+            (document_id, tenant_id),
+        ).fetchone()
+        if head is None:
+            return Err("NOT_FOUND", f"document {document_id} not found", f"document {document_id} introuvable")
+        payments = self._connection.execute(
+            """
+            SELECT p.id, p.method, p.amount, p.account_id, a.ledger_account_code, a.kind
+            FROM treasury.document_payments p LEFT JOIN treasury.accounts a ON a.id = p.account_id
+            WHERE p.document_id = %s ORDER BY p.id
+            """,
+            (document_id,),
+        ).fetchall()
+        keys = ["payment_id", "method", "amount", "account_id", "ledger_account_code", "account_kind"]
+        return Ok({
+            "direction": head[0], "number": head[1], "partner_id": head[2], "date": head[3], "currency": head[4],
+            "status": head[5], "unallocated": head[6],
+            "payments": [dict(zip(keys, p, strict=True)) for p in payments],
+        })
+
+    def instrument_lines(self, *, tenant_id: str, instrument_id: str) -> Result[dict[str, Any]]:
+        row = self._connection.execute(
+            """
+            SELECT i.direction, i.method, i.number, i.amount, i.currency, i.status, i.account_id, a.ledger_account_code,
+                   d.partner_id, d.number
+            FROM treasury.instruments i
+            JOIN treasury.documents d ON d.id = i.document_id
+            LEFT JOIN treasury.accounts a ON a.id = i.account_id
+            WHERE i.id = %s AND i.tenant_id = %s
+            """,
+            (instrument_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"instrument {instrument_id} not found", f"effet {instrument_id} introuvable")
+        keys = ["direction", "method", "number", "amount", "currency", "status", "account_id", "ledger_account_code",
+                "partner_id", "document_number"]
+        return Ok(dict(zip(keys, row, strict=True)))

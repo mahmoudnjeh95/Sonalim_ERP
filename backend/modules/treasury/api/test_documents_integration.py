@@ -216,3 +216,19 @@ def test_a_refused_document_leaves_nothing_behind(db, env):
     assert db.execute("SELECT count(*) FROM treasury.documents WHERE tenant_id = %s", (TENANT,)).fetchone()[0] == before
     assert db.execute("SELECT count(*) FROM events.outbox WHERE tenant_id = %s AND event_type = 'treasury.disbursement.posted'", (TENANT,)).fetchone()[0] == 0
     assert _balance(db, env["cash"]) == D("1000")
+
+
+def test_posting_service_exposes_ledger_codes_and_the_unallocated_advance(db, env):
+    from modules.treasury.api.posting_service import TreasuryPostingService
+
+    AccountService(db).update_account(tenant_id=TENANT, actor_id=env["actor"], account_id=env["bank"], changes={"ledger_account_code": "521"})
+    doc = _post(db, env, "in", [{"method": "transfer", "amount": 800, "account_id": env["bank"]},
+                                {"method": "cheque", "amount": 200, "number": "C9", "bank_name": "BIM", "due_date": TODAY}],
+                with_details=False)
+    lines = TreasuryPostingService(db).document_lines(tenant_id=TENANT, document_id=doc.value["id"]).value
+    assert lines["direction"] == "in" and lines["unallocated"] == D("1000")
+    by_method = {p["method"]: p for p in lines["payments"]}
+    assert by_method["transfer"]["ledger_account_code"] == "521" and by_method["cheque"]["account_id"] is None
+    instrument = TreasuryPostingService(db).instrument_lines(tenant_id=TENANT, instrument_id=doc.value["instruments"][0]["id"]).value
+    assert instrument["status"] == "pending" and instrument["document_number"] == doc.value["number"]
+    assert isinstance(TreasuryPostingService(db).document_lines(tenant_id=TENANT, document_id="nope"), Err)
