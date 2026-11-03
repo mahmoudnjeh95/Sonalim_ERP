@@ -33,6 +33,7 @@ import {
   Sparkles,
   Tag,
   Target,
+  Receipt,
   TrendingUp,
   Truck,
   UserCircle,
@@ -174,6 +175,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/inventories", labelKey: "nav.inventories", icon: ClipboardList },
       { to: "/shipments", labelKey: "nav.shipments", icon: Truck },
       { to: "/procurement", labelKey: "nav.purchaseOrders", icon: FileText },
+      { to: "/procurement/invoices", labelKey: "nav.purchaseInvoices", icon: Receipt, permission: "procurement.view_purchase_invoices" },
     ],
   },
   {

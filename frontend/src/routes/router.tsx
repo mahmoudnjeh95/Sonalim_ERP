@@ -27,6 +27,7 @@ import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
+import { PurchaseInvoicesPage } from "../features/procurement/PurchaseInvoicesPage";
 import { ProductsPage } from "../features/products/ProductsPage";
 import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
 
@@ -80,6 +81,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/inventories", element: <InventoriesPage /> },
   { path: "/shipments", element: <ShipmentsPage /> },
   { path: "/procurement", element: <PurchaseOrdersPage /> },
+  { path: "/procurement/invoices", element: <PurchaseInvoicesPage /> },
   { path: "/sales", element: <SalesOrdersPage /> },
   { path: "/finance", element: <FinanceInvoicesPage /> },
   { path: "/admin/users", element: <UsersPage /> },
