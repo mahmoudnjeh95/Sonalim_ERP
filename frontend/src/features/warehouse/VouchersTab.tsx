@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, CheckCheck, FileText, Plus, Trash2 } from "lucide-react";
+import { Ban, CheckCheck, Eye, FileText, Plus, Printer, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { ApiError } from "../../lib/api";
@@ -19,7 +19,7 @@ import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { useProductCatalog } from "../products/catalog";
 import { listLocations } from "./api";
-import { cancelVoucher, createVoucher, listVouchers, postVoucher, type VoucherInput, type VoucherType } from "./stockDocumentsApi";
+import { cancelVoucher, createVoucher, getVoucher, listVouchers, postVoucher, type VoucherInput, type VoucherType } from "./stockDocumentsApi";
 
 type Key = Parameters<ReturnType<typeof useI18n>["t"]>[0];
 type Filter = "all" | VoucherType;
@@ -42,12 +42,15 @@ export function VouchersTab() {
   const [dest, setDest] = useState("");
   const [returnOf, setReturnOf] = useState("");
   const [lines, setLines] = useState<DraftLine[]>([{ product_id: "", quantity: 0 }]);
+  const [viewing, setViewing] = useState<string | null>(null);
 
   const { data: vouchers = [], isLoading } = useQuery({ queryKey: ["warehouse", "vouchers"], queryFn: () => listVouchers(token) });
   const { data: locations = [] } = useQuery({ queryKey: ["warehouse", "locations"], queryFn: () => listLocations(token) });
   const locationName = (id: string | null) => locations.find((l) => l.id === id)?.name ?? "—";
   const visible = filter === "all" ? vouchers : vouchers.filter((v) => v.type === filter);
   const postedIssues = vouchers.filter((v) => v.type === "issue" && v.status === "posted");
+  const { data: viewed } = useQuery({ queryKey: ["warehouse", "voucher", viewing], queryFn: () => getVoucher(token, viewing!), enabled: viewing !== null });
+  const productName = (id: string) => catalog.find((p) => p.id === id)?.name ?? id;
 
   const needsSource = type === "issue" || type === "transfer";
   const needsDest = type === "receipt" || type === "return" || type === "transfer";
@@ -148,6 +151,9 @@ export function VouchersTab() {
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">
+                      <Button size="sm" variant="ghost" onClick={() => setViewing(voucher.id)}>
+                        <Eye className="h-3.5 w-3.5" />
+                      </Button>
                       {canPost && voucher.status === "draft" && (
                         <>
                           <Button size="sm" variant="outline" disabled={postMutation.isPending} onClick={() => postMutation.mutate(voucher.id)}>
@@ -243,6 +249,43 @@ export function VouchersTab() {
               {t("voucher.saveDraft")}
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={viewing !== null} onOpenChange={(value) => !value && setViewing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{viewed ? `${t(`voucher.type.${viewed.type}` as Key)} ${viewed.number ?? ""}` : ""}</DialogTitle>
+            <DialogDescription>
+              {viewed && `${viewed.source_location_id ? locationName(viewed.source_location_id) : ""}${viewed.source_location_id && viewed.dest_location_id ? " → " : ""}${viewed.dest_location_id ? locationName(viewed.dest_location_id) : ""}`}
+            </DialogDescription>
+          </DialogHeader>
+          {viewed && (
+            <div className="space-y-4">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t("inventory.column.product")}</TableHead>
+                    <TableHead className="text-right">{t("voucher.quantity")}</TableHead>
+                    <TableHead className="text-right">{t("voucher.unitCost")}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(viewed.lines ?? []).map((line) => (
+                    <TableRow key={line.id}>
+                      <TableCell>{productName(line.product_id)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{Number(line.quantity)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{line.unit_cost ? Number(line.unit_cost) : "—"}</TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+              <Button variant="outline" className="print:hidden" onClick={() => window.print()}>
+                <Printer className="h-4 w-4" />
+                {t("voucher.print")}
+              </Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

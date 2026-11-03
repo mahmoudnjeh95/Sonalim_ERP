@@ -3,7 +3,8 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useFieldArray, useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, Pencil, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { CheckCircle2, PackageCheck, Pencil, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -38,7 +39,7 @@ import { listPartners } from "../partners/api";
 import { ProductSelect } from "../../components/patterns/ProductSelect";
 import { useProductCatalog } from "../products/catalog";
 import { listProductTags } from "../products/api";
-import { confirmOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
+import { confirmOrder, createIssueVoucherFromOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 
 const lineSchema = z.object({
@@ -65,10 +66,11 @@ function formatCurrency(amount: number) {
 }
 
 export function SalesOrdersPage() {
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<SalesOrder | null>(null);
@@ -123,6 +125,18 @@ export function SalesOrdersPage() {
     },
     onError: (error) => {
       toast.error(t("sales.createError"), { description: error instanceof ApiError ? error.message : undefined });
+    },
+  });
+
+  const issueVoucherMutation = useMutation({
+    mutationFn: (order: SalesOrder) => createIssueVoucherFromOrder(token, order.id, order.location_id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["warehouse", "vouchers"] });
+      toast.success(t("sales.issueVoucherCreated"));
+      navigate("/warehouse");
+    },
+    onError: (error) => {
+      toast.error(t("sales.issueVoucherError"), { description: error instanceof ApiError ? error.message : undefined });
     },
   });
 
@@ -255,6 +269,17 @@ export function SalesOrdersPage() {
             <Pencil className="h-3.5 w-3.5" />
             {t("sales.edit")}
           </Button>
+          {order.status === "confirmed" && hasPermission("warehouse.manage_vouchers") && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => issueVoucherMutation.mutate(order)}
+              disabled={issueVoucherMutation.isPending && issueVoucherMutation.variables?.id === order.id}
+            >
+              <PackageCheck className="h-3.5 w-3.5" />
+              {t("sales.issueVoucher")}
+            </Button>
+          )}
           {order.status === "draft" && (
             <Button
               size="sm"

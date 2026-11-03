@@ -3809,6 +3809,10 @@ const en = {
   "treasury.order.notifyError": "Could not send the notification",
   "treasury.order.empty.title": "No payment orders",
   "treasury.order.empty.description": "Create one from a disbursement paid by bank transfer.",
+  "sales.issueVoucher": "Issue voucher",
+  "sales.issueVoucherCreated": "Issue voucher drafted from the order",
+  "sales.issueVoucherError": "Could not draft the issue voucher",
+  "voucher.print": "Print",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -7618,6 +7622,10 @@ const fr: Record<TranslationKey, string> = {
   "treasury.order.notifyError": "Impossible d'envoyer la notification",
   "treasury.order.empty.title": "Aucun ordre de virement",
   "treasury.order.empty.description": "Créez-en un depuis un décaissement payé par virement.",
+  "sales.issueVoucher": "Bon de sortie",
+  "sales.issueVoucherCreated": "Bon de sortie préparé depuis la commande",
+  "sales.issueVoucherError": "Impossible de préparer le bon de sortie",
+  "voucher.print": "Imprimer",
 };
 
 const dictionaries: Record<Language, Record<TranslationKey, string>> = { en, fr };

@@ -52,3 +52,12 @@ export function confirmOrder(token: string, orderId: string) {
     body: { correlation_id: crypto.randomUUID() },
   });
 }
+
+/** Drafts a warehouse issue voucher from this order (customer and lines prefilled). */
+export function createIssueVoucherFromOrder(token: string, orderId: string, sourceLocationId: string) {
+  return apiFetch<{ id: string }>(`/warehouse/vouchers/from-order/${orderId}`, {
+    method: "POST",
+    token,
+    body: { source_location_id: sourceLocationId },
+  });
+}
