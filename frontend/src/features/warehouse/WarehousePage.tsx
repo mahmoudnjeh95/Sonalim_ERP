@@ -13,6 +13,7 @@ import { StockHistoryTab } from "./StockHistoryTab";
 import { VouchersTab } from "./VouchersTab";
 import { InventoryTab } from "./InventoryTab";
 import { ValuedStockTab } from "./ValuedStockTab";
+import { FrozenLocationsNotice } from "./FrozenLocationsNotice";
 
 const TABS = [
   { value: "overview", labelKey: "warehouse.tabs.overview", icon: LayoutDashboard, Component: WarehouseOverviewTab },
@@ -39,6 +40,8 @@ export function WarehousePage() {
         <h1 className="text-xl font-semibold tracking-tight">{t("warehouse.title")}</h1>
         <p className="text-sm text-muted-foreground">{t("warehouse.subtitle")}</p>
       </motion.div>
+
+      <FrozenLocationsNotice />
 
       <StickyTabBar>
         <Tabs value={tab} onValueChange={(value) => setTab(value as TabValue)}>

@@ -3814,6 +3814,7 @@ const en = {
   "sales.issueVoucherError": "Could not draft the issue voucher",
   "voucher.print": "Print",
   "finance.column.amountPaid": "Paid",
+  "inventory.frozenNotice": "Stock movements are blocked while an inventory is open on:",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -7628,6 +7629,7 @@ const fr: Record<TranslationKey, string> = {
   "sales.issueVoucherError": "Impossible de préparer le bon de sortie",
   "voucher.print": "Imprimer",
   "finance.column.amountPaid": "Payé",
+  "inventory.frozenNotice": "Les mouvements de stock sont bloqués pendant un inventaire sur :",
 };
 
 const dictionaries: Record<Language, Record<TranslationKey, string>> = { en, fr };
