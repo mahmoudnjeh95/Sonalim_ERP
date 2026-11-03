@@ -81,10 +81,16 @@ class InventoryService:
 
         inventory_id = str(ULID())
         number = self._next_number(tenant_id)
-        self._connection.execute(
-            "INSERT INTO warehouse.inventories (id, tenant_id, number, location_id, type, note, opened_by) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-            (inventory_id, tenant_id, number, location_id, type, note, actor_id),
-        )
+        try:
+            with self._connection.transaction():
+                self._connection.execute(
+                    "INSERT INTO warehouse.inventories (id, tenant_id, number, location_id, type, note, opened_by) VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                    (inventory_id, tenant_id, number, location_id, type, note, actor_id),
+                )
+        except psycopg.errors.UniqueViolation:
+            # Two people opening the same location at once: the partial unique index is the real guard.
+            return Err("INVENTORY_ALREADY_OPEN", "this location already has an open full inventory",
+                       "cet emplacement a déjà un inventaire complet ouvert")
         # Snapshot the books now. For a full inventory the location is frozen from this moment, so the
         # snapshot cannot drift; an interim one compares counts against the books as they were opened.
         self._connection.execute(
