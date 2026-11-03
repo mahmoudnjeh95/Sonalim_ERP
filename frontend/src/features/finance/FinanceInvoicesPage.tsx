@@ -185,6 +185,13 @@ export function FinanceInvoicesPage() {
       sortValue: (invoice) => invoice.amount,
     },
     {
+      key: "amount_paid",
+      header: t("finance.column.amountPaid"),
+      defaultWidth: 160,
+      cell: (invoice) => <span className="tabular-nums">{formatCurrency(invoice.amount_paid, invoice.currency)}</span>,
+      sortValue: (invoice) => invoice.amount_paid,
+    },
+    {
       key: "status",
       header: (
         <span className="inline-flex items-center gap-1">
@@ -264,6 +271,7 @@ export function FinanceInvoicesPage() {
                 { value: "all", label: t("common.all") },
                 { value: "draft", label: t("status.draft") },
                 { value: "issued", label: t("status.issued") },
+                { value: "partially_paid", label: t("status.partially_paid") },
                 { value: "paid", label: t("status.paid") },
               ]}
             />

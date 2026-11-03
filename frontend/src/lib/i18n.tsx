@@ -3813,6 +3813,7 @@ const en = {
   "sales.issueVoucherCreated": "Issue voucher drafted from the order",
   "sales.issueVoucherError": "Could not draft the issue voucher",
   "voucher.print": "Print",
+  "finance.column.amountPaid": "Paid",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -7626,6 +7627,7 @@ const fr: Record<TranslationKey, string> = {
   "sales.issueVoucherCreated": "Bon de sortie préparé depuis la commande",
   "sales.issueVoucherError": "Impossible de préparer le bon de sortie",
   "voucher.print": "Imprimer",
+  "finance.column.amountPaid": "Payé",
 };
 
 const dictionaries: Record<Language, Record<TranslationKey, string>> = { en, fr };

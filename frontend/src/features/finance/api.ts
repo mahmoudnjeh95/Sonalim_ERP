@@ -1,6 +1,6 @@
 import { apiFetch } from "../../lib/api";
 
-export type InvoiceStatus = "draft" | "issued" | "paid";
+export type InvoiceStatus = "draft" | "issued" | "partially_paid" | "paid";
 
 export interface Invoice {
   id: string;
@@ -8,6 +8,7 @@ export interface Invoice {
   amount: number;
   currency: string;
   status: InvoiceStatus;
+  amount_paid: number;
 }
 
 export interface CreateInvoiceInput {
