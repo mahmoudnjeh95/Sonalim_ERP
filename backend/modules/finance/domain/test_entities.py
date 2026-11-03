@@ -22,3 +22,15 @@ def test_issued_invoice_can_be_paid():
     result = transition(_invoice("issued"), "paid")
     assert isinstance(result, Ok)
     assert result.value.status == "paid"
+
+
+def test_status_follows_amount_paid():
+    from modules.finance.domain.entities import status_for_payment
+
+    assert status_for_payment(100.0, 0) == "issued"
+    assert status_for_payment(100.0, 30.0) == "partially_paid"
+    assert status_for_payment(100.0, 100.0) == "paid"
+
+
+def test_partially_paid_invoice_cannot_be_marked_paid_by_hand():
+    assert transition(_invoice("partially_paid"), "paid").code == "INVALID_TRANSITION"

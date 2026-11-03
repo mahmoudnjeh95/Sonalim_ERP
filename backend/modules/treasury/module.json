@@ -4,7 +4,7 @@
   "depends": ["core"],
   "optional_depends": ["finance", "procurement"],
   "provides_api": ["AccountService", "AccountMovementService"],
-  "publishes_events": [],
+  "publishes_events": ["treasury.receipt.posted", "treasury.receipt.cancelled", "treasury.disbursement.posted", "treasury.disbursement.cancelled"],
   "subscribes_events": [],
   "migrations_path": "./migrations",
   "permissions": [

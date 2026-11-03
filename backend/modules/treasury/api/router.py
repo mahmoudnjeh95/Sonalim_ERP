@@ -3,18 +3,20 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 from core.db import get_connection
 from core.domain.result import Err, err_detail
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, user_has_permission
+from modules.treasury.api.document_service import DocumentService
 from modules.treasury.api.service import AccountService, BankService, SettingsService
 
 router = APIRouter(prefix="/treasury", tags=["treasury"])
 
-_CONFLICT = {"BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
+_CONFLICT = {"DOCUMENT_NOT_POSTED", "INSTRUMENT_ALREADY_PROCESSED", "BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
 
 
 def _err_status(code: str) -> int:
@@ -179,3 +181,106 @@ def set_alert_rule(direction: str, method: str, body: AlertRuleRequest,
         _unwrap(connection, SettingsService(connection).set_alert_rule(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, direction=direction, method=method, offset_days=body.offset_days))
         return SettingsService(connection).list_alert_rules(tenant_id=tenant.tenant_id)
+
+
+# ---- receipts and disbursements ----------------------------------------------------------------
+class PaymentRequest(BaseModel):
+    method: str
+    amount: Decimal
+    account_id: str | None = None
+    number: str | None = None
+    bank_name: str | None = None
+    due_date: datetime.date | None = None
+    reference: str | None = None
+
+
+class AllocationRequest(BaseModel):
+    invoice_id: str
+    amount: Decimal
+
+
+class DocumentRequest(BaseModel):
+    partner_id: str
+    doc_date: datetime.date
+    currency: str = "XOF"
+    reason: str = "full"
+    with_details: bool = True
+    note: str | None = None
+    payments: list[PaymentRequest]
+    allocations: list[AllocationRequest] = []
+
+
+def _create_document(direction: str, body: DocumentRequest, tenant: TenantContext) -> dict:
+    with get_connection() as connection:
+        allowed = user_has_permission(connection, user_id=tenant.user_id, permission="treasury.add_prior_year_invoice")
+        result = DocumentService(connection).create_and_post(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, direction=direction, partner_id=body.partner_id,
+            doc_date=body.doc_date, currency=body.currency, reason=body.reason, with_details=body.with_details,
+            note=body.note, can_add_prior_year=allowed, correlation_id=str(uuid4()),
+            payments=[p.model_dump() for p in body.payments], allocations=[a.model_dump() for a in body.allocations],
+        )
+        return _unwrap(connection, result)
+
+
+def _get_document(direction: str, document_id: str, tenant: TenantContext) -> dict:
+    with get_connection() as connection:
+        result = DocumentService(connection).get(tenant_id=tenant.tenant_id, document_id=document_id, direction=direction)
+        if isinstance(result, Err):
+            raise HTTPException(_err_status(result.code), err_detail(result))
+        return result.value
+
+
+def _cancel_document(direction: str, document_id: str, tenant: TenantContext) -> dict:
+    with get_connection() as connection:
+        result = DocumentService(connection).cancel(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, document_id=document_id, direction=direction,
+            correlation_id=str(uuid4()))
+        return _unwrap(connection, result)
+
+
+@router.get("/receipts")
+def list_receipts(partner_id: str | None = None, status_filter: str | None = None,
+                  date_from: datetime.date | None = None, date_to: datetime.date | None = None,
+                  tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return DocumentService(connection).list(tenant_id=tenant.tenant_id, direction="in", partner_id=partner_id,
+                                                status=status_filter, date_from=date_from, date_to=date_to)
+
+
+@router.post("/receipts", status_code=status.HTTP_201_CREATED)
+def create_receipt(body: DocumentRequest, tenant: TenantContext = Depends(require_permission("treasury.manage_receipts"))) -> dict:
+    return _create_document("in", body, tenant)
+
+
+@router.get("/receipts/{document_id}")
+def get_receipt(document_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    return _get_document("in", document_id, tenant)
+
+
+@router.post("/receipts/{document_id}/cancel")
+def cancel_receipt(document_id: str, tenant: TenantContext = Depends(require_permission("treasury.manage_receipts"))) -> dict:
+    return _cancel_document("in", document_id, tenant)
+
+
+@router.get("/disbursements")
+def list_disbursements(partner_id: str | None = None, status_filter: str | None = None,
+                       date_from: datetime.date | None = None, date_to: datetime.date | None = None,
+                       tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return DocumentService(connection).list(tenant_id=tenant.tenant_id, direction="out", partner_id=partner_id,
+                                                status=status_filter, date_from=date_from, date_to=date_to)
+
+
+@router.post("/disbursements", status_code=status.HTTP_201_CREATED)
+def create_disbursement(body: DocumentRequest, tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
+    return _create_document("out", body, tenant)
+
+
+@router.get("/disbursements/{document_id}")
+def get_disbursement(document_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    return _get_document("out", document_id, tenant)
+
+
+@router.post("/disbursements/{document_id}/cancel")
+def cancel_disbursement(document_id: str, tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
+    return _cancel_document("out", document_id, tenant)

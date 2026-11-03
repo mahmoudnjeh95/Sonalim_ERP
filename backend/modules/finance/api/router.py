@@ -34,6 +34,7 @@ def _invoice_response(invoice) -> dict:
         "amount": invoice.amount,
         "currency": invoice.currency,
         "status": invoice.status,
+        "amount_paid": invoice.amount_paid,
     }
 
 

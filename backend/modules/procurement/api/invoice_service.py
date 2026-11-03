@@ -318,3 +318,26 @@ def _duplicate() -> Err:
         "this supplier already has an invoice with that number",
         "ce fournisseur a déjà une facture avec ce numéro",
     )
+
+
+def apply_document_delta(
+    connection: psycopg.Connection, *, tenant_id: str, actor_id: str, invoice_id: str, delta: Decimal,
+    event_type: str, document_id: str,
+) -> Result[dict[str, Any]]:
+    """`apply_payment_delta` made idempotent on (event_type, document_id, invoice_id), so a replayed
+    treasury event never counts a disbursement twice."""
+    already = connection.execute(
+        "SELECT 1 FROM procurement.invoice_payment_deltas WHERE event_type = %s AND document_id = %s AND invoice_id = %s",
+        (event_type, document_id, invoice_id),
+    ).fetchone()
+    service = PurchaseInvoiceService(connection)
+    if already:
+        return service.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+    result = service.apply_payment_delta(tenant_id=tenant_id, actor_id=actor_id, invoice_id=invoice_id, delta=delta)
+    if isinstance(result, Err):
+        return result
+    connection.execute(
+        "INSERT INTO procurement.invoice_payment_deltas (event_type, document_id, invoice_id, amount) VALUES (%s, %s, %s, %s)",
+        (event_type, document_id, invoice_id, delta),
+    )
+    return result

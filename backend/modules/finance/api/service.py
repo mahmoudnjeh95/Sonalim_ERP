@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+from decimal import Decimal
+from typing import Any
+
 import psycopg
 from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
-from modules.finance.domain.entities import Invoice, transition
+from modules.finance.domain.entities import Invoice, status_for_payment, transition
 
 
 class InvoiceService:
@@ -46,7 +49,7 @@ class InvoiceService:
         if status is not None:
             rows = self._connection.execute(
                 """
-                SELECT id, partner_id, amount, currency, status
+                SELECT id, partner_id, amount, currency, status, amount_paid
                 FROM finance.invoices
                 WHERE tenant_id = %s AND status = %s
                 ORDER BY id DESC
@@ -56,7 +59,7 @@ class InvoiceService:
         else:
             rows = self._connection.execute(
                 """
-                SELECT id, partner_id, amount, currency, status
+                SELECT id, partner_id, amount, currency, status, amount_paid
                 FROM finance.invoices
                 WHERE tenant_id = %s
                 ORDER BY id DESC
@@ -64,9 +67,68 @@ class InvoiceService:
                 (tenant_id,),
             ).fetchall()
         return [
-            Invoice(id=invoice_id, partner_id=partner_id, amount=float(amount), currency=currency, status=invoice_status)
-            for invoice_id, partner_id, amount, currency, invoice_status in rows
+            Invoice(
+                id=invoice_id, partner_id=partner_id, amount=float(amount), currency=currency,
+                status=invoice_status, amount_paid=float(amount_paid),
+            )
+            for invoice_id, partner_id, amount, currency, invoice_status, amount_paid in rows
         ]
+
+    def get_invoice(self, *, tenant_id: str, invoice_id: str) -> Result[dict[str, Any]]:
+        """Public read for treasury: what a receipt needs to know before allocating to an invoice."""
+        row = self._connection.execute(
+            """
+            SELECT id, partner_id, amount, amount_paid, currency, status, created_at::date
+            FROM finance.invoices WHERE id = %s AND tenant_id = %s
+            """,
+            (invoice_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
+        return Ok({
+            "id": row[0], "partner_id": row[1], "amount": row[2], "amount_paid": row[3],
+            "remaining": max(row[2] - row[3], Decimal("0")), "currency": row[4], "status": row[5], "invoice_date": row[6],
+        })
+
+    def apply_payment_delta(
+        self, *, tenant_id: str, actor_id: str, invoice_id: str, delta: Decimal, event_type: str, document_id: str
+    ) -> Result[dict[str, Any]]:
+        """Add (or, negative, take back) a paid amount and re-derive the status.
+
+        Idempotent on (event_type, document_id, invoice_id): a replayed treasury event is a no-op."""
+        already = self._connection.execute(
+            "SELECT 1 FROM finance.invoice_payment_deltas WHERE event_type = %s AND document_id = %s AND invoice_id = %s",
+            (event_type, document_id, invoice_id),
+        ).fetchone()
+        if already:
+            return self.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+        row = self._connection.execute(
+            "SELECT amount, amount_paid, status FROM finance.invoices WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (invoice_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
+        amount, amount_paid, status = row
+        if status in ("draft",):
+            return Err("INVOICE_NOT_VALIDATED", "only an issued invoice can be paid", "seule une facture émise peut être payée")
+        new_paid = amount_paid + delta
+        if new_paid < 0 or new_paid > amount:
+            return Err("OVER_ALLOCATION", f"payment {new_paid} is outside 0..{amount} for this invoice",
+                       f"un paiement de {new_paid} sort de la plage 0..{amount} pour cette facture")
+        new_status = status_for_payment(float(amount), float(new_paid))
+        self._connection.execute(
+            "UPDATE finance.invoices SET amount_paid = %s, status = %s WHERE id = %s", (new_paid, new_status, invoice_id)
+        )
+        self._connection.execute(
+            "INSERT INTO finance.invoice_payment_deltas (event_type, document_id, invoice_id, amount) VALUES (%s, %s, %s, %s)",
+            (event_type, document_id, invoice_id, delta),
+        )
+        record_audit(
+            self._connection, tenant_id=tenant_id, actor_id=actor_id, action="invoice.payment_applied",
+            entity_type="invoice", entity_id=invoice_id,
+            payload={"delta": str(delta), "amount_paid": str(new_paid), "status": new_status},
+        )
+        return self.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
 
     def admin_update_invoice(
         self,
@@ -136,7 +198,7 @@ class InvoiceService:
     ) -> Result[Invoice]:
         row = self._connection.execute(
             """
-            SELECT partner_id, amount, currency, status
+            SELECT partner_id, amount, currency, status, amount_paid
             FROM finance.invoices
             WHERE id = %s AND tenant_id = %s
             FOR UPDATE
@@ -146,15 +208,21 @@ class InvoiceService:
         if row is None:
             return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
 
-        partner_id, amount, currency, status = row
+        partner_id, amount, currency, status, amount_paid = row
+        if new_status == "paid" and amount_paid > 0:
+            return Err(
+                "INVOICE_HAS_PAYMENTS",
+                "this invoice already has receipts allocated; its status follows them",
+                "cette facture a déjà des encaissements ; son statut les suit",
+            )
         current = Invoice(id=invoice_id, partner_id=partner_id, amount=float(amount), currency=currency, status=status)
         result = transition(current, new_status)
         if isinstance(result, Err):
             return result
 
         self._connection.execute(
-            "UPDATE finance.invoices SET status = %s WHERE id = %s",
-            (new_status, invoice_id),
+            "UPDATE finance.invoices SET status = %s, amount_paid = CASE WHEN %s::text = 'paid' THEN amount ELSE amount_paid END WHERE id = %s",
+            (new_status, new_status, invoice_id),
         )
         publish_event(
             self._connection,

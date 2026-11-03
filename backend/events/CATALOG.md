@@ -19,6 +19,10 @@
 | `procurement.purchase_order.status_changed` | 1.0 | procurement | — | `purchase_order_id`, `from_status`, `to_status` |
 | `procurement.purchase_order_receipt.confirmed` | 1.0 | procurement | warehouse | `purchase_order_receipt_id`, `purchase_order_id`, `location_id`, `lines` (`product_id`, `quantity`, `uom_id`, `lot_number`) |
 | `procurement.purchase_invoice.validated` | 1.0 | procurement | — | `invoice_id`, `partner_id`, `amount`, `currency`, `due_date` |
+| `treasury.receipt.posted` | 1.0 | treasury | finance | `receipt_id`, `partner_id`, `allocations` (`invoice_id`, `amount`), `total`, `currency` |
+| `treasury.receipt.cancelled` | 1.0 | treasury | finance | `receipt_id`, `allocations` (`invoice_id`, `amount`) |
+| `treasury.disbursement.posted` | 1.0 | treasury | procurement | `disbursement_id`, `partner_id`, `allocations` (`invoice_id`, `amount`), `total`, `currency` |
+| `treasury.disbursement.cancelled` | 1.0 | treasury | procurement | `disbursement_id`, `allocations` (`invoice_id`, `amount`) |
 | `qc.quality_report.validated` | 1.0 | qc | — | `quality_report_id`, `is_conforming` |
 | `qc.non_conformity.raised` | 1.0 | qc | — | `non_conformity_id`, `of_id`, `product_id`, `quantity`, `location_id` |
 | `qc.non_conformity.dispositioned` | 1.0 | qc | production | `non_conformity_id`, `of_id`, `product_id`, `lines` (`component`, `disposition`, `quantity`) |

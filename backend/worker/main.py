@@ -15,6 +15,8 @@ from core.migrations.runner import apply_all_migrations
 
 # Imported for the side effect of registering their event handlers with core.events.consumers.
 from modules.finance.events import consumers as _finance_consumers  # noqa: F401
+from modules.finance.events import treasury_consumers as _finance_treasury_consumers  # noqa: F401
+from modules.procurement.events import treasury_consumers as _procurement_treasury_consumers  # noqa: F401
 from modules.production.events import consumers as _production_consumers  # noqa: F401
 from modules.warehouse.events import consumers as _warehouse_consumers  # noqa: F401
 
