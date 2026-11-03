@@ -28,6 +28,7 @@ CROSS JOIN unnest(ARRAY[
     'warehouse.manage_vouchers',
     'warehouse.post_vouchers',
     'warehouse.view_fulfillment',
+    'warehouse.manage_fulfillment',
     'warehouse.view_valuation',
     'warehouse.view_cycle_counts',
     'warehouse.manage_cycle_counts',
