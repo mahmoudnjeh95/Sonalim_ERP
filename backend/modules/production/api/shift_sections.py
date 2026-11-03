@@ -129,6 +129,7 @@ _RUNS = RowSet(
         _num("water_quantity"),
         _num("water_percentage"),
         _num("humidity_percentage", None),
+        # Derived from the shift's versements and stops (_derive_semolina_flow), never typed.
         _num("semolina_flow_rate"),
         Col("shortfall_comment"),
     ),
@@ -231,7 +232,8 @@ _PACKING = RowSet(
         *_text(
             "film_product_id", "carton_product_id", "tape_product_id", "scotch_product_id", "ruban_product_id",
             "film_supplier_id", "carton_supplier_id", "tape_supplier_id", "scotch_supplier_id", "ruban_supplier_id",
-            "packaging_location_id", "finished_goods_location_id",
+            "packaging_location_id", "film_location_id", "carton_location_id", "scotch_location_id", "ruban_location_id",
+            "finished_goods_location_id",
         ),
         _num("snapshot_net_weight_grams", None),
         _num("snapshot_packets_per_carton", None),
@@ -317,8 +319,12 @@ def _coerce(col: Col, value: Any, where: str, where_fr: str | None = None) -> Re
             return Ok(value if isinstance(value, datetime.time) else datetime.time.fromisoformat(str(value)))
         if col.kind == "ts":
             if isinstance(value, datetime.datetime):
-                return Ok(value)
-            return Ok(datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00")))
+                dt = value
+            else:
+                dt = datetime.datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            return Ok(dt)
     except (TypeError, ValueError):
         return _bad(f"{where}: {col.name} is not a valid {col.kind}", f"{where_fr} : {col.name} n'est pas un {col.kind} valide")
     text = str(value).strip()
@@ -734,6 +740,57 @@ def _derive_run_inputs(connection: psycopg.Connection, *, tenant_id: str, shift_
         )
 
 
+def _derive_semolina_flow(connection: psycopg.Connection, *, tenant_id: str, shift_id: str) -> None:
+    """The shift's semoule flow, written onto every one of its runs.
+
+    Everything poured into the line -- semoule and rebroyat both -- over the hours it actually
+    ran, which is the shift's configured length less the stops on the same fiche. The versements
+    are recorded once for the shift rather than per run, so this is one figure for the shift and
+    every run carries it; the team no longer types a débit that nothing could check.
+
+    Zero when it cannot be worked out -- the shift's hours are not configured, the stops leave no
+    running time, or nothing has been poured in yet -- rather than a figure nobody can account for.
+    """
+    shift = connection.execute(
+        "SELECT shift FROM production.shift_reports WHERE id = %s AND tenant_id = %s", (shift_id, tenant_id)
+    ).fetchone()
+    if not shift:
+        return
+    window = connection.execute(
+        "SELECT start_time, end_time FROM production.shift_windows WHERE tenant_id = %s AND LOWER(BTRIM(shift)) = LOWER(BTRIM(%s))",
+        (tenant_id, shift[0] or ""),
+    ).fetchone()
+
+    flow = 0.0
+    if window:
+        start, end = window
+        minutes = (
+            datetime.datetime.combine(datetime.date.min, end) - datetime.datetime.combine(datetime.date.min, start)
+        ).total_seconds() / 60
+        # A shift that runs past midnight (23-07) ends "before" it starts on the clock.
+        if minutes <= 0:
+            minutes += 24 * 60
+        stopped = connection.execute(
+            "SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (ended_at - started_at)) / 60), 0) FROM production.machine_stops "
+            "WHERE tenant_id = %s AND shift_report_id = %s AND started_at IS NOT NULL AND ended_at IS NOT NULL "
+            "AND ended_at >= started_at",
+            (tenant_id, shift_id),
+        ).fetchone()[0]
+        running = minutes - float(stopped or 0)
+        poured = connection.execute(
+            "SELECT (SELECT COALESCE(SUM(quantity), 0) FROM production.shift_versements WHERE tenant_id = %s AND shift_report_id = %s) "
+            "+ (SELECT COALESCE(SUM(quantity), 0) FROM production.shift_rebroyat_versements WHERE tenant_id = %s AND shift_report_id = %s)",
+            (tenant_id, shift_id, tenant_id, shift_id),
+        ).fetchone()[0]
+        if running > 0 and float(poured or 0) > 0:
+            flow = round(float(poured) / (running / 60), 2)
+
+    connection.execute(
+        "UPDATE production.shift_runs SET semolina_flow_rate = %s WHERE tenant_id = %s AND shift_report_id = %s",
+        (flow, tenant_id, shift_id),
+    )
+
+
 def _validate_single_rebroyat(rows: list[dict]) -> Result[None]:
     """A run records one rebroyat item, so a shift's rebroyat versements must all name the same one."""
     products = {r["product_id"] for r in rows if r["product_id"] and (r["quantity"] or 0) > 0}
@@ -791,6 +848,9 @@ def save_section_rows(
             _sync_rowset(connection, tenant_id, shift_report_id, part, value)
     if section_key == "runs":
         _derive_run_inputs(connection, tenant_id=tenant_id, shift_id=shift_report_id)
+    # The flow divides the versements (runs) by the hours the stops left, so either section moving changes it.
+    if section_key in ("runs", "stops"):
+        _derive_semolina_flow(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     if section_key in ("packing", "waste_packing"):
         derive_waste_cartons(connection, tenant_id=tenant_id, shift_id=shift_report_id)
     return Ok(None)
@@ -867,17 +927,21 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
                     f"ligne de conditionnement {index} : le produit n'a pas d'emplacement de stockage par défaut ; "
                     "définissez-en un sur le produit, puis enregistrez à nouveau la section",
                 )
-            uses_packaging = any(
-                float(row.get(quantity) or 0) > 0
-                for quantity in ("film_quantity", "carton_quantity", "tape_quantity", "scotch_quantity", "ruban_quantity")
-            )
-            if uses_packaging and not row.get("packaging_location_id"):
-                return Err(
-                    "NO_DEFAULT_LOCATION",
-                    f"packing row {index}: a packaging item has no default storage location; set one on the item, then save the section again",
-                    f"ligne de conditionnement {index} : un article d'emballage n'a pas d'emplacement de stockage par défaut ; "
-                    "définissez-en un sur l'article, puis enregistrez à nouveau la section",
-                )
+            # Each packaging item posts from its own default store; a row with several items
+            # no longer needs them to share one (see packing_derivation_service).
+            for quantity_key, location_key in (
+                ("film_quantity", "film_location_id"),
+                ("carton_quantity", "carton_location_id"),
+                ("scotch_quantity", "scotch_location_id"),
+                ("ruban_quantity", "ruban_location_id"),
+            ):
+                if float(row.get(quantity_key) or 0) > 0 and not (row.get(location_key) or row.get("packaging_location_id")):
+                    return Err(
+                        "NO_DEFAULT_LOCATION",
+                        f"packing row {index}: a packaging item has no default storage location; set one on the item, then save the section again",
+                        f"ligne de conditionnement {index} : un article d'emballage n'a pas d'emplacement de stockage par défaut ; "
+                        "définissez-en un sur l'article, puis enregistrez à nouveau la section",
+                    )
             detail = ConditionnementReportDetail(
                 packets_counted=float(row.get("packets_counted") or 0),
                 film_quantity=float(row.get("film_quantity") or 0),
@@ -889,6 +953,10 @@ def check_ready_to_submit(section_key: str, payload: dict) -> Result[None]:
                 scotch_product_id=row.get("scotch_product_id"),
                 ruban_product_id=row.get("ruban_product_id"),
                 packaging_location_id=row.get("packaging_location_id"),
+                film_location_id=row.get("film_location_id"),
+                carton_location_id=row.get("carton_location_id"),
+                scotch_location_id=row.get("scotch_location_id"),
+                ruban_location_id=row.get("ruban_location_id"),
                 finished_goods_location_id=row.get("finished_goods_location_id"),
             )
             checked = validate_conditionnement_stock_targets(detail)

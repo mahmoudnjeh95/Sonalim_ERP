@@ -30,7 +30,7 @@ class PurchaseOrderLineRequest(BaseModel):
     uom_id: str
     quantity_ordered: float
     unit_price: float = 0
-    unit_price_currency: str = "EUR"
+    unit_price_currency: str = "XOF"
 
 
 class CreatePurchaseOrderRequest(BaseModel):
@@ -48,7 +48,7 @@ class AddPurchaseOrderLineRequest(BaseModel):
     uom_id: str
     quantity_ordered: float
     unit_price: float = 0
-    unit_price_currency: str = "EUR"
+    unit_price_currency: str = "XOF"
 
 
 class UpdatePurchaseOrderRequest(BaseModel):

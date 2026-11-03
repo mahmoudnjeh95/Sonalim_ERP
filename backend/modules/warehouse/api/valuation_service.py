@@ -1,96 +1,195 @@
 from __future__ import annotations
 
-import datetime
-from decimal import Decimal
-from typing import Any
-
 import psycopg
+from ulid import ULID
 
-from modules.warehouse.domain.valuation import value_of, weighted_average
+from modules.warehouse.domain.valuation import (
+    NEUTRAL_MOVE_TYPES,
+    Allocation,
+    CostLayer,
+    ProductValuation,
+    allocate_fifo,
+    allocation_cost,
+    value_layers,
+)
+
+_LAYER_COLUMNS = "id, tenant_id, product_id, reference, move_type, quantity_in, quantity_remaining, unit_cost, received_at"
+
+
+def _layer_from_row(row) -> CostLayer:
+    return CostLayer(
+        id=row[0], tenant_id=row[1], product_id=row[2], reference=row[3], move_type=row[4], quantity_in=float(row[5]),
+        quantity_remaining=float(row[6]), unit_cost=float(row[7]) if row[7] is not None else None, received_at=row[8],
+    )
 
 
 class ValuationService:
-    """Weighted-average cost (CMUP) per product, plus the valued-stock and movements reports.
-    Callers commit."""
+    """FIFO cost layers. StockService calls record_inflow / record_outflow in
+    the same transaction as every movement that changes what the plant owns,
+    so a layer never drifts from the stock it values. Imports nothing from
+    StockService -- the dependency only runs one way.
+
+    Writes here are deliberately not audited: they are a mechanical
+    consequence of a stock movement that is itself recorded (stock_moves) and,
+    where a person caused it, audited by the caller."""
 
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
-    def apply_receipt(self, *, tenant_id: str, product_id: str, on_hand_before: Decimal, quantity: Decimal, unit_cost: Decimal) -> Decimal:
-        """Fold a costed receipt into the product's average. A product with no average yet takes the
-        receipt's cost as it is; only receipts change the average (issues and transfers never do)."""
+    def _fallback_unit_cost(self, tenant_id: str, product_id: str) -> float | None:
         row = self._connection.execute(
-            "SELECT avg_cost FROM warehouse.stock_valuation WHERE tenant_id = %s AND product_id = %s FOR UPDATE",
-            (tenant_id, product_id),
+            "SELECT purchase_price FROM core.products WHERE id = %s AND tenant_id = %s", (product_id, tenant_id)
         ).fetchone()
-        old_cost = row[0] if row else Decimal("0")
-        new_cost = weighted_average(on_hand_before, old_cost, quantity, unit_cost)
+        if row is None or row[0] is None or row[0] <= 0:
+            return None
+        return float(row[0])
+
+    def record_inflow(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        quantity: float,
+        reference: str,
+        move_type: str,
+        unit_cost: float | None = None,
+    ) -> None:
+        """A new layer. Without a known cost (only a purchase receipt knows its
+        landed cost) the catalog purchase price stands in, and without that the
+        layer is unvalued rather than priced at an invented 0."""
+        if move_type in NEUTRAL_MOVE_TYPES or quantity <= 0:
+            return
+        cost = unit_cost if unit_cost is not None and unit_cost >= 0 else self._fallback_unit_cost(tenant_id, product_id)
         self._connection.execute(
-            """
-            INSERT INTO warehouse.stock_valuation (tenant_id, product_id, avg_cost, cost_source, updated_at)
-            VALUES (%s, %s, %s, 'receipt', NOW())
-            ON CONFLICT (tenant_id, product_id)
-            DO UPDATE SET avg_cost = EXCLUDED.avg_cost, cost_source = 'receipt', updated_at = NOW()
+            f"""
+            INSERT INTO warehouse.cost_layers ({_LAYER_COLUMNS})
+            -- clock_timestamp(), not NOW(): NOW() is the transaction's start time, so two
+            -- receipts in one transaction shared it and FIFO order fell to the `id`
+            -- tie-break -- and ULIDs are not ordered inside a millisecond, which could draw
+            -- the newer layer first and misprice what left stock.
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
             """,
-            (tenant_id, product_id, new_cost),
+            (str(ULID()), tenant_id, product_id, reference, move_type, quantity, quantity, cost),
         )
-        return new_cost
 
-    def valued_stock(self, *, tenant_id: str, location_id: str | None = None) -> dict[str, Any]:
-        params: list[Any] = [tenant_id]
-        location_clause = ""
-        if location_id:
-            location_clause = " AND si.location_id = %s"
-            params.append(location_id)
+    def record_outflow(
+        self, *, tenant_id: str, product_id: str, quantity: float, reference: str, move_type: str
+    ) -> list[Allocation]:
+        if move_type in NEUTRAL_MOVE_TYPES or quantity <= 0:
+            return []
+        rows = self._connection.execute(
+            """
+            SELECT id, quantity_remaining, unit_cost FROM warehouse.cost_layers
+            WHERE tenant_id = %s AND product_id = %s AND quantity_remaining > 0
+            ORDER BY received_at, id
+            FOR UPDATE
+            """,
+            (tenant_id, product_id),
+        ).fetchall()
+        layers = [(row[0], float(row[1]), float(row[2]) if row[2] is not None else None) for row in rows]
+        allocations = allocate_fifo(layers, quantity)
+        for allocation in allocations:
+            if allocation.layer_id is not None:
+                self._connection.execute(
+                    "UPDATE warehouse.cost_layers SET quantity_remaining = quantity_remaining - %s WHERE id = %s",
+                    (allocation.quantity, allocation.layer_id),
+                )
+            self._connection.execute(
+                """
+                INSERT INTO warehouse.cost_layer_consumptions
+                    (id, tenant_id, product_id, layer_id, reference, move_type, quantity, unit_cost)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (str(ULID()), tenant_id, product_id, allocation.layer_id, reference, move_type, allocation.quantity, allocation.unit_cost),
+            )
+        return allocations
+
+    def record_delta(
+        self, *, tenant_id: str, product_id: str, delta: float, reference: str, move_type: str, unit_cost: float | None = None
+    ) -> None:
+        """For corrections, whose sign is only known at run time."""
+        if delta > 0:
+            self.record_inflow(
+                tenant_id=tenant_id, product_id=product_id, quantity=delta, reference=reference, move_type=move_type, unit_cost=unit_cost
+            )
+        elif delta < 0:
+            self.record_outflow(tenant_id=tenant_id, product_id=product_id, quantity=-delta, reference=reference, move_type=move_type)
+
+    # --- Reads ------------------------------------------------------------------------
+
+    def list_layers(self, *, tenant_id: str, product_id: str, open_only: bool = True) -> list[CostLayer]:
+        remaining_clause = " AND quantity_remaining > 0" if open_only else ""
         rows = self._connection.execute(
             f"""
-            SELECT si.product_id, p.sku, p.name, SUM(si.quantity_on_hand), v.avg_cost, v.cost_source
-            FROM warehouse.stock_items si
-            JOIN core.products p ON p.id = si.product_id
-            LEFT JOIN warehouse.stock_valuation v ON v.tenant_id = si.tenant_id AND v.product_id = si.product_id
-            WHERE si.tenant_id = %s{location_clause}
-            GROUP BY si.product_id, p.sku, p.name, v.avg_cost, v.cost_source
-            HAVING SUM(si.quantity_on_hand) <> 0
-            ORDER BY p.name
+            SELECT {_LAYER_COLUMNS} FROM warehouse.cost_layers
+            WHERE tenant_id = %s AND product_id = %s{remaining_clause}
+            ORDER BY received_at, id
             """,
-            params,
+            (tenant_id, product_id),
         ).fetchall()
-        items, total = [], Decimal("0")
-        for product_id, sku, name, quantity, avg_cost, source in rows:
-            value = value_of(quantity, avg_cost) if avg_cost is not None else None
-            if value is not None:
-                total += value
-            items.append({
-                "product_id": product_id, "sku": sku, "name": name, "quantity": quantity, "avg_cost": avg_cost,
-                "cost_source": source, "value": value, "missing_cost": avg_cost is None, "negative": quantity < 0,
-            })
-        return {"items": items, "total_value": total, "missing_cost_count": sum(1 for i in items if i["missing_cost"])}
+        return [_layer_from_row(row) for row in rows]
 
-    def movements_report(self, *, tenant_id: str, product_id: str | None = None, location_id: str | None = None,
-                         move_type: str | None = None, date_from: datetime.date | None = None,
-                         date_to: datetime.date | None = None, limit: int = 2000) -> list[dict[str, Any]]:
-        clauses, params = ["m.tenant_id = %s"], [tenant_id]
-        for column, value, op in (("m.product_id", product_id, "="), ("m.location_id", location_id, "="),
-                                  ("m.move_type", move_type, "="), ("m.created_at::date", date_from, ">="),
-                                  ("m.created_at::date", date_to, "<=")):
-            if value:
-                clauses.append(f"{column} {op} %s")
-                params.append(value)
-        params.append(limit)
+    def get_valuation(self, *, tenant_id: str) -> list[ProductValuation]:
         rows = self._connection.execute(
             f"""
-            SELECT m.created_at, m.move_type, p.sku, p.name, l.name, m.quantity, m.unit_cost, m.reference,
-                   m.source_type, m.source_id, v.number, v.type
-            FROM warehouse.stock_moves m
-            JOIN core.products p ON p.id = m.product_id
-            LEFT JOIN warehouse.locations l ON l.id = m.location_id
-            LEFT JOIN warehouse.vouchers v ON m.source_type = 'voucher' AND v.id = m.source_id
-            WHERE {' AND '.join(clauses)}
-            ORDER BY m.created_at DESC, m.id DESC
-            LIMIT %s
+            SELECT {_LAYER_COLUMNS} FROM warehouse.cost_layers
+            WHERE tenant_id = %s AND quantity_remaining > 0
+            ORDER BY product_id, received_at, id
             """,
-            params,
+            (tenant_id,),
         ).fetchall()
-        keys = ["created_at", "move_type", "sku", "product", "location", "quantity", "unit_cost", "reference",
-                "source_type", "source_id", "voucher_number", "voucher_type"]
-        return [dict(zip(keys, r, strict=True)) for r in rows]
+        by_product: dict[str, list[CostLayer]] = {}
+        for row in rows:
+            layer = _layer_from_row(row)
+            by_product.setdefault(layer.product_id, []).append(layer)
+        return [value_layers(product_id, layers) for product_id, layers in by_product.items()]
+
+    def cost_of_reference(self, *, tenant_id: str, reference: str) -> dict:
+        """What the stock that left under `reference` cost -- a shipment's
+        cost of goods sold, an OF's material cost."""
+        rows = self._connection.execute(
+            """
+            SELECT layer_id, quantity, unit_cost FROM warehouse.cost_layer_consumptions
+            WHERE tenant_id = %s AND reference = %s
+            """,
+            (tenant_id, reference),
+        ).fetchall()
+        allocations = [
+            Allocation(layer_id=row[0], quantity=float(row[1]), unit_cost=float(row[2]) if row[2] is not None else None)
+            for row in rows
+        ]
+        cost, unvalued = allocation_cost(allocations)
+        return {
+            "reference": reference,
+            "quantity": sum(a.quantity for a in allocations),
+            "cost": cost,
+            "unvalued_quantity": unvalued,
+            "currency": "XOF",
+        }
+
+    def costs_of_references(self, *, tenant_id: str, references: list[str]) -> dict[str, dict]:
+        """`cost_of_reference` for several references in one query. Every reference asked
+        for is in the result; one nothing left under has quantity and cost 0."""
+        rows = self._connection.execute(
+            """
+            SELECT reference, layer_id, quantity, unit_cost FROM warehouse.cost_layer_consumptions
+            WHERE tenant_id = %s AND reference = ANY(%s)
+            """,
+            (tenant_id, list(references)),
+        ).fetchall()
+        allocations: dict[str, list[Allocation]] = {reference: [] for reference in references}
+        for reference, layer_id, quantity, unit_cost in rows:
+            allocations[reference].append(
+                Allocation(layer_id=layer_id, quantity=float(quantity), unit_cost=float(unit_cost) if unit_cost is not None else None)
+            )
+        result: dict[str, dict] = {}
+        for reference, items in allocations.items():
+            cost, unvalued = allocation_cost(items)
+            result[reference] = {
+                "reference": reference,
+                "quantity": sum(a.quantity for a in items),
+                "cost": cost,
+                "unvalued_quantity": unvalued,
+                "currency": "XOF",
+            }
+        return result

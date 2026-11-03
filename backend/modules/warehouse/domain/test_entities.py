@@ -1,5 +1,13 @@
 from core.domain.result import Err, Ok
-from modules.warehouse.domain.entities import StockLevel, adjust, consume_in_production, issue, reserve, send_to_production
+from modules.warehouse.domain.entities import (
+    StockLevel,
+    adjust,
+    consume_in_production,
+    issue,
+    issue_unreserved,
+    reserve,
+    send_to_production,
+)
 
 
 def test_reserve_within_available_quantity_succeeds():
@@ -41,6 +49,28 @@ def test_issue_beyond_on_hand_quantity_fails():
 def test_issue_non_positive_quantity_fails():
     level = StockLevel(location_id="loc1", product_id="p1", quantity_on_hand=10, quantity_reserved=0)
     result = issue(level, 0)
+    assert isinstance(result, Err)
+    assert result.code == "INVALID_QUANTITY"
+
+
+def test_issue_unreserved_takes_only_stock_nobody_has_reserved():
+    level = StockLevel(location_id="loc1", product_id="p1", quantity_on_hand=10, quantity_reserved=5)
+    result = issue_unreserved(level, 5)
+    assert isinstance(result, Ok)
+    assert (result.value.quantity_on_hand, result.value.quantity_reserved) == (5, 5)
+
+
+def test_issue_unreserved_refuses_to_eat_into_a_reservation():
+    """10 on hand, 5 promised elsewhere: issuing 8 would leave the reservation unbacked."""
+    level = StockLevel(location_id="loc1", product_id="p1", quantity_on_hand=10, quantity_reserved=5)
+    result = issue_unreserved(level, 8)
+    assert isinstance(result, Err)
+    assert result.code == "INSUFFICIENT_STOCK"
+
+
+def test_issue_unreserved_rejects_a_non_positive_quantity():
+    level = StockLevel(location_id="loc1", product_id="p1", quantity_on_hand=10, quantity_reserved=0)
+    result = issue_unreserved(level, 0)
     assert isinstance(result, Err)
     assert result.code == "INVALID_QUANTITY"
 

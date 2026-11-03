@@ -14,6 +14,8 @@ export const MOVE_TYPE_VARIANT: Record<StockMoveType, BadgeProps["variant"]> = {
   transfer_out: "warning",
   transfer_in: "success",
   admin_correction: "destructive",
+  shipment: "warning",
+  reservation_expired: "outline",
 };
 
 export function useMoveTypeLabels(): Record<StockMoveType, string> {
@@ -30,6 +32,8 @@ export function useMoveTypeLabels(): Record<StockMoveType, string> {
     transfer_out: t("warehouse.stockHistory.type.transferOut"),
     transfer_in: t("warehouse.stockHistory.type.transferIn"),
     admin_correction: t("warehouse.stockHistory.type.adminCorrection"),
+    shipment: t("warehouse.stockHistory.type.shipment"),
+    reservation_expired: t("warehouse.stockHistory.type.reservationExpired"),
   };
 }
 
@@ -46,6 +50,7 @@ const REFERENCE_KIND_KEY = {
   work_order: "warehouse.stockHistory.referenceKind.workOrder",
   production_report: "warehouse.stockHistory.referenceKind.productionReport",
   manual_adjustment: "warehouse.stockHistory.referenceKind.manualAdjustment",
+  shipment: "warehouse.stockHistory.referenceKind.shipment",
 } as const;
 type ReferenceKind = keyof typeof REFERENCE_KIND_KEY;
 
@@ -59,6 +64,7 @@ export function useReferenceKindLabels(): Record<ReferenceKind, string> {
     work_order: t("warehouse.stockHistory.referenceKind.workOrder"),
     production_report: t("warehouse.stockHistory.referenceKind.productionReport"),
     manual_adjustment: t("warehouse.stockHistory.referenceKind.manualAdjustment"),
+    shipment: t("warehouse.stockHistory.referenceKind.shipment"),
   };
 }
 
@@ -111,7 +117,7 @@ export function relatedWorkOrderId(move: StockMove): string | null {
  * any added/used rollup (e.g. a per-product history chart) agree on the same
  * sign instead of each re-deriving it.
  */
-const OUT_MOVE_TYPES = new Set<StockMoveType>(["issue", "production_consumption", "transfer_out", "send_to_production"]);
+const OUT_MOVE_TYPES = new Set<StockMoveType>(["issue", "production_consumption", "transfer_out", "send_to_production", "shipment"]);
 
 export function signedMoveQuantity(move: StockMove): number {
   if (move.move_type === "adjustment" || move.move_type === "admin_correction") return move.quantity;

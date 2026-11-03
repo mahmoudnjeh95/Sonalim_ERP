@@ -18,15 +18,46 @@ MODULE_LABELS = {
     "finance": "Finance",
     "hr": "Ressources humaines",
     "maintenance": "Maintenance",
+    "payroll": "Paie",
     "procurement": "Achats",
     "production": "Production",
     "qc": "Qualité",
+    "scan": "Numérisation",
     "sales": "Ventes",
     "treasury": "Trésorerie",
     "warehouse": "Entrepôt",
 }
 
 ADMINISTRATOR_ROLE_CODE = "administrateur"
+
+# Permissions held back from their module's everyday role, for the same reason admin_*
+# codes are: they're granted one at a time, deliberately. The admin_* prefix rule below
+# can't express these, and renaming them to admin_* isn't worth it here: the permission
+# string is what's stored in core.role_permissions, so a rename needs a migration to
+# carry the existing grants over (see production/0070 for one that did).
+#
+#   hr.view_sensitive        personal data: salary, national id, bank details.
+#   hr.view/manage_payroll   running payroll is the payroll role's job, not everyday HR's;
+#                            anyone who does both jobs gets both roles.
+#   scan.use_cloud_reader    reading fiches with Claude sends the photos (workers' names
+#                            on them) to the Anthropic API; it has a role of its own below.
+DELIBERATE_GRANT_PERMISSIONS = {
+    "hr.view_sensitive",
+    "hr.view_payroll",
+    "hr.manage_payroll",
+    "scan.use_cloud_reader",
+}
+
+# Single-purpose roles for deliberate grants, so an admin hands one out by role instead of
+# per user. scan/0003 creates this one on the tenants that already have the default roles.
+DELIBERATE_GRANT_ROLES = [
+    {
+        "code": "scan_cloud",
+        "name": "Numérisation cloud (Claude)",
+        "description": "Lire les fiches papier avec Claude : les photos sont envoyées à l'API Anthropic.",
+        "permissions": ["scan.use_cloud_reader"],
+    },
+]
 
 # Permissions core itself defines that aren't tied to any business module.
 CORE_PERMISSIONS = [
@@ -76,7 +107,9 @@ def default_role_catalog() -> list[dict[str, object]]:
         permissions = [
             entry["permission"]
             for entry in catalog
-            if entry["module"] == module and not entry["permission"].split(".", 1)[1].startswith("admin_")
+            if entry["module"] == module
+            and not entry["permission"].split(".", 1)[1].startswith("admin_")
+            and entry["permission"] not in DELIBERATE_GRANT_PERMISSIONS
         ]
         if not permissions:
             continue
@@ -89,6 +122,7 @@ def default_role_catalog() -> list[dict[str, object]]:
             }
         )
 
+    roles.extend(DELIBERATE_GRANT_ROLES)
     roles.append(
         {
             "code": ADMINISTRATOR_ROLE_CODE,

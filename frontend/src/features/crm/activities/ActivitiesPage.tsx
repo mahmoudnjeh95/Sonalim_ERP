@@ -276,7 +276,7 @@ export function ActivitiesPage() {
                     }}
                   >
                     <option value="lead">{t("crm.activity.subject.lead")}</option>
-                    <option value="partner">{t("crm.activity.subject.account")}</option>
+                    <option value="partner">{t("crm.activity.subject.partner")}</option>
                     <option value="opportunity">{t("crm.activity.subject.opportunity")}</option>
                   </Select>
                 </div>

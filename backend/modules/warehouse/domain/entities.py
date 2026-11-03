@@ -7,15 +7,36 @@ from core.domain.result import Err, Ok, Result
 INSUFFICIENT_STOCK = "INSUFFICIENT_STOCK"
 
 
+LOCATION_TYPES = frozenset({"zone", "aisle", "rack", "bin"})
+
+
 @dataclass(frozen=True)
 class Location:
     id: str
     code: str
     name: str
+    site_id: str
+    # Every pre-existing location became a "bin" directly under its tenant's
+    # synthetic default site when the hierarchy was introduced -- "bin" is the
+    # leaf level stock actually lives at, so it is the right default for a
+    # plain location nobody has placed in a zone/aisle/rack yet.
+    location_type: str = "bin"
+    parent_location_id: str | None = None
+    sequence: int | None = None
     # A blocked location holds stock that exists but must not be promised —
     # quarantine above all. Excluded from available quantity.
     is_blocked: bool = False
     blocked_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class Site:
+    id: str
+    tenant_id: str
+    code: str
+    name: str
+    address: str | None = None
+    is_active: bool = True
 
 
 @dataclass(frozen=True)
@@ -106,6 +127,19 @@ def issue(level: StockLevel, quantity: float) -> Result[StockLevel]:
             quantity_in_production=level.quantity_in_production,
         )
     )
+
+
+def issue_unreserved(level: StockLevel, quantity: float) -> Result[StockLevel]:
+    """An issue that may only take stock nobody has reserved: what is promised to
+    another order stays on the shelf for it."""
+    if quantity > 0 and quantity > level.quantity_on_hand - level.quantity_reserved:
+        free = level.quantity_on_hand - level.quantity_reserved
+        return Err(
+            INSUFFICIENT_STOCK,
+            f"cannot issue {quantity}, only {free} free ({level.quantity_reserved} reserved)",
+            f"impossible de sortir {quantity}, seulement {free} disponible ({level.quantity_reserved} réservé)",
+        )
+    return issue(level, quantity)
 
 
 def adjust(level: StockLevel, delta: float) -> Result[StockLevel]:

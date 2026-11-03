@@ -288,6 +288,12 @@ class ConditionnementReportDetail:
     scotch_supplier_id: str | None = None
     ruban_supplier_id: str | None = None
     packaging_location_id: str | None = None
+    # Each packaging item's own store. Unset falls back to packaging_location_id, so a row
+    # whose items share one store (or an old row saved before these existed) still works.
+    film_location_id: str | None = None
+    carton_location_id: str | None = None
+    scotch_location_id: str | None = None
+    ruban_location_id: str | None = None
     finished_goods_location_id: str | None = None
     # The daily report whose output this run packaged. Always optional: a team
     # may file conditionnement before that day's daily report exists, or
@@ -596,11 +602,11 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
             "le produit fini doit nommer le magasin dans lequel il entre",
         )
 
-    for quantity_field, product_field, label in (
-        ("film_quantity", "film_product_id", "film"),
-        ("carton_quantity", "carton_product_id", "carton"),
-        ("scotch_quantity", "scotch_product_id", "scotch"),
-        ("ruban_quantity", "ruban_product_id", "ruban"),
+    for quantity_field, product_field, location_field, label in (
+        ("film_quantity", "film_product_id", "film_location_id", "film"),
+        ("carton_quantity", "carton_product_id", "carton_location_id", "carton"),
+        ("scotch_quantity", "scotch_product_id", "scotch_location_id", "scotch"),
+        ("ruban_quantity", "ruban_product_id", "ruban_location_id", "ruban"),
     ):
         if getattr(detail, quantity_field) > 0:
             if not (getattr(detail, product_field) or "").strip():
@@ -609,7 +615,9 @@ def validate_conditionnement_stock_targets(detail: ConditionnementReportDetail) 
                     f"the {label} figure must name the product it consumed",
                     f"le chiffre {label} doit nommer le produit qu'il a consommé",
                 )
-            if not (detail.packaging_location_id or "").strip():
+            # Each item may name its own store; a row with none set falls back to the
+            # row's shared store, kept for old rows and manually-entered reports.
+            if not (getattr(detail, location_field) or detail.packaging_location_id or "").strip():
                 return Err(
                     "MISSING_STOCK_TARGET",
                     "packaging figures must name the store they came out of",

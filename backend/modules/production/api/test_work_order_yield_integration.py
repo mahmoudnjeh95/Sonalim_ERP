@@ -47,7 +47,7 @@ def _of(db, env):
 
 
 def _validated_shift(db, env, of_id, day, *, semolina_quantity=1000, finished_product_quantity=900,
-                      water_percentage=0, semolina_flow_rate=0, shift="morning") -> str:
+                      water_percentage=0, shift="morning") -> str:
     service = ShiftReportService(db)
     shift_id = _ok(service.open_shift(tenant_id=TENANT, actor_id=env["actor"], work_center_id=env["work_center"], report_date=day, shift=shift))["id"]
     run = {
@@ -55,7 +55,7 @@ def _validated_shift(db, env, of_id, day, *, semolina_quantity=1000, finished_pr
         "production_minutes": 420, "finished_product_quantity": finished_product_quantity,
         "raw_material_location_id": env["location"],
         "semolina_lines": [{"product_id": env["semolina"], "quantity": semolina_quantity, "location_id": env["location"]}],
-        "water_percentage": water_percentage, "semolina_flow_rate": semolina_flow_rate,
+        "water_percentage": water_percentage,
     }
     _ok(service.save_section(tenant_id=TENANT, actor_id=env["actor"], shift_report_id=shift_id, section_key="runs", payload={"runs": [run], "versements": run.pop("semolina_lines", [])}))
     for key in SECTION_KEYS:
@@ -107,19 +107,26 @@ def test_list_work_order_yields_returns_every_of_with_a_defined_yield(db, env):
 
 def test_recipe_correlation_pairs_a_shifts_water_dosage_with_its_ofs_yield(db, env):
     of_id = _of(db, env)
-    shift_id = _validated_shift(db, env, of_id, D(2030, 6, 5), water_percentage=32.5, semolina_flow_rate=1.2)
+    # The débit is no longer typed: it is the shift's versements over the hours it ran.
+    # An 8 h morning with nothing stopped pours 1000 t, so 125 t/h.
+    db.execute(
+        "INSERT INTO production.shift_windows (tenant_id, shift, start_time, end_time) VALUES (%s, 'morning', '07:00', '15:00') "
+        "ON CONFLICT (tenant_id, shift) DO NOTHING",
+        (TENANT,),
+    )
+    shift_id = _validated_shift(db, env, of_id, D(2030, 6, 5), water_percentage=32.5)
 
     rows = WorkOrderYieldService(db).list_recipe_correlation(tenant_id=TENANT)
 
     row = next(r for r in rows if r["of_id"] == of_id)
     assert row["water_percentage"] == pytest.approx(32.5)
-    assert row["semolina_flow_rate"] == pytest.approx(1.2)
+    assert row["semolina_flow_rate"] == pytest.approx(125.0)
     assert row["yield_ratio"] == pytest.approx(0.9)
 
 
 def test_recipe_correlation_excludes_shifts_with_nothing_dosed(db, env):
     of_id = _of(db, env)
-    _validated_shift(db, env, of_id, D(2030, 6, 5), water_percentage=0, semolina_flow_rate=0)
+    _validated_shift(db, env, of_id, D(2030, 6, 5), water_percentage=0)
 
     rows = WorkOrderYieldService(db).list_recipe_correlation(tenant_id=TENANT)
 

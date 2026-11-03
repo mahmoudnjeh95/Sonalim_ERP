@@ -1,0 +1,536 @@
+"""Scanning a shift's paper fiches: sessions, their photos, the proposal and applying it.
+
+A session is one user's scan of one line, date and shift. Photos wait in
+scan.scan_pages until the worker's reader has the OCR container read them; the
+proposal is rebuilt from the read pages on every request, so it never goes stale.
+Applying writes the reviewed sections through production's ShiftReportService --
+exactly what a team typing them would do -- and learns the codes the user corrected.
+"""
+from __future__ import annotations
+
+import base64
+import binascii
+import datetime
+import os
+from typing import Any
+
+import psycopg
+from psycopg.types.json import Jsonb
+from ulid import ULID
+
+from core.audit import record_audit
+from core.domain.result import Err, Ok, Result
+from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.service import WorkOrderService
+from modules.production.api.shift_report_service import ShiftReportService
+from modules.production.api.work_center_service import WorkCenterService
+from modules.scan.api.alias_service import ScanAliasService
+from modules.scan.api.vocabulary_service import build_vocabulary
+from modules.scan.domain.attribution import Selection, attribute, header_of_page, line_label_of
+from modules.scan.domain.draft import ProposalContext
+from modules.scan.domain.ocr_result import page_read_from_json
+from modules.scan.domain.proposal import build_proposal
+from modules.scan.domain.review import (
+    APPLY_ORDER, aliases_to_learn, count_rows, final_values, fingerprint, outcomes, stale_sections, strip_private,
+)
+
+MAX_PAGES = 20
+MAX_IMAGE_BYTES = 10 * 1024 * 1024
+IMAGE_TYPES = frozenset({"image/jpeg", "image/png", "image/webp"})
+FORM_HINTS = frozenset({"fabrication", "conditionnement", "bobines"})
+HEADER_FIELDS = ("team", "conducteur", "agent_fabrication", "machiniste", "aide_machiniste")
+APPLY_REASON = "Import depuis photos"
+READERS = ("ocr", "claude")
+
+_SESSION_NAMES = (
+    "id", "kind", "work_center_id", "report_date", "shift", "default_of_id", "shift_report_id", "status",
+    "review_state", "created_by", "created_at", "applied_at", "reader",
+)
+_PAGE_NAMES = (
+    "id", "status", "form_type", "form_hint", "rotation", "width", "height", "attempts", "error", "created_at", "read_at", "read_by", "ocr_result",
+)
+_SESSION_NOT_FOUND = Err("NOT_FOUND", "scan session not found", "session de scan introuvable")
+_PAGE_NOT_FOUND = Err("NOT_FOUND", "photo not found", "photo introuvable")
+_SESSION_CLOSED = Err("SESSION_CLOSED", "this scan is already applied or discarded", "ce scan est déjà enregistré ou abandonné")
+
+
+CLOUD_PERMISSION = "scan.use_cloud_reader"
+_CLOUD_FORBIDDEN = Err(
+    "FORBIDDEN_READER", f"reading with Claude sends the photos to the cloud and needs the {CLOUD_PERMISSION} permission",
+    f"la lecture par Claude envoie les photos dans le cloud et demande la permission {CLOUD_PERMISSION}",
+)
+
+
+def available_readers(cloud_allowed: bool = True) -> dict:
+    """Which readers this server can run, which this user may use, and the one a new scan
+    starts with.
+
+    The OCR container keeps the photos on the server; Claude sends them to the Anthropic
+    API, so it also needs the user's scan.use_cloud_reader. SCAN_READER picks the default
+    among the readers both available and allowed.
+    """
+    available = {"ocr": bool(os.environ.get("OCR_URL")), "claude": bool(os.environ.get("CLAUDE_API_KEY", "").strip())}
+    allowed = {"ocr": True, "claude": cloud_allowed}
+    usable = {r: available[r] and allowed[r] for r in READERS}
+    wanted = os.environ.get("SCAN_READER", "ocr").strip().lower()
+    default = wanted if usable.get(wanted) else next((r for r in READERS if usable[r]), "ocr")
+    return {"default": default, "available": available, "allowed": allowed}
+
+
+def _iso(value: Any) -> Any:
+    return value.isoformat() if isinstance(value, (datetime.date, datetime.datetime)) else value
+
+
+class ScanSessionService:
+    def __init__(self, connection: psycopg.Connection) -> None:
+        self._connection = connection
+
+    # ---- reading -----------------------------------------------------------
+
+    def _session_row(self, tenant_id: str, session_id: str) -> dict | None:
+        row = self._connection.execute(
+            f"SELECT {', '.join(_SESSION_NAMES)} FROM scan.scan_sessions WHERE id = %s AND tenant_id = %s",
+            (session_id, tenant_id),
+        ).fetchone()
+        return {name: _iso(value) for name, value in zip(_SESSION_NAMES, row)} if row else None
+
+    def _open_session(self, tenant_id: str, session_id: str) -> Result[dict]:
+        session = self._session_row(tenant_id, session_id)
+        if session is None:
+            return _SESSION_NOT_FOUND
+        if session["status"] != "open":
+            return _SESSION_CLOSED
+        return Ok(session)
+
+    def _open_session_locked(self, tenant_id: str, session_id: str) -> Result[dict]:
+        """Like `_open_session`, but locks the row so a concurrent apply can't also pass the check."""
+        row = self._connection.execute(
+            f"SELECT {', '.join(_SESSION_NAMES)} FROM scan.scan_sessions WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (session_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return _SESSION_NOT_FOUND
+        session = {name: _iso(value) for name, value in zip(_SESSION_NAMES, row)}
+        if session["status"] != "open":
+            return _SESSION_CLOSED
+        return Ok(session)
+
+    def _window(self, tenant_id: str, shift: str):
+        wanted = shift.strip().lower()
+        windows = DashboardSettingsService(self._connection).list_shift_windows(tenant_id=tenant_id)
+        return next((w for w in windows if w.shift.strip().lower() == wanted), None)
+
+    def _selection(self, tenant_id: str, session: dict) -> Selection | None:
+        window = self._window(tenant_id, session["shift"])
+        if window is None:
+            return None
+        lines = WorkCenterService(self._connection).list_work_centers(tenant_id=tenant_id)
+        line = next((w for w in lines if w.id == session["work_center_id"]), None)
+        return Selection(
+            report_date=datetime.date.fromisoformat(session["report_date"]),
+            shift_start=window.start,
+            line_label=line_label_of(line.code, line.name) if line else None,
+        )
+
+    def _shift_state(self, tenant_id: str, session: dict) -> dict | None:
+        """The shift report this scan fills, if it exists: its status and every section's rows."""
+        reports = ShiftReportService(self._connection)
+        wanted = session["shift"].strip().lower()
+        shifts = reports.list_shifts(
+            tenant_id=tenant_id,
+            report_date=datetime.date.fromisoformat(session["report_date"]),
+            work_center_id=session["work_center_id"],
+        )
+        match = next((s for s in shifts if s["shift"].strip().lower() == wanted), None)
+        if match is None:
+            return None
+        found = reports.get_shift(tenant_id=tenant_id, shift_report_id=match["id"])
+        if isinstance(found, Err):
+            return None
+        shift = found.value
+        keys = ("id", "status", "team", "conducteur", "agent_fabrication", "machiniste", "aide_machiniste", "default_lot_number")
+        return {
+            **{key: shift[key] for key in keys},
+            "sections": {
+                s["key"]: {
+                    "status": s["status"], "revision": s["revision"], "rows": count_rows(s["payload"]),
+                    "fingerprint": fingerprint(s["payload"]), "payload": s["payload"],
+                }
+                for s in shift["sections"]
+            },
+        }
+
+    def _pages(self, tenant_id: str, session_id: str) -> list[dict]:
+        rows = self._connection.execute(
+            f"SELECT {', '.join(_PAGE_NAMES)} FROM scan.scan_pages WHERE tenant_id = %s AND session_id = %s ORDER BY created_at, id",
+            (tenant_id, session_id),
+        ).fetchall()
+        return [dict(zip(_PAGE_NAMES, row)) for row in rows]
+
+    def _page_summary(self, page: dict, selection: Selection | None) -> dict:
+        summary = {name: _iso(page[name]) for name in _PAGE_NAMES if name != "ocr_result"}
+        summary["attribution"] = None
+        if page["ocr_result"] and selection is not None:
+            result = attribute(header_of_page(page_read_from_json(page["id"], page["ocr_result"])), selection)
+            summary["attribution"] = {"verdict": result.verdict, "reasons": list(result.reasons), "read": result.read}
+        return summary
+
+    def _page(self, tenant_id: str, session_id: str, page_id: str) -> dict | None:
+        return next((p for p in self._pages(tenant_id, session_id) if p["id"] == page_id), None)
+
+    def get_session(self, *, tenant_id: str, session_id: str) -> Result[dict]:
+        session = self._session_row(tenant_id, session_id)
+        if session is None:
+            return _SESSION_NOT_FOUND
+        selection = self._selection(tenant_id, session)
+        window = self._window(tenant_id, session["shift"])
+        return Ok({
+            **session,
+            "pages": [self._page_summary(p, selection) for p in self._pages(tenant_id, session_id)],
+            "shift_report": self._shift_state(tenant_id, session),
+            "window": {"start": window.start.strftime("%H:%M"), "end": window.end.strftime("%H:%M")} if window else None,
+        })
+
+    def list_sessions(self, *, tenant_id: str, status: str | None = None) -> list[dict]:
+        names = [n for n in _SESSION_NAMES if n != "review_state"]
+        clause, params = ("s.tenant_id = %s", [tenant_id]) if status is None else ("s.tenant_id = %s AND s.status = %s", [tenant_id, status])
+        rows = self._connection.execute(
+            f"SELECT {', '.join('s.' + n for n in names)}, "
+            f"(SELECT count(*) FROM scan.scan_pages p WHERE p.session_id = s.id) "
+            f"FROM scan.scan_sessions s WHERE {clause} ORDER BY s.created_at DESC LIMIT 200",
+            params,
+        ).fetchall()
+        return [{**{n: _iso(v) for n, v in zip(names, row)}, "page_count": row[-1]} for row in rows]
+
+    def page_image(self, *, tenant_id: str, page_id: str) -> Result[tuple[bytes, str]]:
+        row = self._connection.execute(
+            "SELECT image, content_type FROM scan.scan_pages WHERE id = %s AND tenant_id = %s", (page_id, tenant_id)
+        ).fetchone()
+        if row is None:
+            return _PAGE_NOT_FOUND
+        return Ok((bytes(row[0]), row[1]))
+
+    def shift_pages(self, *, tenant_id: str, shift_report_id: str) -> list[dict]:
+        """The photos behind a shift report: pages of the scans applied to it."""
+        rows = self._connection.execute(
+            """
+            SELECT p.id, p.session_id, p.form_type, p.rotation, p.width, p.height, p.created_at
+            FROM scan.scan_pages p JOIN scan.scan_sessions s ON s.id = p.session_id
+            WHERE p.tenant_id = %s AND s.shift_report_id = %s AND s.status = 'applied'
+            ORDER BY p.created_at, p.id
+            """,
+            (tenant_id, shift_report_id),
+        ).fetchall()
+        names = ("id", "session_id", "form_type", "rotation", "width", "height", "created_at")
+        return [{n: _iso(v) for n, v in zip(names, row)} for row in rows]
+
+    # ---- proposal and review -----------------------------------------------
+
+    def _context(self, tenant_id: str, session: dict, shift: dict | None) -> ProposalContext | None:
+        window = self._window(tenant_id, session["shift"])
+        if window is None:
+            return None
+        default_product = None
+        if session["default_of_id"]:
+            orders = WorkOrderService(self._connection).list_work_orders(tenant_id)
+            order = next((o for o in orders if o.id == session["default_of_id"]), None)
+            default_product = order.product_id if order else None
+        return ProposalContext(
+            report_date=datetime.date.fromisoformat(session["report_date"]),
+            shift_start=window.start,
+            shift_end=window.end,
+            team=shift["team"] if shift else None,
+            default_of_id=session["default_of_id"],
+            default_product_id=default_product,
+            vocabulary=build_vocabulary(self._connection, tenant_id=tenant_id, work_center_id=session["work_center_id"]),
+            aliases=ScanAliasService(self._connection).alias_map(tenant_id=tenant_id),
+        )
+
+    def _build(self, tenant_id: str, session: dict, shift: dict | None) -> Result[dict]:
+        ctx = self._context(tenant_id, session, shift)
+        selection = self._selection(tenant_id, session)
+        if ctx is None or selection is None:
+            return Err("UNKNOWN_SHIFT", f"{session['shift']!r} is no longer one of the plant's shifts",
+                       f"{session['shift']!r} ne fait plus partie des shifts de l'usine")
+        pages = [
+            page_read_from_json(p["id"], p["ocr_result"])
+            for p in self._pages(tenant_id, session["id"])
+            if p["status"] == "read" and p["ocr_result"]
+        ]
+        include = set((session["review_state"] or {}).get("include_pages") or [])
+        return Ok(build_proposal(pages, ctx, selection, include))
+
+    def proposal(self, *, tenant_id: str, session_id: str) -> Result[dict]:
+        session = self._session_row(tenant_id, session_id)
+        if session is None:
+            return _SESSION_NOT_FOUND
+        shift = self._shift_state(tenant_id, session)
+        built = self._build(tenant_id, session, shift)
+        if isinstance(built, Err):
+            return built
+        return Ok({"proposal": built.value, "shift": shift, "review_state": session["review_state"]})
+
+    def save_review(self, *, tenant_id: str, session_id: str, review_state: dict) -> Result[None]:
+        """The review in progress, autosaved while the user works.
+
+        Not audited: it is a working copy saved every few seconds, like a form draft in the
+        browser; what the review decides is audited when it is applied.
+        """
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        self._connection.execute(
+            "UPDATE scan.scan_sessions SET review_state = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+            (Jsonb(review_state), session_id, tenant_id),
+        )
+        return Ok(None)
+
+    # ---- changing ----------------------------------------------------------
+
+    def _audit(self, tenant_id: str, actor_id: str, action: str, session_id: str, payload: dict) -> None:
+        record_audit(
+            self._connection, tenant_id=tenant_id, actor_id=actor_id, action=action,
+            entity_type="scan_session", entity_id=session_id, payload=payload,
+        )
+
+    def create_session(
+        self, *, tenant_id: str, actor_id: str, kind: str, work_center_id: str, report_date: datetime.date,
+        shift: str, default_of_id: str | None, reader: str | None = None, cloud_allowed: bool = True,
+    ) -> Result[dict]:
+        reader = reader or available_readers(cloud_allowed)["default"]
+        if reader not in READERS:
+            return Err("INVALID_VALUE", f"unknown reader {reader!r}", f"lecteur inconnu {reader!r}")
+        if reader == "claude" and not cloud_allowed:
+            return _CLOUD_FORBIDDEN
+        if kind != "shift":
+            return Err("NOT_SUPPORTED_YET", "only shift fiches can be scanned for now", "seules les fiches de shift peuvent être scannées pour l'instant")
+        if self._window(tenant_id, shift or "") is None:
+            return Err("UNKNOWN_SHIFT", f"{shift!r} is not one of the plant's shifts", f"{shift!r} ne fait pas partie des shifts de l'usine")
+        existing_shift = self._shift_state(
+            tenant_id, {"shift": shift, "report_date": report_date.isoformat(), "work_center_id": work_center_id}
+        )
+        if existing_shift is not None and existing_shift["status"] == "validated":
+            return Err("SHIFT_VALIDATED", "this shift is validated and its stock posted; it must be returned before it can be scanned",
+                       "ce shift est validé et son stock passé ; il doit être renvoyé avant qu'il puisse être scanné")
+        session_id = str(ULID())
+        self._connection.execute(
+            """
+            INSERT INTO scan.scan_sessions (id, tenant_id, kind, work_center_id, report_date, shift, default_of_id, created_by, reader)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+            """,
+            (session_id, tenant_id, kind, work_center_id, report_date, shift.strip(), default_of_id, actor_id, reader),
+        )
+        self._audit(tenant_id, actor_id, "scan_session.created", session_id,
+                    {"work_center_id": work_center_id, "report_date": report_date.isoformat(), "shift": shift.strip(), "reader": reader})
+        return Ok(self._session_row(tenant_id, session_id))
+
+    def add_pages(
+        self, *, tenant_id: str, actor_id: str, session_id: str, files: list[dict], cloud_allowed: bool = True,
+    ) -> Result[list[dict]]:
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        if found.value["reader"] == "claude" and not cloud_allowed:  # the new photos would go to Claude
+            return _CLOUD_FORBIDDEN
+        held = self._connection.execute(
+            "SELECT count(*) FROM scan.scan_pages WHERE tenant_id = %s AND session_id = %s", (tenant_id, session_id)
+        ).fetchone()[0]
+        if held + len(files) > MAX_PAGES:
+            return Err("TOO_MANY_PAGES", f"a scan holds at most {MAX_PAGES} photos", f"un scan contient au plus {MAX_PAGES} photos")
+        decoded: list[tuple[dict, bytes]] = []
+        for upload in files:
+            if upload.get("content_type") not in IMAGE_TYPES:
+                return Err("UNSUPPORTED_IMAGE", "photos must be JPEG, PNG or WebP", "les photos doivent être en JPEG, PNG ou WebP")
+            try:
+                data = base64.b64decode(upload.get("data_base64") or "", validate=True)
+            except (binascii.Error, ValueError):
+                return Err("UNSUPPORTED_IMAGE", "a photo could not be decoded", "une photo n'a pas pu être décodée")
+            if not data:
+                return Err("UNSUPPORTED_IMAGE", "a photo is empty", "une photo est vide")
+            if len(data) > MAX_IMAGE_BYTES:
+                return Err("IMAGE_TOO_LARGE", "a photo is larger than 10 MB", "une photo dépasse 10 Mo")
+            decoded.append((upload, data))
+        ids = []
+        for upload, data in decoded:
+            page_id = str(ULID())
+            ids.append(page_id)
+            self._connection.execute(
+                """
+                INSERT INTO scan.scan_pages
+                    (id, tenant_id, session_id, image, content_type, filename, width, height, uploaded_by, created_at)
+                -- clock_timestamp(), not the column's NOW() default: NOW() is the
+                -- transaction's start time, so pages uploaded in one request shared it and
+                -- their order (ORDER BY created_at, id -- the order of the paper fiche)
+                -- fell to the id tie-break, and ULIDs are not ordered inside a millisecond.
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
+                """,
+                (page_id, tenant_id, session_id, data, upload["content_type"], upload.get("filename"),
+                 upload.get("width"), upload.get("height"), actor_id),
+            )
+        self._connection.execute("UPDATE scan.scan_sessions SET updated_at = NOW() WHERE id = %s", (session_id,))
+        self._audit(tenant_id, actor_id, "scan_session.pages_added", session_id, {"pages": ids})
+        return Ok([self._page_summary(self._page(tenant_id, session_id, page_id), None) for page_id in ids])
+
+    def delete_page(self, *, tenant_id: str, actor_id: str, session_id: str, page_id: str) -> Result[None]:
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        page = self._page(tenant_id, session_id, page_id)
+        if page is None:
+            return _PAGE_NOT_FOUND
+        self._connection.execute("DELETE FROM scan.scan_pages WHERE id = %s AND tenant_id = %s", (page_id, tenant_id))
+        self._audit(tenant_id, actor_id, "scan_session.page_removed", session_id, {"page_id": page_id, "form_type": page["form_type"]})
+        return Ok(None)
+
+    def reread_page(
+        self, *, tenant_id: str, actor_id: str, session_id: str, page_id: str, form_hint: str | None,
+        cloud_allowed: bool = True,
+    ) -> Result[dict]:
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        if found.value["reader"] == "claude" and not cloud_allowed:
+            return _CLOUD_FORBIDDEN
+        if form_hint is not None and form_hint not in FORM_HINTS:
+            return Err("INVALID_VALUE", f"unknown fiche type {form_hint!r}", f"type de fiche inconnu {form_hint!r}")
+        if self._page(tenant_id, session_id, page_id) is None:
+            return _PAGE_NOT_FOUND
+        self._connection.execute(
+            "UPDATE scan.scan_pages SET status = 'queued', attempts = 0, error = NULL, form_hint = %s WHERE id = %s AND tenant_id = %s",
+            (form_hint, page_id, tenant_id),
+        )
+        self._audit(tenant_id, actor_id, "scan_session.page_reread", session_id, {"page_id": page_id, "form_hint": form_hint})
+        return Ok(self._page_summary(self._page(tenant_id, session_id, page_id), None))
+
+    def set_reader(
+        self, *, tenant_id: str, actor_id: str, session_id: str, reader: str, reread_all: bool, cloud_allowed: bool = True,
+    ) -> Result[dict]:
+        """Switch the scan between the local OCR and Claude. Photos still waiting are read by
+        the new reader; with `reread_all` the photos already read are queued again too (their
+        current reading stays until the new one replaces it)."""
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        if reader not in READERS:
+            return Err("INVALID_VALUE", f"unknown reader {reader!r}", f"lecteur inconnu {reader!r}")
+        if reader == "claude" and not cloud_allowed:
+            return _CLOUD_FORBIDDEN
+        self._connection.execute(
+            "UPDATE scan.scan_sessions SET reader = %s, updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+            (reader, session_id, tenant_id),
+        )
+        requeued = 0
+        if reread_all:
+            requeued = self._connection.execute(
+                "UPDATE scan.scan_pages SET status = 'queued', attempts = 0, error = NULL "
+                "WHERE tenant_id = %s AND session_id = %s AND status IN ('read', 'unrecognized', 'failed')",
+                (tenant_id, session_id),
+            ).rowcount
+        self._audit(tenant_id, actor_id, "scan_session.reader_changed", session_id,
+                    {"from": found.value["reader"], "to": reader, "pages_requeued": requeued})
+        return Ok(self._session_row(tenant_id, session_id))
+
+    def discard_session(self, *, tenant_id: str, actor_id: str, session_id: str) -> Result[dict]:
+        found = self._open_session(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        self._connection.execute(
+            "UPDATE scan.scan_sessions SET status = 'discarded', updated_at = NOW() WHERE id = %s AND tenant_id = %s",
+            (session_id, tenant_id),
+        )
+        self._audit(tenant_id, actor_id, "scan_session.discarded", session_id, {})
+        return Ok(self._session_row(tenant_id, session_id))
+
+    # ---- apply -------------------------------------------------------------
+
+    def apply(
+        self, *, tenant_id: str, actor_id: str, session_id: str, header: dict, sections: dict,
+        fingerprints: dict, allowed_sections: set[str],
+    ) -> Result[dict]:
+        """Write the reviewed sections into the shift report as drafts, all or nothing.
+
+        The caller commits on Ok and rolls back on Err, so a section save_section refuses
+        leaves nothing written.
+        """
+        found = self._open_session_locked(tenant_id, session_id)
+        if isinstance(found, Err):
+            return found
+        session = found.value
+        if not sections:
+            return Err("NOTHING_TO_APPLY", "no section was chosen to write", "aucune section n'a été choisie")
+        unknown = sorted(k for k in sections if k not in APPLY_ORDER)
+        if unknown:
+            return Err("INVALID_SECTION", f"these sections cannot be imported: {', '.join(unknown)}",
+                       f"ces sections ne peuvent pas être importées : {', '.join(unknown)}")
+        refused = sorted(k for k in sections if k not in allowed_sections)
+        if refused:
+            return Err("FORBIDDEN_SECTION", f"you may not edit: {', '.join(refused)}", f"vous ne pouvez pas modifier : {', '.join(refused)}")
+        shift = self._shift_state(tenant_id, session)
+        if shift is not None and shift["status"] == "validated":
+            return Err("SHIFT_VALIDATED", "this shift is validated and its stock posted; it must be returned before it can change",
+                       "ce shift est validé et son stock passé ; il doit être renvoyé avant toute modification")
+        stale = stale_sections(list(sections), shift["sections"] if shift else None, fingerprints)
+        if stale:
+            return Err("SECTION_CHANGED", f"changed since the review was loaded: {', '.join(stale)}",
+                       f"modifiées depuis le chargement de la vérification : {', '.join(stale)}")
+        built = self._build(tenant_id, session, shift)
+        if isinstance(built, Err):
+            return built
+
+        reports = ShiftReportService(self._connection)
+        header_fields = {k: header[k] for k in HEADER_FIELDS if header.get(k) not in (None, "")}
+        if shift is None:
+            opened = reports.open_shift(
+                tenant_id=tenant_id, actor_id=actor_id, work_center_id=session["work_center_id"],
+                report_date=datetime.date.fromisoformat(session["report_date"]), shift=session["shift"],
+                team=header_fields.get("team"),
+            )
+            if isinstance(opened, Err):
+                return opened
+            shift_id = opened.value["id"]
+        else:
+            shift_id = shift["id"]
+        if header_fields:
+            updated = reports.update_header(tenant_id=tenant_id, actor_id=actor_id, shift_report_id=shift_id, fields=header_fields)
+            if isinstance(updated, Err):
+                return updated
+        written = []
+        for key in APPLY_ORDER:
+            if key not in sections:
+                continue
+            saved = reports.save_section(
+                tenant_id=tenant_id, actor_id=actor_id, shift_report_id=shift_id, section_key=key,
+                payload=strip_private(sections[key]), reason=APPLY_REASON,
+            )
+            if isinstance(saved, Err):
+                return Err(saved.code, f"{key}: {saved.message}", f"{key} : {saved.message_fr or saved.message}")
+            written.append(key)
+
+        finals = final_values(sections, header)
+        aliases = ScanAliasService(self._connection)
+        for kind, read_text, value in aliases_to_learn(built.value["coded"], finals):
+            aliases.learn(tenant_id=tenant_id, actor_id=actor_id, kind=kind, read_text=read_text, target_value=value)
+        for row in outcomes(built.value, finals):
+            first_segment = row["field_path"].split("/", 1)[0]
+            if first_segment != "header" and first_segment not in sections:
+                continue
+            self._connection.execute(
+                """
+                INSERT INTO scan.scan_field_outcomes
+                    (id, tenant_id, session_id, page_id, field_path, read_text, confidence, proposed_value, final_value, flag, changed)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                """,
+                (str(ULID()), tenant_id, session_id, row["page_id"], row["field_path"], row["read_text"], row["confidence"],
+                 row["proposed_value"], row["final_value"], row["flag"], row["changed"]),
+            )
+        self._connection.execute(
+            "UPDATE scan.scan_sessions SET status = 'applied', shift_report_id = %s, applied_by = %s, applied_at = NOW(), "
+            "updated_at = NOW() WHERE id = %s AND tenant_id = %s AND status = 'open'",
+            (shift_id, actor_id, session_id, tenant_id),
+        )
+        sections_kept = sorted(k for k in built.value["sections"] if k not in sections)
+        pages_read = sum(1 for p in self._pages(tenant_id, session_id) if p["status"] == "read")
+        self._audit(tenant_id, actor_id, "scan_session.applied", session_id,
+                    {"shift_report_id": shift_id, "sections_written": written, "sections_kept": sections_kept,
+                     "pages": pages_read, "header": sorted(header_fields)})
+        return Ok({"shift_report_id": shift_id, "sections_written": written})

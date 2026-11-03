@@ -11,7 +11,8 @@ What is offered comes from the packing reports of one day, not from the store's 
 each finished product packed that day, how much of it, how much has already been released
 (remembered in `stock_release_lines`) and how much the line store still holds. Only what quality
 control has validated as conforming may go: packed goods still waiting on their shift's QC report,
-or rejected by it, are shown as pending and refused by the release itself. The list opens
+or rejected by it, are shown apart and refused by the release itself. Rejected goods are not
+counted as left to release, so a day whose only leftovers QC rejected is not pending. The list opens
 on yesterday, or on today once nothing from yesterday is left unreleased. Quantities are in each
 product's own unit; cartons are only the screen's way of reading them.
 """
@@ -58,15 +59,22 @@ class StockReleaseService:
     def _line_store(self, tenant_id: str) -> str | None:
         return DashboardSettingsService(self._connection).line_store_id(tenant_id=tenant_id)
 
-    def _packed_on(self, tenant_id: str, day: datetime.date) -> dict[str, float]:
-        """Finished product per product that validated packing reports of `day` brought in.
+    def _packed_on(self, tenant_id: str, day: datetime.date, rows: list[tuple[str, str, float]] | None = None) -> dict[str, float]:
+        """Finished product per product that validated packing reports of `day` brought in."""
+        packed: dict[str, float] = {}
+        for _row_id, product_id, quantity in rows if rows is not None else self._packed_rows_on(tenant_id, day):
+            packed[product_id] = packed.get(product_id, 0.0) + quantity
+        return {product_id: quantity for product_id, quantity in packed.items() if quantity > 0}
+
+    def _packed_rows_on(self, tenant_id: str, day: datetime.date) -> list[tuple[str, str, float]]:
+        """(packing row id, product id, finished product) for each validated packing row of `day`.
 
         The same count validation posted to stock (`finished_quantity_from_count`, with the
         packets-per-carton frozen on each report), so the list and the store cannot disagree.
         """
         rows = self._connection.execute(
             """
-            SELECT COALESCE(p.product_id, w.product_id), p.carton_quantity, p.waste_carton_quantity, p.packets_counted, p.snapshot_packets_per_carton
+            SELECT p.id, COALESCE(p.product_id, w.product_id), p.carton_quantity, p.waste_carton_quantity, p.packets_counted, p.snapshot_packets_per_carton
             FROM production.shift_packing_rows p
             JOIN production.shift_reports s ON s.id = p.shift_report_id AND s.tenant_id = p.tenant_id
             JOIN production.work_orders w ON w.id = p.of_id AND w.tenant_id = p.tenant_id
@@ -74,15 +82,19 @@ class StockReleaseService:
             """,
             (tenant_id, day),
         ).fetchall()
-        packed: dict[str, float] = {}
-        for product_id, cartons, waste, counted, per_carton in rows:
-            packed[product_id] = packed.get(product_id, 0.0) + finished_quantity_from_count(
-                packets_per_carton=float(per_carton) if per_carton else None,
-                carton_quantity=float(cartons),
-                packets_counted=float(counted),
-                waste_carton_quantity=float(waste),
+        return [
+            (
+                row_id,
+                product_id,
+                finished_quantity_from_count(
+                    packets_per_carton=float(per_carton) if per_carton else None,
+                    carton_quantity=float(cartons),
+                    packets_counted=float(counted),
+                    waste_carton_quantity=float(waste),
+                ),
             )
-        return {product_id: quantity for product_id, quantity in packed.items() if quantity > 0}
+            for row_id, product_id, cartons, waste, counted, per_carton in rows
+        ]
 
     def _released_on(self, tenant_id: str, day: datetime.date) -> dict[str, float]:
         rows = self._connection.execute(
@@ -96,6 +108,32 @@ class StockReleaseService:
         from modules.qc.api.quality_service import QualityReportService
 
         return QualityReportService(self._connection).get_validated_conforming(tenant_id=tenant_id, day=day)
+
+    def _qc_outcome_on(
+        self, tenant_id: str, day: datetime.date, packed_rows: list[tuple[str, str, float]]
+    ) -> tuple[dict[str, float], dict[str, float], dict[str, float]]:
+        """Per product, what QC did with the goods packed on `day`: (cleared, awaiting, rejected).
+
+        Judged packing row by packing row, so a row QC cleared beyond its packed count never
+        covers for another row's rejected goods. A row no validated QC report has judged yet is
+        awaiting; on a judged row, whatever the verdict did not clear as conforming is rejected
+        and will never be released.
+        """
+        from modules.qc.api.quality_service import QualityReportService
+
+        verdicts = QualityReportService(self._connection).get_validated_conforming_by_row(tenant_id=tenant_id, day=day)
+        cleared: dict[str, float] = {}
+        awaiting: dict[str, float] = {}
+        rejected: dict[str, float] = {}
+        for product_id, pieces in verdicts.values():
+            cleared[product_id] = cleared.get(product_id, 0.0) + pieces
+        for row_id, product_id, packed in packed_rows:
+            verdict = verdicts.get(row_id)
+            if verdict is None:
+                awaiting[product_id] = awaiting.get(product_id, 0.0) + packed
+            else:
+                rejected[product_id] = rejected.get(product_id, 0.0) + max(packed - verdict[1], 0.0)
+        return cleared, awaiting, rejected
 
     def get_release_list(self, *, tenant_id: str, day: datetime.date | None = None, today: datetime.date | None = None) -> dict:
         """The products packed on `day`, what has left the line store and what still can.
@@ -139,13 +177,16 @@ class StockReleaseService:
         names = {location.id: location.name for location in LocationService(self._connection).list_locations(tenant_id=tenant_id)}
         on_hand = {level.product_id: level.quantity_on_hand for level in self._stock.list_stock_items(tenant_id, location_id=line_id)}
         released = self._released_on(tenant_id, day)
-        qc_validated = self._qc_validated_on(tenant_id, day)
+        packed_rows = self._packed_rows_on(tenant_id, day)
+        qc_validated, qc_awaiting, qc_rejected = self._qc_outcome_on(tenant_id, day, packed_rows)
         items = []
-        for product_id, packed in self._packed_on(tenant_id, day).items():
+        for product_id, packed in self._packed_on(tenant_id, day, packed_rows).items():
             product = self._core.get_product(tenant_id, product_id)
             if product is None:
                 continue
-            remaining = max(packed - released.get(product_id, 0.0), 0.0)
+            rejected = qc_rejected.get(product_id, 0.0)
+            # Goods QC rejected never leave the line store by a release, so they are not left to release.
+            remaining = max(packed - released.get(product_id, 0.0) - rejected, 0.0)
             destination = product.default_location_id
             per_carton = product.packets_per_carton
             classification = self._classifications.get_classification(tenant_id, product_id)
@@ -167,8 +208,10 @@ class StockReleaseService:
                     # was set went straight to the product's own store and cannot be moved from here.
                     # QC caps it too: packed goods QC has not validated as conforming stay put.
                     "releasable": min(remaining, max(on_hand.get(product_id, 0.0), 0.0), qc_remaining),
-                    # Packed but not cleared: its shift's QC report is not validated yet, or QC rejected it.
-                    "pending_qc": max(packed - qc_conforming, 0.0),
+                    # Packed but not cleared, in two parts: no validated QC report has judged it yet,
+                    # or one has and did not clear it as conforming.
+                    "awaiting_qc": qc_awaiting.get(product_id, 0.0),
+                    "rejected_qc": rejected,
                     "destination": {"id": destination, "name": names.get(destination)} if destination else None,
                 }
             )

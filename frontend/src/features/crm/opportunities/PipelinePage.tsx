@@ -15,6 +15,7 @@ import {
 import { toast } from "sonner";
 import { useAuth } from "../../../lib/auth";
 import { currentLocale, useI18n } from "../../../lib/i18n";
+import { formatXofWithCode } from "../../../lib/currency";
 import { ApiError } from "../../../lib/api";
 import { cn } from "../../../lib/utils";
 import { listUserDirectory, userDisplayName } from "../../../lib/usersApi";
@@ -51,7 +52,7 @@ const PRIORITY_DOT: Record<Priority, string> = {
 };
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
+  return formatXofWithCode(amount);
 }
 
 function daysSince(iso: string) {

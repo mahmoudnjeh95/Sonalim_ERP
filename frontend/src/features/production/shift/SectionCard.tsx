@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { ChevronDown, Lock, LockOpen, Maximize2, RotateCcw, Save, Send } from "lucide-react";
@@ -10,12 +10,13 @@ import { Badge } from "../../../components/ui/badge";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Label as FieldLabel } from "../../../components/ui/label";
-import { Cell, ShiftGrid, type GridRow, type OptionMap } from "./ShiftGrid";
+import { Cell, DECOR_CLASS, ShiftGrid, type CellDecor, type GridRow, type OptionMap } from "./ShiftGrid";
 import { FullscreenOverlay } from "./FullscreenOverlay";
 import { RevisionHistory } from "./RevisionHistory";
 import { StatusNode } from "./StatusNode";
 import type { PartDef, SectionDef } from "./sectionConfig";
-import { followLot, hasData, partDefaults, rowCount, toDraft, toPayload, type Draft } from "./shiftModel";
+import { followDefaults, hasData, partDefaults, rowCount, toDraft, toPayload, type Draft } from "./shiftModel";
+import type { ShiftContext } from "./shiftDerived";
 import {
   declareSectionEmpty,
   saveShiftSection,
@@ -45,6 +46,7 @@ export function SectionCard({
   open,
   onToggle,
   onChanged,
+  context,
 }: {
   def: SectionDef;
   state: SectionState;
@@ -54,6 +56,8 @@ export function SectionCard({
   open: boolean;
   onToggle: () => void;
   onChanged: () => void;
+  /** What the other sections settled: the OF production ran, the shift's semoule flow. */
+  context: ShiftContext;
 }) {
   const { session, hasPermission } = useAuth();
   const token = session!.token;
@@ -62,7 +66,7 @@ export function SectionCard({
   const [maximized, setMaximized] = useState(false);
 
   const validated = shift.status === "validated";
-  const canUnlock = canEdit && validated && hasPermission("production.shift.unlock_validated");
+  const canUnlock = canEdit && validated && hasPermission("production.admin_unlock_validated");
   const [unlocked, setUnlocked] = useState(false);
   const [unlockReason, setUnlockReason] = useState("");
   const locked = !canEdit || (validated && !unlocked);
@@ -70,8 +74,18 @@ export function SectionCard({
   // An editable section opens with one blank line in each table; a locked one shows what was handed in.
   const lotNumber = shift.default_lot_number ?? null;
   const reportDate = shift.report_date;
-  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber, reportDate));
+  const runOrderId = context.runOrderId;
+  // Per shift and section, so two sections never share a backup and an old shift's copy
+  // cannot land in a new one.
+  const storageKey = `sonalim-erp.shift-draft.${shift.id}.${def.key}`;
+  const [draft, setDraft] = useState<Draft>(() => toDraft(def, state.payload, !locked, lotNumber, reportDate, runOrderId));
   const [dirty, setDirty] = useState(false);
+  const [restoreAvailable, setRestoreAvailable] = useState(false);
+  // Read by the unmount flush, which must not re-run (and so re-subscribe) on every keystroke.
+  const draftRef = useRef(draft);
+  draftRef.current = draft;
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
 
   // What the server holds is the truth: when it changes (a save, a validator's return),
   // the grids follow it and the section is clean again. Keyed on canEdit, not on
@@ -79,50 +93,129 @@ export function SectionCard({
   // otherwise flipping `unlocked` would change `locked`, which would reset `unlocked`.
   const serverKey = `${state.revision}|${state.status}|${canEdit}|${JSON.stringify(state.payload ?? {})}`;
   useEffect(() => {
-    setDraft(toDraft(def, state.payload, !locked, lotNumber, reportDate));
+    setDraft(toDraft(def, state.payload, !locked, lotNumber, reportDate, runOrderId));
     setDirty(false);
     // A fresh server snapshot means any correction just landed (or someone else's did);
     // either way the section goes back to being read-only.
     setUnlocked(false);
     setUnlockReason("");
+    if (!locked) {
+      try {
+        setRestoreAvailable(window.localStorage.getItem(storageKey) !== null);
+      } catch {
+        // private browsing, or storage full: there is simply nothing to offer back
+        setRestoreAvailable(false);
+      }
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [serverKey]);
 
   const toggleUnlock = () => {
-    if (unlocked) setDraft(toDraft(def, state.payload, false, lotNumber, reportDate)); // cancelling drops the unsaved correction
+    if (unlocked) setDraft(toDraft(def, state.payload, false, lotNumber, reportDate, runOrderId)); // cancelling drops the unsaved correction
     setUnlockReason("");
     setUnlocked(!unlocked);
   };
 
-  // Naming the team gives the shift a lot: lines still untouched pick it up. Not an edit, so not unsaved.
+  // Naming the team gives the shift a lot, and saving the production rows names the OF the lots
+  // were packed under: lines still untouched pick both up. Not an edit, so not unsaved.
   useEffect(() => {
-    if (!locked) setDraft((current) => followLot(def, current, lotNumber, reportDate));
+    if (!locked) setDraft((current) => followDefaults(def, current, lotNumber, reportDate, runOrderId));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lotNumber]);
+  }, [lotNumber, runOrderId]);
 
   const filled = hasData(def, draft);
   const count = rowCount(def, draft);
   const submitted = state.status === "submitted";
 
   const edit = (partKey: string, value: GridRow[] | Row) => {
-    setDraft((current) => ({ ...current, [partKey]: value }));
+    setDraft((current) => {
+      const next = { ...current, [partKey]: value };
+      try {
+        // The local copy is written on every keystroke; the debounced save below is the
+        // one that reaches the server. A closed tab or a dead network keeps this one.
+        window.localStorage.setItem(storageKey, JSON.stringify(next));
+      } catch {
+        // private browsing / full quota: the debounced server save is still authoritative
+      }
+      return next;
+    });
     setDirty(true);
+    setRestoreAvailable(false);
+  };
+
+  const forgetBackup = () => {
+    try {
+      window.localStorage.removeItem(storageKey);
+    } catch {
+      // best effort only
+    }
+  };
+
+  const restoreDraft = () => {
+    try {
+      const raw = window.localStorage.getItem(storageKey);
+      if (raw) {
+        setDraft(JSON.parse(raw) as Draft);
+        setDirty(true);
+      }
+    } catch {
+      // unreadable backup: leave the server's version in place
+    }
+    setRestoreAvailable(false);
+  };
+
+  const discardRestore = () => {
+    forgetBackup();
+    setRestoreAvailable(false);
   };
 
   const fail = (error: unknown) =>
     toast.error(label(T.failed), { description: error instanceof ApiError ? error.message : undefined });
 
   const save = useMutation({
-    mutationFn: () =>
+    mutationFn: (_opts?: { silent?: boolean }) =>
       unlocked
         ? unlockedEditSection(token, shift.id, def.key, toPayload(def, draft), unlockReason.trim() || undefined)
         : saveShiftSection(token, shift.id, def.key, toPayload(def, draft)),
-    onSuccess: () => {
-      toast.success(label(unlocked ? T.unlockedEditSaved : T.saved));
+    onSuccess: (_data, opts) => {
+      forgetBackup();
+      setDirty(false);
+      if (!opts?.silent) toast.success(label(unlocked ? T.unlockedEditSaved : T.saved));
       onChanged();
     },
-    onError: fail,
+    onError: (error, opts) => {
+      // An autosave failure still has to reach the user, but one toast at a time: reusing
+      // the id replaces it instead of stacking while they keep typing into a stuck save.
+      if (opts?.silent) {
+        toast.error(label(T.failed), {
+          id: `autosave-${shift.id}-${def.key}`,
+          description: error instanceof ApiError ? error.message : undefined,
+        });
+        return;
+      }
+      fail(error);
+    },
   });
+
+  // Debounced autosave, 1.5s after the last change. Never while a correction is being
+  // written: that save goes through a different endpoint and carries a reason the user
+  // is still typing, so it stays a deliberate press of Save.
+  const autosaves = !locked && !unlocked;
+  useEffect(() => {
+    if (!autosaves || !dirty) return;
+    const timer = window.setTimeout(() => save.mutate({ silent: true }), 1500);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draft, autosaves, dirty]);
+
+  // Leaving the section (another section, another shift, the tab): the local copy is
+  // already current, this only tries the last network round trip.
+  useEffect(() => {
+    return () => {
+      if (dirtyRef.current && autosaves) save.mutate({ silent: true });
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   const submit = useMutation({
     mutationFn: async () => {
       if (dirty) await saveShiftSection(token, shift.id, def.key, toPayload(def, draft));
@@ -172,6 +265,20 @@ export function SectionCard({
         </div>
       )}
 
+      {restoreAvailable && !locked && (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-warning/40 bg-warning-soft px-3 py-2 text-sm">
+          <span>{label(T.restoreFound)}</span>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={discardRestore}>
+              {label(T.discard)}
+            </Button>
+            <Button size="sm" onClick={restoreDraft}>
+              {label(T.restore)}
+            </Button>
+          </div>
+        </div>
+      )}
+
       {def.parts.map((part) => (
         <Part
           key={part.payloadKey}
@@ -181,7 +288,7 @@ export function SectionCard({
           onChange={(value) => edit(part.payloadKey, value)}
           options={options}
           disabled={locked || busy}
-          defaults={partDefaults(part, lotNumber, reportDate)}
+          defaults={partDefaults(part, lotNumber, reportDate, runOrderId)}
         />
       ))}
 
@@ -339,6 +446,8 @@ export function Part({
   options,
   disabled,
   defaults,
+  decorate,
+  onCellFocus,
 }: {
   part: PartDef;
   sectionKey: string;
@@ -348,6 +457,8 @@ export function Part({
   disabled: boolean;
   /** What a line added to a table starts with. */
   defaults?: Row;
+  decorate?: (row: Row, key: string) => CellDecor | undefined;
+  onCellFocus?: (row: Row, key: string) => void;
 }) {
   const label = useLabel();
   const idPrefix = `${sectionKey}-${part.payloadKey}`;
@@ -356,22 +467,30 @@ export function Part({
     <div className="space-y-2">
       {part.title && <h3 className="text-sm font-medium">{label(part.title)}</h3>}
       {part.shape === "single" ? (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5">
-          {part.columns.map((column) => (
-            <div key={column.key} className="space-y-1">
-              <FieldLabel htmlFor={`${idPrefix}-${column.key}`} className="text-xs text-muted-foreground">
-                {label(column.label)}
-              </FieldLabel>
-              <Cell
-                column={column}
-                value={(value as Row)[column.key]}
-                onChange={(next) => onChange({ ...(value as Row), [column.key]: next })}
-                options={options}
-                disabled={disabled}
-                idPrefix={idPrefix}
-              />
-            </div>
-          ))}
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-5">
+          {part.columns.map((column) => {
+            const decor = decorate?.(value as Row, column.key);
+            return (
+              <div
+                key={column.key}
+                title={decor?.title}
+                onFocusCapture={onCellFocus ? () => onCellFocus(value as Row, column.key) : undefined}
+                className={cn("space-y-1", decor && cn("rounded-md p-1", DECOR_CLASS[decor.tone]))}
+              >
+                <FieldLabel htmlFor={`${idPrefix}-${column.key}`} className="text-xs text-muted-foreground">
+                  {label(column.label)}
+                </FieldLabel>
+                <Cell
+                  column={column}
+                  value={(value as Row)[column.key]}
+                  onChange={(next) => onChange({ ...(value as Row), [column.key]: next })}
+                  options={options}
+                  disabled={disabled}
+                  idPrefix={idPrefix}
+                />
+              </div>
+            );
+          })}
         </div>
       ) : (
         <ShiftGrid
@@ -386,6 +505,8 @@ export function Part({
           idPrefix={idPrefix}
           storageKey={idPrefix}
           keepOne
+          decorate={decorate}
+          onCellFocus={onCellFocus}
         />
       )}
     </div>

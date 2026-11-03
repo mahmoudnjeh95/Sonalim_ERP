@@ -5,7 +5,8 @@ import { ArrowRightCircle, Pencil, Target, ThumbsDown, Trophy } from "lucide-rea
 import { toast } from "sonner";
 import { useAuth } from "../../../lib/auth";
 import { ApiError } from "../../../lib/api";
-import { currentLocale, useI18n } from "../../../lib/i18n";
+import { useI18n } from "../../../lib/i18n";
+import { CURRENCY_CODE, formatXofWithCode } from "../../../lib/currency";
 import { cn } from "../../../lib/utils";
 import { listUserDirectory, userDisplayName } from "../../../lib/usersApi";
 import { Button } from "../../../components/ui/button";
@@ -34,7 +35,7 @@ const USER_DIRECTORY_QUERY_KEY = ["core", "users", "directory"] as const;
 type StageFilter = "all" | "open" | "won" | "lost";
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
+  return formatXofWithCode(amount);
 }
 
 export function OpportunitiesPage() {
@@ -260,7 +261,7 @@ export function OpportunitiesPage() {
           value={Math.round(wonTotal)}
           icon={<Trophy className="h-5 w-5" />}
           accent="success"
-          unit="F CFA"
+          unit={CURRENCY_CODE}
         />
       </div>
 

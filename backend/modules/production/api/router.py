@@ -48,6 +48,7 @@ from modules.production.api.dashboard_lines_service import DashboardLinesService
 from modules.production.api.dashboard_live_service import DashboardLiveService
 from modules.production.api.stock_release_service import StockReleaseService
 from modules.production.api.dashboard_settings_service import DashboardSettingsService
+from modules.production.api.shift_role_service import ShiftRoleService
 from modules.production.api.waste_type_service import WasteTypeService
 from modules.production.domain.dashboard import ShiftWindow
 from modules.production.api.packaging_variance_service import (
@@ -1922,6 +1923,7 @@ def _report_err_status(code: str) -> int:
         "OPEN_STOP",
         "NOTHING_TO_VALIDATE",
         "ALREADY_POSTED",
+        "DELETE_NOT_ALLOWED",
     ):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
@@ -2625,6 +2627,41 @@ def replace_store_roles(
         return _settings_result(connection, result)
 
 
+@router.get("/shift-roles/people")
+def list_shift_role_people(
+    tenant: TenantContext = Depends(require_permission("production.shift.view")),
+) -> dict:
+    """Who the fiche de shift's four person fields may name, and the positions each maps to."""
+    with get_connection() as connection:
+        service = ShiftRoleService(connection)
+        return {
+            "people": service.list_role_people(tenant_id=tenant.tenant_id),
+            "positions": service.get_role_positions(tenant_id=tenant.tenant_id),
+        }
+
+
+class ReplaceShiftRolePositionsRequest(BaseModel):
+    position_ids: list[str] = []
+
+
+@router.put("/shift-roles/{role}/positions")
+def replace_shift_role_positions(
+    role: str,
+    body: ReplaceShiftRolePositionsRequest,
+    tenant: TenantContext = Depends(require_permission("production.manage_dashboard_settings")),
+) -> dict:
+    """Map one of the four person fields to the HR positions whose holders may be named in it."""
+    with get_connection() as connection:
+        result = ShiftRoleService(connection).set_role_positions(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, role=role, position_ids=body.position_ids
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
+        connection.commit()
+        return {"role": role, "position_ids": result.value}
+
+
 @router.get("/dashboard/lines")
 def get_dashboard_lines(
     at: datetime.time | None = Query(default=None, description="Plant-local clock time, HH:MM. Defaults to the server's."),
@@ -3044,7 +3081,7 @@ def edit_shift_report_section_after_validation(
     shift_report_id: str,
     section_key: str,
     body: UnlockedEditSectionRequest,
-    tenant: TenantContext = Depends(require_permission("production.shift.unlock_validated")),
+    tenant: TenantContext = Depends(require_permission("production.admin_unlock_validated")),
 ) -> dict:
     with get_connection() as connection:
         result = ShiftValidationService(connection).edit_section_after_validation(
@@ -3082,6 +3119,20 @@ def list_shift_report_section_revisions(
                 tenant_id=tenant.tenant_id, shift_report_id=shift_report_id, section_key=section_key
             ),
         )
+
+
+@router.delete("/shift-reports/{shift_report_id}")
+def delete_shift_report(
+    shift_report_id: str,
+    tenant: TenantContext = Depends(require_permission("production.shift.delete")),
+) -> dict:
+    """Delete a shift report that was never fully submitted -- while it is 'open' or
+    'returned'. Anything further along has posted to stock and is refused (409)."""
+    with get_connection() as connection:
+        result = ShiftReportService(connection).delete_shift(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, shift_report_id=shift_report_id
+        )
+        return _shift_result(connection, result)
 
 
 # --- validating a shift -------------------------------------------------------

@@ -269,7 +269,7 @@ function ShiftReviewDialog({
           <AppLoader size={120} className="py-6" />
         ) : (
           <div className="space-y-3">
-            <dl className="grid gap-x-6 gap-y-1 rounded-md bg-muted/50 px-4 py-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
+            <dl className="grid grid-cols-1 gap-x-6 gap-y-1 rounded-md bg-muted/50 px-4 py-3 text-sm sm:grid-cols-2 lg:grid-cols-5">
               {(
                 [
                   [T.team, shift.team],

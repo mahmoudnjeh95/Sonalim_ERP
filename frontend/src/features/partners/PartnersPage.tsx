@@ -203,7 +203,7 @@ export function PartnersPage() {
         <div className="flex justify-end gap-2">
           <Button size="sm" variant="ghost" onClick={() => navigate(`/crm/partners/${partner.id}`)}>
             <Eye className="h-3.5 w-3.5" />
-            View
+            {t("partners.view")}
           </Button>
           <Button size="sm" variant="outline" onClick={() => openEditDialog(partner)}>
             <Pencil className="h-3.5 w-3.5" />

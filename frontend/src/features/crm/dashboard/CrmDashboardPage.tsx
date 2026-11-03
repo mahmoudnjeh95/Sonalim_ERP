@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+﻿import { useQuery } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { motion } from "framer-motion";
 import {
@@ -28,7 +28,8 @@ import {
 } from "recharts";
 import { InteractiveChart } from "../../../components/charts/InteractiveChart";
 import { useAuth } from "../../../lib/auth";
-import { currentLocale, useI18n, type Language } from "../../../lib/i18n";
+import { useI18n, type Language } from "../../../lib/i18n";
+import { CURRENCY_CODE, formatXofWithCode } from "../../../lib/currency";
 import { cn } from "../../../lib/utils";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../../../components/ui/card";
 import { StatCard } from "../../../components/patterns/StatCard";
@@ -88,7 +89,7 @@ function relativeTime(iso: string, language: Language) {
 const DASHBOARD_QUERY_KEY = ["crm", "dashboard"] as const;
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
+  return formatXofWithCode(amount);
 }
 
 export function CrmDashboardPage() {
@@ -188,21 +189,21 @@ export function CrmDashboardPage() {
               value={Math.round(data.forecast?.amount ?? 0)}
               icon={<Target className="h-5 w-5" />}
               accent="primary"
-              unit="F CFA"
+              unit={CURRENCY_CODE}
             />
             <StatCard
               label={t("crm.dashboard.stat.forecastWeighted")}
               value={Math.round(data.forecast_weighted?.amount ?? 0)}
               icon={<Target className="h-5 w-5" />}
               accent="primary"
-              unit="F CFA"
+              unit={CURRENCY_CODE}
             />
             <StatCard
               label={t("crm.dashboard.stat.won")}
               value={Math.round(data.won_amount)}
               icon={<Trophy className="h-5 w-5" />}
               accent="success"
-              unit="F CFA"
+              unit={CURRENCY_CODE}
             />
             <StatCard
               label={t("crm.dashboard.stat.winRate")}
@@ -217,7 +218,7 @@ export function CrmDashboardPage() {
               value={Math.round(avgDealSize ?? 0)}
               icon={<Coins className="h-5 w-5" />}
               accent="accent"
-              unit="F CFA"
+              unit={CURRENCY_CODE}
             />
           </div>
 

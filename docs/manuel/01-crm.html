@@ -1,0 +1,414 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manuel CRM — Sonalim</title>
+<style>
+/* Manuel Sonalim - feuille de style commune.
+   Conçue pour des lecteurs peu ou pas scolarisés :
+   grands caractères, forts contrastes, une idée par bloc.
+   Elle est recopiée dans chaque page pour qu'un fichier
+   seul, copié sur une clé USB, s'affiche correctement. */
+
+:root {
+  --encre: #14213d;
+  --gris: #5a6472;
+  --trait: #d9dee6;
+  --fond: #ffffff;
+  --fond-doux: #f4f6fa;
+  --bleu: #1d3b78;
+  --rouge: #d7263d;
+  --ambre-fond: #fff6e0;
+  --ambre-trait: #e0a500;
+  --vert-fond: #e8f6ed;
+  --vert-trait: #1d7a44;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--fond-doux);
+  color: var(--encre);
+  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-size: 19px;
+  line-height: 1.6;
+}
+
+.page { max-width: 1100px; margin: 0 auto; padding: 0 24px 80px; }
+
+/* ---- couverture du guide ---- */
+.couverture {
+  background: var(--bleu);
+  color: #fff;
+  padding: 48px 24px 40px;
+  margin-bottom: 40px;
+}
+.couverture .dedans { max-width: 1100px; margin: 0 auto; padding: 0 24px; }
+.couverture .module { font-size: 17px; letter-spacing: .18em; text-transform: uppercase; opacity: .8; }
+.couverture h1 { font-size: 46px; margin: 10px 0 12px; line-height: 1.15; }
+.couverture p { font-size: 21px; margin: 0; max-width: 680px; opacity: .95; }
+
+/* ---- sommaire ---- */
+.sommaire { background: #fff; border: 1px solid var(--trait); border-radius: 12px; padding: 24px 28px; margin-bottom: 44px; }
+.sommaire h2 { margin: 0 0 14px; font-size: 22px; }
+.sommaire ol { margin: 0; padding-left: 26px; }
+.sommaire li { margin: 7px 0; }
+.sommaire a { color: var(--bleu); text-decoration: none; }
+.sommaire a:hover { text-decoration: underline; }
+
+/* ---- un bloc = une tâche ---- */
+.tache {
+  background: #fff;
+  border: 1px solid var(--trait);
+  border-radius: 14px;
+  padding: 28px 30px 32px;
+  margin-bottom: 40px;
+}
+.tache > .numero {
+  display: inline-block;
+  background: var(--bleu); color: #fff;
+  font-size: 16px; font-weight: 700;
+  padding: 4px 14px; border-radius: 999px;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.tache h2 { font-size: 31px; margin: 14px 0 6px; line-height: 1.2; }
+.tache .but { color: var(--gris); font-size: 19px; margin: 0 0 22px; }
+
+/* ---- la capture d'écran et ses pastilles ---- */
+.capture { position: relative; display: block; margin: 0 0 24px; border: 2px solid var(--trait); border-radius: 10px; overflow: hidden; }
+.capture img { display: block; width: 100%; height: auto; }
+.pastille {
+  position: absolute;
+  width: 38px; height: 38px;
+  margin: -19px 0 0 -19px;       /* centre la pastille sur le point mesuré */
+  border-radius: 50%;
+  background: var(--rouge); color: #fff;
+  font-size: 21px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center;
+  border: 3px solid #fff;
+  box-shadow: 0 0 0 2px var(--rouge), 0 2px 6px rgba(0,0,0,.35);
+}
+
+/* ---- les étapes sous l'image ---- */
+.etapes { list-style: none; margin: 0 0 8px; padding: 0; counter-reset: etape; }
+.etapes li { position: relative; padding: 10px 0 10px 54px; border-top: 1px solid var(--trait); font-size: 20px; }
+.etapes li:first-child { border-top: none; }
+.etapes li::before {
+  counter-increment: etape; content: counter(etape);
+  position: absolute; left: 0; top: 9px;
+  width: 36px; height: 36px; border-radius: 50%;
+  background: var(--rouge); color: #fff;
+  font-weight: 700; font-size: 20px;
+  display: flex; align-items: center; justify-content: center;
+}
+.etapes b { background: #eef2fa; padding: 1px 7px; border-radius: 5px; font-weight: 600; white-space: nowrap; }
+
+/* ---- encadrés ---- */
+.boite { border-radius: 10px; padding: 16px 20px; margin: 20px 0 0; font-size: 19px; }
+.boite .chapeau { font-weight: 700; display: block; margin-bottom: 4px; font-size: 17px; letter-spacing: .06em; text-transform: uppercase; }
+.attention { background: var(--ambre-fond); border-left: 8px solid var(--ambre-trait); }
+.reussi { background: var(--vert-fond); border-left: 8px solid var(--vert-trait); }
+
+/* ---- repères de navigation ---- */
+.chemin { background: #eef2fa; border-radius: 8px; padding: 10px 16px; font-size: 18px; margin: 0 0 20px; }
+.chemin b { color: var(--bleu); }
+
+footer { color: var(--gris); font-size: 16px; text-align: center; padding: 30px 0 0; border-top: 1px solid var(--trait); }
+
+/* ---- impression papier A4 ---- */
+@media print {
+  body { background: #fff; font-size: 12pt; }
+  .couverture { background: #fff !important; color: var(--encre) !important; border-bottom: 3px solid var(--bleu); padding-top: 0; }
+  .couverture h1 { font-size: 30pt; }
+  .tache { border: 1px solid #bbb; box-shadow: none; }
+  /* An image, a step list and a coloured box each stay whole; the task itself
+     may flow onto the next sheet, because several tasks are taller than A4. */
+  .capture { break-inside: avoid; page-break-inside: avoid; }
+  .etapes li { break-inside: avoid; page-break-inside: avoid; }
+  .boite { break-inside: avoid; page-break-inside: avoid; }
+  .tache h2 { break-after: avoid; page-break-after: avoid; }
+  a { color: inherit; }
+}
+</style>
+</head>
+<body>
+
+<div class="couverture">
+  <div class="dedans">
+    <div class="module">Manuel Sonalim · Guide 1 sur 5</div>
+    <h1>CRM — Les clients<br>et les affaires</h1>
+    <p>Ce guide montre, en images, comment noter un nouveau client possible,
+       comment suivre une affaire jusqu'à la vente, et comment garder la trace
+       de chaque appel et de chaque visite.</p>
+  </div>
+</div>
+
+<div class="page">
+
+<div class="sommaire">
+  <h2>Ce que vous allez apprendre</h2>
+  <ol>
+    <li><a href="#t1">Regarder le tableau de bord</a></li>
+    <li><a href="#t2">Trouver un prospect dans la liste</a></li>
+    <li><a href="#t3">Enregistrer un nouveau prospect</a></li>
+    <li><a href="#t4">Qualifier, puis convertir un prospect</a></li>
+    <li><a href="#t5">Faire avancer une affaire</a></li>
+    <li><a href="#t6">Déplacer une affaire sur le tableau</a></li>
+    <li><a href="#t7">Noter un appel ou une visite</a></li>
+    <li><a href="#t8">Voir la liste des clients</a></li>
+  </ol>
+</div>
+
+<section class="tache" id="t1">
+  <span class="numero">Tâche 1</span>
+  <h2>Regarder le tableau de bord</h2>
+  <p class="but">Pour voir, en un coup d'œil, où en sont toutes vos affaires.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Tableau de bord</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/01-tableau-de-bord.png" alt="Écran Tableau de bord CRM">
+    <span class="pastille" style="left:27.5%; top:20.5%">1</span>
+    <span class="pastille" style="left:50%; top:39%">2</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>En haut, les grands chiffres : l'argent que vous pouvez gagner si toutes
+        les affaires se concluent.</li>
+    <li>Le cadre <b>Nécessite une attention</b> : ce sont les affaires en retard.
+        Occupez-vous de celles-là en premier.</li>
+  </ol>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Vous voyez des chiffres, et non une page vide.
+  </div>
+</section>
+
+<section class="tache" id="t2">
+  <span class="numero">Tâche 2</span>
+  <h2>Trouver un prospect dans la liste</h2>
+  <p class="but">Un « prospect » est une personne qui pourrait devenir client, mais qui n'achète pas encore.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Prospects</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/02-prospects-liste.png" alt="Écran Prospects : la liste">
+    <span class="pastille" style="left:25.8%; top:27.2%">1</span>
+    <span class="pastille" style="left:15.8%; top:36.8%">2</span>
+    <span class="pastille" style="left:60.5%; top:42.7%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Ces boutons trient la liste. <b>Tous</b> montre tout le monde.
+        <b>Nouveau</b> montre ceux que personne n'a encore appelés.</li>
+    <li>Pour chercher quelqu'un, tapez son nom dans la case sous le mot <b>CONTACT</b>.</li>
+    <li>La colonne <b>STATUT</b> donne la couleur de chaque prospect :
+        gris = nouveau, bleu = qualifié, vert = converti, rouge = disqualifié.</li>
+  </ol>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La personne que vous cherchez apparaît sur une ligne du tableau.
+  </div>
+</section>
+
+<section class="tache" id="t3">
+  <span class="numero">Tâche 3</span>
+  <h2>Enregistrer un nouveau prospect</h2>
+  <p class="but">À faire dès qu'une personne vous demande vos produits, au téléphone ou sur le marché.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Prospects</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/02-prospects-liste.png" alt="Le bouton Nouveau prospect, en haut à droite">
+    <span class="pastille" style="left:70.5%; top:27.2%">1</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Cliquez le bouton bleu foncé <b>Nouveau prospect</b>, tout en haut à droite.</li>
+  </ol>
+
+  <p style="margin:26px 0 14px; font-size:20px;">Une fenêtre s'ouvre au milieu de l'écran :</p>
+
+  <figure class="capture">
+    <img src="images/crm/03-prospect-nouveau.png" alt="La fenêtre Nouveau prospect">
+    <span class="pastille" style="left:37.5%; top:38.7%">2</span>
+    <span class="pastille" style="left:37.5%; top:47.8%">3</span>
+    <span class="pastille" style="left:37.5%; top:56.9%">4</span>
+    <span class="pastille" style="left:48.2%; top:56.9%">5</span>
+    <span class="pastille" style="left:37.5%; top:71.8%">6</span>
+  </figure>
+
+  <ol class="etapes" style="counter-reset: etape 1">
+    <li>Écrivez le nom de la personne dans <b>Nom du contact</b>. C'est la seule case obligatoire.</li>
+    <li>Écrivez son adresse e-mail, si elle en a une. Sinon, laissez vide.</li>
+    <li><b>Source</b> : d'où vient cette personne — le marché, le téléphone, une recommandation.</li>
+    <li><b>Priorité</b> : mettez <b>Haute</b> si elle veut acheter vite.</li>
+    <li>Cliquez le grand bouton bleu <b>Créer le prospect</b>.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Si vous fermez la fenêtre avec la croix ×, tout ce que vous avez écrit est perdu.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La fenêtre se ferme toute seule, et le nom apparaît dans la liste avec l'étiquette grise <b>Nouveau</b>.
+  </div>
+</section>
+
+<section class="tache" id="t4">
+  <span class="numero">Tâche 4</span>
+  <h2>Qualifier, puis convertir un prospect</h2>
+  <p class="but">« Qualifier » veut dire : cette personne veut vraiment acheter.
+     « Convertir » veut dire : elle devient un vrai client.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Prospects</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/02-prospects-liste.png" alt="Les boutons Qualifier et Convertir sur les lignes">
+    <span class="pastille" style="left:75.8%; top:53%">1</span>
+    <span class="pastille" style="left:75.5%; top:72.7%">2</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Sur la ligne de la personne, cliquez <b>Qualifier</b>.
+        Son étiquette devient bleue : <b>Qualifié</b>.</li>
+    <li>Quand elle est prête à commander, cliquez <b>Convertir</b>.
+        Son étiquette devient verte : <b>Converti</b>.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Le bouton <b>Disqualifier</b> sert quand la personne ne veut plus rien.
+    Ne le cliquez pas à la place de <b>Qualifier</b> : les deux mots se ressemblent beaucoup.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La couleur de l'étiquette, dans la colonne <b>STATUT</b>, a changé.
+  </div>
+</section>
+
+<section class="tache" id="t5">
+  <span class="numero">Tâche 5</span>
+  <h2>Faire avancer une affaire</h2>
+  <p class="but">Une « opportunité » est une affaire en cours : un client veut acheter une quantité, à un prix.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Opportunités</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/04-opportunites-liste.png" alt="Écran Opportunités : la liste des affaires">
+    <span class="pastille" style="left:73.8%; top:53%">1</span>
+    <span class="pastille" style="left:64.5%; top:66.4%">2</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Cliquez <b>Faire avancer</b> quand l'affaire progresse.
+        Elle passe au stade suivant : Prospection, puis Qualification,
+        puis Proposition, puis Négociation, puis Gagnée.</li>
+    <li>La colonne <b>STADE</b> dit où en est chaque affaire aujourd'hui.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    Le petit bouton avec le pouce vers le bas veut dire « Marquer comme perdue ».
+    Une affaire perdue ne revient plus dans la liste des affaires ouvertes.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Le mot dans la colonne <b>STADE</b> a changé, sur la ligne de l'affaire.
+  </div>
+</section>
+
+<section class="tache" id="t6">
+  <span class="numero">Tâche 6</span>
+  <h2>Déplacer une affaire sur le tableau</h2>
+  <p class="but">C'est le même travail que la tâche 5, mais présenté en colonnes.
+     Beaucoup de personnes trouvent ce tableau plus simple.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Pipeline</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/05-pipeline.png" alt="Écran Pipeline : les affaires en colonnes">
+    <span class="pastille" style="left:19.5%; top:21%">1</span>
+    <span class="pastille" style="left:23%; top:44%">2</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Chaque colonne est un stade. Le chiffre en haut à droite de la colonne
+        dit combien d'affaires s'y trouvent, et pour combien d'argent.</li>
+    <li>Sur chaque carte, le bouton porte le nom du stade suivant.
+        Cliquez-le : la carte saute dans la colonne d'à côté.</li>
+  </ol>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La carte a changé de colonne.
+  </div>
+</section>
+
+<section class="tache" id="t7">
+  <span class="numero">Tâche 7</span>
+  <h2>Noter un appel ou une visite</h2>
+  <p class="but">Pour que tout le monde sache ce qui a été dit au client, même si vous êtes absent ce jour-là.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Agenda</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/06-agenda.png" alt="Écran Agenda : les activités">
+    <span class="pastille" style="left:69.5%; top:27.2%">1</span>
+    <span class="pastille" style="left:26.5%; top:27.2%">2</span>
+    <span class="pastille" style="left:75.5%; top:42.7%">3</span>
+  </figure>
+
+  <ol class="etapes">
+    <li>Cliquez <b>Enregistrer une activité</b> pour noter ce que vous venez de faire.</li>
+    <li>Ces boutons trient la liste : <b>Tâche</b>, <b>Appel</b>, <b>Rendez-vous</b>, <b>Commentaire</b>.
+        <b>En retard</b> montre ce qui aurait dû être fait avant aujourd'hui.</li>
+    <li>Quand le travail est fait, cliquez <b>Terminer</b> sur sa ligne.</li>
+  </ol>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    La ligne quitte la liste <b>Ouvertes</b> et passe dans <b>Terminées</b>.
+  </div>
+</section>
+
+<section class="tache" id="t8">
+  <span class="numero">Tâche 8</span>
+  <h2>Voir la liste des clients</h2>
+  <p class="but">Un « partenaire » est une entreprise avec qui on travaille :
+     un client qui achète, ou un fournisseur qui vend.</p>
+  <p class="chemin">Dans le menu à gauche : <b>CRM</b> → <b>Partenaires</b></p>
+
+  <figure class="capture">
+    <img src="images/crm/07-partenaires.png" alt="Écran Partenaires">
+    <span class="pastille" style="left:25.8%; top:27.2%">1</span>
+    <span class="pastille" style="left:70.5%; top:27.2%">2</span>
+  </figure>
+
+  <ol class="etapes">
+    <li><b>Clients</b> = ceux qui vous achètent. <b>Fournisseurs</b> = ceux qui vous vendent.</li>
+    <li>Le bouton <b>Nouveau partenaire</b> sert à ajouter une entreprise
+        qui n'est pas encore dans la liste.</li>
+  </ol>
+
+  <div class="boite attention">
+    <span class="chapeau">Attention</span>
+    <b>Archiver</b> retire un partenaire de la liste de tous les jours.
+    Ne le faites que si l'entreprise a vraiment fermé.
+  </div>
+
+  <div class="boite reussi">
+    <span class="chapeau">C'est réussi quand…</span>
+    Le nom de l'entreprise apparaît dans le tableau.
+  </div>
+</section>
+
+<footer>
+  Manuel Sonalim — guide CRM · Images prises le 30 septembre 2026 ·
+  Les écrans peuvent changer un peu après une mise à jour du programme.
+</footer>
+
+</div>
+</body>
+</html>

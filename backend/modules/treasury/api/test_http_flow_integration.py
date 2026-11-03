@@ -211,9 +211,10 @@ def test_stock_documents_over_http(api, db):
     short = api.post(f"/warehouse/vouchers/{issue['id']}/post")
     assert short.status_code == 409 and short.json()["detail"]["code"] == "STOCK_INSUFFICIENT"
 
-    valuation = _ok(api.get("/warehouse/valuation"))
-    assert float(valuation["total_value"]) == 50 and float(valuation["items"][0]["avg_cost"]) == 5
-    assert api.get("/warehouse/valuation?format=csv").headers["content-type"].startswith("text/csv")
+    valuation = _ok(api.get("/warehouse/reports/valued-stock"))
+    item = next(i for i in valuation["items"] if i["product_id"] == product)
+    assert float(item["value"]) == 50 and float(item["avg_cost"]) == 5
+    assert api.get("/warehouse/reports/valued-stock?format=csv").headers["content-type"].startswith("text/csv")
     assert api.get("/warehouse/reports/movements?format=xlsx").content[:2] == b"PK"
     assert _ok(api.get("/warehouse/reports/movements"))[0]["voucher_number"] == posted["number"]
 

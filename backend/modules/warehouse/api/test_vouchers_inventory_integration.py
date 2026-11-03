@@ -1,4 +1,4 @@
-"""Integration tests for stock vouchers, the inventory freeze, and weighted-average valuation."""
+"""Integration tests for stock vouchers, the inventory freeze, and FIFO valuation."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -11,6 +11,7 @@ from modules.sales.api.service import SalesOrderService
 from modules.sales.domain.entities import OrderLine
 from modules.warehouse.api.inventory_service import InventoryService
 from modules.warehouse.api.service import StockService
+from modules.warehouse.api.movements_report_service import MovementsReportService
 from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.api.voucher_service import VoucherService
 
@@ -154,29 +155,34 @@ def test_issue_from_a_sales_order_is_capped_across_vouchers(db, env):
 
 # ---- valuation ---------------------------------------------------------------------------------
 
-def test_weighted_average_follows_receipts_only(db, env):
+def _film_value(db, env):
+    return next(v for v in ValuationService(db).get_valuation(tenant_id=TENANT) if v.product_id == env["film"])
+
+
+def test_fifo_valuation_spans_locations_and_issue_draws_the_oldest_layer(db, env):
     _receive(db, env, env["film"], 100, 10)
-    _receive(db, env, env["film"], 100, 20, location=env["annex"])  # average spans locations
-    valuation = ValuationService(db).valued_stock(tenant_id=TENANT)
-    row = next(i for i in valuation["items"] if i["product_id"] == env["film"])
-    assert row["avg_cost"] == D("15.0000") and row["quantity"] == D("200") and row["value"] == D("3000.00")
+    _receive(db, env, env["film"], 100, 20, location=env["annex"])  # valuation is plant-wide
+    before = _film_value(db, env)
+    assert before.quantity == 200 and before.value == 3000 and before.average_unit_cost == 15
     issue = _voucher(db, env, type="issue", source_location_id=env["main"], lines=[{"product_id": env["film"], "quantity": 50}])
-    _post(db, env, issue)
-    after = next(i for i in ValuationService(db).valued_stock(tenant_id=TENANT)["items"] if i["product_id"] == env["film"])
-    assert after["avg_cost"] == D("15.0000") and after["value"] == D("2250.00")
+    posted = _post(db, env, issue)
+    assert isinstance(posted, Ok)
+    after = _film_value(db, env)
+    assert after.value == 2500  # 50 @ 10 + 100 @ 20
+    line = posted.value["lines"][0]
+    assert float(line["unit_cost"]) == 10  # recorded so a return restocks at the same figure
 
 
-def test_valued_stock_flags_products_without_cost_and_filters_by_location(db, env):
+def test_stock_received_without_cost_is_counted_but_not_valued(db, env):
     StockService(db).receive_stock(tenant_id=TENANT, product_id=env["pasta"], location_id=env["main"], quantity=5,
                                    correlation_id="c", reference="manual")
-    report = ValuationService(db).valued_stock(tenant_id=TENANT, location_id=env["main"])
-    assert report["missing_cost_count"] == 1 and report["items"][0]["missing_cost"]
-    assert ValuationService(db).valued_stock(tenant_id=TENANT, location_id=env["annex"])["items"] == []
+    pasta = next(v for v in ValuationService(db).get_valuation(tenant_id=TENANT) if v.product_id == env["pasta"])
+    assert pasta.unvalued_quantity == 5
 
 
 def test_movements_report_links_the_voucher(db, env):
     posted = _receive(db, env, env["film"], 5, 2)
-    rows = ValuationService(db).movements_report(tenant_id=TENANT, product_id=env["film"])
+    rows = MovementsReportService(db).movements_report(tenant_id=TENANT, product_id=env["film"])
     assert rows[0]["voucher_number"] == posted["number"] and rows[0]["unit_cost"] == D("2.0000")
 
 

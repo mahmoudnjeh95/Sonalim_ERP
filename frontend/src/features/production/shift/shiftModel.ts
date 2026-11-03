@@ -29,12 +29,27 @@ function toGridRows(rows: unknown, childKey?: string): GridRow[] {
 
 /**
  * What a line added to this table starts with: the shift's lot and date, in a table that has
- * them to write -- so the team only has to type the time, not the whole date, on every row.
+ * them to write -- so the team only has to type the time, not the whole date, on every row --
+ * and, for the packing lots, the OF the shift's production ran.
+ *
+ * These are the screen's values, not the team's: `withDefaults` marks them, so a line holding
+ * nothing else still counts as blank and is never handed in.
  */
-export function partDefaults(part: PartDef, lotNumber: string | null | undefined, reportDate?: string | null): Row {
+export function partDefaults(
+  part: PartDef,
+  lotNumber: string | null | undefined,
+  reportDate?: string | null,
+  /** The OF the production rows named; the packing lots start on the same one. */
+  runOrderId?: string | null,
+): Row {
   if (part.shape !== "rows") return {};
   const defaults: Row = {};
   if (lotNumber && part.columns.some((c) => c.key === "lot_number")) defaults.lot_number = lotNumber;
+  // Only a table that picks its OF from the shift's orders follows production; the production
+  // rows name the OF themselves, so they are the source, never the follower.
+  if (runOrderId && part.columns.some((c) => c.key === "of_id" && c.options === "shiftOrders")) {
+    defaults.of_id = runOrderId;
+  }
   if (reportDate) {
     for (const column of part.columns) {
       if (column.kind === "date") defaults[column.key] = reportDate;
@@ -58,6 +73,7 @@ export function toDraft(
   withBlankLine = false,
   lotNumber?: string | null,
   reportDate?: string | null,
+  runOrderId?: string | null,
 ): Draft {
   const draft: Draft = {};
   for (const part of def.parts) {
@@ -69,21 +85,28 @@ export function toDraft(
     const rows = toGridRows(stored, part.child?.payloadKey);
     draft[part.payloadKey] =
       rows.length === 0 && withBlankLine
-        ? [blankRow(part.child?.payloadKey, partDefaults(part, lotNumber, reportDate))]
+        ? [blankRow(part.child?.payloadKey, partDefaults(part, lotNumber, reportDate, runOrderId))]
         : rows;
   }
   return draft;
 }
 
 /**
- * The shift's lot changed (the team was named or renamed): the lines nobody has typed in
- * follow it. A line somebody started typing keeps what it has.
+ * What the screen fills in changed -- the shift's lot (the team was named or renamed), or the
+ * OF its production ran: the lines nobody has typed in follow it. A line somebody started
+ * typing keeps what it has.
  */
-export function followLot(def: SectionDef, draft: Draft, lotNumber: string | null | undefined, reportDate?: string | null): Draft {
+export function followDefaults(
+  def: SectionDef,
+  draft: Draft,
+  lotNumber: string | null | undefined,
+  reportDate?: string | null,
+  runOrderId?: string | null,
+): Draft {
   const next: Draft = { ...draft };
   for (const part of def.parts) {
     if (part.shape !== "rows") continue;
-    const defaults = partDefaults(part, lotNumber, reportDate);
+    const defaults = partDefaults(part, lotNumber, reportDate, runOrderId);
     next[part.payloadKey] = (draft[part.payloadKey] as GridRow[]).map((row) =>
       isBlankRow(row) ? withDefaults(row, defaults) : row,
     );

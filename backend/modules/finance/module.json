@@ -1,11 +1,38 @@
 {
   "name": "finance",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "depends": ["core"],
-  "optional_depends": ["sales"],
-  "provides_api": ["InvoiceService"],
-  "publishes_events": ["finance.invoice.issued", "finance.invoice.paid"],
-  "subscribes_events": ["sales.order.confirmed", "treasury.receipt.posted", "treasury.receipt.cancelled", "treasury.instrument.unpaid"],
+  "optional_depends": ["sales", "payroll"],
+  "provides_api": [
+    "InvoiceService",
+    "LedgerPostingService",
+    "LedgerQueryService",
+    "LedgerReportService",
+    "PeriodService"
+  ],
+  "publishes_events": ["finance.invoice.issued", "finance.invoice.paid", "finance.journal_entry.posted"],
+  "subscribes_events": [
+    "sales.order.confirmed",
+    "payroll.run.approved",
+    "payroll.run.paid",
+    "payroll.run.reversed",
+    "finance.invoice.issued",
+    "finance.invoice.paid",
+    "treasury.receipt.posted",
+    "treasury.receipt.cancelled",
+    "treasury.instrument.unpaid"
+  ],
   "migrations_path": "./migrations",
-  "permissions": ["finance.view_invoices", "finance.manage_invoices", "finance.admin_invoices"]
+  "permissions": [
+    "finance.view_invoices",
+    "finance.manage_invoices",
+    "finance.admin_invoices",
+    "finance.view_ledger",
+    "finance.manage_entries",
+    "finance.admin_entries",
+    "finance.manage_accounts",
+    "finance.admin_accounts",
+    "finance.admin_periods",
+    "finance.manage_posting_rules"
+  ]
 }

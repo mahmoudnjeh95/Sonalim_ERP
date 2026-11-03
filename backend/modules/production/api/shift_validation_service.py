@@ -347,7 +347,7 @@ class ShiftValidationService:
     ) -> Result[dict]:
         """An admin's in-place fix to a section after the shift was already validated.
 
-        Gated by `production.shift.unlock_validated` at the router, not here. The shift
+        Gated by `production.admin_unlock_validated` at the router, not here. The shift
         and section keep their status (this corrects data, it does not reopen a workflow);
         the revision it freezes is tagged `edited_after_validation` at write time.
         """

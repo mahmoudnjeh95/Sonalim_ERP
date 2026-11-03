@@ -1,6 +1,4 @@
-import { apiErrorFromResponse, apiFetch, networkError } from "../../lib/api";
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://localhost:8000";
+import { apiFetch } from "../../lib/api";
 
 export type VoucherType = "receipt" | "issue" | "return" | "transfer";
 export type VoucherStatus = "draft" | "posted" | "cancelled";
@@ -63,22 +61,6 @@ export interface Inventory {
   lines?: InventoryLine[];
 }
 
-export interface ValuedStock {
-  items: {
-    product_id: string;
-    sku: string;
-    name: string;
-    quantity: string;
-    avg_cost: string | null;
-    cost_source: "catalog" | "receipt" | null;
-    value: string | null;
-    missing_cost: boolean;
-    negative: boolean;
-  }[];
-  total_value: string;
-  missing_cost_count: number;
-}
-
 export const listVouchers = (token: string, type?: VoucherType) =>
   apiFetch<Voucher[]>(`/warehouse/vouchers${type ? `?type=${type}` : ""}`, { token });
 export const getVoucher = (token: string, id: string) => apiFetch<Voucher>(`/warehouse/vouchers/${id}`, { token });
@@ -100,16 +82,3 @@ export const addInventoryLine = (token: string, inventoryId: string, productId: 
   apiFetch<Inventory>(`/warehouse/inventories/${inventoryId}/lines`, { method: "POST", token, body: { product_id: productId } });
 export const closeInventory = (token: string, id: string) => apiFetch<Inventory>(`/warehouse/inventories/${id}/close`, { method: "POST", token });
 export const cancelInventory = (token: string, id: string) => apiFetch<Inventory>(`/warehouse/inventories/${id}/cancel`, { method: "POST", token });
-
-export const getValuedStock = (token: string) => apiFetch<ValuedStock>("/warehouse/valuation", { token });
-
-export async function downloadValuedStock(token: string, format: "csv" | "xlsx"): Promise<Blob> {
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE_URL}/warehouse/valuation?format=${format}`, { headers: { Authorization: `Bearer ${token}` } });
-  } catch {
-    throw networkError();
-  }
-  if (!response.ok) throw await apiErrorFromResponse(response);
-  return response.blob();
-}

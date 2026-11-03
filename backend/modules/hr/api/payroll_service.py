@@ -50,7 +50,7 @@ class PayrollService:
         run_id = str(ULID())
         try: self.connection.execute("INSERT INTO hr.payroll_runs (id,tenant_id,period_month,status) VALUES (%s,%s,%s,'calculated')", (run_id,tenant_id,period_month))
         except psycopg.errors.UniqueViolation: return Err("DUPLICATE_PERIOD", "a payroll run already exists for this month", "une paie existe déjà pour ce mois")
-        employees = self.connection.execute("SELECT e.id,COALESCE(c.salary,0),COALESCE(c.currency,'USD') FROM hr.employees e LEFT JOIN LATERAL (SELECT salary,currency FROM hr.contracts WHERE employee_id=e.id AND tenant_id=e.tenant_id AND status='active' ORDER BY start_date DESC LIMIT 1) c ON TRUE WHERE e.tenant_id=%s AND e.status != 'inactive'", (tenant_id,)).fetchall()
+        employees = self.connection.execute("SELECT e.id,COALESCE(c.salary,0),COALESCE(c.currency,'XOF') FROM hr.employees e LEFT JOIN LATERAL (SELECT salary,currency FROM hr.contracts WHERE employee_id=e.id AND tenant_id=e.tenant_id AND status='active' ORDER BY start_date DESC LIMIT 1) c ON TRUE WHERE e.tenant_id=%s AND e.status NOT IN ('inactive','terminated')", (tenant_id,)).fetchall()
         for employee_id, salary, currency in employees:
             net = float(salary) + bonuses - deductions - taxes
             self.connection.execute("INSERT INTO hr.payroll_items (id,tenant_id,payroll_run_id,employee_id,base_salary,bonuses,deductions,taxes,net_salary,currency) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)", (str(ULID()),tenant_id,run_id,employee_id,salary,bonuses,deductions,taxes,net,currency))

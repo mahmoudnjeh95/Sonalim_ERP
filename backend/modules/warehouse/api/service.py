@@ -16,11 +16,14 @@ from modules.warehouse.domain.entities import (
     adjust,
     consume_in_production,
     issue,
+    issue_unreserved,
     receive,
     release_reservation,
     reserve,
     send_to_production,
 )
+from modules.warehouse.api.valuation_service import ValuationService
+from modules.warehouse.domain.reservation import validate_reservation_expiry
 
 
 class StockService:
@@ -28,6 +31,8 @@ class StockService:
 
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
+        # FIFO cost layers move in the same transaction as the stock they value.
+        self._valuation = ValuationService(connection)
 
     def _validate_quantity(self, *, tenant_id: str, product_id: str, quantity: float) -> Result[None]:
         """Every quantity that lands in warehouse.stock_items must respect its
@@ -39,36 +44,44 @@ class StockService:
             return Ok(None)
         return validate_quantity_for_uom(quantity, uom)
 
-    def list_stock_items(self, tenant_id: str, location_id: str | None = None) -> list[StockLevel]:
+    def list_stock_items(
+        self, tenant_id: str, location_id: str | None = None, site_id: str | None = None
+    ) -> list[StockLevel]:
+        clauses = ["si.tenant_id = %s"]
+        params: list[object] = [tenant_id]
         if location_id is not None:
-            rows = self._connection.execute(
-                """
-                SELECT location_id, product_id, quantity_on_hand, quantity_reserved, quantity_in_production
-                FROM warehouse.stock_items
-                WHERE tenant_id = %s AND location_id = %s
-                ORDER BY product_id
-                """,
-                (tenant_id, location_id),
-            ).fetchall()
-        else:
-            rows = self._connection.execute(
-                """
-                SELECT location_id, product_id, quantity_on_hand, quantity_reserved, quantity_in_production
-                FROM warehouse.stock_items
-                WHERE tenant_id = %s
-                ORDER BY location_id, product_id
-                """,
-                (tenant_id,),
-            ).fetchall()
+            clauses.append("si.location_id = %s")
+            params.append(location_id)
+        if site_id is not None:
+            clauses.append("loc.site_id = %s")
+            params.append(site_id)
+        # Only join locations when a site filter needs it -- every other call
+        # site keeps the exact query it had before this filter existed.
+        join = (
+            "JOIN warehouse.locations loc ON loc.id = si.location_id AND loc.tenant_id = si.tenant_id"
+            if site_id is not None
+            else ""
+        )
+        order = "si.product_id" if location_id is not None else "si.location_id, si.product_id"
+        rows = self._connection.execute(
+            f"""
+            SELECT si.location_id, si.product_id, si.quantity_on_hand, si.quantity_reserved, si.quantity_in_production
+            FROM warehouse.stock_items si
+            {join}
+            WHERE {' AND '.join(clauses)}
+            ORDER BY {order}
+            """,
+            params,
+        ).fetchall()
         return [
             StockLevel(
-                location_id=location_id,
+                location_id=row_location_id,
                 product_id=product_id,
                 quantity_on_hand=float(on_hand),
                 quantity_reserved=float(reserved),
                 quantity_in_production=float(in_production),
             )
-            for location_id, product_id, on_hand, reserved, in_production in rows
+            for row_location_id, product_id, on_hand, reserved, in_production in rows
         ]
 
     def _assert_not_frozen(self, tenant_id: str, location_id: str) -> Err | None:
@@ -122,10 +135,15 @@ class StockService:
         correlation_id: str,
         reference: str,
         actor_id: str | None = None,
+        expires_at: datetime.datetime | None = None,
     ) -> Result[StockLevel]:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        if expires_at is not None:
+            expiry = validate_reservation_expiry(expires_at=expires_at, now=datetime.datetime.now(datetime.timezone.utc))
+            if isinstance(expiry, Err):
+                return expiry
 
         row = self._connection.execute(
             """
@@ -164,6 +182,19 @@ class StockService:
             """,
             (str(ULID()), tenant_id, location_id, product_id, quantity, reference, actor_id),
         )
+        self._connection.execute(
+            """
+            INSERT INTO warehouse.stock_reservations
+                (id, tenant_id, product_id, location_id, reference, quantity, quantity_open, expires_at, created_by,
+                 created_at)
+            -- clock_timestamp(), not the column's NOW() default: NOW() is the transaction's
+            -- start time, so two reservations taken together shared it and the release order
+            -- (ORDER BY created_at, id) fell to the id tie-break -- and ULIDs are not ordered
+            -- inside a millisecond, which could close the newer hold before the older one.
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, clock_timestamp())
+            """,
+            (str(ULID()), tenant_id, product_id, location_id, reference, quantity, quantity, expires_at, actor_id),
+        )
         publish_event(
             self._connection,
             event_type="warehouse.stock.reserved",
@@ -184,6 +215,60 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
     ) -> Result[StockLevel]:
+        """Gives `quantity` held under `reference` back to available stock, and
+        closes that much of the reference's ledger rows, oldest first. A
+        reservation made before the ledger existed has no row to close; the
+        counter is released regardless, so it still works."""
+        result = self.release_reserved_quantity(
+            tenant_id=tenant_id, product_id=product_id, location_id=location_id, quantity=quantity,
+            reference=reference, actor_id=actor_id,
+        )
+        if isinstance(result, Err):
+            return result
+
+        remaining = quantity
+        open_rows = self._connection.execute(
+            """
+            SELECT id, quantity_open FROM warehouse.stock_reservations
+            WHERE tenant_id = %s AND product_id = %s AND location_id = %s AND reference = %s AND status = 'active'
+            ORDER BY created_at, id
+            FOR UPDATE
+            """,
+            (tenant_id, product_id, location_id, reference),
+        ).fetchall()
+        for reservation_id, quantity_open in open_rows:
+            if remaining <= 0:
+                break
+            taken = min(float(quantity_open), remaining)
+            remaining -= taken
+            left = float(quantity_open) - taken
+            self._connection.execute(
+                """
+                UPDATE warehouse.stock_reservations
+                SET quantity_open = %s,
+                    status = CASE WHEN %s <= 0 THEN 'released' ELSE status END,
+                    closed_at = CASE WHEN %s <= 0 THEN NOW() ELSE closed_at END
+                WHERE id = %s
+                """,
+                (left, left, left, reservation_id),
+            )
+        return result
+
+    def release_reserved_quantity(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        location_id: str,
+        quantity: float,
+        reference: str,
+        actor_id: str | None = None,
+        move_type: str = "reservation_released",
+    ) -> Result[StockLevel]:
+        """The counter half of a release only: stock_items.quantity_reserved and
+        the move row, no ledger. ReservationService uses it to release one
+        specific ledger row (an expiry, a manual release) and closes that row
+        itself; everything else should call release_stock_reservation."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
@@ -221,9 +306,9 @@ class StockService:
         self._connection.execute(
             """
             INSERT INTO warehouse.stock_moves (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id)
-            VALUES (%s, %s, %s, %s, %s, 'reservation_released', %s, %s)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (str(ULID()), tenant_id, location_id, product_id, quantity, reference, actor_id),
+            (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id),
         )
         return result
 
@@ -312,6 +397,9 @@ class StockService:
                 source_id,
                 of_id,
             ),
+        )
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=delta, reference=reference, move_type=move_type
         )
         publish_event(
             self._connection,
@@ -533,20 +621,17 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
         move_type: str = "receipt",
-        unit_cost: Decimal | None = None,
+        unit_cost: float | None = None,
     ) -> Result[StockLevel]:
+        """`unit_cost` (XOF per product unit) is the FIFO layer's cost; only a
+        purchase receipt knows its real landed cost, everything else falls
+        back to the catalog purchase price."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
         frozen = self._assert_not_frozen(tenant_id, location_id)
         if frozen is not None:
             return frozen
-        # The average is over the whole product, so read what was on hand everywhere before this lands.
-        on_hand_before = self._connection.execute(
-            "SELECT COALESCE(SUM(quantity_on_hand), 0) FROM warehouse.stock_items WHERE tenant_id = %s AND product_id = %s",
-            (tenant_id, product_id),
-        ).fetchone()[0]
-
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -584,13 +669,10 @@ class StockService:
             """,
             (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id, unit_cost),
         )
-        if unit_cost is not None:
-            from modules.warehouse.api.valuation_service import ValuationService
-
-            ValuationService(self._connection).apply_receipt(
-                tenant_id=tenant_id, product_id=product_id, on_hand_before=Decimal(str(on_hand_before)),
-                quantity=Decimal(str(quantity)), unit_cost=Decimal(str(unit_cost)),
-            )
+        self._valuation.record_inflow(
+            tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type=move_type,
+            unit_cost=unit_cost,
+        )
         publish_event(
             self._connection,
             event_type="warehouse.stock.received",
@@ -611,8 +693,13 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
         move_type: str = "issue",
+        respect_reservations: bool = False,
     ) -> Result[StockLevel]:
-        """Records a "sortie" — physical consumption of stock (e.g. a receipt moving into production use)."""
+        """Records a "sortie" — physical consumption of stock (e.g. a receipt moving into production use).
+
+        With `respect_reservations`, only stock nobody has reserved may go: the check runs on
+        the row locked below, so a reservation made after the caller looked at availability
+        is still honoured."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
@@ -637,9 +724,12 @@ class StockService:
             quantity_reserved=float(row[1]) if row else 0.0,
         )
 
-        result = issue(current, quantity)
+        result = issue_unreserved(current, quantity) if respect_reservations else issue(current, quantity)
         if isinstance(result, Err):
             return result
+        self._valuation.record_outflow(
+            tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type=move_type
+        )
 
         self._connection.execute(
             """
@@ -775,6 +865,9 @@ class StockService:
             """,
             (str(ULID()), tenant_id, location_id, product_id, quantity, reference, actor_id),
         )
+        self._valuation.record_outflow(
+            tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type="production_consumption"
+        )
         return result
 
     def adjust_stock(
@@ -833,6 +926,9 @@ class StockService:
             VALUES (%s, %s, %s, %s, %s, 'adjustment', %s, %s, %s)
             """,
             (str(ULID()), tenant_id, location_id, product_id, delta, reference, actor_id, reason),
+        )
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=delta, reference=reference, move_type="adjustment"
         )
         return result
 
@@ -1035,6 +1131,10 @@ class StockService:
                 ),
             ),
         )
+        owned_delta = (quantity_on_hand + quantity_in_production) - (before.quantity_on_hand + before.quantity_in_production)
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=owned_delta, reference="admin_set_stock", move_type="admin_correction"
+        )
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -1100,5 +1200,9 @@ class StockService:
         self._connection.execute(
             "DELETE FROM warehouse.stock_items WHERE tenant_id = %s AND product_id = %s AND location_id = %s",
             (tenant_id, product_id, location_id),
+        )
+        self._valuation.record_delta(
+            tenant_id=tenant_id, product_id=product_id, delta=-(quantity_on_hand + quantity_in_production),
+            reference="delete_stock_item", move_type="admin_correction",
         )
         return Ok(None)

@@ -57,3 +57,28 @@ def test_unclassified_table_stops_the_reset(db):
     db.execute("CREATE TABLE core.reset_probe_unclassified (id INT)")
     with pytest.raises(reset.ResetError, match="reset_probe_unclassified"):
         reset.purge(db, _tenant(db))
+
+
+def test_a_restarted_program_sweeps_from_today(db):
+    """Programs stay through the reset but their jobs go: each one is marked as generated
+    through yesterday so the next sweep does not re-raise every past occurrence."""
+    tenant = "integration-test-reset-programs"
+    program_id = "reset-probe-program"
+    db.execute(
+        "INSERT INTO maintenance.equipment (id, tenant_id, work_center_id, code, name) "
+        "VALUES ('reset-probe-eq', %s, 'wc', 'RESET-PROBE', 'Probe')",
+        (tenant,),
+    )
+    db.execute(
+        "INSERT INTO maintenance.programs (id, tenant_id, equipment_id, name, interval_value, interval_unit, "
+        "start_date, lead_days, stops_machine, active, created_by) "
+        "VALUES (%s, %s, 'reset-probe-eq', 'Graissage', 1, 'week', CURRENT_DATE - 60, 0, false, true, 'u')",
+        (program_id, tenant),
+    )
+
+    assert reset.restart_program_sweeps(db, tenant) == 1
+
+    marked, yesterday = db.execute(
+        "SELECT last_generated_date, CURRENT_DATE - 1 FROM maintenance.programs WHERE id = %s", (program_id,)
+    ).fetchone()
+    assert marked == yesterday

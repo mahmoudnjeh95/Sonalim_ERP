@@ -216,11 +216,16 @@ class VoucherService:
             if isinstance(result, Err):
                 return result
             # Record the cost the goods left at, so a later return restocks at the same figure.
+            # The FIFO layers consumed under this voucher number give the average cost of the line.
             cost = self._connection.execute(
-                "SELECT avg_cost FROM warehouse.stock_valuation WHERE tenant_id = %s AND product_id = %s",
-                (tenant_id, line["product_id"]),
+                """
+                SELECT SUM(quantity * unit_cost) / NULLIF(SUM(quantity), 0)
+                FROM warehouse.cost_layer_consumptions
+                WHERE tenant_id = %s AND reference = %s AND product_id = %s AND unit_cost IS NOT NULL
+                """,
+                (tenant_id, number, line["product_id"]),
             ).fetchone()
-            if cost:
+            if cost and cost[0] is not None:
                 self._connection.execute("UPDATE warehouse.voucher_lines SET unit_cost = %s WHERE id = %s", (cost[0], line["id"]))
         self._warn_minimum(tenant_id, location, merged, warnings)
         return Ok(None)

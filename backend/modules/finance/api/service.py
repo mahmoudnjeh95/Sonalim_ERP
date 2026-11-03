@@ -95,7 +95,13 @@ class InvoiceService:
     ) -> Result[dict[str, Any]]:
         """Add (or, negative, take back) a paid amount and re-derive the status.
 
-        Idempotent on (event_type, document_id, invoice_id): a replayed treasury event is a no-op."""
+        Idempotent on (event_type, document_id, invoice_id): a replayed treasury event is a no-op.
+
+        Ledger (D4): this path deliberately publishes no finance.invoice.paid. That event makes the
+        ledger post a generic bank entry (invoice_ledger_service.post_paid); an invoice settled
+        through treasury must instead be posted once, on the real cash/bank/mobile-money account,
+        by the treasury ledger posting (B6). mark_paid refuses invoices that have treasury
+        payments (INVOICE_HAS_PAYMENTS), so the two postings can never both fire."""
         already = self._connection.execute(
             "SELECT 1 FROM finance.invoice_payment_deltas WHERE event_type = %s AND document_id = %s AND invoice_id = %s",
             (event_type, document_id, invoice_id),

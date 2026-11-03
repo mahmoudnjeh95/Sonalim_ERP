@@ -243,3 +243,46 @@ def test_packing_ratios_leave_out_waste_cartons_and_a_mould_change_day_gets_a_ro
         "mardi · Coquillette 500 g": (pytest.approx(100), pytest.approx(20)),
         "mardi · Coquillette 200 g": (pytest.approx(125), pytest.approx(40)),
     }
+
+
+# ---- untrusted text in cells -------------------------------------------------
+
+
+@pytest.mark.parametrize("text", ["=1+1", "+34", "-7", "@SUM(A1)", '=HYPERLINK("http://x","clic")'])
+def test_a_typed_name_cannot_become_a_formula(text):
+    """Product names, motifs and notes are typed by users and land in this workbook.
+    Excel reads a cell starting with = + - @ as a formula, so the export would run it on
+    whoever opens the file."""
+    from openpyxl import Workbook
+
+    from modules.production.api.month_recap_export import _headers, _heading, _put, _title
+
+    ws = Workbook().active
+
+    _put(ws, 1, 1, text)
+    _title(ws, 2, 3, text, subtitle=text)
+    _heading(ws, 5, 3, text)
+    _headers(ws, 6, [text, "Quantité"])
+
+    for row, col in ((1, 1), (2, 1), (3, 1), (5, 1), (6, 1)):
+        assert ws.cell(row=row, column=col).value == f"'{text}", f"cell {row},{col} is not neutralised"
+    assert ws.cell(row=6, column=2).value == "Quantité"
+
+
+def test_numbers_dates_and_ordinary_text_are_untouched():
+    import datetime as dt
+
+    from openpyxl import Workbook
+
+    from modules.production.api.month_recap_export import _put
+
+    ws = Workbook().active
+
+    _put(ws, 1, 1, 12.5)
+    _put(ws, 1, 2, dt.date(2026, 10, 5))
+    _put(ws, 1, 3, "Rupture - manque de cartons")
+    _put(ws, 1, 4, None)
+
+    assert ws.cell(row=1, column=1).value == 12.5
+    assert ws.cell(row=1, column=2).value == dt.date(2026, 10, 5)
+    assert ws.cell(row=1, column=3).value == "Rupture - manque de cartons"

@@ -1,16 +1,21 @@
 {
   "name": "maintenance",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "depends": ["core"],
-  "optional_depends": [],
-  "provides_api": ["EquipmentService"],
-  "publishes_events": [],
+  "optional_depends": ["hr", "warehouse", "production"],
+  "provides_api": ["EquipmentService", "JobService", "PartsService"],
+  "publishes_events": ["maintenance.parts.purchase_requested"],
   "subscribes_events": [],
   "migrations_path": "./migrations",
   "permissions": [
     "maintenance.view_equipment",
     "maintenance.manage_equipment",
     "maintenance.admin_equipment",
-    "maintenance.delete_equipment"
+    "maintenance.delete_equipment",
+    "maintenance.view_jobs",
+    "maintenance.plan_jobs",
+    "maintenance.execute_jobs",
+    "maintenance.manage_checkpoints",
+    "maintenance.manage_teams"
   ]
 }

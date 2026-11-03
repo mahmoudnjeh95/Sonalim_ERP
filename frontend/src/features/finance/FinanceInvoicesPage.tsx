@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
 import { currentLocale, useI18n } from "../../lib/i18n";
+import { CURRENCY_CODE, formatXofWithCode } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
@@ -50,6 +51,10 @@ const PARTNERS_QUERY_KEY = ["core", "partners"] as const;
 type StatusFilter = "all" | InvoiceStatus;
 
 function formatCurrency(amount: number, currency: string) {
+  // XOF goes through the shared helper: ICU's symbol for it is "F CFA", which
+  // would disagree with the "XOF" printed everywhere else on this same page.
+  // A genuine foreign currency keeps its own symbol.
+  if (currency === CURRENCY_CODE) return formatXofWithCode(amount);
   try {
     return new Intl.NumberFormat(currentLocale(), { style: "currency", currency }).format(amount);
   } catch {
@@ -254,7 +259,7 @@ export function FinanceInvoicesPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label={t("finance.stat.total")} value={invoices.length} icon={<Receipt className="h-5 w-5" />} />
         <StatCard label={t("finance.stat.outstanding")} value={outstandingCount} icon={<CircleDollarSign className="h-5 w-5" />} accent="warning" />
-        <StatCard label={t("finance.stat.paid")} value={Math.round(paidTotal)} icon={<BadgeDollarSign className="h-5 w-5" />} accent="success" unit="F CFA" />
+        <StatCard label={t("finance.stat.paid")} value={Math.round(paidTotal)} icon={<BadgeDollarSign className="h-5 w-5" />} accent="success" unit="XOF" />
       </div>
 
       <Card>

@@ -296,9 +296,14 @@ function ReleaseTable({
                 <td className="px-2 py-2 text-right tabular-nums">
                   {formatQuantity(item.packed / factor, unit)}
                   {factor !== 1 ? <span className="block text-xs text-muted-foreground">{formatQuantity(item.packed, unitOf(item.uom_id))}</span> : null}
-                  {item.pending_qc > 0 ? (
+                  {item.awaiting_qc > 0 ? (
                     <span className="block text-xs text-amber-600">
-                      {formatQuantity(item.pending_qc / factor, unit)} {t("production.board.release.pendingQcShort")}
+                      {formatQuantity(item.awaiting_qc / factor, unit)} {t("production.board.release.awaitingQcShort")}
+                    </span>
+                  ) : null}
+                  {item.rejected_qc > 0 ? (
+                    <span className="block text-xs text-destructive">
+                      {formatQuantity(item.rejected_qc / factor, unit)} {t("production.board.release.rejectedQcShort")}
                     </span>
                   ) : null}
                 </td>
@@ -321,9 +326,11 @@ function ReleaseTable({
                   ) : (
                     <span className="text-xs text-muted-foreground">
                       {item.remaining <= 0
-                        ? t("production.board.release.alreadyReleased")
-                        : item.pending_qc > 0 && item.destination !== null
-                          ? t("production.board.release.pendingQc")
+                        ? item.released <= 0 && item.rejected_qc > 0
+                          ? t("production.board.release.rejectedQc")
+                          : t("production.board.release.alreadyReleased")
+                        : item.awaiting_qc > 0 && item.destination !== null
+                          ? t("production.board.release.awaitingQc")
                           : item.destination === null
                             ? ""
                             : t("production.board.release.notInLineStore")}

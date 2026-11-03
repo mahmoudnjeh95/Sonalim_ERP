@@ -258,7 +258,17 @@ class QualityReportService:
         ]
 
     def get_validated_conforming(self, *, tenant_id: str, day: datetime.date) -> dict[str, float]:
-        """Conforming pieces per product that validated QC reports of `day` cleared.
+        """Conforming pieces per product that validated QC reports of `day` cleared (see
+        `get_validated_conforming_by_row`, summed per product)."""
+        totals: dict[str, float] = {}
+        for product_id, pieces in self.get_validated_conforming_by_row(tenant_id=tenant_id, day=day).values():
+            totals[product_id] = totals.get(product_id, 0.0) + pieces
+        return totals
+
+    def get_validated_conforming_by_row(self, *, tenant_id: str, day: datetime.date) -> dict[str, tuple[str, float]]:
+        """Per packing row a validated QC report of `day` judged: its product and the conforming
+        pieces the verdict cleared. A row listed with 0 was judged and cleared nothing; a row not
+        listed has no validated verdict yet.
 
         Only a validated report counts -- a draft, submitted or rejected one is a claim, not a
         verdict. `report_date` is the QC report's own, copied from its shift at creation, so it
@@ -286,7 +296,7 @@ class QualityReportService:
         current_by_row = packing_row_packets_per_carton(
             self._connection, tenant_id=tenant_id, shift_packing_row_ids=[row[1] for row in rows]
         )
-        totals: dict[str, float] = {}
+        by_row: dict[str, tuple[str, float]] = {}
         for product_id, row_id, conforming_cartons in rows:
             current = current_by_row.get(row_id)
             if current is None:
@@ -298,8 +308,8 @@ class QualityReportService:
             pieces = finished_quantity_from_count(
                 packets_per_carton=packets_per_carton, carton_quantity=cartons, packets_counted=cartons,
             )
-            totals[product_id] = totals.get(product_id, 0.0) + pieces
-        return totals
+            by_row[row_id] = (product_id, by_row.get(row_id, (product_id, 0.0))[1] + pieces)
+        return by_row
 
     GRAINS = ("day", "week", "month", "year")
 

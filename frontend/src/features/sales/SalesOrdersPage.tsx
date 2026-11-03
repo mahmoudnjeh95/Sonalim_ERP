@@ -8,7 +8,8 @@ import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
-import { currentLocale, useI18n } from "../../lib/i18n";
+import { useI18n } from "../../lib/i18n";
+import { formatXofWithCode } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { productRequiresIntegerQuantity } from "../../lib/units";
 import { Button } from "../../components/ui/button";
@@ -62,7 +63,7 @@ const PRODUCT_TAGS_QUERY_KEY = ["core", "product-tags"] as const;
 type StatusFilter = "all" | SalesOrderStatus;
 
 function formatCurrency(amount: number) {
-  return new Intl.NumberFormat(currentLocale(), { style: "currency", currency: "XOF", maximumFractionDigits: 0 }).format(amount);
+  return formatXofWithCode(amount);
 }
 
 export function SalesOrdersPage() {
@@ -308,7 +309,7 @@ export function SalesOrdersPage() {
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <StatCard label={t("sales.stat.total")} value={orders.length} icon={<ShoppingCart className="h-5 w-5" />} />
         <StatCard label={t("sales.stat.confirmed")} value={confirmedCount} icon={<CheckCircle2 className="h-5 w-5" />} accent="success" />
-        <StatCard label={t("sales.stat.pipelineValue")} value={Math.round(totalValue)} icon={<ShoppingCart className="h-5 w-5" />} accent="accent" unit="F CFA" />
+        <StatCard label={t("sales.stat.pipelineValue")} value={Math.round(totalValue)} icon={<ShoppingCart className="h-5 w-5" />} accent="accent" unit="XOF" />
       </div>
 
       <Card>
@@ -325,6 +326,7 @@ export function SalesOrdersPage() {
                 { value: "all", label: t("common.all") },
                 { value: "draft", label: t("status.draft") },
                 { value: "confirmed", label: t("status.confirmed") },
+                { value: "shipped", label: t("status.shipped") },
               ]}
             />
             {columnFilters.isActive && (
