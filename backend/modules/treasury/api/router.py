@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from pydantic import BaseModel
 
 from core.db import get_connection
@@ -139,11 +139,12 @@ def update_account(account_id: str, body: AccountUpdateRequest,
             changes=body.model_dump(exclude_unset=True)))
 
 
-@router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_account(account_id: str, tenant: TenantContext = Depends(require_permission("treasury.manage_accounts"))) -> None:
+@router.delete("/accounts/{account_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def delete_account(account_id: str, tenant: TenantContext = Depends(require_permission("treasury.manage_accounts"))) -> Response:
     with get_connection() as connection:
         _unwrap(connection, AccountService(connection).delete_account(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, account_id=account_id))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/accounts/{account_id}/movements")
