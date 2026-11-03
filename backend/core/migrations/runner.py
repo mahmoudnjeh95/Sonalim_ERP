@@ -12,6 +12,9 @@ logger = logging.getLogger(__name__)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# The schemas and tables that exist before any migration can run, starting with the tracking table.
+BOOTSTRAP_SQL = REPO_ROOT / "docker" / "postgres" / "init.sql"
+
 MODULE_MIGRATION_DIRS: dict[str, Path] = {
     "core": REPO_ROOT / "core" / "migrations",
     "warehouse": REPO_ROOT / "modules" / "warehouse" / "migrations",
@@ -40,6 +43,14 @@ MODULE_MIGRATION_DIRS: dict[str, Path] = {
 # scan runs last: it holds no foreign key into another module and reads them only
 # through their api services.
 MODULE_ORDER = ["core", "warehouse", "production", "crm", "sales", "finance", "hr", "payroll", "procurement", "qc", "maintenance", "treasury", "scan"]
+
+
+def _bootstrap_empty_database(connection: psycopg.Connection) -> None:
+    """Gives a brand new database what the first migration assumes. A database that already has
+    the tracking table runs no DDL here and never reads the file."""
+    if connection.execute("SELECT to_regclass('core.module_migrations')").fetchone()[0] is not None:
+        return
+    connection.execute(BOOTSTRAP_SQL.read_text(encoding="utf-8"))
 
 
 def _ensure_tracking_table(connection: psycopg.Connection) -> None:
@@ -89,6 +100,7 @@ def apply_all_migrations() -> None:
     with get_connection() as connection:
         connection.execute("SELECT pg_advisory_lock(%s)", (MIGRATION_LOCK_KEY,))
         try:
+            _bootstrap_empty_database(connection)
             _ensure_tracking_table(connection)
             connection.commit()
             # The applied set is re-read per module inside the lock, so whoever waited
