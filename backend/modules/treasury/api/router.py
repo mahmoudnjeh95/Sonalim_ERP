@@ -13,11 +13,13 @@ from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.treasury.api.document_service import DocumentService
 from modules.treasury.api.instrument_service import InstrumentService
+from modules.treasury.api.report_service import InvoiceStatusReportService, tabular_response
+from modules.treasury.api.statement_service import StatementImportService
 from modules.treasury.api.service import AccountService, BankService, SettingsService
 
 router = APIRouter(prefix="/treasury", tags=["treasury"])
 
-_CONFLICT = {"INSTRUMENT_NOT_PENDING", "UNPAID_CHEQUE_ONLY", "DOCUMENT_NOT_POSTED", "INSTRUMENT_ALREADY_PROCESSED", "BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
+_CONFLICT = {"LINE_MATCHED", "INSTRUMENT_NOT_PENDING", "UNPAID_CHEQUE_ONLY", "DOCUMENT_NOT_POSTED", "INSTRUMENT_ALREADY_PROCESSED", "BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
 
 
 def _err_status(code: str) -> int:
@@ -366,3 +368,111 @@ def cash_journal(account_id: str, date_from: datetime.date | None = None, date_t
         if isinstance(result, Err):
             raise HTTPException(_err_status(result.code), err_detail(result))
         return result.value
+
+
+# ---- bank statements and reports ---------------------------------------------------------------
+class StatementImportRequest(BaseModel):
+    account_id: str
+    filename: str
+    content_base64: str
+    commit: bool = False
+
+
+class LinePartnerRequest(BaseModel):
+    partner_id: str | None = None
+
+
+class LineMatchRequest(BaseModel):
+    payment_id: str | None = None
+
+
+@router.post("/statements/import")
+def import_statement(body: StatementImportRequest, tenant: TenantContext = Depends(require_permission("treasury.import_statements"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, StatementImportService(connection).import_statement(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, account_id=body.account_id, filename=body.filename,
+            content_base64=body.content_base64, commit=body.commit))
+
+
+@router.get("/statements/lines")
+def list_statement_lines(account_id: str, unmatched_only: bool = False,
+                         tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return StatementImportService(connection).list_lines(tenant_id=tenant.tenant_id, account_id=account_id, unmatched_only=unmatched_only)
+
+
+@router.get("/statements/suggestions")
+def statement_suggestions(account_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    with get_connection() as connection:
+        service = StatementImportService(connection)
+        return {
+            "suggestions": service.suggestions(tenant_id=tenant.tenant_id, account_id=account_id),
+            "payments": service.candidate_payments(tenant_id=tenant.tenant_id, account_id=account_id),
+        }
+
+
+@router.get("/statements/summary")
+def statement_summary(account_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    with get_connection() as connection:
+        result = StatementImportService(connection).summary(tenant_id=tenant.tenant_id, account_id=account_id)
+        if isinstance(result, Err):
+            raise HTTPException(_err_status(result.code), err_detail(result))
+        return result.value
+
+
+@router.patch("/statements/lines/{line_id}/partner")
+def set_line_partner(line_id: str, body: LinePartnerRequest, tenant: TenantContext = Depends(require_permission("treasury.import_statements"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, StatementImportService(connection).set_partner(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, line_id=line_id, partner_id=body.partner_id))
+
+
+@router.patch("/statements/lines/{line_id}/match")
+def match_statement_line(line_id: str, body: LineMatchRequest, tenant: TenantContext = Depends(require_permission("treasury.import_statements"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, StatementImportService(connection).match(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, line_id=line_id, payment_id=body.payment_id))
+
+
+@router.delete("/statements/lines/{line_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def delete_statement_line(line_id: str, tenant: TenantContext = Depends(require_permission("treasury.import_statements"))) -> Response:
+    with get_connection() as connection:
+        _unwrap(connection, StatementImportService(connection).delete_line(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, line_id=line_id))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get("/statements/profile")
+def get_statement_profile(account_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    with get_connection() as connection:
+        return StatementImportService(connection).get_profile(tenant_id=tenant.tenant_id, account_id=account_id)
+
+
+@router.put("/statements/profile")
+def put_statement_profile(account_id: str, body: dict[str, Any], tenant: TenantContext = Depends(require_permission("treasury.admin_config"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, StatementImportService(connection).set_profile(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, account_id=account_id, profile=body))
+
+
+def _report(kind: str, fmt: str | None, tenant: TenantContext):
+    with get_connection() as connection:
+        service = InvoiceStatusReportService(connection)
+        rows = service.sales(tenant_id=tenant.tenant_id) if kind == "sales" else service.purchases(tenant_id=tenant.tenant_id)
+        groups = InvoiceStatusReportService.by_partner(rows)
+    if fmt in ("csv", "xlsx"):
+        headers = ["partner_id", "currency", "invoiced", "paid", "remaining", "0-30", "31-60", "61-90", "90+", "invoices"]
+        data = [[g["partner_id"], g["currency"], g["invoiced"], g["paid"], g["remaining"], g["bucket_0-30"], g["bucket_31-60"],
+                 g["bucket_61-90"], g["bucket_90+"], g["count"]] for g in groups]
+        return tabular_response(headers, data, fmt, f"{kind}-invoice-status")
+    return {"partners": groups, "invoices": rows}
+
+
+@router.get("/reports/sales-invoices")
+def sales_invoice_report(format: str | None = None, tenant: TenantContext = Depends(require_permission("treasury.view"))):
+    return _report("sales", format, tenant)
+
+
+@router.get("/reports/purchase-invoices")
+def purchase_invoice_report(format: str | None = None, tenant: TenantContext = Depends(require_permission("treasury.view"))):
+    return _report("purchases", format, tenant)
