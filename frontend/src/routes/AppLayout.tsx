@@ -6,6 +6,7 @@ import { useIsFetching } from "@tanstack/react-query";
 import { Sidebar } from "./Sidebar";
 import { AppLoader } from "../components/patterns/AppLoader";
 import { useI18n } from "../lib/i18n";
+import { TreasuryAlertBanner } from "../features/treasury/TreasuryAlertBanner";
 
 // The loader never flashes for less than this, and the page needs this long to
 // mount its queries after the outgoing route finishes its exit animation.
@@ -65,6 +66,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <AppLoader label={t("app.loading")} className="py-8" />
           </div>
         )}
+
+        <TreasuryAlertBanner />
 
         <AnimatePresence mode="wait" onExitComplete={() => mainRef.current?.scrollTo({ top: 0 })}>
           <motion.div
