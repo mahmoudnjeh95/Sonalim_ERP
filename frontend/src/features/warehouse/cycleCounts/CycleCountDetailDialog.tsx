@@ -44,7 +44,11 @@ function LineRow({
 
   const submitMutation = useMutation({
     mutationFn: () => submitCycleCountLine(token, cycleCountId, line.id, Number(draft)),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: cycleCountQueryKey(cycleCountId) }),
+    onSuccess: () => {
+      // A confirming count has to be typed afresh, not re-sent from what is left in the box.
+      setDraft("");
+      queryClient.invalidateQueries({ queryKey: cycleCountQueryKey(cycleCountId) });
+    },
   });
   const resolveMutation = useMutation({
     mutationFn: (decision: "approve" | "reject") => resolveCycleCountLine(token, cycleCountId, line.id, decision),
@@ -79,9 +83,9 @@ function LineRow({
         ) : (
           (line.counted_quantity ?? "—")
         )}
-        {line.status === "pending" && line.count_1 !== null && (
-          <p className="mt-1 text-xs text-warning">
-            {t("warehouse.cycleCounts.line.recount")} ({[line.count_1, line.count_2, line.count_3].filter((c) => c !== null).join(" / ")})
+        {line.status === "pending" && line.counts_recorded > 0 && (
+          <p className="mt-1 text-xs text-muted-foreground">
+            {t(line.counts_recorded === 1 ? "warehouse.cycleCounts.line.secondCount" : "warehouse.cycleCounts.line.thirdCount")}
           </p>
         )}
       </TableCell>
@@ -159,6 +163,7 @@ export function CycleCountDetailDialog({
           <DialogTitle>{t("warehouse.cycleCounts.detail.title")}</DialogTitle>
           {detail && (
             <DialogDescription>
+              {detail.number ? `${detail.number} · ` : ""}
               {t(`warehouse.cycleCounts.status.${detail.status}`)} · {t(`warehouse.cycleCounts.type.${detail.count_type}`)}
             </DialogDescription>
           )}
@@ -183,6 +188,12 @@ export function CycleCountDetailDialog({
                 </Button>
               )}
             </div>
+            {detail.status === "draft" && <p className="text-sm text-muted-foreground">{t("warehouse.cycleCounts.detail.linesOnStart")}</p>}
+            {startMutation.isError && (
+              <p className="text-sm text-destructive">
+                {startMutation.error instanceof ApiError ? startMutation.error.message : t("warehouse.cycleCounts.dialog.error")}
+              </p>
+            )}
             {completeMutation.isError && (
               <p className="text-sm text-destructive">
                 {completeMutation.error instanceof ApiError ? completeMutation.error.message : t("warehouse.cycleCounts.dialog.error")}

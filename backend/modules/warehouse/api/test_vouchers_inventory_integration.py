@@ -154,6 +154,22 @@ def test_issue_from_a_sales_order_is_capped_across_vouchers(db, env):
     assert isinstance(_post(db, env, rest), Ok)
 
 
+def test_a_draft_made_before_the_order_was_confirmed_cannot_be_posted_after(db, env):
+    order = SalesOrderService(db).create_order(tenant_id=TENANT, actor_id=env["actor"], partner_id=env["customer"],
+                                               location_id=env["main"], lines=[OrderLine(product_id=env["film"], quantity=10, unit_price=1)])
+    _receive(db, env, env["film"], 50, 5)
+    draft = VoucherService(db).create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id,
+                                                       source_location_id=env["main"])
+    assert isinstance(draft, Ok)
+    assert isinstance(SalesOrderService(db).confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id, correlation_id="c"), Ok)
+
+    refused = _post(db, env, draft)
+
+    assert isinstance(refused, Err) and refused.code == "ORDER_IN_FULFILLMENT"
+    assert _on_hand(db, env, env["film"], env["main"]) == D("50")
+    assert VoucherService(db).get(tenant_id=TENANT, voucher_id=draft.value["id"]).value["status"] == "draft"
+
+
 # ---- valuation ---------------------------------------------------------------------------------
 
 def _film_value(db, env):
@@ -227,8 +243,9 @@ def test_a_started_cycle_count_freezes_its_scope_until_completed(db, env):
 
     service = CycleCountService(db)
     line = service.list_lines(tenant_id=TENANT, cycle_count_id=count.id).value[0]
-    assert isinstance(service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id,
-                                                line_id=line.id, counted_quantity=10), Ok)
+    for _ in range(2):
+        assert isinstance(service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id,
+                                                    line_id=line.id, counted_quantity=10), Ok)
     assert isinstance(service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id="c"), Ok)
     assert isinstance(stock.receive_stock(tenant_id=TENANT, product_id=env["film"], location_id=env["main"], quantity=1,
                                           correlation_id="c", reference="x"), Ok)
@@ -246,8 +263,8 @@ def test_the_count_rule_two_equal_counts_else_a_third_and_approval_adjusts_stock
         assert isinstance(result, Ok), result
         return result.value
 
-    first = submit(8)  # differs from the books: not settled yet
-    assert first.status == "pending" and first.counted_quantity is None and first.count_1 == 8
+    first = submit(8)  # one count never settles
+    assert first.status == "pending" and first.counted_quantity is None and first.counts_recorded == 1
     second = submit(9)  # two different counts: a third decides
     assert second.status == "pending" and second.counted_quantity is None
     third = submit(8)

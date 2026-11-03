@@ -7,6 +7,7 @@ export type CycleCountLineResolution = "matched" | "approved" | "rejected" | nul
 
 export interface CycleCount {
   id: string;
+  number: string | null;
   site_id: string;
   scope_location_id: string | null;
   count_type: CycleCountType;
@@ -32,11 +33,12 @@ export interface CycleCountLine {
   counted_at: string | null;
   resolved_by: string | null;
   resolved_at: string | null;
-  // The counts as entered: a count that differs from the books is confirmed by a second one,
-  // and two different ones by a third. counted_quantity is the settled figure.
+  // Two equal counts settle a line, two different ones need a third. counted_quantity is the settled
+  // figure; the raw counts stay null until then, so only their number is known while counting.
   count_1: number | null;
   count_2: number | null;
   count_3: number | null;
+  counts_recorded: number;
 }
 
 export interface CycleCountDetail extends CycleCount {
@@ -55,6 +57,16 @@ export function listCycleCounts(token: string, params: { site_id?: string; statu
   if (params.status) query.set("status", params.status);
   const suffix = query.size > 0 ? `?${query}` : "";
   return apiFetch<CycleCount[]>(`/warehouse/cycle-counts${suffix}`, { token });
+}
+
+export interface FrozenLocation {
+  cycle_count_id: string;
+  number: string;
+  name: string;
+}
+
+export function listFrozenLocations(token: string) {
+  return apiFetch<FrozenLocation[]>("/warehouse/frozen-locations", { token });
 }
 
 export function getCycleCount(token: string, cycleCountId: string) {

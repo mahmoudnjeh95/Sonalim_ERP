@@ -420,7 +420,8 @@ class PartsService:
                     respect_reservations=True,
                 )
                 if isinstance(issued, Err):
-                    # Only reachable if the stock moved under us since the check: the caller rolls back.
+                    # Stock moved under us since the check, or a cycle count froze the location (a count
+                    # blocks spare-part issues too, by decision): the caller rolls back.
                     return issued
             self._connection.execute(
                 """

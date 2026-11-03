@@ -141,6 +141,9 @@ class VoucherService:
         order = SalesOrderService(self._connection).get_order(tenant_id=tenant_id, order_id=order_id)
         if isinstance(order, Err):
             return order
+        held = self._check_order_not_in_fulfillment(tenant_id, order_id)
+        if isinstance(held, Err):
+            return held
         lines = []
         for line in order.value.lines:
             quantity = (quantities or {}).get(line.product_id, Decimal(str(line.quantity)))
@@ -201,6 +204,11 @@ class VoucherService:
 
     def _post_issue(self, tenant_id, actor_id, correlation_id, voucher, number, lines, merged, warnings) -> Result[None]:
         location = voucher["source_location_id"]
+        # Here as well as when drafting: a draft made before the order was confirmed can still be posted.
+        if voucher["ref_type"] == "sales_order" and voucher["ref_id"]:
+            held = self._check_order_not_in_fulfillment(tenant_id, voucher["ref_id"])
+            if isinstance(held, Err):
+                return held
         for product_id, quantity in merged.items():
             available = Decimal(str(self._stock.get_available_quantity(tenant_id, product_id, location)))
             checked = check_issue_available(available, quantity)
@@ -279,6 +287,28 @@ class VoucherService:
         return Ok(None)
 
     # ---- helpers ----------------------------------------------------------------------------
+
+    def _check_order_not_in_fulfillment(self, tenant_id: str, order_id: str) -> Result[None]:
+        """An order leaves the warehouse by one route only. Once fulfillment holds it (a pick list, or
+        stock reserved for it) or has shipped it, a voucher would issue the same goods a second time:
+        the order cap counts only vouchers, and surplus stock passes the availability check.
+        FOR SHARE makes a ship running at the same moment finish first, so its status is the real one."""
+        pick_list = self._connection.execute(
+            "SELECT 1 FROM warehouse.pick_lists WHERE tenant_id = %s AND source_type = 'sales_order' AND source_id = %s "
+            "AND status <> 'cancelled' FOR SHARE",
+            (tenant_id, order_id),
+        ).fetchone()
+        reservation = pick_list or self._connection.execute(
+            "SELECT 1 FROM warehouse.stock_reservations WHERE tenant_id = %s AND reference = %s AND status = 'active' LIMIT 1",
+            (tenant_id, f"sales_order:{order_id}"),
+        ).fetchone()
+        if reservation is None:
+            return Ok(None)
+        return Err(
+            "ORDER_IN_FULFILLMENT",
+            "this order is handled by fulfillment (pick list and shipment); an issue voucher would deduct the stock twice",
+            "cette commande est traitée par la préparation (liste de prélèvement et expédition) ; un bon de sortie déduirait le stock deux fois",
+        )
 
     def _check_order_cap(self, tenant_id: str, voucher: dict[str, Any], product_id: str, quantity: Decimal) -> Result[None]:
         from modules.sales.api.service import SalesOrderService

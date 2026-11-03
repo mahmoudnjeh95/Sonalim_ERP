@@ -19,7 +19,7 @@ from modules.warehouse.api.voucher_service import VoucherService
 # Vouchers and valuation reports. Mounted on the warehouse router (prefix /warehouse).
 router = APIRouter(tags=["warehouse"])
 
-_CONFLICT = {"VOUCHER_NOT_DRAFT", "LOCATION_FROZEN", "STOCK_INSUFFICIENT",
+_CONFLICT = {"VOUCHER_NOT_DRAFT", "LOCATION_FROZEN", "ORDER_IN_FULFILLMENT", "STOCK_INSUFFICIENT",
              "ORDER_QTY_EXCEEDED", "RETURN_QTY_EXCEEDED"}
 
 

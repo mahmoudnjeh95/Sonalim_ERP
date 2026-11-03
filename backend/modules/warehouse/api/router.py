@@ -501,7 +501,7 @@ def admin_set_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
+            raise HTTPException(_admin_stock_err_status(result.code), err_detail(result))
         connection.commit()
     return {
         "location_id": result.value.location_id,
@@ -526,9 +526,14 @@ def delete_stock_item(
         )
         if isinstance(result, Err):
             connection.rollback()
-            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, err_detail(result))
+            raise HTTPException(_admin_stock_err_status(result.code), err_detail(result))
         connection.commit()
+
+
+def _admin_stock_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    return status.HTTP_409_CONFLICT if code == "LOCATION_FROZEN" else status.HTTP_400_BAD_REQUEST
 
 
 # --- Lots/serials -----------------------------------------------------------------------
@@ -658,6 +663,7 @@ class CompleteCycleCountRequest(BaseModel):
 def _cycle_count_response(count: CycleCount) -> dict:
     return {
         "id": count.id,
+        "number": count.number,
         "site_id": count.site_id,
         "scope_location_id": count.scope_location_id,
         "count_type": count.count_type,
@@ -687,15 +693,23 @@ def _cycle_count_line_response(line: CycleCountLine) -> dict:
         "count_1": line.count_1,
         "count_2": line.count_2,
         "count_3": line.count_3,
+        "counts_recorded": line.counts_recorded,
     }
 
 
 def _cycle_count_err_status(code: str) -> int:
     if code == "NOT_FOUND":
         return status.HTTP_404_NOT_FOUND
-    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNRESOLVED"):
+    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNRESOLVED", "COUNT_SCOPE_OVERLAP", "LOCATION_FROZEN"):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
+
+
+@router.get("/frozen-locations")
+def list_frozen_locations(tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> list[dict]:
+    """Open to whoever sees stock moves, not only to those who manage counts: they are the ones refused."""
+    with get_connection() as connection:
+        return CycleCountService(connection).frozen_scopes(tenant_id=tenant.tenant_id)
 
 
 @router.get("/cycle-counts")

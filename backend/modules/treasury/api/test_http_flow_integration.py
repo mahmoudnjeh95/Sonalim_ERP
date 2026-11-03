@@ -71,6 +71,32 @@ def api(db, monkeypatch):
     return client
 
 
+def _user_with(db, *permissions):
+    """A second session holding only these permissions, for checks the main fixture's user would pass."""
+    user, token = str(ULID()), str(ULID())
+    db.execute("INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')", (user, TENANT, f"{user}@test.local"))
+    db.execute("INSERT INTO core.sessions (token, user_id, tenant_id, expires_at) VALUES (%s, %s, %s, NOW() + interval '1 hour')", (token, user, TENANT))
+    for permission in permissions:
+        db.execute("INSERT INTO core.user_permissions (user_id, permission) VALUES (%s, %s)", (user, permission))
+    return {"Authorization": f"Bearer {token}"}
+
+
+def test_the_ledger_posting_switch_needs_its_own_permission(api, db):
+    settings_only = _user_with(db, "treasury.admin_config", "treasury.view")
+    switch_only = _user_with(db, "treasury.admin_ledger_posting", "treasury.view")
+
+    refused = api.put("/treasury/settings/ledger_posting_enabled", json={"value": True}, headers=settings_only)
+    assert refused.status_code == 403
+    assert refused.json()["detail"]["code"] == "FORBIDDEN"
+    assert "treasury.admin_ledger_posting" in refused.json()["detail"]["message_fr"]
+    assert _ok(api.get("/treasury/settings", headers=settings_only))["ledger_posting_enabled"] is False
+
+    assert _ok(api.put("/treasury/settings/cash_payment_limit", json={"value": 500000}, headers=settings_only))["cash_payment_limit"] == 500000
+    assert api.put("/treasury/settings/cash_payment_limit", json={"value": 1}, headers=switch_only).status_code == 403
+
+    assert _ok(api.put("/treasury/settings/ledger_posting_enabled", json={"value": True}, headers=switch_only))["ledger_posting_enabled"] is True
+
+
 def _ok(response, status=200):
     assert response.status_code == status, response.text
     return response.json() if response.content else None
@@ -229,8 +255,10 @@ def test_stock_documents_over_http(api, db):
     frozen_post = api.post(f"/warehouse/vouchers/{frozen.json()['id']}/post")
     assert frozen_post.status_code == 409 and frozen_post.json()["detail"]["code"] == "LOCATION_FROZEN"
     line = _ok(api.get(f"/warehouse/cycle-counts/{count['id']}"))["lines"][0]
+    first = _ok(api.post(f"/warehouse/cycle-counts/{count['id']}/lines/{line['id']}/count", json={"counted_quantity": 10}))
+    assert first["status"] == "pending" and first["count_1"] is None and first["counts_recorded"] == 1
     counted = _ok(api.post(f"/warehouse/cycle-counts/{count['id']}/lines/{line['id']}/count", json={"counted_quantity": 10}))
-    assert counted["resolution"] == "matched" and counted["count_1"] == 10
+    assert counted["resolution"] == "matched" and counted["count_2"] == 10
     completed = _ok(api.post(f"/warehouse/cycle-counts/{count['id']}/complete", json={"correlation_id": "http-flow"}))
     assert completed["status"] == "completed"
     assert api.post(f"/warehouse/cycle-counts/{count['id']}/complete", json={"correlation_id": "http-flow"}).status_code == 409

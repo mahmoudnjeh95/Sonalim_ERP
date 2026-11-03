@@ -84,10 +84,10 @@ class StockService:
             for row_location_id, product_id, on_hand, reserved, in_production in rows
         ]
 
-    def _assert_not_frozen(self, tenant_id: str, location_id: str) -> Err | None:
-        """A cycle count in progress freezes the bins in its scope: counting a shelf while stock
-        moves in and out of it would make the counts meaningless. Only the count's own approved
-        adjustments (adjust_stock(_from_inventory=True)) may post there."""
+    def _assert_not_frozen(self, tenant_id: str, location_id: str, own_count_id: str | None = None) -> Err | None:
+        """A cycle count in progress freezes the locations in its scope: counting a shelf while stock
+        moves in and out of it would make the counts meaningless. Only that count's own approved
+        adjustment (`own_count_id`) passes, and never through another count's freeze."""
         row = self._connection.execute(
             """
             WITH RECURSIVE up AS (
@@ -96,13 +96,14 @@ class StockService:
                 SELECT l.id, l.parent_location_id, l.site_id
                 FROM warehouse.locations l JOIN up ON l.id = up.parent_location_id
             )
-            SELECT cc.id FROM warehouse.cycle_counts cc
+            SELECT COALESCE(cc.number, cc.id) FROM warehouse.cycle_counts cc
             WHERE cc.tenant_id = %s AND cc.status = 'in_progress'
               AND cc.site_id = (SELECT site_id FROM up LIMIT 1)
               AND (cc.scope_location_id IS NULL OR cc.scope_location_id IN (SELECT id FROM up))
+              AND (%s::text IS NULL OR cc.id <> %s)
             LIMIT 1
             """,
-            (location_id, tenant_id, tenant_id),
+            (location_id, tenant_id, tenant_id, own_count_id, own_count_id),
         ).fetchone()
         if row is None:
             return None
@@ -892,13 +893,13 @@ class StockService:
         reason: str,
         actor_id: str | None = None,
         reference: str = "manual_adjustment",
-        _from_inventory: bool = False,
+        _for_cycle_count: str | None = None,
     ) -> Result[StockLevel]:
         """Records an "ajustement" — a manual correction to on-hand quantity (e.g. a physical count)."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=delta)
         if isinstance(validation, Err):
             return validation
-        frozen = None if _from_inventory else self._assert_not_frozen(tenant_id, location_id)
+        frozen = self._assert_not_frozen(tenant_id, location_id, own_count_id=_for_cycle_count)
         if frozen is not None:
             return frozen
 
@@ -1079,6 +1080,9 @@ class StockService:
         promises about future stock, not records of the past, so a negative one
         is just wrong.
         """
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
         if quantity_reserved < 0 or quantity_in_production < 0:
             return Err(
                 "INVALID_QUANTITY",
@@ -1179,6 +1183,9 @@ class StockService:
     ) -> Result[None]:
         """Deletes a stock row entirely. The values are captured in the audit log
         before deletion, since the row itself won't be there to recover them from."""
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved, quantity_in_production

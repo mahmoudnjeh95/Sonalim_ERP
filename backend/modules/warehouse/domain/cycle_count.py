@@ -19,6 +19,7 @@ class CycleCount:
     completed_at: datetime.datetime | None
     created_by: str
     created_at: datetime.datetime
+    number: str | None = None
 
 
 @dataclass(frozen=True)
@@ -36,11 +37,13 @@ class CycleCountLine:
     counted_at: datetime.datetime | None
     resolved_by: str | None
     resolved_at: datetime.datetime | None
-    # The raw counts as entered, in order. counted_quantity is the settled figure and stays None
-    # until the counts settle (see settle_counts).
+    # The raw counts as entered, in order; counted_quantity is the settled figure and stays None
+    # until they settle (see settle_counts). Whoever reads an unsettled line gets only how many
+    # counts were entered, never their values: a second count must not be able to copy the first.
     count_1: float | None = None
     count_2: float | None = None
     count_3: float | None = None
+    counts_recorded: int = 0
 
 
 CYCLE_COUNT_VALID_TRANSITIONS = {
@@ -73,20 +76,13 @@ def resolve_count(*, expected_quantity: float, counted_quantity: float) -> str |
     return "matched" if counted_quantity == expected_quantity else None
 
 
-def settle_counts(
-    expected_quantity: float, count_1: float | None, count_2: float | None, count_3: float | None
-) -> tuple[float | None, bool]:
-    """Returns (settled quantity, more_counts_needed).
+def settle_counts(count_1: float | None, count_2: float | None, count_3: float | None) -> float | None:
+    """The settled quantity of a line, or None while it needs another count.
 
-    A first count that agrees with the books settles at once. Otherwise two equal counts settle the
-    line; two different ones need a third, which then decides. The variance of a settled line is
+    Two equal counts settle a line; two different ones need a third, which then decides. A first
+    count never settles, even when it matches the books: the books are compared only afterwards, so
+    the counter learns nothing from entering a figure. The variance of a settled line is
     settled - expected, positive when more was found than the books say."""
-    if count_1 is None:
-        return None, True
-    if count_2 is None:
-        return (count_1, False) if count_1 == expected_quantity else (None, True)
-    if count_1 == count_2:
-        return count_1, False
-    if count_3 is None:
-        return None, True
-    return count_3, False
+    if count_1 is None or count_2 is None:
+        return None
+    return count_1 if count_1 == count_2 else count_3

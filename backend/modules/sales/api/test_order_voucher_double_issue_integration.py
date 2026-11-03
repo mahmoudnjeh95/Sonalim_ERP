@@ -1,10 +1,8 @@
 """Integration test: a confirmed sales order can leave the warehouse by two routes that don't know
 about each other. The fulfillment flow (pick list, pack, ship) issues the stock; an issue voucher
-drafted from the same order issues it again. The voucher's order cap only counts other vouchers,
-and its availability check only looks at stock not reserved, so surplus stock lets it through.
-
-The two xfail tests state the correct outcome. They are strict, so the refusal in voucher_service
-turns them into failures until the marker comes off."""
+drafted from the same order would issue it again. The voucher's order cap only counts other vouchers,
+and its availability check only looks at stock not reserved, so surplus stock would let it through.
+voucher_service refuses such an order with ORDER_IN_FULFILLMENT."""
 from __future__ import annotations
 
 import pytest
@@ -21,11 +19,6 @@ from modules.warehouse.events.consumers import _handle_sales_order_confirmed
 
 TENANT = "integration-test-order-voucher"
 ORDERED = 30
-
-double_issue = pytest.mark.xfail(
-    strict=True,
-    reason="voucher_service does not refuse an order that fulfillment holds or has shipped",
-)
 
 
 @pytest.fixture
@@ -116,21 +109,21 @@ def test_shipping_alone_issues_the_order_once(db, env):
     assert db.execute("SELECT status FROM sales.orders WHERE id = %s", (order_id,)).fetchone()[0] == "shipped"
 
 
-@double_issue
 def test_a_voucher_after_the_shipment_does_not_issue_the_goods_again(db, env):
     order_id = _confirmed_order(db, env, stock=100)
     _ship(db, env, order_id)
 
-    _post_voucher_from_order(db, env, order_id)
+    posted = _post_voucher_from_order(db, env, order_id)
 
+    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
     assert _levels(db, env) == (100 - ORDERED, 0)
 
 
-@double_issue
 def test_a_voucher_before_the_shipment_does_not_issue_the_goods_twice(db, env):
     order_id = _confirmed_order(db, env, stock=100)
 
-    _post_voucher_from_order(db, env, order_id)
+    posted = _post_voucher_from_order(db, env, order_id)
+    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
     fulfillment_can_ship = [p for p in FulfillmentService(db).list_pick_lists(tenant_id=TENANT) if p.source_id == order_id]
     assert fulfillment_can_ship
     _ship(db, env, order_id)
@@ -138,12 +131,48 @@ def test_a_voucher_before_the_shipment_does_not_issue_the_goods_twice(db, env):
     assert _levels(db, env) == (100 - ORDERED, 0)
 
 
-def test_without_surplus_stock_the_voucher_is_already_refused(db, env):
-    """Why this stays unnoticed in a small test: the reservation hides the order's own stock from
-    the voucher, so only stock beyond the order lets the second issue through."""
+def test_without_surplus_stock_the_voucher_is_refused_the_same_way(db, env):
     order_id = _confirmed_order(db, env, stock=ORDERED)
 
     posted = _post_voucher_from_order(db, env, order_id)
 
-    assert isinstance(posted, Err)
+    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
     assert _levels(db, env) == (ORDERED, ORDERED)
+
+
+def test_a_reservation_alone_is_enough_to_refuse_the_voucher(db, env):
+    """The window between confirming the order and the worker creating its pick list."""
+    received = StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=env["product"], location_id=env["location"], quantity=100,
+        correlation_id=str(ULID()), reference="setup", actor_id=env["actor"],
+    )
+    assert isinstance(received, Ok)
+    sales = SalesOrderService(db)
+    order = sales.create_order(
+        tenant_id=TENANT, actor_id=env["actor"], partner_id=env["partner"], location_id=env["location"],
+        lines=[OrderLine(product_id=env["product"], quantity=ORDERED, unit_price=100.0)],
+    )
+    assert isinstance(sales.confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id, correlation_id=str(ULID())), Ok)
+
+    assert not [p for p in FulfillmentService(db).list_pick_lists(tenant_id=TENANT) if p.source_id == order.id]
+    posted = _post_voucher_from_order(db, env, order.id)
+
+    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
+
+
+def test_a_cancelled_pick_list_with_no_reservation_left_lets_the_voucher_through(db, env):
+    order_id = _confirmed_order(db, env, stock=100)
+    db.execute("UPDATE warehouse.pick_lists SET status = 'cancelled' WHERE tenant_id = %s AND source_id = %s", (TENANT, order_id))
+    db.execute(
+        "UPDATE warehouse.stock_reservations SET status = 'released', quantity_open = 0 WHERE tenant_id = %s AND reference = %s",
+        (TENANT, f"sales_order:{order_id}"),
+    )
+    db.execute(
+        "UPDATE warehouse.stock_items SET quantity_reserved = 0 WHERE tenant_id = %s AND product_id = %s",
+        (TENANT, env["product"]),
+    )
+
+    posted = _post_voucher_from_order(db, env, order_id)
+
+    assert isinstance(posted, Ok), posted
+    assert _levels(db, env) == (100 - ORDERED, 0)
