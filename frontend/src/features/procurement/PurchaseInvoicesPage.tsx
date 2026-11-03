@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { Ban, CheckCheck, FileText, Plus } from "lucide-react";
+import { Ban, CheckCheck, FileText, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -72,6 +72,7 @@ export function PurchaseInvoicesPage() {
   const canManage = hasPermission("procurement.manage_purchase_invoices");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [lines, setLines] = useState<{ description: string; quantity: number; unit_price: number }[]>([]);
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listPurchaseInvoices(token) });
   const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
@@ -82,20 +83,33 @@ export function PurchaseInvoicesPage() {
   const {
     register,
     handleSubmit,
+    setValue,
     reset,
     formState: { errors },
   } = useForm<FormValues>({ resolver: zodResolver(schema), defaultValues: { currency: "XOF" } });
+
+  function changeLines(next: { description: string; quantity: number; unit_price: number }[]) {
+    setLines(next);
+    const total = next.reduce((sum, l) => sum + (Number(l.quantity) || 0) * (Number(l.unit_price) || 0), 0);
+    // With lines the header total is their sum, so the two can never disagree.
+    if (total > 0) setValue("amount", Math.round(total * 100) / 100, { shouldValidate: true });
+  }
 
   const onError = (fallbackKey: Parameters<typeof t>[0]) => (error: unknown) =>
     toast.error(t(fallbackKey), { description: error instanceof ApiError ? error.message : undefined });
 
   const createMutation = useMutation({
     mutationFn: (input: FormValues) =>
-      createPurchaseInvoice(token, { ...input, due_date: input.due_date || undefined }),
+      createPurchaseInvoice(token, {
+        ...input,
+        due_date: input.due_date || undefined,
+        lines: lines.filter((l) => l.description && l.quantity > 0),
+      }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
       reset({ currency: "XOF" });
+      setLines([]);
       toast.success(t("purchaseInvoice.created"));
     },
     onError: onError("purchaseInvoice.createError"),
@@ -311,7 +325,7 @@ export function PurchaseInvoicesPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label htmlFor="pi_amount">{t("purchaseInvoice.field.amount")}</Label>
-                      <Input id="pi_amount" type="number" step="any" {...register("amount")} />
+                      <Input id="pi_amount" type="number" step="any" readOnly={lines.length > 0} {...register("amount")} />
                       {errors.amount && <p className="text-sm text-destructive">{errors.amount.message}</p>}
                     </div>
                     <div className="space-y-1.5">
@@ -325,6 +339,27 @@ export function PurchaseInvoicesPage() {
                         ))}
                       </Select>
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <Label>{t("purchaseInvoice.field.lines")}</Label>
+                      <Button type="button" size="sm" variant="outline" onClick={() => changeLines([...lines, { description: "", quantity: 1, unit_price: 0 }])}>
+                        <Plus className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                    {lines.map((line, index) => (
+                      <div key={index} className="grid grid-cols-[1fr_5rem_7rem_auto] gap-2">
+                        <Input placeholder={t("purchaseInvoice.field.lineDescription")} value={line.description}
+                          onChange={(e) => changeLines(lines.map((l, i) => (i === index ? { ...l, description: e.target.value } : l)))} />
+                        <Input type="number" step="any" min="0" value={line.quantity}
+                          onChange={(e) => changeLines(lines.map((l, i) => (i === index ? { ...l, quantity: Number(e.target.value) } : l)))} />
+                        <Input type="number" step="any" min="0" value={line.unit_price}
+                          onChange={(e) => changeLines(lines.map((l, i) => (i === index ? { ...l, unit_price: Number(e.target.value) } : l)))} />
+                        <Button type="button" size="sm" variant="ghost" onClick={() => changeLines(lines.filter((_, i) => i !== index))}>
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
                   </div>
                   <Button type="submit" className="w-full" disabled={createMutation.isPending}>
                     {createMutation.isPending ? t("purchaseInvoice.creating") : t("purchaseInvoice.create")}

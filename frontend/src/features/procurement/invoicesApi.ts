@@ -27,6 +27,7 @@ export interface CreatePurchaseInvoiceInput {
   due_date?: string;
   purchase_order_id?: string;
   note?: string;
+  lines?: { description: string; quantity: number; unit_price: number }[];
 }
 
 export function listPurchaseInvoices(token: string, params?: { status?: PurchaseInvoiceStatus; overdue?: boolean }) {

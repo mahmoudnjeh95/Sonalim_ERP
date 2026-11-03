@@ -3816,6 +3816,8 @@ const en = {
   "finance.column.amountPaid": "Paid",
   "inventory.frozenNotice": "Stock movements are blocked while an inventory is open on:",
   "voucher.available": "Available at the source",
+  "purchaseInvoice.field.lines": "Lines (optional)",
+  "purchaseInvoice.field.lineDescription": "Description",
 } as const;
 
 export type TranslationKey = keyof typeof en;
@@ -7632,6 +7634,8 @@ const fr: Record<TranslationKey, string> = {
   "finance.column.amountPaid": "Payé",
   "inventory.frozenNotice": "Les mouvements de stock sont bloqués pendant un inventaire sur :",
   "voucher.available": "Disponible à la source",
+  "purchaseInvoice.field.lines": "Lignes (facultatif)",
+  "purchaseInvoice.field.lineDescription": "Désignation",
 };
 
 const dictionaries: Record<Language, Record<TranslationKey, string>> = { en, fr };
