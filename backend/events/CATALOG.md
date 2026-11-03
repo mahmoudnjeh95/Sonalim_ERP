@@ -18,6 +18,7 @@
 | `finance.invoice.paid` | 1.0 | finance | — | `invoice_id`, `partner_id`, `amount`, `currency` |
 | `procurement.purchase_order.status_changed` | 1.0 | procurement | — | `purchase_order_id`, `from_status`, `to_status` |
 | `procurement.purchase_order_receipt.confirmed` | 1.0 | procurement | warehouse | `purchase_order_receipt_id`, `purchase_order_id`, `location_id`, `lines` (`product_id`, `quantity`, `uom_id`, `lot_number`) |
+| `procurement.purchase_invoice.validated` | 1.0 | procurement | — | `invoice_id`, `partner_id`, `amount`, `currency`, `due_date` |
 | `qc.quality_report.validated` | 1.0 | qc | — | `quality_report_id`, `is_conforming` |
 | `qc.non_conformity.raised` | 1.0 | qc | — | `non_conformity_id`, `of_id`, `product_id`, `quantity`, `location_id` |
 | `qc.non_conformity.dispositioned` | 1.0 | qc | production | `non_conformity_id`, `of_id`, `product_id`, `lines` (`component`, `disposition`, `quantity`) |
