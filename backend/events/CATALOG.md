@@ -23,6 +23,8 @@
 | `treasury.receipt.cancelled` | 1.0 | treasury | finance | `receipt_id`, `allocations` (`invoice_id`, `amount`) |
 | `treasury.disbursement.posted` | 1.0 | treasury | procurement | `disbursement_id`, `partner_id`, `allocations` (`invoice_id`, `amount`), `total`, `currency` |
 | `treasury.disbursement.cancelled` | 1.0 | treasury | procurement | `disbursement_id`, `allocations` (`invoice_id`, `amount`) |
+| `treasury.instrument.collected` | 1.0 | treasury | — | `instrument_id`, `direction`, `method`, `amount`, `currency`, `account_id` |
+| `treasury.instrument.unpaid` | 1.0 | treasury | finance, procurement | `instrument_id`, `direction`, `amount`, `currency`, `allocations` (`invoice_id`, `amount`) |
 | `qc.quality_report.validated` | 1.0 | qc | — | `quality_report_id`, `is_conforming` |
 | `qc.non_conformity.raised` | 1.0 | qc | — | `non_conformity_id`, `of_id`, `product_id`, `quantity`, `location_id` |
 | `qc.non_conformity.dispositioned` | 1.0 | qc | production | `non_conformity_id`, `of_id`, `product_id`, `lines` (`component`, `disposition`, `quantity`) |

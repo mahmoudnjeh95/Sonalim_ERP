@@ -5,7 +5,7 @@
   "optional_depends": ["sales"],
   "provides_api": ["InvoiceService"],
   "publishes_events": ["finance.invoice.issued", "finance.invoice.paid"],
-  "subscribes_events": ["sales.order.confirmed", "treasury.receipt.posted", "treasury.receipt.cancelled"],
+  "subscribes_events": ["sales.order.confirmed", "treasury.receipt.posted", "treasury.receipt.cancelled", "treasury.instrument.unpaid"],
   "migrations_path": "./migrations",
   "permissions": ["finance.view_invoices", "finance.manage_invoices", "finance.admin_invoices"]
 }

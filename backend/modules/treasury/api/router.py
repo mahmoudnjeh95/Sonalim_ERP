@@ -12,11 +12,12 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.treasury.api.document_service import DocumentService
+from modules.treasury.api.instrument_service import InstrumentService
 from modules.treasury.api.service import AccountService, BankService, SettingsService
 
 router = APIRouter(prefix="/treasury", tags=["treasury"])
 
-_CONFLICT = {"DOCUMENT_NOT_POSTED", "INSTRUMENT_ALREADY_PROCESSED", "BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
+_CONFLICT = {"INSTRUMENT_NOT_PENDING", "UNPAID_CHEQUE_ONLY", "DOCUMENT_NOT_POSTED", "INSTRUMENT_ALREADY_PROCESSED", "BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
 
 
 def _err_status(code: str) -> int:
@@ -312,3 +313,56 @@ def list_open_invoices(direction: str, partner_id: str, tenant: TenantContext = 
             i for status_name in ("validated", "partially_paid")
             for i in PurchaseInvoiceService(connection).list_invoices(tenant_id=tenant.tenant_id, status=status_name, partner_id=partner_id)
         ]
+
+
+# ---- instruments, deposit slips, alerts, cash journal ------------------------------------------
+class SlipItemRequest(BaseModel):
+    instrument_id: str
+    outcome: str
+
+
+class SlipRequest(BaseModel):
+    account_id: str
+    slip_date: datetime.date
+    note: str | None = None
+    items: list[SlipItemRequest]
+
+
+@router.get("/instruments")
+def list_instruments(direction: str | None = None, status_filter: str | None = None, due_to: datetime.date | None = None,
+                     tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return InstrumentService(connection).list_instruments(
+            tenant_id=tenant.tenant_id, direction=direction, status=status_filter, due_to=due_to)
+
+
+@router.post("/deposit-slips", status_code=status.HTTP_201_CREATED)
+def post_deposit_slip(body: SlipRequest, tenant: TenantContext = Depends(require_permission("treasury.collect_instruments"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, InstrumentService(connection).post_slip(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, account_id=body.account_id, slip_date=body.slip_date,
+            note=body.note, items=[i.model_dump() for i in body.items], correlation_id=str(uuid4())))
+
+
+@router.post("/instruments/{instrument_id}/unpaid")
+def mark_instrument_unpaid(instrument_id: str, tenant: TenantContext = Depends(require_permission("treasury.collect_instruments"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, InstrumentService(connection).mark_unpaid(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, instrument_id=instrument_id, correlation_id=str(uuid4())))
+
+
+@router.get("/alerts")
+def list_alerts(tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return InstrumentService(connection).alerts(tenant_id=tenant.tenant_id)
+
+
+@router.get("/journals/cash")
+def cash_journal(account_id: str, date_from: datetime.date | None = None, date_to: datetime.date | None = None,
+                 tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    with get_connection() as connection:
+        result = InstrumentService(connection).cash_journal(
+            tenant_id=tenant.tenant_id, account_id=account_id, date_from=date_from, date_to=date_to)
+        if isinstance(result, Err):
+            raise HTTPException(_err_status(result.code), err_detail(result))
+        return result.value

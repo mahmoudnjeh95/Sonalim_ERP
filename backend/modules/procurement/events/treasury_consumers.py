@@ -39,3 +39,20 @@ def _handle_cancelled(connection: psycopg.Connection, envelope: dict) -> None:
 
 register("procurement.treasury_disbursement_posted", "treasury.disbursement.posted", _handle_posted)
 register("procurement.treasury_disbursement_cancelled", "treasury.disbursement.cancelled", _handle_cancelled)
+
+
+def _handle_instrument_unpaid(connection: psycopg.Connection, envelope: dict) -> None:
+    """A bounced issued cheque reopens the purchase invoices it was paying (disbursements only)."""
+    payload = envelope["payload"]
+    if payload["direction"] != "out":
+        return
+    for allocation in payload["allocations"]:
+        result = apply_document_delta(
+            connection, tenant_id=envelope["tenant_id"], actor_id=SYSTEM_ACTOR, invoice_id=allocation["invoice_id"],
+            delta=-Decimal(allocation["amount"]), event_type=envelope["event_type"], document_id=payload["instrument_id"],
+        )
+        if isinstance(result, Err):
+            raise RuntimeError(f"{result.code}: {result.message}")
+
+
+register("procurement.treasury_instrument_unpaid", "treasury.instrument.unpaid", _handle_instrument_unpaid)
