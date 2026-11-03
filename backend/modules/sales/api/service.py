@@ -62,6 +62,13 @@ class SalesOrderService:
             opportunity_id=opportunity_id,
         )
 
+    def get_order(self, *, tenant_id: str, order_id: str) -> Result[SalesOrder]:
+        """Public single-order read (with lines) for other modules, e.g. a warehouse issue voucher."""
+        order = next((o for o in self.list_orders(tenant_id) if o.id == order_id), None)
+        if order is None:
+            return Err("NOT_FOUND", f"order {order_id} not found", f"commande {order_id} introuvable")
+        return Ok(order)
+
     def list_orders(self, tenant_id: str, status: str | None = None) -> list[SalesOrder]:
         if status is not None:
             rows = self._connection.execute(

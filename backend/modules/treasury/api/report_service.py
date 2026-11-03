@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-import csv
+
 import datetime
-import io
+
 from decimal import Decimal
 from typing import Any
 
 import psycopg
-from fastapi import Response
-from openpyxl import Workbook
+
+from core.tabular_export import tabular_response  # noqa: F401  (re-exported for the router)
 
 BUCKETS = (("0-30", 0, 30), ("31-60", 31, 60), ("61-90", 61, 90), ("90+", 91, 10**6))
 
@@ -84,26 +84,3 @@ class InvoiceStatusReportService:
         return sorted(groups.values(), key=lambda g: (g["partner_id"], g["currency"]))
 
 
-def tabular_response(headers: list[str], rows: list[list[Any]], fmt: str, filename: str) -> Response:
-    """CSV or XLSX download of a report. Decimals are written as numbers, not text."""
-    if fmt == "xlsx":
-        workbook = Workbook()
-        sheet = workbook.active
-        sheet.append(headers)
-        for row in rows:
-            sheet.append([float(c) if isinstance(c, Decimal) else c for c in row])
-        buffer = io.BytesIO()
-        workbook.save(buffer)
-        return Response(
-            buffer.getvalue(),
-            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            headers={"Content-Disposition": f'attachment; filename="{filename}.xlsx"'},
-        )
-    buffer = io.StringIO()
-    writer = csv.writer(buffer)
-    writer.writerow(headers)
-    writer.writerows(rows)
-    return Response(
-        "﻿" + buffer.getvalue(), media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{filename}.csv"'},
-    )

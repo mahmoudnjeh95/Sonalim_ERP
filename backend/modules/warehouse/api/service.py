@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 import psycopg
 from ulid import ULID
@@ -69,6 +70,22 @@ class StockService:
             )
             for location_id, product_id, on_hand, reserved, in_production in rows
         ]
+
+    def _assert_not_frozen(self, tenant_id: str, location_id: str) -> Err | None:
+        """A full inventory freezes its location: counting a shelf while stock moves in and out of
+        it would make the counts meaningless. Only closing the inventory itself may post there."""
+        row = self._connection.execute(
+            "SELECT number FROM warehouse.inventories WHERE tenant_id = %s AND location_id = %s "
+            "AND status = 'open' AND type = 'full' LIMIT 1",
+            (tenant_id, location_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return Err(
+            "LOCATION_FROZEN",
+            f"this location is frozen by inventory {row[0]}; close it before moving stock",
+            f"cet emplacement est gelé par l'inventaire {row[0]} ; clôturez-le avant de mouvementer le stock",
+        )
 
     def get_available_quantity(self, tenant_id: str, product_id: str, location_id: str) -> float:
         """What this location can actually promise.
@@ -247,6 +264,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -513,10 +533,19 @@ class StockService:
         reference: str,
         actor_id: str | None = None,
         move_type: str = "receipt",
+        unit_cost: Decimal | None = None,
     ) -> Result[StockLevel]:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
+        # The average is over the whole product, so read what was on hand everywhere before this lands.
+        on_hand_before = self._connection.execute(
+            "SELECT COALESCE(SUM(quantity_on_hand), 0) FROM warehouse.stock_items WHERE tenant_id = %s AND product_id = %s",
+            (tenant_id, product_id),
+        ).fetchone()[0]
 
         row = self._connection.execute(
             """
@@ -550,11 +579,18 @@ class StockService:
         )
         self._connection.execute(
             """
-            INSERT INTO warehouse.stock_moves (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO warehouse.stock_moves (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id, unit_cost)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id),
+            (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id, unit_cost),
         )
+        if unit_cost is not None:
+            from modules.warehouse.api.valuation_service import ValuationService
+
+            ValuationService(self._connection).apply_receipt(
+                tenant_id=tenant_id, product_id=product_id, on_hand_before=Decimal(str(on_hand_before)),
+                quantity=Decimal(str(quantity)), unit_cost=Decimal(str(unit_cost)),
+            )
         publish_event(
             self._connection,
             event_type="warehouse.stock.received",
@@ -580,6 +616,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -635,6 +674,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -691,6 +733,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -742,11 +787,15 @@ class StockService:
         reason: str,
         actor_id: str | None = None,
         reference: str = "manual_adjustment",
+        _from_inventory: bool = False,
     ) -> Result[StockLevel]:
         """Records an "ajustement" — a manual correction to on-hand quantity (e.g. a physical count)."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=delta)
         if isinstance(validation, Err):
             return validation
+        frozen = None if _from_inventory else self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """

@@ -12,10 +12,12 @@ from modules.warehouse.api.analytics_service import WarehouseAnalyticsService
 from modules.warehouse.api.location_service import LocationService
 from modules.warehouse.api.lot_service import LotService
 from modules.warehouse.api.service import StockService
+from modules.warehouse.api.stock_documents_router import router as stock_documents_router
 from modules.warehouse.domain.entities import Location
 from modules.warehouse.domain.lot import Lot, LOT_VALID_TRANSITIONS
 
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
+router.include_router(stock_documents_router)
 
 
 class ReserveStockRequest(BaseModel):

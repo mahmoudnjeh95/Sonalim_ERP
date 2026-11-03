@@ -4,7 +4,7 @@
   "depends": ["core"],
   "optional_depends": [],
   "provides_api": ["StockService", "LocationService", "LotService", "WarehouseAnalyticsService"],
-  "publishes_events": ["warehouse.stock.reserved", "warehouse.stock.received", "warehouse.stock.issued"],
+  "publishes_events": ["warehouse.stock.reserved", "warehouse.stock.received", "warehouse.stock.issued", "warehouse.voucher.posted", "warehouse.inventory.closed"],
   "subscribes_events": ["procurement.purchase_order_receipt.confirmed", "core.product.created"],
   "migrations_path": "./migrations",
   "permissions": [
@@ -15,6 +15,11 @@
     "warehouse.admin_locations",
     "warehouse.view_lots",
     "warehouse.manage_lots",
-    "warehouse.set_lot_expiry"
+    "warehouse.set_lot_expiry",
+    "warehouse.manage_vouchers",
+    "warehouse.post_vouchers",
+    "warehouse.manage_inventory",
+    "warehouse.close_inventory",
+    "warehouse.view_valuation"
   ]
 }
