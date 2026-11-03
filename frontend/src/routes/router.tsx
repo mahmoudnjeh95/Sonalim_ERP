@@ -28,6 +28,7 @@ import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
 import { PurchaseInvoicesPage } from "../features/procurement/PurchaseInvoicesPage";
+import { TreasuryPage } from "../features/treasury/TreasuryPage";
 import { ProductsPage } from "../features/products/ProductsPage";
 import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
 
@@ -82,6 +83,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/shipments", element: <ShipmentsPage /> },
   { path: "/procurement", element: <PurchaseOrdersPage /> },
   { path: "/procurement/invoices", element: <PurchaseInvoicesPage /> },
+  { path: "/treasury", element: <TreasuryPage /> },
   { path: "/sales", element: <SalesOrdersPage /> },
   { path: "/finance", element: <FinanceInvoicesPage /> },
   { path: "/admin/users", element: <UsersPage /> },

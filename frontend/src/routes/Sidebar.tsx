@@ -33,6 +33,7 @@ import {
   Sparkles,
   Tag,
   Target,
+  Landmark,
   Receipt,
   TrendingUp,
   Truck,
@@ -183,6 +184,7 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart },
       { to: "/finance", labelKey: "nav.finance", icon: Wallet },
+      { to: "/treasury", labelKey: "nav.treasury", icon: Landmark, permission: "treasury.view" },
     ],
   },
   {
