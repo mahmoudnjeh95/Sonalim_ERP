@@ -191,3 +191,28 @@ def test_listing_filters_by_direction(db, env):
     _post(db, env, "in", [{"method": "cash", "amount": 10, "account_id": env["cash"]}], with_details=False)
     assert len(DocumentService(db).list(tenant_id=TENANT, direction="in")) == 1
     assert DocumentService(db).list(tenant_id=TENANT, direction="out") == []
+
+
+def test_two_documents_cannot_both_claim_the_same_remaining_before_events_are_applied(db, env):
+    invoice_id = _sales_invoice(db, env, 1000.0)
+    first = _post(db, env, "in", [{"method": "cash", "amount": 700, "account_id": env["cash"]}], [{"invoice_id": invoice_id, "amount": 700}], reason="advance")
+    assert isinstance(first, Ok)
+    # The finance consumer has not run yet, so the invoice still reads 1000 remaining.
+    assert InvoiceService(db).get_invoice(tenant_id=TENANT, invoice_id=invoice_id).value["remaining"] == D("1000")
+    second = _post(db, env, "in", [{"method": "cash", "amount": 400, "account_id": env["cash"]}], [{"invoice_id": invoice_id, "amount": 400}], reason="advance")
+    assert isinstance(second, Err) and second.code == "OVER_ALLOCATION"
+    fits = _post(db, env, "in", [{"method": "cash", "amount": 300, "account_id": env["cash"]}], [{"invoice_id": invoice_id, "amount": 300}], reason="advance")
+    assert isinstance(fits, Ok)
+    open_view = DocumentService(db).open_invoice(TENANT, "in", invoice_id).value
+    assert open_view["remaining"] == D("0")
+    DocumentService(db).cancel(tenant_id=TENANT, actor_id=env["actor"], document_id=first.value["id"], direction="in", correlation_id="c")
+    assert DocumentService(db).open_invoice(TENANT, "in", invoice_id).value["remaining"] == D("700")
+
+
+def test_a_refused_document_leaves_nothing_behind(db, env):
+    before = db.execute("SELECT count(*) FROM treasury.documents WHERE tenant_id = %s", (TENANT,)).fetchone()[0]
+    refused = _post(db, env, "out", [{"method": "cash", "amount": 5000, "account_id": env["cash"]}], with_details=False)
+    assert isinstance(refused, Err) and refused.code == "INSUFFICIENT_BALANCE"
+    assert db.execute("SELECT count(*) FROM treasury.documents WHERE tenant_id = %s", (TENANT,)).fetchone()[0] == before
+    assert db.execute("SELECT count(*) FROM events.outbox WHERE tenant_id = %s AND event_type = 'treasury.disbursement.posted'", (TENANT,)).fetchone()[0] == 0
+    assert _balance(db, env["cash"]) == D("1000")

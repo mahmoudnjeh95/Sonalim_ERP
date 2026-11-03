@@ -294,28 +294,30 @@ def cancel_disbursement(document_id: str, tenant: TenantContext = Depends(requir
 @router.get("/open-invoices")
 def list_open_invoices(direction: str, partner_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
     """Invoices a receipt (direction=in) or disbursement (direction=out) can still be allocated to,
-    read through the owning modules' public services so treasury never touches their tables."""
+    read through the owning modules' public services so treasury never touches their tables. The
+    remaining amount already accounts for documents posted but not yet applied by the invoice's owner."""
     if direction not in ("in", "out"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": "INVALID_DIRECTION", "message": "direction must be in or out",
                                                           "message_fr": "le sens doit être in ou out"})
     with get_connection() as connection:
+        documents = DocumentService(connection)
         if direction == "in":
             from modules.finance.api.service import InvoiceService
 
-            service = InvoiceService(connection)
-            rows = []
-            for invoice in service.list_invoices(tenant.tenant_id):
-                if invoice.partner_id == partner_id and invoice.status in ("issued", "partially_paid"):
-                    detail = service.get_invoice(tenant_id=tenant.tenant_id, invoice_id=invoice.id)
-                    if not isinstance(detail, Err):
-                        rows.append(detail.value)
-            return rows
-        from modules.procurement.api.invoice_service import PurchaseInvoiceService
+            candidates = [i.id for i in InvoiceService(connection).list_invoices(tenant.tenant_id)
+                          if i.partner_id == partner_id and i.status in ("issued", "partially_paid")]
+        else:
+            from modules.procurement.api.invoice_service import PurchaseInvoiceService
 
-        return [
-            i for status_name in ("validated", "partially_paid")
-            for i in PurchaseInvoiceService(connection).list_invoices(tenant_id=tenant.tenant_id, status=status_name, partner_id=partner_id)
-        ]
+            service = PurchaseInvoiceService(connection)
+            candidates = [i["id"] for s in ("validated", "partially_paid")
+                          for i in service.list_invoices(tenant_id=tenant.tenant_id, status=s, partner_id=partner_id)]
+        rows = []
+        for invoice_id in candidates:
+            detail = documents.open_invoice(tenant.tenant_id, direction, invoice_id)
+            if not isinstance(detail, Err) and detail.value["remaining"] > 0:
+                rows.append(detail.value)
+        return rows
 
 
 # ---- instruments, deposit slips, alerts, cash journal ------------------------------------------

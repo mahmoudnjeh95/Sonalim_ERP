@@ -7,6 +7,7 @@ from typing import Any
 import psycopg
 from ulid import ULID
 
+from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
@@ -87,6 +88,7 @@ class InstrumentService:
 
     # ---- writes -----------------------------------------------------------------------------
 
+    @atomic
     def post_slip(self, *, tenant_id: str, actor_id: str, account_id: str, slip_date: datetime.date,
                   items: list[dict[str, str]], correlation_id: str, note: str | None = None) -> Result[dict[str, Any]]:
         if not items:
@@ -130,6 +132,7 @@ class InstrumentService:
                      entity_type="deposit_slip", entity_id=slip_id, payload={"number": number, "items": len(items)})
         return Ok({"id": slip_id, "number": number, "account_id": account_id, "slip_date": slip_date, "items": items})
 
+    @atomic
     def mark_unpaid(self, *, tenant_id: str, actor_id: str, instrument_id: str, correlation_id: str) -> Result[dict[str, Any]]:
         """Bounce a cheque outside a slip (typically after the bank already credited it)."""
         instrument = self._lock(tenant_id, instrument_id)

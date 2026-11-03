@@ -6,6 +6,7 @@ from typing import Any
 import psycopg
 from ulid import ULID
 
+from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
@@ -143,6 +144,7 @@ class InventoryService:
         )
         return self.get(tenant_id=tenant_id, inventory_id=inventory_id)
 
+    @atomic
     def close(self, *, tenant_id: str, actor_id: str, inventory_id: str, correlation_id: str) -> Result[dict[str, Any]]:
         locked = self._lock_open(tenant_id, inventory_id)
         if isinstance(locked, Err):

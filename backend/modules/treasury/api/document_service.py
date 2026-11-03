@@ -7,6 +7,7 @@ from typing import Any
 import psycopg
 from ulid import ULID
 
+from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
@@ -91,6 +92,7 @@ class DocumentService:
 
     # ---- writes -----------------------------------------------------------------------------
 
+    @atomic
     def create_and_post(
         self,
         *,
@@ -193,6 +195,7 @@ class DocumentService:
                      payload={"number": number, "total": str(total.value), "partner_id": partner_id})
         return self.get(tenant_id=tenant_id, document_id=document_id)
 
+    @atomic
     def cancel(self, *, tenant_id: str, actor_id: str, document_id: str, direction: str, correlation_id: str) -> Result[dict[str, Any]]:
         row = self._connection.execute(
             "SELECT status, number, partner_id, doc_date, currency, total FROM treasury.documents "
@@ -240,14 +243,36 @@ class DocumentService:
 
     # ---- helpers ----------------------------------------------------------------------------
 
-    def _invoice(self, tenant_id: str, direction: str, invoice_id: str) -> Result[dict[str, Any]]:
+    def open_invoice(self, tenant_id: str, direction: str, invoice_id: str, *, lock: bool = False) -> Result[dict[str, Any]]:
+        """The invoice as a new allocation sees it. Its owner updates the paid amount from our events
+        a moment after a document is posted, so `remaining` alone could be stale; we also subtract what
+        posted documents have already committed to it, and take the lesser. `lock` serialises two
+        documents allocating to the same invoice at the same time."""
+        if lock:
+            self._connection.execute("SELECT pg_advisory_xact_lock(hashtext(%s))", (f"treasury-invoice:{invoice_id}",))
         if direction == "in":
             from modules.finance.api.service import InvoiceService
 
-            return InvoiceService(self._connection).get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
-        from modules.procurement.api.invoice_service import PurchaseInvoiceService
+            invoice = InvoiceService(self._connection).get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+        else:
+            from modules.procurement.api.invoice_service import PurchaseInvoiceService
 
-        return PurchaseInvoiceService(self._connection).get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+            invoice = PurchaseInvoiceService(self._connection).get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+        if isinstance(invoice, Err):
+            return invoice
+        committed = self._connection.execute(
+            """
+            SELECT COALESCE(SUM(a.amount - a.reversed), 0)
+            FROM treasury.document_allocations a JOIN treasury.documents d ON d.id = a.document_id
+            WHERE d.tenant_id = %s AND d.direction = %s AND d.status = 'posted' AND a.invoice_id = %s
+            """,
+            (tenant_id, direction, invoice_id),
+        ).fetchone()[0]
+        effective = max(invoice.value["amount"] - committed, Decimal("0"))
+        return Ok({**invoice.value, "remaining": min(invoice.value["remaining"], effective)})
+
+    def _invoice(self, tenant_id: str, direction: str, invoice_id: str) -> Result[dict[str, Any]]:
+        return self.open_invoice(tenant_id, direction, invoice_id, lock=True)
 
     def _next_number(self, tenant_id: str, direction: str, year: int) -> str:
         row = self._connection.execute(

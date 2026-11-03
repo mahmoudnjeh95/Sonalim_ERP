@@ -6,6 +6,7 @@ from typing import Any
 import psycopg
 from ulid import ULID
 
+from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
@@ -151,6 +152,7 @@ class VoucherService:
 
     # ---- posting ----------------------------------------------------------------------------
 
+    @atomic
     def post(self, *, tenant_id: str, actor_id: str, voucher_id: str, correlation_id: str) -> Result[dict[str, Any]]:
         current = self._lock(tenant_id, voucher_id)
         if isinstance(current, Err):
