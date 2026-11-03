@@ -153,6 +153,7 @@ PURGE_TABLES = [
     "warehouse.vouchers",
     "warehouse.voucher_lines",
     "warehouse.voucher_counters",
+    # legacy: the inventory feature was replaced by cycle counts; tables stay in databases that applied 0020
     "warehouse.inventories",
     "warehouse.inventory_lines",
     "treasury.documents",

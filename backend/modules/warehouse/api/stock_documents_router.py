@@ -12,15 +12,14 @@ from core.api.service import CoreService
 from core.domain.result import Err, err_detail
 from core.tabular_export import tabular_response
 from core.tenancy import TenantContext, require_permission
-from modules.warehouse.api.inventory_service import InventoryService
 from modules.warehouse.api.movements_report_service import MovementsReportService
 from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.api.voucher_service import VoucherService
 
-# Vouchers, physical inventory and valuation. Mounted on the warehouse router (prefix /warehouse).
+# Vouchers and valuation reports. Mounted on the warehouse router (prefix /warehouse).
 router = APIRouter(tags=["warehouse"])
 
-_CONFLICT = {"VOUCHER_NOT_DRAFT", "INVENTORY_ALREADY_OPEN", "INVENTORY_NOT_OPEN", "LOCATION_FROZEN", "STOCK_INSUFFICIENT",
+_CONFLICT = {"VOUCHER_NOT_DRAFT", "LOCATION_FROZEN", "STOCK_INSUFFICIENT",
              "ORDER_QTY_EXCEEDED", "RETURN_QTY_EXCEEDED"}
 
 
@@ -67,22 +66,6 @@ class VoucherUpdateRequest(BaseModel):
 class IssueFromOrderRequest(BaseModel):
     source_location_id: str
     quantities: dict[str, Decimal] | None = None
-
-
-class InventoryRequest(BaseModel):
-    location_id: str
-    type: str = "full"
-    note: str | None = None
-
-
-class CountRequest(BaseModel):
-    which: int
-    quantity: Decimal | None
-    observation: str | None = None
-
-
-class AddLineRequest(BaseModel):
-    product_id: str
 
 
 # ---- vouchers ----------------------------------------------------------------------------------
@@ -139,70 +122,6 @@ def cancel_voucher(voucher_id: str, tenant: TenantContext = Depends(require_perm
     with get_connection() as connection:
         return _unwrap(connection, VoucherService(connection).cancel(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, voucher_id=voucher_id))
-
-
-# ---- inventories -------------------------------------------------------------------------------
-@router.get("/inventories")
-def list_inventories(status_filter: str | None = None, location_id: str | None = None,
-                     tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> list[dict]:
-    with get_connection() as connection:
-        return InventoryService(connection).list(tenant_id=tenant.tenant_id, status=status_filter, location_id=location_id)
-
-
-@router.post("/inventories", status_code=status.HTTP_201_CREATED)
-def open_inventory(body: InventoryRequest, tenant: TenantContext = Depends(require_permission("warehouse.manage_inventory"))) -> dict:
-    with get_connection() as connection:
-        return _unwrap(connection, InventoryService(connection).open(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, location_id=body.location_id, type=body.type, note=body.note))
-
-
-@router.get("/inventories/{inventory_id}")
-def get_inventory(inventory_id: str, tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> dict:
-    with get_connection() as connection:
-        result = InventoryService(connection).get(tenant_id=tenant.tenant_id, inventory_id=inventory_id)
-        if isinstance(result, Err):
-            raise HTTPException(_err_status(result.code), err_detail(result))
-        return result.value
-
-
-@router.get("/inventories/{inventory_id}/blank-sheet")
-def inventory_blank_sheet(inventory_id: str, tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> dict:
-    with get_connection() as connection:
-        result = InventoryService(connection).blank_sheet(tenant_id=tenant.tenant_id, inventory_id=inventory_id)
-        if isinstance(result, Err):
-            raise HTTPException(_err_status(result.code), err_detail(result))
-        return result.value
-
-
-@router.post("/inventories/{inventory_id}/lines")
-def add_inventory_line(inventory_id: str, body: AddLineRequest,
-                       tenant: TenantContext = Depends(require_permission("warehouse.manage_inventory"))) -> dict:
-    with get_connection() as connection:
-        return _unwrap(connection, InventoryService(connection).add_line(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, inventory_id=inventory_id, product_id=body.product_id))
-
-
-@router.patch("/inventories/{inventory_id}/lines/{line_id}/count")
-def record_inventory_count(inventory_id: str, line_id: str, body: CountRequest,
-                           tenant: TenantContext = Depends(require_permission("warehouse.manage_inventory"))) -> dict:
-    with get_connection() as connection:
-        return _unwrap(connection, InventoryService(connection).record_count(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, inventory_id=inventory_id, line_id=line_id,
-            which=body.which, quantity=body.quantity, observation=body.observation))
-
-
-@router.post("/inventories/{inventory_id}/close")
-def close_inventory(inventory_id: str, tenant: TenantContext = Depends(require_permission("warehouse.close_inventory"))) -> dict:
-    with get_connection() as connection:
-        return _unwrap(connection, InventoryService(connection).close(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, inventory_id=inventory_id, correlation_id=str(uuid4())))
-
-
-@router.post("/inventories/{inventory_id}/cancel")
-def cancel_inventory(inventory_id: str, tenant: TenantContext = Depends(require_permission("warehouse.manage_inventory"))) -> dict:
-    with get_connection() as connection:
-        return _unwrap(connection, InventoryService(connection).cancel(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, inventory_id=inventory_id))
 
 
 # ---- valuation and movements report ------------------------------------------------------------

@@ -13,6 +13,7 @@ from modules.warehouse.domain.cycle_count import (
     CycleCount,
     CycleCountLine,
     resolve_count,
+    settle_counts,
     transition_cycle_count,
     validate_counted_quantity,
 )
@@ -23,7 +24,7 @@ _COUNT_COLUMNS = (
 )
 _LINE_COLUMNS = (
     "id, tenant_id, cycle_count_id, location_id, product_id, expected_quantity, counted_quantity, "
-    "status, resolution, counted_by, counted_at, resolved_by, resolved_at"
+    "status, resolution, counted_by, counted_at, resolved_by, resolved_at, count_1, count_2, count_3"
 )
 
 
@@ -40,6 +41,9 @@ def _line_from_row(row) -> CycleCountLine:
         expected_quantity=float(row[5]) if row[5] is not None else None,
         counted_quantity=float(row[6]) if row[6] is not None else None,
         status=row[7], resolution=row[8], counted_by=row[9], counted_at=row[10], resolved_by=row[11], resolved_at=row[12],
+        count_1=float(row[13]) if row[13] is not None else None,
+        count_2=float(row[14]) if row[14] is not None else None,
+        count_3=float(row[15]) if row[15] is not None else None,
     )
 
 
@@ -250,21 +254,40 @@ class CycleCountService:
             return line_result
         line = line_result.value
 
-        resolution = resolve_count(expected_quantity=line.expected_quantity, counted_quantity=counted_quantity)
+        if line.status == "counted":
+            return Err("INVALID_STATE", "this line is already counted", "cette ligne est déjà comptée")
+
+        # Counts go into the next free slot: a first count that differs from the books must be
+        # confirmed by a second, and two different ones by a third (see settle_counts).
+        counts = [line.count_1, line.count_2, line.count_3]
+        slot = counts.index(None)
+        counts[slot] = counted_quantity
+        settled, _ = settle_counts(line.expected_quantity, *counts)
         now = datetime.datetime.now(datetime.timezone.utc)
-        self._connection.execute(
-            """
-            UPDATE warehouse.cycle_count_lines
-            SET counted_quantity = %s, status = 'counted', resolution = %s, counted_by = %s, counted_at = %s,
-                resolved_by = %s, resolved_at = %s
-            WHERE id = %s AND tenant_id = %s
-            """,
-            (counted_quantity, resolution, actor_id, now, actor_id if resolution else None, now if resolution else None, line_id, tenant_id),
-        )
+        if settled is None:
+            self._connection.execute(
+                f"UPDATE warehouse.cycle_count_lines SET count_{slot + 1} = %s, counted_by = %s, counted_at = %s "
+                "WHERE id = %s AND tenant_id = %s",
+                (counted_quantity, actor_id, now, line_id, tenant_id),
+            )
+            resolution = None
+        else:
+            resolution = resolve_count(expected_quantity=line.expected_quantity, counted_quantity=settled)
+            self._connection.execute(
+                f"""
+                UPDATE warehouse.cycle_count_lines
+                SET count_{slot + 1} = %s, counted_quantity = %s, status = 'counted', resolution = %s, counted_by = %s,
+                    counted_at = %s, resolved_by = %s, resolved_at = %s
+                WHERE id = %s AND tenant_id = %s
+                """,
+                (counted_quantity, settled, resolution, actor_id, now, actor_id if resolution else None,
+                 now if resolution else None, line_id, tenant_id),
+            )
         record_audit(
             self._connection, tenant_id=tenant_id, actor_id=actor_id, action="cycle_count_line.counted",
             entity_type="cycle_count_line", entity_id=line_id,
-            payload={"expected_quantity": line.expected_quantity, "counted_quantity": counted_quantity, "resolution": resolution},
+            payload={"expected_quantity": line.expected_quantity, "counted_quantity": counted_quantity,
+                     "round": slot + 1, "settled_quantity": settled, "resolution": resolution},
         )
         return self._get_line(tenant_id=tenant_id, cycle_count_id=cycle_count_id, line_id=line_id)
 
@@ -306,6 +329,7 @@ class CycleCountService:
                     reason=f"cycle_count:{cycle_count_id}",
                     actor_id=actor_id,
                     reference=f"cycle_count:{cycle_count_id}",
+                    _from_inventory=True,  # the count's own adjustment is the one write its freeze lets through
                 )
                 if isinstance(adjust_result, Err):
                     return adjust_result

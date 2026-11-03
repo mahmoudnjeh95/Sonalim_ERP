@@ -684,6 +684,9 @@ def _cycle_count_line_response(line: CycleCountLine) -> dict:
         "counted_at": line.counted_at,
         "resolved_by": line.resolved_by,
         "resolved_at": line.resolved_at,
+        "count_1": line.count_1,
+        "count_2": line.count_2,
+        "count_3": line.count_3,
     }
 
 

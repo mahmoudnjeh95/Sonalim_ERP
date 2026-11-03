@@ -1,6 +1,6 @@
 import { useState, type ComponentType } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { BarChart3, Boxes, ClipboardList, Coins, FileText, History as HistoryIcon, LayoutDashboard, ListTree, Lock, Package, Repeat } from "lucide-react";
+import { BarChart3, Boxes, Coins, FileText, History as HistoryIcon, LayoutDashboard, ListTree, Lock, Package, Repeat } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
 import { StickyTabBar } from "../../components/patterns/StickyTabBar";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
@@ -17,7 +17,6 @@ import { FinishedGoodsAnalysisTab } from "./FinishedGoodsAnalysisTab";
 import { HistoryTab } from "./HistoryTab";
 import { StockHistoryTab } from "./StockHistoryTab";
 import { VouchersTab } from "./VouchersTab";
-import { InventoryTab } from "./InventoryTab";
 import { FrozenLocationsNotice } from "./FrozenLocationsNotice";
 import { ScannerTab } from "./scanning/ScannerTab";
 import { LocationsTab } from "./locations/LocationsTab";
@@ -51,7 +50,6 @@ const TABS: readonly {
   { value: "history", labelKey: "warehouse.tabs.history", icon: HistoryIcon, Component: HistoryTab },
   { value: "stock-history", labelKey: "warehouse.tabs.stockHistory", icon: ListTree, Component: StockHistoryTab },
   { value: "vouchers", labelKey: "warehouse.tabs.vouchers", icon: FileText, Component: VouchersTab },
-  { value: "inventory", labelKey: "warehouse.tabs.inventory", icon: ClipboardList, Component: InventoryTab },
   { value: "scanning", labelKey: "warehouse.tabs.scanning", icon: ScanIcon, Component: ScannerTab },
 ];
 

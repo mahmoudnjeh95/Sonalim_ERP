@@ -79,6 +79,11 @@ function LineRow({
         ) : (
           (line.counted_quantity ?? "—")
         )}
+        {line.status === "pending" && line.count_1 !== null && (
+          <p className="mt-1 text-xs text-warning">
+            {t("warehouse.cycleCounts.line.recount")} ({[line.count_1, line.count_2, line.count_3].filter((c) => c !== null).join(" / ")})
+          </p>
+        )}
       </TableCell>
       <TableCell>{variance !== null ? (variance > 0 ? `+${variance}` : variance) : "—"}</TableCell>
       <TableCell>

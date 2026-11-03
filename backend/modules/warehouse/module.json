@@ -27,8 +27,7 @@
     "warehouse.shipment.shipped",
     "warehouse.reservation.expired",
     "warehouse.replenishment.approved",
-    "warehouse.voucher.posted",
-    "warehouse.inventory.closed"
+    "warehouse.voucher.posted"
   ],
   "subscribes_events": ["procurement.purchase_order_receipt.confirmed", "core.product.created", "sales.order.confirmed"],
   "migrations_path": "./migrations",
@@ -59,8 +58,6 @@
     "warehouse.manage_replenishment",
     "warehouse.admin_reorder_rules",
     "warehouse.manage_vouchers",
-    "warehouse.post_vouchers",
-    "warehouse.manage_inventory",
-    "warehouse.close_inventory"
+    "warehouse.post_vouchers"
   ]
 }

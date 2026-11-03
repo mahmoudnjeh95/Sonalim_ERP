@@ -1,4 +1,4 @@
-"""Integration tests for stock vouchers, the inventory freeze, and FIFO valuation."""
+"""Integration tests for stock vouchers, the cycle-count freeze, and FIFO valuation."""
 from __future__ import annotations
 
 from decimal import Decimal
@@ -9,8 +9,9 @@ from ulid import ULID
 from core.domain.result import Err, Ok
 from modules.sales.api.service import SalesOrderService
 from modules.sales.domain.entities import OrderLine
-from modules.warehouse.api.inventory_service import InventoryService
+from modules.warehouse.api.cycle_count_service import CycleCountService
 from modules.warehouse.api.service import StockService
+from modules.warehouse.api.site_service import SiteService
 from modules.warehouse.api.movements_report_service import MovementsReportService
 from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.api.voucher_service import VoucherService
@@ -186,25 +187,28 @@ def test_movements_report_links_the_voucher(db, env):
     assert rows[0]["voucher_number"] == posted["number"] and rows[0]["unit_cost"] == D("2.0000")
 
 
-# ---- inventory ---------------------------------------------------------------------------------
+# ---- cycle-count freeze ------------------------------------------------------------------------
 
-def _inventory(db, env, kind="full", location=None):
-    result = InventoryService(db).open(tenant_id=TENANT, actor_id=env["actor"], location_id=location or env["main"], type=kind)
-    assert isinstance(result, Ok), result
-    return result.value
-
-
-def _count(db, env, inventory, line, which, qty, observation=None):
-    return InventoryService(db).record_count(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"],
-                                             line_id=line["id"], which=which, quantity=D(str(qty)), observation=observation)
+def _site_for(db, env):
+    """Put the fixture's two locations in one site as bins, so a cycle count can cover them."""
+    site = SiteService(db).create_site(tenant_id=TENANT, actor_id=env["actor"], code="main", name="Main").value
+    db.execute("UPDATE warehouse.locations SET site_id = %s, location_type = 'bin' WHERE tenant_id = %s", (site.id, TENANT))
+    return site
 
 
-def test_full_inventory_freezes_the_location_until_closed(db, env):
+def _started_count(db, env, scope=None):
+    site = _site_for(db, env)
+    service = CycleCountService(db)
+    count = service.create_count(tenant_id=TENANT, actor_id=env["actor"], site_id=site.id, scope_location_id=scope)
+    assert isinstance(count, Ok), count
+    started = service.start_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.value.id)
+    assert isinstance(started, Ok)
+    return count.value
+
+
+def test_a_started_cycle_count_freezes_its_scope_until_completed(db, env):
     _receive(db, env, env["film"], 10, 5)
-    inventory = _inventory(db, env)
-    assert len(inventory["lines"]) == 1 and inventory["lines"][0]["theoretical_qty"] == D("10")
-    again = InventoryService(db).open(tenant_id=TENANT, actor_id=env["actor"], location_id=env["main"], type="full")
-    assert isinstance(again, Err) and again.code == "INVENTORY_ALREADY_OPEN"
+    count = _started_count(db, env, scope=env["main"])
 
     stock = StockService(db)
     blocked = [
@@ -217,78 +221,53 @@ def test_full_inventory_freezes_the_location_until_closed(db, env):
     assert all(isinstance(r, Err) and r.code == "LOCATION_FROZEN" for r in blocked)
     voucher = _voucher(db, env, type="receipt", dest_location_id=env["main"], lines=[{"product_id": env["film"], "quantity": 1, "unit_cost": 1}])
     assert _post(db, env, voucher).code == "LOCATION_FROZEN"
+    # Outside the count's scope stock still moves.
     assert isinstance(stock.receive_stock(tenant_id=TENANT, product_id=env["film"], location_id=env["annex"], quantity=1,
                                           correlation_id="c", reference="x"), Ok)
 
-    line = inventory["lines"][0]
-    _count(db, env, inventory, line, 1, 10)
-    _count(db, env, inventory, line, 2, 10)
-    closed = InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c")
-    assert isinstance(closed, Ok) and closed.value["status"] == "closed"
+    service = CycleCountService(db)
+    line = service.list_lines(tenant_id=TENANT, cycle_count_id=count.id).value[0]
+    assert isinstance(service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id,
+                                                line_id=line.id, counted_quantity=10), Ok)
+    assert isinstance(service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id="c"), Ok)
     assert isinstance(stock.receive_stock(tenant_id=TENANT, product_id=env["film"], location_id=env["main"], quantity=1,
                                           correlation_id="c", reference="x"), Ok)
 
 
-def test_close_adjusts_stock_by_the_variance_and_demands_observations(db, env):
+def test_the_count_rule_two_equal_counts_else_a_third_and_approval_adjusts_stock(db, env):
     _receive(db, env, env["film"], 10, 5)
-    inventory = _inventory(db, env)
-    line = inventory["lines"][0]
-    _count(db, env, inventory, line, 1, 8)
-    unsettled = InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c")
-    assert isinstance(unsettled, Err) and unsettled.code == "COUNT_REQUIRED"
-    _count(db, env, inventory, line, 2, 9)
-    assert InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c").code == "COUNT_REQUIRED"
-    updated = _count(db, env, inventory, line, 3, 9, observation="two cartons damaged")
-    assert updated.value["lines"][0]["final_qty"] == D("9") and updated.value["lines"][0]["variance"] == D("-1")
+    count = _started_count(db, env, scope=env["main"])
+    service = CycleCountService(db)
+    line = service.list_lines(tenant_id=TENANT, cycle_count_id=count.id).value[0]
 
-    cleared = _count(db, env, inventory, line, 3, 8)
-    assert cleared.value["lines"][0]["final_qty"] == D("8")
-    closed = InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c")
-    assert isinstance(closed, Ok)
+    def submit(qty):
+        result = service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id,
+                                           counted_quantity=qty)
+        assert isinstance(result, Ok), result
+        return result.value
+
+    first = submit(8)  # differs from the books: not settled yet
+    assert first.status == "pending" and first.counted_quantity is None and first.count_1 == 8
+    second = submit(9)  # two different counts: a third decides
+    assert second.status == "pending" and second.counted_quantity is None
+    third = submit(8)
+    assert third.status == "counted" and third.counted_quantity == 8 and third.resolution is None  # variance -2 awaits a decision
+    assert service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id,
+                                     counted_quantity=8).code == "INVALID_STATE"
+
+    refused = service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id="c")
+    assert isinstance(refused, Err) and refused.code == "LINES_UNRESOLVED"
+    resolved = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id,
+                                             decision="approve")
+    assert isinstance(resolved, Ok)  # the count's own adjustment passes its own freeze
     assert _on_hand(db, env, env["film"], env["main"]) == D("8")
-    move = db.execute("SELECT move_type, source_type, quantity FROM warehouse.stock_moves WHERE tenant_id = %s AND reference = %s",
-                      (TENANT, inventory["number"])).fetchone()
-    assert move == ("adjustment", "inventory", D("-2"))
+    assert isinstance(service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id="c"), Ok)
 
 
-def test_variance_without_observation_cannot_close(db, env):
+def test_cancelling_a_cycle_count_unfreezes_its_scope(db, env):
     _receive(db, env, env["film"], 10, 5)
-    inventory = _inventory(db, env)
-    line = inventory["lines"][0]
-    _count(db, env, inventory, line, 1, 7)
-    _count(db, env, inventory, line, 2, 7)
-    refused = InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c")
-    assert isinstance(refused, Err) and refused.code == "OBSERVATION_REQUIRED"
-    _count(db, env, inventory, line, 2, 7, observation="shrinkage")
-    assert isinstance(InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c"), Ok)
-
-
-def test_interim_inventory_neither_freezes_nor_adjusts(db, env):
-    _receive(db, env, env["film"], 10, 5)
-    inventory = _inventory(db, env, kind="interim")
-    assert isinstance(StockService(db).issue_stock(tenant_id=TENANT, product_id=env["film"], location_id=env["main"], quantity=1, reference="x"), Ok)
-    line = inventory["lines"][0]
-    _count(db, env, inventory, line, 1, 3)
-    _count(db, env, inventory, line, 2, 3, observation="count only")
-    assert isinstance(InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c"), Ok)
-    assert _on_hand(db, env, env["film"], env["main"]) == D("9")  # untouched by the interim count
-
-
-def test_cancel_unfreezes_and_extra_lines_start_at_zero(db, env):
-    _receive(db, env, env["film"], 10, 5)
-    inventory = _inventory(db, env)
-    extra = InventoryService(db).add_line(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], product_id=env["pasta"])
-    assert {l["sku"]: l["theoretical_qty"] for l in extra.value["lines"]} == {"FILM": D("10"), "PASTA": D("0")}
-    cancelled = InventoryService(db).cancel(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"])
-    assert cancelled.value["status"] == "cancelled"
-    assert isinstance(StockService(db).issue_stock(tenant_id=TENANT, product_id=env["film"], location_id=env["main"], quantity=1, reference="x"), Ok)
-    closed_again = InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=inventory["id"], correlation_id="c")
-    assert isinstance(closed_again, Err) and closed_again.code == "INVENTORY_NOT_OPEN"
-
-
-def test_blank_sheet_hides_counts(db, env):
-    _receive(db, env, env["film"], 10, 5)
-    inventory = _inventory(db, env)
-    _count(db, env, inventory, inventory["lines"][0], 1, 4)
-    sheet = InventoryService(db).blank_sheet(tenant_id=TENANT, inventory_id=inventory["id"]).value
-    assert sheet["lines"][0]["theoretical_qty"] == D("10") and sheet["lines"][0]["count_1"] is None
+    count = _started_count(db, env, scope=env["main"])
+    stock = StockService(db)
+    assert stock.issue_stock(tenant_id=TENANT, product_id=env["film"], location_id=env["main"], quantity=1, reference="x").code == "LOCATION_FROZEN"
+    assert isinstance(CycleCountService(db).cancel_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id), Ok)
+    assert isinstance(stock.issue_stock(tenant_id=TENANT, product_id=env["film"], location_id=env["main"], quantity=1, reference="x"), Ok)

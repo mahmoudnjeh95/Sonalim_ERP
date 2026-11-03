@@ -20,8 +20,8 @@ PERMISSIONS = [
     "treasury.view", "treasury.manage_accounts", "treasury.manage_receipts", "treasury.manage_disbursements",
     "treasury.collect_instruments", "treasury.import_statements", "treasury.admin_config",
     "procurement.view_purchase_invoices", "procurement.manage_purchase_invoices",
-    "warehouse.view_moves", "warehouse.manage_vouchers", "warehouse.post_vouchers", "warehouse.manage_inventory",
-    "warehouse.close_inventory", "warehouse.view_valuation",
+    "warehouse.view_moves", "warehouse.manage_vouchers", "warehouse.post_vouchers", "warehouse.view_valuation",
+    "warehouse.view_cycle_counts", "warehouse.manage_cycle_counts",
 ]
 
 
@@ -52,10 +52,11 @@ def api(db, monkeypatch):
     import core.tenancy
     import modules.procurement.api.invoice_router
     import modules.treasury.api.router
+    import modules.warehouse.api.router
     import modules.warehouse.api.stock_documents_router
 
     for module in (core.tenancy, modules.procurement.api.invoice_router, modules.treasury.api.router,
-                   modules.warehouse.api.stock_documents_router):
+                   modules.warehouse.api.router, modules.warehouse.api.stock_documents_router):
         monkeypatch.setattr(module, "get_connection", shared)
 
     from app.main import app
@@ -218,15 +219,19 @@ def test_stock_documents_over_http(api, db):
     assert api.get("/warehouse/reports/movements?format=xlsx").content[:2] == b"PK"
     assert _ok(api.get("/warehouse/reports/movements"))[0]["voucher_number"] == posted["number"]
 
-    inventory = _ok(api.post("/warehouse/inventories", json={"location_id": main, "type": "full"}), 201)
-    line = inventory["lines"][0]
+    from modules.warehouse.api.site_service import SiteService
+
+    site = SiteService(db).create_site(tenant_id=TENANT, actor_id=str(ULID()), code="hf-site", name="HF").value
+    db.execute("UPDATE warehouse.locations SET site_id = %s, location_type = 'bin' WHERE id = %s", (site.id, main))
+    count = _ok(api.post("/warehouse/cycle-counts", json={"site_id": site.id, "scope_location_id": main}), 201)
+    _ok(api.post(f"/warehouse/cycle-counts/{count['id']}/start"))
     frozen = api.post("/warehouse/vouchers", json={"type": "receipt", "dest_location_id": main, "lines": [{"product_id": product, "quantity": "1", "unit_cost": "5"}]})
     frozen_post = api.post(f"/warehouse/vouchers/{frozen.json()['id']}/post")
     assert frozen_post.status_code == 409 and frozen_post.json()["detail"]["code"] == "LOCATION_FROZEN"
-    for which in (1, 2):
-        _ok(api.patch(f"/warehouse/inventories/{inventory['id']}/lines/{line['id']}/count", json={"which": which, "quantity": "10"}))
-    sheet = _ok(api.get(f"/warehouse/inventories/{inventory['id']}/blank-sheet"))
-    assert sheet["lines"][0]["count_1"] is None
-    closed = _ok(api.post(f"/warehouse/inventories/{inventory['id']}/close"))
-    assert closed["status"] == "closed"
-    assert api.post(f"/warehouse/inventories/{inventory['id']}/close").status_code == 409
+    line = _ok(api.get(f"/warehouse/cycle-counts/{count['id']}"))["lines"][0]
+    counted = _ok(api.post(f"/warehouse/cycle-counts/{count['id']}/lines/{line['id']}/count", json={"counted_quantity": 10}))
+    assert counted["resolution"] == "matched" and counted["count_1"] == 10
+    completed = _ok(api.post(f"/warehouse/cycle-counts/{count['id']}/complete", json={"correlation_id": "http-flow"}))
+    assert completed["status"] == "completed"
+    assert api.post(f"/warehouse/cycle-counts/{count['id']}/complete", json={"correlation_id": "http-flow"}).status_code == 409
+    assert api.post(f"/warehouse/vouchers/{frozen.json()['id']}/post").status_code == 200

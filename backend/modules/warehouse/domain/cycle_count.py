@@ -36,6 +36,11 @@ class CycleCountLine:
     counted_at: datetime.datetime | None
     resolved_by: str | None
     resolved_at: datetime.datetime | None
+    # The raw counts as entered, in order. counted_quantity is the settled figure and stays None
+    # until the counts settle (see settle_counts).
+    count_1: float | None = None
+    count_2: float | None = None
+    count_3: float | None = None
 
 
 CYCLE_COUNT_VALID_TRANSITIONS = {
@@ -66,3 +71,22 @@ def resolve_count(*, expected_quantity: float, counted_quantity: float) -> str |
     """A count that matches the books needs no decision -- only a real variance
     is left for a supervisor to approve or reject."""
     return "matched" if counted_quantity == expected_quantity else None
+
+
+def settle_counts(
+    expected_quantity: float, count_1: float | None, count_2: float | None, count_3: float | None
+) -> tuple[float | None, bool]:
+    """Returns (settled quantity, more_counts_needed).
+
+    A first count that agrees with the books settles at once. Otherwise two equal counts settle the
+    line; two different ones need a third, which then decides. The variance of a settled line is
+    settled - expected, positive when more was found than the books say."""
+    if count_1 is None:
+        return None, True
+    if count_2 is None:
+        return (count_1, False) if count_1 == expected_quantity else (None, True)
+    if count_1 == count_2:
+        return count_1, False
+    if count_3 is None:
+        return None, True
+    return count_3, False

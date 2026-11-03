@@ -125,6 +125,7 @@ def test_an_approved_variance_adjusts_stock_and_a_rejected_one_does_not(db, env)
     service.start_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id)
     line = service.list_lines(tenant_id=TENANT, cycle_count_id=count.id).value[0]
 
+    service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=95)  # a differing count needs a confirming second one
     counted = service.submit_line_count(
         tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=95
     )
@@ -157,6 +158,7 @@ def test_rejecting_a_variance_leaves_stock_unchanged(db, env):
     service.start_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id)
     line = service.list_lines(tenant_id=TENANT, cycle_count_id=count.id).value[0]
     service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=50)
+    service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=50)
 
     rejected = service.resolve_line_variance(
         tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="reject"
@@ -176,6 +178,7 @@ def test_complete_is_blocked_until_every_line_is_resolved(db, env):
     service = CycleCountService(db)
     service.start_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id)
     line = service.list_lines(tenant_id=TENANT, cycle_count_id=count.id).value[0]
+    service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=42)
     service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=42)
 
     result = service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id=str(ULID()))

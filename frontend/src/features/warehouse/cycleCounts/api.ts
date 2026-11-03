@@ -32,6 +32,11 @@ export interface CycleCountLine {
   counted_at: string | null;
   resolved_by: string | null;
   resolved_at: string | null;
+  // The counts as entered: a count that differs from the books is confirmed by a second one,
+  // and two different ones by a third. counted_quantity is the settled figure.
+  count_1: number | null;
+  count_2: number | null;
+  count_3: number | null;
 }
 
 export interface CycleCountDetail extends CycleCount {

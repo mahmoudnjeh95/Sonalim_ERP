@@ -85,19 +85,31 @@ class StockService:
         ]
 
     def _assert_not_frozen(self, tenant_id: str, location_id: str) -> Err | None:
-        """A full inventory freezes its location: counting a shelf while stock moves in and out of
-        it would make the counts meaningless. Only closing the inventory itself may post there."""
+        """A cycle count in progress freezes the bins in its scope: counting a shelf while stock
+        moves in and out of it would make the counts meaningless. Only the count's own approved
+        adjustments (adjust_stock(_from_inventory=True)) may post there."""
         row = self._connection.execute(
-            "SELECT number FROM warehouse.inventories WHERE tenant_id = %s AND location_id = %s "
-            "AND status = 'open' AND type = 'full' LIMIT 1",
-            (tenant_id, location_id),
+            """
+            WITH RECURSIVE up AS (
+                SELECT id, parent_location_id, site_id FROM warehouse.locations WHERE id = %s AND tenant_id = %s
+                UNION ALL
+                SELECT l.id, l.parent_location_id, l.site_id
+                FROM warehouse.locations l JOIN up ON l.id = up.parent_location_id
+            )
+            SELECT cc.id FROM warehouse.cycle_counts cc
+            WHERE cc.tenant_id = %s AND cc.status = 'in_progress'
+              AND cc.site_id = (SELECT site_id FROM up LIMIT 1)
+              AND (cc.scope_location_id IS NULL OR cc.scope_location_id IN (SELECT id FROM up))
+            LIMIT 1
+            """,
+            (location_id, tenant_id, tenant_id),
         ).fetchone()
         if row is None:
             return None
         return Err(
             "LOCATION_FROZEN",
-            f"this location is frozen by inventory {row[0]}; close it before moving stock",
-            f"cet emplacement est gelé par l'inventaire {row[0]} ; clôturez-le avant de mouvementer le stock",
+            f"this location is frozen by cycle count {row[0]}; complete or cancel it before moving stock",
+            f"cet emplacement est gelé par l'inventaire {row[0]} ; terminez-le ou annulez-le avant de mouvementer le stock",
         )
 
     def get_available_quantity(self, tenant_id: str, product_id: str, location_id: str) -> float:
