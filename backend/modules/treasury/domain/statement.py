@@ -119,6 +119,10 @@ def parse_rows(rows: list[list[Any]], profile: dict[str, Any] | None = None) -> 
             result.errors.append({"row": row_number, "message": "amounts must not be negative",
                                   "message_fr": "les montants ne doivent pas être négatifs"})
             continue
+        if any(value != value.to_integral_value() for value in (debit, credit, balance) if value is not None):
+            result.errors.append({"row": row_number, "message": "amounts must be whole F CFA",
+                                  "message_fr": "les montants doivent être des nombres entiers en F CFA"})
+            continue
         if (debit > 0) == (credit > 0):
             result.errors.append({"row": row_number, "message": "a line needs exactly one of debit or credit",
                                   "message_fr": "une ligne doit avoir un débit ou un crédit, pas les deux ni aucun"})

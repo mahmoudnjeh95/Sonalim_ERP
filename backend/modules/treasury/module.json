@@ -15,6 +15,7 @@
     "treasury.collect_instruments",
     "treasury.import_statements",
     "treasury.admin_config",
-    "treasury.add_prior_year_invoice"
+    "treasury.admin_ledger_posting",
+    "treasury.admin_add_prior_year_invoice"
   ]
 }

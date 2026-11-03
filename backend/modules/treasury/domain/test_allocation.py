@@ -59,7 +59,7 @@ def test_invoice_target_checks():
     assert isinstance(check_invoice_target(_invoice(), D("100"), **ok), Ok)
     assert check_invoice_target(_invoice(status="draft"), D("10"), **ok).code == "INVOICE_NOT_VALIDATED"
     assert check_invoice_target(_invoice(), D("101"), **ok).code == "OVER_ALLOCATION"
-    assert check_invoice_target(_invoice(currency="EUR"), D("10"), **ok).code == "CURRENCY_MISMATCH"
+    assert check_invoice_target(_invoice(currency="EUR"), D("10"), **ok).code == "INVOICE_CURRENCY_NOT_XOF"
     assert check_invoice_target(_invoice(partner_id="q"), D("10"), **ok).code == "PARTNER_MISMATCH"
     out = dict(direction="out", document_currency="XOF", partner_id="p")
     assert isinstance(check_invoice_target(_invoice(status="validated"), D("10"), **out), Ok)
@@ -70,3 +70,18 @@ def test_prior_year_needs_permission():
     assert isinstance(check_prior_year(datetime.date(2025, 12, 1), datetime.date(2026, 1, 5), allowed=False), Err)
     assert isinstance(check_prior_year(datetime.date(2025, 12, 1), datetime.date(2026, 1, 5), allowed=True), Ok)
     assert isinstance(check_prior_year(datetime.date(2026, 1, 1), datetime.date(2026, 1, 5), allowed=False), Ok)
+
+
+def test_payments_and_allocations_are_whole_francs():
+    fractional = [{"method": "cash", "amount": "1000.50"}]
+    assert check_payments(D("0"), fractional, None).code == "AMOUNT_NOT_WHOLE"
+    assert check_payments(D("0"), [{"method": "cash", "amount": "1000.00"}], None).value == D("1000")
+    assert check_allocations(D("100"), [("i", D("10.50"))], with_details=True, reason="partial").code == "AMOUNT_NOT_WHOLE"
+
+
+def test_a_rejection_fee_is_whole_xof():
+    from modules.treasury.domain.instruments import check_rejection_fee
+
+    assert check_rejection_fee(D("100"), "a", currency="EUR").code == "TREASURY_CURRENCY_NOT_XOF"
+    assert check_rejection_fee(D("100.50"), "a", currency="XOF").code == "AMOUNT_NOT_WHOLE"
+    assert check_rejection_fee(D("100"), "a", currency="XOF").value == D("100")

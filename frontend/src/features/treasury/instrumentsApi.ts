@@ -14,6 +14,8 @@ export interface Instrument {
   document_number: string;
   account_id: string | null;
   partner_id: string;
+  rejection_fee: string | null;
+  rejection_fee_account_id: string | null;
 }
 
 export interface InstrumentAlert extends Instrument {
@@ -38,8 +40,8 @@ export const postDepositSlip = (
   body: { account_id: string; slip_date: string; items: { instrument_id: string; outcome: "collected" | "unpaid" }[] },
 ) => apiFetch<{ id: string; number: string }>("/treasury/deposit-slips", { method: "POST", token, body });
 
-export const markUnpaid = (token: string, id: string) =>
-  apiFetch<Instrument>(`/treasury/instruments/${id}/unpaid`, { method: "POST", token });
+export const markUnpaid = (token: string, id: string, fee?: { rejection_fee: number; rejection_fee_account_id: string }) =>
+  apiFetch<Instrument>(`/treasury/instruments/${id}/unpaid`, { method: "POST", token, body: fee ?? {} });
 
 export const listAlerts = (token: string) => apiFetch<InstrumentAlert[]>("/treasury/alerts", { token });
 

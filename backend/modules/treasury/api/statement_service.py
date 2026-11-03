@@ -14,6 +14,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.treasury.api.service import AccountService
+from modules.treasury.domain.money import check_currency
 from modules.treasury.domain.statement import DEFAULT_PROFILE, dedupe_key, parse_rows, suggest_matches
 
 MAX_BYTES = 5 * 1024 * 1024
@@ -67,6 +68,9 @@ class StatementImportService:
         if account.value["kind"] != "bank":
             return Err("ACCOUNT_NOT_BANK", "statements can only be imported for a bank account",
                        "un relevé ne peut être importé que pour un compte bancaire")
+        in_xof = check_currency(account.value["currency"])
+        if isinstance(in_xof, Err):
+            return in_xof
         if not filename.lower().endswith((".xlsx", ".xlsm", ".csv", ".txt")):
             return Err("STATEMENT_FORMAT_INVALID", "upload an .xlsx or .csv file", "importez un fichier .xlsx ou .csv")
         try:

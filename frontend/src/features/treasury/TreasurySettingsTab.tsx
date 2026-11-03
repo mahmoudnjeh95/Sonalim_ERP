@@ -60,7 +60,7 @@ export function TreasurySettingsTab() {
           <p className="text-sm text-muted-foreground">{t("treasury.settings.cashLimit.help")}</p>
           <div className="space-y-1.5">
             <Label htmlFor="cash_limit">{t("treasury.settings.cashLimit.label")}</Label>
-            <Input id="cash_limit" type="number" min="0" step="any" value={limit} disabled={!canEdit} onChange={(e) => setLimit(e.target.value)} />
+            <Input id="cash_limit" type="number" min="0" step="1" value={limit} disabled={!canEdit} onChange={(e) => setLimit(e.target.value)} />
           </div>
           {canEdit && (
             <Button onClick={() => limitMutation.mutate()} disabled={limitMutation.isPending}>

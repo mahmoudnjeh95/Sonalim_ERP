@@ -15,7 +15,6 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
-import { listCurrencies } from "../settings/exchangeRatesApi";
 import {
   createAccount,
   listAccounts,
@@ -31,7 +30,7 @@ const ACCOUNTS_KEY = ["treasury", "accounts"] as const;
 
 function money(value: string, currency: string) {
   try {
-    return new Intl.NumberFormat(currentLocale(), { style: "currency", currency, maximumFractionDigits: 2 }).format(Number(value));
+    return new Intl.NumberFormat(currentLocale(), { style: "currency", currency, maximumFractionDigits: 0 }).format(Number(value));
   } catch {
     return `${value} ${currency}`;
   }
@@ -52,7 +51,6 @@ export function AccountsTab() {
 
   const { data: accounts = [], isLoading } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: () => listAccounts(token, true) });
   const { data: banks = [] } = useQuery({ queryKey: ["treasury", "banks"], queryFn: () => listBanks(token) });
-  const { data: currencies = [] } = useQuery({ queryKey: ["core", "currencies"], queryFn: () => listCurrencies(token) });
   const { data: movements = [] } = useQuery({
     queryKey: ["treasury", "movements", movementsFor?.id],
     queryFn: () => listMovements(token, movementsFor!.id),
@@ -183,14 +181,7 @@ export function AccountsTab() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="acc_currency">{t("treasury.field.currency")}</Label>
-                <Select id="acc_currency" value={form.currency} onChange={(e) => set("currency", e.target.value)}>
-                  {currencies.length === 0 && <option value="XOF">XOF</option>}
-                  {currencies.map((c) => (
-                    <option key={c.code} value={c.code}>
-                      {c.code}
-                    </option>
-                  ))}
-                </Select>
+                <Input id="acc_currency" value="F CFA" disabled />
               </div>
             </div>
             <div className="space-y-1.5">
@@ -237,7 +228,7 @@ export function AccountsTab() {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label htmlFor="acc_opening">{t("treasury.field.openingBalance")}</Label>
-                <Input id="acc_opening" type="number" step="any" value={form.opening_balance ?? 0} onChange={(e) => set("opening_balance", Number(e.target.value))} />
+                <Input id="acc_opening" type="number" step="1" value={form.opening_balance ?? 0} onChange={(e) => set("opening_balance", Number(e.target.value))} />
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="acc_ledger">{t("treasury.field.ledgerAccount")}</Label>

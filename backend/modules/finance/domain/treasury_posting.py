@@ -15,6 +15,8 @@ Rule shapes (code = payment method, direction for instrument kinds, or '*' as th
   instrument_collected  in:  debit = the slip's account (its ledger code), credit = holding account
                         out: debit = holding account, credit = the slip's account
   instrument_unpaid     self-contained: in: debit customer, credit holding; out: debit holding, credit supplier
+  instrument_rejection_fee  debit = the bank-charges account; the credit is the ledger code of the
+                        treasury account the bank charged, so any credit on the rule is ignored
 
 Every rule also names the journal. The money side of a payment is the ledger code of the treasury
 account it moved, so each mobile-money operator keeps its own 5xx account.
@@ -32,7 +34,7 @@ from modules.finance.domain.posting import WILDCARD, PostingRule, _amount, resol
 
 DIRECTION_NOUN = {"in": "receipt", "out": "disbursement"}
 METHODS = ("cash", "transfer", "mobile_money", "cheque", "draft")
-INSTRUMENT_KINDS = ("instrument_collected", "instrument_unpaid")
+INSTRUMENT_KINDS = ("instrument_collected", "instrument_unpaid", "instrument_rejection_fee")
 RULE_KINDS = ("receipt_payment", "receipt_advance", "disbursement_payment", "disbursement_advance") + INSTRUMENT_KINDS
 
 
@@ -199,6 +201,41 @@ def instrument_entry(
             [
                 EntryLine(rule.debit_account_code, debit=value.value, label=label, partner_id=partner_id if on_debit else None),
                 EntryLine(rule.credit_account_code, credit=value.value, label=label, partner_id=None if on_debit else partner_id),
+            ],
+        )
+    )
+
+
+def rejection_fee_entry(
+    *,
+    direction: str,
+    amount: object,
+    currency: str,
+    account_ledger_code: str | None,
+    label: str,
+    rules: Iterable[PostingRule],
+) -> Result[TreasuryEntry]:
+    """What the bank charged for rejecting a cheque: an expense against the account it came out of."""
+    if currency != "XOF":
+        return _not_xof(currency)
+    value = _amount(amount, code="instrument_rejection_fee")
+    if isinstance(value, Err):
+        return value
+    resolved = resolve_rule(list(rules), source="treasury", source_kind="instrument_rejection_fee", code=direction)
+    if isinstance(resolved, Err):
+        return resolved
+    rule = resolved.value
+    if not rule.debit_account_code or not rule.journal_code:
+        return _incomplete(rule, "the bank-charges account and a journal")
+    if not account_ledger_code:
+        return _no_ledger_code("the account charged for the rejection")
+    return Ok(
+        TreasuryEntry(
+            "",
+            str(rule.journal_code),
+            [
+                EntryLine(rule.debit_account_code, debit=value.value, label=label),
+                EntryLine(account_ledger_code, credit=value.value, label=label),
             ],
         )
     )

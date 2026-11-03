@@ -29,14 +29,17 @@ def check_transition(current: str, target: str) -> Result[None]:
 
 
 def remaining(amount: Decimal, amount_paid: Decimal) -> Decimal:
-    return max(amount - amount_paid, Decimal("0"))
+    """Under one franc is settled (see status_for_payment), so it is not shown as still due."""
+    gap = amount - amount_paid
+    return gap if gap >= 1 else Decimal("0")
 
 
 def status_for_payment(amount: Decimal, amount_paid: Decimal) -> str:
-    """The status a validated invoice has once `amount_paid` has been applied."""
+    """The status a validated invoice has once `amount_paid` has been applied. Treasury pays in whole
+    francs, so what is left under one franc of an amount with cents can never be paid: settled."""
     if amount_paid <= 0:
         return "validated"
-    if amount_paid >= amount:
+    if amount - amount_paid < 1:
         return "paid"
     return "partially_paid"
 

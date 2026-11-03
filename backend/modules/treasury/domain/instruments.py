@@ -4,6 +4,7 @@ import datetime
 from decimal import Decimal
 
 from core.domain.result import Err, Ok, Result
+from modules.treasury.domain.money import check_currency, check_whole
 
 # status -> outcomes reachable from it. `unpaid` is for cheques only: a draft is settled or it
 # is not due yet, and the manual reserves the "impayé" outcome for bounced cheques.
@@ -23,6 +24,26 @@ def check_outcome(method: str, status: str, outcome: str) -> Result[None]:
             return Err("INSTRUMENT_NOT_PENDING", "this cheque can no longer be marked unpaid",
                        "ce chèque ne peut plus être marqué impayé")
     return Ok(None)
+
+
+def check_rejection_fee(amount: Decimal | None, account_id: str | None, *, currency: str) -> Result[Decimal | None]:
+    """The bank's optional charge for rejecting a cheque: nothing at all, or a positive amount and the
+    account it came out of, in whole francs."""
+    if amount is None and not account_id:
+        return Ok(None)
+    if amount is None:
+        return Err("REJECTION_FEE_REQUIRED", "enter the fee amount or remove its account", "saisissez le montant des frais ou retirez le compte")
+    if amount <= 0:
+        return Err("INVALID_REJECTION_FEE", "a rejection fee must be positive", "les frais de rejet doivent être positifs")
+    in_xof = check_currency(currency)
+    if isinstance(in_xof, Err):
+        return in_xof
+    whole = check_whole(amount)
+    if isinstance(whole, Err):
+        return whole
+    if not account_id:
+        return Err("REJECTION_FEE_ACCOUNT_REQUIRED", "a rejection fee needs the account it was charged to", "des frais de rejet exigent le compte débité")
+    return Ok(amount)
 
 
 def unpaid_reverses_balance(status_before: str) -> bool:

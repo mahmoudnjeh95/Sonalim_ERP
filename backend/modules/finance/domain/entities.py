@@ -41,9 +41,10 @@ def transition(invoice: Invoice, new_status: str) -> Result[Invoice]:
 
 
 def status_for_payment(amount: float, amount_paid: float) -> str:
-    """The status an issued invoice has once `amount_paid` has been applied to it."""
+    """The status an issued invoice has once `amount_paid` has been applied to it. Treasury pays in
+    whole francs, so what is left under one franc of an amount with cents can never be paid: settled."""
     if amount_paid <= 0:
         return "issued"
-    if amount_paid >= amount:
+    if amount - amount_paid < 1:
         return "paid"
     return "partially_paid"

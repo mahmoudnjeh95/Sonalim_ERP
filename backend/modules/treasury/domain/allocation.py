@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 from core.domain.result import Err, Ok, Result
+from modules.treasury.domain.money import TREASURY_CURRENCY, check_whole
 
 METHODS = ("cash", "cheque", "draft", "transfer", "mobile_money")
 INSTRUMENT_METHODS = ("cheque", "draft")
@@ -25,6 +26,9 @@ def check_payments(total_payments: Decimal, payments: list[dict[str, Any]], cash
         amount = Decimal(str(payment["amount"]))
         if amount <= 0:
             return Err("INVALID_AMOUNT", "payment amounts must be positive", "les montants de paiement doivent être positifs")
+        whole = check_whole(amount)
+        if isinstance(whole, Err):
+            return whole
         if payment["method"] not in METHODS:
             return Err("INVALID_METHOD", f"unknown payment method {payment['method']}", f"mode de paiement inconnu {payment['method']}")
         if payment["method"] in INSTRUMENT_METHODS and not (
@@ -55,6 +59,10 @@ def check_allocations(
     allocated = sum((amount for _, amount in allocations), Decimal("0"))
     if any(amount <= 0 for _, amount in allocations):
         return Err("INVALID_AMOUNT", "allocated amounts must be positive", "les montants affectés doivent être positifs")
+    for _, amount in allocations:
+        whole = check_whole(amount)
+        if isinstance(whole, Err):
+            return whole
     if len({invoice_id for invoice_id, _ in allocations}) != len(allocations):
         return Err("DUPLICATE_ALLOCATION", "an invoice can appear only once", "une facture ne peut apparaître qu'une fois")
     if allocated > total:
@@ -76,6 +84,9 @@ def check_invoice_target(
         return Err("INVOICE_NOT_VALIDATED", "this invoice is not open for payment", "cette facture n'est pas ouverte au paiement")
     if invoice["partner_id"] != partner_id:
         return Err("PARTNER_MISMATCH", "the invoice belongs to another partner", "la facture appartient à un autre partenaire")
+    if invoice["currency"] != TREASURY_CURRENCY:
+        return Err("INVOICE_CURRENCY_NOT_XOF", f"this invoice is in {invoice['currency']}; treasury can only settle invoices in XOF (F CFA)",
+                   f"cette facture est en {invoice['currency']} ; la trésorerie ne règle que les factures en XOF (F CFA)")
     if invoice["currency"] != document_currency:
         return Err("CURRENCY_MISMATCH", "the invoice is in another currency than the payment",
                    "la facture est dans une autre devise que le paiement")

@@ -11,6 +11,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from modules.treasury.domain.accounts import apply_movement, normalize_iban, validate_account
+from modules.treasury.domain.money import check_currency, check_whole
 
 # The manual's offsets, in days relative to the due date. Used until a tenant saves its own;
 # nothing is seeded per tenant because the tenant ids do not exist when the migration runs.
@@ -143,6 +144,9 @@ class AccountService:
         checked = validate_account(kind, fields, self._format_rules(tenant_id))
         if isinstance(checked, Err):
             return checked
+        money = _check_account_money(fields["currency"], fields.get("opening_balance") or 0)
+        if isinstance(money, Err):
+            return money
         taken = self._number_taken(tenant_id, fields.get("account_number"), fields.get("iban"), exclude_id=None)
         if taken:
             return taken
@@ -189,6 +193,9 @@ class AccountService:
         checked = validate_account(account["kind"], merged, self._format_rules(tenant_id))
         if isinstance(checked, Err):
             return checked
+        money = _check_account_money(merged["currency"], merged["opening_balance"])
+        if isinstance(money, Err):
+            return money
         taken = self._number_taken(tenant_id, merged.get("account_number"), merged.get("iban"), exclude_id=account_id)
         if taken:
             return taken
@@ -311,6 +318,13 @@ class AccountMovementService:
         return Ok(moved.value)
 
 
+def _check_account_money(currency: str, opening_balance: Any) -> Result[None]:
+    checked = check_currency(currency)
+    if isinstance(checked, Err):
+        return checked
+    return check_whole(Decimal(str(opening_balance)))
+
+
 class SettingsService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
@@ -328,6 +342,10 @@ class SettingsService:
             return Err("INVALID_SETTING", "ledger_posting_enabled must be true or false", "ledger_posting_enabled doit valoir vrai ou faux")
         if key == "cash_payment_limit" and value is not None and Decimal(str(value)) <= 0:
             return Err("INVALID_SETTING", "the cash payment limit must be positive or empty", "le plafond d'espèces doit être positif ou vide")
+        if key == "cash_payment_limit" and value is not None:
+            whole = check_whole(Decimal(str(value)))
+            if isinstance(whole, Err):
+                return whole
         self._connection.execute(
             "INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, %s, %s::jsonb) "
             "ON CONFLICT (tenant_id, key) DO UPDATE SET value_json = EXCLUDED.value_json",

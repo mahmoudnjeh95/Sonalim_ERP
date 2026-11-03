@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from core.db import get_connection
 from core.domain.result import Err, err_detail
-from core.tenancy import TenantContext, require_permission, user_has_permission
+from core.tenancy import TenantContext, require_permission, require_session, user_has_permission
 from modules.treasury.api.document_service import DocumentService
 from modules.treasury.api.instrument_service import InstrumentService
 from modules.treasury.api.payment_order_service import PaymentOrderService
@@ -165,9 +165,20 @@ def get_settings(tenant: TenantContext = Depends(require_permission("treasury.vi
         return SettingsService(connection).get_settings(tenant_id=tenant.tenant_id)
 
 
+# Settings that need their own permission rather than treasury.admin_config: turning ledger posting on
+# writes journal entries, which is not the same decision as adjusting a treasury setting.
+SETTING_PERMISSIONS = {"ledger_posting_enabled": "treasury.admin_ledger_posting"}
+
+
 @router.put("/settings/{key}")
-def set_setting(key: str, body: SettingRequest, tenant: TenantContext = Depends(require_permission("treasury.admin_config"))) -> dict:
+def set_setting(key: str, body: SettingRequest, tenant: TenantContext = Depends(require_session)) -> dict:
+    permission = SETTING_PERMISSIONS.get(key, "treasury.admin_config")
     with get_connection() as connection:
+        if not user_has_permission(connection, user_id=tenant.user_id, permission=permission):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                {"code": "FORBIDDEN", "message": f"missing permission: {permission}", "message_fr": f"permission manquante : {permission}"},
+            )
         _unwrap(connection, SettingsService(connection).set_setting(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, key=key, value=body.value))
         return SettingsService(connection).get_settings(tenant_id=tenant.tenant_id)
@@ -217,7 +228,7 @@ class DocumentRequest(BaseModel):
 
 def _create_document(direction: str, body: DocumentRequest, tenant: TenantContext) -> dict:
     with get_connection() as connection:
-        allowed = user_has_permission(connection, user_id=tenant.user_id, permission="treasury.add_prior_year_invoice")
+        allowed = user_has_permission(connection, user_id=tenant.user_id, permission="treasury.admin_add_prior_year_invoice")
         result = DocumentService(connection).create_and_post(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, direction=direction, partner_id=body.partner_id,
             doc_date=body.doc_date, currency=body.currency, reason=body.reason, with_details=body.with_details,
@@ -315,7 +326,8 @@ def list_open_invoices(direction: str, partner_id: str, tenant: TenantContext = 
         rows = []
         for invoice_id in candidates:
             detail = documents.open_invoice(tenant.tenant_id, direction, invoice_id)
-            if not isinstance(detail, Err) and detail.value["remaining"] > 0:
+            # An invoice in another currency cannot be settled here, so it is not offered.
+            if not isinstance(detail, Err) and detail.value["remaining"] > 0 and detail.value["currency"] == "XOF":
                 rows.append(detail.value)
         return rows
 
@@ -349,11 +361,19 @@ def post_deposit_slip(body: SlipRequest, tenant: TenantContext = Depends(require
             note=body.note, items=[i.model_dump() for i in body.items], correlation_id=str(uuid4())))
 
 
+class MarkUnpaidRequest(BaseModel):
+    rejection_fee: Decimal | None = None
+    rejection_fee_account_id: str | None = None
+
+
 @router.post("/instruments/{instrument_id}/unpaid")
-def mark_instrument_unpaid(instrument_id: str, tenant: TenantContext = Depends(require_permission("treasury.collect_instruments"))) -> dict:
+def mark_instrument_unpaid(instrument_id: str, body: MarkUnpaidRequest | None = None,
+                           tenant: TenantContext = Depends(require_permission("treasury.collect_instruments"))) -> dict:
+    fee = body or MarkUnpaidRequest()
     with get_connection() as connection:
         return _unwrap(connection, InstrumentService(connection).mark_unpaid(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, instrument_id=instrument_id, correlation_id=str(uuid4())))
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, instrument_id=instrument_id, correlation_id=str(uuid4()),
+            rejection_fee=fee.rejection_fee, rejection_fee_account_id=fee.rejection_fee_account_id))
 
 
 @router.get("/alerts")

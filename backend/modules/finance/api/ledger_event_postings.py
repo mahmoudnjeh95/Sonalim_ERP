@@ -139,6 +139,15 @@ def retry_failure(connection: psycopg.Connection, *, tenant_id: str, actor_id: s
             f"posting failure {failure_id} is already {failure['status']}",
             f"l'échec d'imputation {failure_id} est déjà {FAILURE_STATUS_FR[failure['status']]}",
         )
+    if failure["source_module"] == "treasury":
+        from modules.finance.api.treasury_ledger_service import ledger_posting_enabled
+
+        if not ledger_posting_enabled(connection, tenant_id):
+            return Err(
+                "LEDGER_POSTING_DISABLED",
+                "treasury ledger posting is switched off; turn it on before retrying",
+                "la comptabilisation de la trésorerie est désactivée ; activez-la avant de réessayer",
+            )
     result = post_for_event(connection, failure["envelope"])
     if isinstance(result, Err):
         return result

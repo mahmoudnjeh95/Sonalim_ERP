@@ -44,6 +44,9 @@ export function InstrumentsTab() {
   const [slipOpen, setSlipOpen] = useState(false);
   const [accountId, setAccountId] = useState("");
   const [slipDate, setSlipDate] = useState(today());
+  const [unpaidTarget, setUnpaidTarget] = useState<Instrument | null>(null);
+  const [feeAmount, setFeeAmount] = useState("");
+  const [feeAccountId, setFeeAccountId] = useState("");
 
   const { data: instruments = [], isLoading } = useQuery({ queryKey: ["treasury", "instruments"], queryFn: () => listInstruments(token) });
   const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
@@ -73,15 +76,25 @@ export function InstrumentsTab() {
     onError: fail("treasury.instruments.slipError"),
   });
   const unpaidMutation = useMutation({
-    mutationFn: (id: string) => markUnpaid(token, id),
+    mutationFn: (id: string) =>
+      markUnpaid(token, id, feeAmount.trim() ? { rejection_fee: Number(feeAmount), rejection_fee_account_id: feeAccountId } : undefined),
     onSuccess: () => {
       refresh();
+      setUnpaidTarget(null);
       toast.success(t("treasury.instruments.markedUnpaid"));
     },
     onError: fail("treasury.instruments.unpaidError"),
   });
 
   const eligibleAccounts = accounts.filter((a) => (a.kind === "bank" || a.kind === "cash") && a.is_active);
+  const feeAccounts = eligibleAccounts;
+  const feeEntered = feeAmount.trim() !== "";
+  const feeValid = !feeEntered || (Number.isInteger(Number(feeAmount)) && Number(feeAmount) > 0 && feeAccountId !== "");
+  const openUnpaid = (instrument: Instrument) => {
+    setUnpaidTarget(instrument);
+    setFeeAmount("");
+    setFeeAccountId(instrument.account_id ?? "");
+  };
 
   return (
     <>
@@ -150,10 +163,17 @@ export function InstrumentsTab() {
                     <TableCell>{partnerName(instrument.partner_id)}</TableCell>
                     <TableCell className={overdue ? "font-medium text-destructive" : undefined}>{instrument.due_date}</TableCell>
                     <TableCell className="text-right tabular-nums">{money(instrument.amount, instrument.currency)}</TableCell>
-                    <TableCell>{t(`treasury.instruments.status.${instrument.status}` as Key)}</TableCell>
+                    <TableCell>
+                      {t(`treasury.instruments.status.${instrument.status}` as Key)}
+                      {instrument.rejection_fee && (
+                        <span className="block text-xs text-muted-foreground">
+                          {t("treasury.instruments.rejectionFee")} : {money(instrument.rejection_fee, instrument.currency)}
+                        </span>
+                      )}
+                    </TableCell>
                     <TableCell className="text-right">
-                      {canCollect && instrument.method === "cheque" && instrument.status === "collected" && (
-                        <Button size="sm" variant="outline" onClick={() => unpaidMutation.mutate(instrument.id)} disabled={unpaidMutation.isPending}>
+                      {canCollect && instrument.method === "cheque" && (instrument.status === "collected" || instrument.status === "pending") && (
+                        <Button size="sm" variant="outline" onClick={() => openUnpaid(instrument)} disabled={unpaidMutation.isPending}>
                           <Undo2 className="h-3.5 w-3.5" />
                           {t("treasury.instruments.markUnpaid")}
                         </Button>
@@ -166,6 +186,36 @@ export function InstrumentsTab() {
           </Table>
         </CardContent>
       </Card>
+
+      <Dialog open={unpaidTarget !== null} onOpenChange={(open) => !open && setUnpaidTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("treasury.instruments.markUnpaid")} {unpaidTarget?.number}</DialogTitle>
+            <DialogDescription>{t("treasury.instruments.unpaidDescription")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="rejection_fee">{t("treasury.instruments.rejectionFeeOptional")}</Label>
+                <Input id="rejection_fee" type="number" min="1" step="1" value={feeAmount} onChange={(e) => setFeeAmount(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="rejection_fee_account">{t("treasury.instruments.rejectionFeeAccount")}</Label>
+                <Select id="rejection_fee_account" value={feeAccountId} disabled={!feeEntered} onChange={(e) => setFeeAccountId(e.target.value)}>
+                  <option value="">—</option>
+                  {feeAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>{a.name}</option>
+                  ))}
+                </Select>
+              </div>
+            </div>
+            {feeEntered && !feeValid && <p className="text-sm text-destructive">{t("treasury.instruments.rejectionFeeInvalid")}</p>}
+            <Button className="w-full" disabled={!feeValid || unpaidMutation.isPending} onClick={() => unpaidTarget && unpaidMutation.mutate(unpaidTarget.id)}>
+              {t("treasury.instruments.markUnpaid")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={slipOpen} onOpenChange={setSlipOpen}>
         <DialogContent>

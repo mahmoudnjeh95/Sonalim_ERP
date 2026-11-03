@@ -232,3 +232,109 @@ def test_posting_service_exposes_ledger_codes_and_the_unallocated_advance(db, en
     instrument = TreasuryPostingService(db).instrument_lines(tenant_id=TENANT, instrument_id=doc.value["instruments"][0]["id"]).value
     assert instrument["status"] == "pending" and instrument["document_number"] == doc.value["number"]
     assert isinstance(TreasuryPostingService(db).document_lines(tenant_id=TENANT, document_id="nope"), Err)
+
+
+# ---- XOF and whole francs only -------------------------------------------------------------------
+
+def test_an_account_in_another_currency_or_with_cents_is_refused(db, env):
+    accounts = AccountService(db)
+    euro = accounts.create_account(tenant_id=TENANT, actor_id=env["actor"], kind="cash", fields={"name": "E", "currency": "EUR"})
+    assert isinstance(euro, Err) and euro.code == "TREASURY_CURRENCY_NOT_XOF"
+    cents = accounts.create_account(tenant_id=TENANT, actor_id=env["actor"], kind="cash",
+                                    fields={"name": "C", "currency": "XOF", "opening_balance": "10.50"})
+    assert isinstance(cents, Err) and cents.code == "AMOUNT_NOT_WHOLE"
+
+    fresh = accounts.create_account(tenant_id=TENANT, actor_id=env["actor"], kind="cash", fields={"name": "F", "currency": "XOF"}).value
+    changed = accounts.update_account(tenant_id=TENANT, actor_id=env["actor"], account_id=fresh["id"], changes={"currency": "USD"})
+    assert isinstance(changed, Err) and changed.code == "TREASURY_CURRENCY_NOT_XOF"
+    changed = accounts.update_account(tenant_id=TENANT, actor_id=env["actor"], account_id=fresh["id"], changes={"opening_balance": "0.50"})
+    assert isinstance(changed, Err) and changed.code == "AMOUNT_NOT_WHOLE"
+
+
+def test_a_document_in_another_currency_or_with_cents_is_refused_and_moves_nothing(db, env):
+    before = _balance(db, env["cash"])
+    other = DocumentService(db).create_and_post(
+        tenant_id=TENANT, actor_id=env["actor"], direction="in", partner_id=env["customer"], doc_date=TODAY, currency="EUR",
+        payments=[{"method": "cash", "amount": 100, "account_id": env["cash"]}], reason="advance", with_details=False, correlation_id="c")
+    assert isinstance(other, Err) and other.code == "TREASURY_CURRENCY_NOT_XOF"
+    cents = _post(db, env, "in", [{"method": "cash", "amount": "100.50", "account_id": env["cash"]}], reason="advance", with_details=False)
+    assert isinstance(cents, Err) and cents.code == "AMOUNT_NOT_WHOLE"
+    cheque = _post(db, env, "in", [{"method": "cheque", "amount": "100.50", "number": "C", "bank_name": "B", "due_date": TODAY}],
+                   reason="advance", with_details=False)
+    assert isinstance(cheque, Err) and cheque.code == "AMOUNT_NOT_WHOLE"
+    assert _balance(db, env["cash"]) == before
+
+
+def test_a_payment_order_on_a_disbursement_that_is_not_whole_xof_is_refused(db, env):
+    from modules.treasury.api.payment_order_service import PaymentOrderService
+
+    doc = _post(db, env, "out", [{"method": "cash", "amount": 100, "account_id": env["cash"]}], reason="advance", with_details=False).value
+    orders = PaymentOrderService(db)
+    db.execute("UPDATE treasury.documents SET currency = 'EUR' WHERE id = %s", (doc["id"],))
+    refused = orders.create_for_disbursement(tenant_id=TENANT, actor_id=env["actor"], disbursement_id=doc["id"])
+    assert isinstance(refused, Err) and refused.code == "TREASURY_CURRENCY_NOT_XOF"
+    db.execute("UPDATE treasury.documents SET currency = 'XOF', total = 100.50 WHERE id = %s", (doc["id"],))
+    refused = orders.create_for_disbursement(tenant_id=TENANT, actor_id=env["actor"], disbursement_id=doc["id"])
+    assert isinstance(refused, Err) and refused.code == "AMOUNT_NOT_WHOLE"
+
+
+def test_a_sales_invoice_of_1000_50_is_settled_by_1000_and_not_stuck_on_50_cents(db, env):
+    invoice_id = _sales_invoice(db, env, 1000.50)
+    service = DocumentService(db)
+    assert service.open_invoice(TENANT, "in", invoice_id).value["remaining"] == D("1000")
+
+    too_much = _post(db, env, "in", [{"method": "cash", "amount": 1001, "account_id": env["cash"]}],
+                     [{"invoice_id": invoice_id, "amount": 1001}])
+    assert isinstance(too_much, Err) and too_much.code == "OVER_ALLOCATION"
+    cents = _post(db, env, "in", [{"method": "cash", "amount": "1000.50", "account_id": env["cash"]}],
+                  [{"invoice_id": invoice_id, "amount": "1000.50"}])
+    assert isinstance(cents, Err) and cents.code == "AMOUNT_NOT_WHOLE"
+
+    first = _post(db, env, "in", [{"method": "cash", "amount": 600, "account_id": env["cash"]}],
+                  [{"invoice_id": invoice_id, "amount": 600}], reason="advance")
+    _deliver(db, finance_consumers, "treasury.receipt.posted", first.value["id"])
+    invoice = InvoiceService(db).get_invoice(tenant_id=TENANT, invoice_id=invoice_id).value
+    assert (invoice["status"], invoice["amount_paid"], invoice["remaining"]) == ("partially_paid", D("600"), D("400.50"))
+    assert service.open_invoice(TENANT, "in", invoice_id).value["remaining"] == D("400")
+
+    second = _post(db, env, "in", [{"method": "cash", "amount": 400, "account_id": env["cash"]}],
+                   [{"invoice_id": invoice_id, "amount": 400}])
+    assert isinstance(second, Ok), second
+    _deliver(db, finance_consumers, "treasury.receipt.posted", second.value["id"])
+    invoice = InvoiceService(db).get_invoice(tenant_id=TENANT, invoice_id=invoice_id).value
+    assert (invoice["status"], invoice["amount_paid"], invoice["remaining"]) == ("paid", D("1000"), D("0"))
+
+
+def test_a_purchase_invoice_of_1000_50_is_settled_by_1000_and_not_stuck_on_50_cents(db, env):
+    invoice_id = _purchase_invoice(db, env, D("1000.50"))
+    doc = _post(db, env, "out", [{"method": "cash", "amount": 1000, "account_id": env["cash"]}], [{"invoice_id": invoice_id, "amount": 1000}])
+    assert isinstance(doc, Ok), doc
+    _deliver(db, procurement_consumers, "treasury.disbursement.posted", doc.value["id"])
+    invoice = PurchaseInvoiceService(db).get_invoice(tenant_id=TENANT, invoice_id=invoice_id).value
+    assert (invoice["status"], invoice["amount_paid"], invoice["remaining"]) == ("paid", D("1000"), D("0"))
+
+
+def test_cancelling_the_payment_of_a_settled_invoice_with_cents_reopens_it(db, env):
+    invoice_id = _sales_invoice(db, env, 1000.50)
+    doc = _post(db, env, "in", [{"method": "cash", "amount": 1000, "account_id": env["cash"]}], [{"invoice_id": invoice_id, "amount": 1000}])
+    _deliver(db, finance_consumers, "treasury.receipt.posted", doc.value["id"])
+    assert InvoiceService(db).get_invoice(tenant_id=TENANT, invoice_id=invoice_id).value["status"] == "paid"
+    assert isinstance(DocumentService(db).cancel(tenant_id=TENANT, actor_id=env["actor"], document_id=doc.value["id"], direction="in", correlation_id="c"), Ok)
+    _deliver(db, finance_consumers, "treasury.receipt.cancelled", doc.value["id"])
+    invoice = InvoiceService(db).get_invoice(tenant_id=TENANT, invoice_id=invoice_id).value
+    assert (invoice["status"], invoice["amount_paid"], invoice["remaining"]) == ("issued", D("0"), D("1000.50"))
+
+
+def test_an_invoice_in_another_currency_cannot_be_settled_through_treasury(db, env):
+    sales = InvoiceService(db).create_draft_invoice(tenant_id=TENANT, partner_id=env["customer"], amount=500.0, currency="EUR")
+    InvoiceService(db).issue_invoice(tenant_id=TENANT, actor_id=env["actor"], invoice_id=sales.id, correlation_id="c")
+    refused = _post(db, env, "in", [{"method": "cash", "amount": 500, "account_id": env["cash"]}], [{"invoice_id": sales.id, "amount": 500}])
+    assert isinstance(refused, Err) and refused.code == "INVOICE_CURRENCY_NOT_XOF"
+    assert "XOF" in refused.message_fr
+
+    service = PurchaseInvoiceService(db)
+    created = service.create_draft(tenant_id=TENANT, actor_id=env["actor"], partner_id=env["supplier"], supplier_invoice_number=str(ULID()),
+                                   invoice_date=TODAY, amount=D("500"), currency="USD")
+    service.validate(tenant_id=TENANT, actor_id=env["actor"], invoice_id=created.value["id"], correlation_id="c")
+    refused = _post(db, env, "out", [{"method": "cash", "amount": 500, "account_id": env["cash"]}], [{"invoice_id": created.value["id"], "amount": 500}])
+    assert isinstance(refused, Err) and refused.code == "INVOICE_CURRENCY_NOT_XOF"

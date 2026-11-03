@@ -12,6 +12,7 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.treasury.api.service import AccountMovementService, AccountService, SettingsService
+from modules.treasury.domain.money import check_currency, whole_francs_payable
 from modules.treasury.domain.allocation import (
     ACCOUNT_KIND_FOR_METHOD,
     INSTRUMENT_METHODS,
@@ -111,6 +112,9 @@ class DocumentService:
         correlation_id: str,
     ) -> Result[dict[str, Any]]:
         allocations = allocations or []
+        currency_checked = check_currency(currency)
+        if isinstance(currency_checked, Err):
+            return currency_checked
         limit = SettingsService(self._connection).get_settings(tenant_id=tenant_id)["cash_payment_limit"]
         total = check_payments(Decimal("0"), payments, Decimal(str(limit)) if limit is not None else None)
         if isinstance(total, Err):
@@ -269,7 +273,7 @@ class DocumentService:
             (tenant_id, direction, invoice_id),
         ).fetchone()[0]
         effective = max(invoice.value["amount"] - committed, Decimal("0"))
-        return Ok({**invoice.value, "remaining": min(invoice.value["remaining"], effective)})
+        return Ok({**invoice.value, "remaining": whole_francs_payable(min(invoice.value["remaining"], effective))})
 
     def _invoice(self, tenant_id: str, direction: str, invoice_id: str) -> Result[dict[str, Any]]:
         return self.open_invoice(tenant_id, direction, invoice_id, lock=True)

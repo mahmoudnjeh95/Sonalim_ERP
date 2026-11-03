@@ -82,3 +82,14 @@ def test_a_payment_matches_one_line_only_nearest_first():
     payments = [_pay("p1", "in", "100", 13)]
     assert suggest_matches(lines, payments) == {"l2": "p1"} or suggest_matches(lines, payments) == {"l1": "p1"}
     assert len(suggest_matches(lines, payments)) == 1
+
+
+def test_a_statement_line_with_cents_is_a_row_error():
+    rows = [["DATE", "LIBELLE", "DEBIT", "CREDIT", "SOLDE"],
+            ["01/03/2026", "ok", "1 250,00", "", ""],
+            ["02/03/2026", "cents", "10,50", "", ""],
+            ["03/03/2026", "balance", "10", "", "99,50"]]
+    result = parse_rows(rows)
+    assert [line.label for line in result.lines] == ["ok"]
+    assert [e["row"] for e in result.errors] == [3, 4]
+    assert all("F CFA" in e["message_fr"] for e in result.errors)

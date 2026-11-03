@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from core.domain.result import Err, Ok
 from modules.finance.domain.posting import PostingRule, validate_rule
-from modules.finance.domain.treasury_posting import document_entries, instrument_entry, valid_rule_code
+from modules.finance.domain.treasury_posting import document_entries, instrument_entry, rejection_fee_entry, valid_rule_code
 
 D = Decimal
 
@@ -83,6 +83,11 @@ def test_a_foreign_currency_is_refused():
     assert isinstance(result, Err) and result.code == "CURRENCY_NOT_XOF"
 
 
+def test_the_ledger_still_refuses_a_fractional_amount_as_a_safety_net():
+    result = entries(payments=[{"method": "cash", "amount": D("1000.50"), "account_id": "a", "ledger_account_code": "M1"}])
+    assert isinstance(result, Err) and result.code == "INVALID_ENTRY_LINE"
+
+
 def test_collecting_an_instrument_moves_it_from_holding_to_the_slip_account():
     rules = [rule("instrument_collected", "in", credit="H1", journal="BNQ")]
     result = instrument_entry("instrument_collected", direction="in", amount=D("400"), currency="XOF", partner_id="P",
@@ -102,6 +107,23 @@ def test_a_bounced_instrument_puts_the_debt_back_on_the_customer():
     result = instrument_entry("instrument_unpaid", direction="in", amount=D("400"), currency="XOF", partner_id="P",
                               account_ledger_code=None, label="L", rules=rules)
     assert [(l.account_code, l.debit, l.credit, l.partner_id) for l in result.value.lines] == [("C1", 400, 0, "P"), ("H1", 0, 400, None)]
+
+
+def _fee(rules, ledger_code="B1", currency="XOF", amount=D("2500")):
+    return rejection_fee_entry(direction="in", amount=amount, currency=currency, account_ledger_code=ledger_code, label="L", rules=rules)
+
+
+def test_a_rejection_fee_debits_the_rule_account_and_credits_the_account_charged():
+    result = _fee([rule("instrument_rejection_fee", "*", debit="X1", credit="IGNORED", journal="BNQ")])
+    assert result.value.journal_code == "BNQ"
+    assert [(l.account_code, l.debit, l.credit) for l in result.value.lines] == [("X1", 2500, 0), ("B1", 0, 2500)]
+
+
+def test_a_rejection_fee_refuses_rather_than_guessing_an_account():
+    assert _fee([]).code == "POSTING_RULE_MISSING"
+    assert _fee([rule("instrument_rejection_fee", "*", credit="C1")]).code == "POSTING_RULE_MISSING"
+    assert _fee([rule("instrument_rejection_fee", "*", debit="X1")], ledger_code=None).code == "LEDGER_ACCOUNT_MISSING"
+    assert _fee([rule("instrument_rejection_fee", "*", debit="X1")], currency="EUR").code == "CURRENCY_NOT_XOF"
 
 
 def test_rule_codes_are_methods_or_directions_for_instruments():

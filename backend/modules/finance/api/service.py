@@ -87,7 +87,9 @@ class InvoiceService:
             return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
         return Ok({
             "id": row[0], "partner_id": row[1], "amount": row[2], "amount_paid": row[3],
-            "remaining": max(row[2] - row[3], Decimal("0")), "currency": row[4], "status": row[5], "invoice_date": row[6],
+            # Under one franc is settled (see status_for_payment), so it is not shown as still due.
+            "remaining": row[2] - row[3] if row[2] - row[3] >= 1 else Decimal("0"),
+            "currency": row[4], "status": row[5], "invoice_date": row[6],
         })
 
     def apply_payment_delta(

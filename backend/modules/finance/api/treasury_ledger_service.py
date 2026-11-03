@@ -15,6 +15,7 @@ from typing import Callable
 
 import psycopg
 
+from core.atomic import atomic
 from core.domain.result import Err, Ok, Result
 from modules.finance.api.ledger_posting_service import SYSTEM_ACTOR, LedgerPostingService
 from modules.finance.api.posting_rule_service import PostingRuleService
@@ -25,12 +26,14 @@ from modules.finance.domain.treasury_posting import (
     TreasuryEntry,
     document_entries,
     instrument_entry,
+    rejection_fee_entry,
 )
 
 TREASURY_MODULE = "treasury"
 ADVANCE = "advance"
 KIND_COLLECTED = "instrument_collected"
 KIND_UNPAID = "instrument_unpaid"
+KIND_REJECTION_FEE = "instrument_rejection_fee"
 
 
 def _default_treasury_api(connection: psycopg.Connection):
@@ -56,6 +59,7 @@ class TreasuryLedgerService:
 
     # -- receipts and disbursements -------------------------------------------------------------
 
+    @atomic
     def post_document(
         self, *, tenant_id: str, direction: str, document_id: str, correlation_id: str, causation_id: str | None = None
     ) -> Result[list[dict]]:
@@ -64,6 +68,10 @@ class TreasuryLedgerService:
         if isinstance(document, Err):
             return document
         doc = document.value
+        if doc["status"] != "posted":
+            # Cancelled since the event was published (a late delivery, or the retry of a refused
+            # posting): the cancellation found nothing to reverse, so posting now would never be undone.
+            return Ok([])
         label = f"{'Encaissement' if direction == 'in' else 'Décaissement'} {doc['number']}"
         entries = document_entries(
             direction,
@@ -82,6 +90,7 @@ class TreasuryLedgerService:
             correlation_id=correlation_id, causation_id=causation_id,
         )
 
+    @atomic
     def cancel_document(
         self, *, tenant_id: str, direction: str, document_id: str, cancelled_on: datetime.date,
         correlation_id: str, causation_id: str | None = None,
@@ -114,6 +123,10 @@ class TreasuryLedgerService:
         if isinstance(instrument, Err):
             return instrument
         inst = instrument.value
+        if inst["status"] != "collected":
+            # It bounced since: the unpaid posting found no collection to reverse, so posting one now
+            # would leave the money in the bank account in the ledger for good.
+            return Ok([])
         label = f"Encaissement effet {inst['number']}" if inst["direction"] == "in" else f"Paiement effet {inst['number']}"
         entry = instrument_entry(
             KIND_COLLECTED, direction=inst["direction"], amount=inst["amount"], currency=inst["currency"],
@@ -129,6 +142,7 @@ class TreasuryLedgerService:
             correlation_id=correlation_id, causation_id=causation_id,
         )
 
+    @atomic
     def post_instrument_unpaid(
         self, *, tenant_id: str, instrument_id: str, unpaid_on: datetime.date,
         correlation_id: str, causation_id: str | None = None,
@@ -165,7 +179,25 @@ class TreasuryLedgerService:
         )
         if isinstance(done, Err):
             return done
-        return Ok(posted + done.value)
+        posted += done.value
+        if inst["rejection_fee"] is None:
+            return Ok(posted)
+        fee_label = f"Frais de rejet {inst['number']}"
+        fee = rejection_fee_entry(
+            direction=inst["direction"], amount=inst["rejection_fee"], currency=inst["currency"],
+            account_ledger_code=inst["rejection_fee_ledger_code"], label=fee_label,
+            rules=self._rules.rules_for(tenant_id=tenant_id, source=TREASURY_MODULE),
+        )
+        if isinstance(fee, Err):
+            return fee
+        charged = self._post_all(
+            tenant_id=tenant_id, kind=KIND_REJECTION_FEE, source_id=instrument_id, entries=[fee.value],
+            entry_date=unpaid_on, label=fee_label, reference=inst["number"],
+            correlation_id=correlation_id, causation_id=causation_id,
+        )
+        if isinstance(charged, Err):
+            return charged
+        return Ok(posted + charged.value)
 
     # -- shared ---------------------------------------------------------------------------------
 

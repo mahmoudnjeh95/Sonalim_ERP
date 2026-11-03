@@ -8,6 +8,7 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from modules.treasury.domain.money import check_currency, check_whole
 
 
 class PaymentOrderService:
@@ -19,13 +20,16 @@ class PaymentOrderService:
 
     def create_for_disbursement(self, *, tenant_id: str, actor_id: str, disbursement_id: str, note: str | None = None) -> Result[dict[str, Any]]:
         row = self._connection.execute(
-            "SELECT status FROM treasury.documents WHERE id = %s AND tenant_id = %s AND direction = 'out' FOR UPDATE",
+            "SELECT status, currency, total FROM treasury.documents WHERE id = %s AND tenant_id = %s AND direction = 'out' FOR UPDATE",
             (disbursement_id, tenant_id),
         ).fetchone()
         if row is None:
             return Err("NOT_FOUND", f"disbursement {disbursement_id} not found", f"décaissement {disbursement_id} introuvable")
         if row[0] != "posted":
             return Err("DOCUMENT_NOT_POSTED", "only a posted disbursement can have a payment order", "seul un décaissement comptabilisé peut avoir un ordre de virement")
+        for checked in (check_currency(row[1]), check_whole(row[2])):
+            if isinstance(checked, Err):
+                return checked
         has_transfer = self._connection.execute(
             "SELECT 1 FROM treasury.document_payments WHERE document_id = %s AND method = 'transfer' LIMIT 1", (disbursement_id,)
         ).fetchone()

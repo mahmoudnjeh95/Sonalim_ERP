@@ -58,10 +58,11 @@ class TreasuryPostingService:
         row = self._connection.execute(
             """
             SELECT i.direction, i.method, i.number, i.amount, i.currency, i.status, i.account_id, a.ledger_account_code,
-                   d.partner_id, d.number
+                   d.partner_id, d.number, i.rejection_fee, f.ledger_account_code
             FROM treasury.instruments i
             JOIN treasury.documents d ON d.id = i.document_id
             LEFT JOIN treasury.accounts a ON a.id = i.account_id
+            LEFT JOIN treasury.accounts f ON f.id = i.rejection_fee_account_id
             WHERE i.id = %s AND i.tenant_id = %s
             """,
             (instrument_id, tenant_id),
@@ -69,5 +70,5 @@ class TreasuryPostingService:
         if row is None:
             return Err("NOT_FOUND", f"instrument {instrument_id} not found", f"effet {instrument_id} introuvable")
         keys = ["direction", "method", "number", "amount", "currency", "status", "account_id", "ledger_account_code",
-                "partner_id", "document_number"]
+                "partner_id", "document_number", "rejection_fee", "rejection_fee_ledger_code"]
         return Ok(dict(zip(keys, row, strict=True)))

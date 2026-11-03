@@ -12,14 +12,14 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.treasury.api.service import AccountMovementService, AccountService, SettingsService
-from modules.treasury.domain.instruments import alert_due, check_outcome, split_reduction, unpaid_reverses_balance
+from modules.treasury.domain.instruments import alert_due, check_outcome, check_rejection_fee, split_reduction, unpaid_reverses_balance
 
 INSTRUMENT_COLUMNS = (
     "i.id, i.direction, i.method, i.number, i.bank_name, i.due_date, i.amount, i.currency, i.status, "
-    "i.document_id, i.account_id, d.partner_id, d.number"
+    "i.document_id, i.account_id, d.partner_id, d.number, i.rejection_fee, i.rejection_fee_account_id"
 )
 INSTRUMENT_KEYS = ["id", "direction", "method", "number", "bank_name", "due_date", "amount", "currency", "status",
-                   "document_id", "account_id", "partner_id", "document_number"]
+                   "document_id", "account_id", "partner_id", "document_number", "rejection_fee", "rejection_fee_account_id"]
 
 
 class InstrumentService:
@@ -133,18 +133,46 @@ class InstrumentService:
         return Ok({"id": slip_id, "number": number, "account_id": account_id, "slip_date": slip_date, "items": items})
 
     @atomic
-    def mark_unpaid(self, *, tenant_id: str, actor_id: str, instrument_id: str, correlation_id: str) -> Result[dict[str, Any]]:
-        """Bounce a cheque outside a slip (typically after the bank already credited it)."""
+    def mark_unpaid(self, *, tenant_id: str, actor_id: str, instrument_id: str, correlation_id: str,
+                    rejection_fee: Decimal | None = None, rejection_fee_account_id: str | None = None) -> Result[dict[str, Any]]:
+        """Bounce a cheque outside a slip, whether or not the bank had already credited it, with what
+        the bank charged for the rejection when the user enters it."""
         instrument = self._lock(tenant_id, instrument_id)
         if isinstance(instrument, Err):
             return instrument
         checked = check_outcome(instrument.value["method"], instrument.value["status"], "unpaid")
         if isinstance(checked, Err):
             return checked
-        applied = self._apply(tenant_id, actor_id, instrument.value, "unpaid", None, datetime.date.today(), correlation_id)
+        fee = check_rejection_fee(rejection_fee, rejection_fee_account_id, currency=instrument.value["currency"])
+        if isinstance(fee, Err):
+            return fee
+        if fee.value is not None:
+            account = AccountService(self._connection).get_account(tenant_id=tenant_id, account_id=rejection_fee_account_id)
+            if isinstance(account, Err):
+                return account
+            if account.value["kind"] == "mobile_money" or not account.value["is_active"]:
+                return Err("ACCOUNT_NOT_ELIGIBLE", "a rejection fee needs an active bank or cash account",
+                           "des frais de rejet exigent un compte bancaire ou de caisse actif")
+            if account.value["currency"] != instrument.value["currency"]:
+                return Err("CURRENCY_MISMATCH", "the fee account is in another currency than the cheque",
+                           "le compte des frais est dans une autre devise que le chèque")
+        today = datetime.date.today()
+        applied = self._apply(tenant_id, actor_id, instrument.value, "unpaid", None, today, correlation_id, rejection_fee=fee.value)
         if isinstance(applied, Err):
             return applied
-        return Ok({**instrument.value, "status": "unpaid"})
+        if fee.value is not None:
+            moved = AccountMovementService(self._connection).post(
+                tenant_id=tenant_id, actor_id=actor_id, account_id=rejection_fee_account_id, signed_amount=-fee.value,
+                source_type="instrument_rejection_fee", source_id=instrument_id, occurred_on=today,
+                note=f"Frais de rejet {instrument.value['number']}",
+            )
+            if isinstance(moved, Err):
+                return moved
+            self._connection.execute(
+                "UPDATE treasury.instruments SET rejection_fee = %s, rejection_fee_account_id = %s WHERE id = %s",
+                (fee.value, rejection_fee_account_id, instrument_id),
+            )
+        return self._lock(tenant_id, instrument_id)
 
     # ---- helpers ----------------------------------------------------------------------------
 
@@ -159,7 +187,8 @@ class InstrumentService:
         return Ok(dict(zip(INSTRUMENT_KEYS, row, strict=True)))
 
     def _apply(self, tenant_id: str, actor_id: str, instrument: dict[str, Any], outcome: str,
-               slip_account_id: str | None, on: datetime.date, correlation_id: str) -> Result[None]:
+               slip_account_id: str | None, on: datetime.date, correlation_id: str,
+               rejection_fee: Decimal | None = None) -> Result[None]:
         movements = AccountMovementService(self._connection)
         sign = Decimal("1") if instrument["direction"] == "in" else Decimal("-1")
         amount: Decimal = instrument["amount"]
@@ -206,9 +235,11 @@ class InstrumentService:
                       tenant_id=tenant_id, correlation_id=correlation_id,
                       payload={"instrument_id": instrument["id"], "direction": instrument["direction"], "amount": str(amount),
                                "currency": instrument["currency"],
+                               "rejection_fee": str(rejection_fee) if rejection_fee is not None else None,
                                "allocations": [{"invoice_id": i, "amount": str(a)} for i, a in reductions]})
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.instrument.unpaid",
-                     entity_type="instrument", entity_id=instrument["id"], payload={"number": instrument["number"]})
+                     entity_type="instrument", entity_id=instrument["id"],
+                     payload={"number": instrument["number"], "rejection_fee": str(rejection_fee) if rejection_fee is not None else None})
         return Ok(None)
 
     def _next_slip_number(self, tenant_id: str, year: int) -> str:

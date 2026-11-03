@@ -145,3 +145,93 @@ def test_cash_journal_has_running_balance(db, env):
     assert journal["rows"][0]["money_in"] == D("50") and journal["rows"][1]["money_out"] == D("30")
     later = InstrumentService(db).cash_journal(tenant_id=TENANT, account_id=env["cash"], date_from=TODAY + datetime.timedelta(days=1)).value
     assert later["opening_balance"] == D("120") and later["rows"] == []
+
+
+def _bounce(db, env, instrument_id, fee=None, account=None):
+    return InstrumentService(db).mark_unpaid(tenant_id=TENANT, actor_id=env["actor"], instrument_id=instrument_id, correlation_id="c",
+                                             rejection_fee=fee, rejection_fee_account_id=account)
+
+
+def test_rejection_fee_reduces_the_account_appears_in_the_journal_and_is_recorded(db, env):
+    instrument_id, _ = _cheque_receipt(db, env, 400)
+    before = _balance(db, env["bank"])
+    result = _bounce(db, env, instrument_id, D("2500"), env["bank"])
+    assert isinstance(result, Ok), result
+    assert (result.value["status"], result.value["rejection_fee"], result.value["rejection_fee_account_id"]) == ("unpaid", D("2500"), env["bank"])
+    assert _balance(db, env["bank"]) == before - D("2500")
+    journal = InstrumentService(db).cash_journal(tenant_id=TENANT, account_id=env["bank"]).value
+    assert [(r["label"], r["money_out"]) for r in journal["rows"] if r["source_type"] == "instrument_rejection_fee"] == [("Frais de rejet CH1", D("2500"))]
+    assert journal["closing_balance"] == before - D("2500")
+
+
+def test_no_fee_is_still_allowed_and_records_nothing(db, env):
+    instrument_id, _ = _cheque_receipt(db, env, 400)
+    result = _bounce(db, env, instrument_id)
+    assert isinstance(result, Ok), result
+    assert result.value["rejection_fee"] is None
+
+
+@pytest.mark.parametrize("fee, code", [(D("0"), "INVALID_REJECTION_FEE"), (D("-5"), "INVALID_REJECTION_FEE"), (D("10.50"), "AMOUNT_NOT_WHOLE")])
+def test_a_zero_negative_or_fractional_fee_is_refused_and_the_cheque_stays_as_it_was(db, env, fee, code):
+    instrument_id, _ = _cheque_receipt(db, env, 400)
+    before = _balance(db, env["bank"])
+    result = _bounce(db, env, instrument_id, fee, env["bank"])
+    assert isinstance(result, Err) and result.code == code
+    assert _balance(db, env["bank"]) == before
+    status = db.execute("SELECT status FROM treasury.instruments WHERE id = %s", (instrument_id,)).fetchone()[0]
+    assert status == "pending"
+
+
+def test_a_fee_needs_its_account_and_an_account_needs_its_fee(db, env):
+    instrument_id, _ = _cheque_receipt(db, env, 400)
+    no_account = _bounce(db, env, instrument_id, D("100"), None)
+    assert isinstance(no_account, Err) and no_account.code == "REJECTION_FEE_ACCOUNT_REQUIRED"
+    no_amount = _bounce(db, env, instrument_id, None, env["bank"])
+    assert isinstance(no_amount, Err) and no_amount.code == "REJECTION_FEE_REQUIRED"
+
+
+def test_a_fee_the_account_cannot_cover_undoes_the_whole_rejection(db, env):
+    accounts = AccountService(db)
+    empty = accounts.create_account(tenant_id=TENANT, actor_id=env["actor"], kind="cash",
+                                    fields={"name": "Vide", "currency": "XOF", "opening_balance": 0}).value["id"]
+    instrument_id, _ = _cheque_receipt(db, env, 400)
+    result = _bounce(db, env, instrument_id, D("100"), empty)
+    assert isinstance(result, Err)
+    assert _balance(db, empty) == D("0")
+    status = db.execute("SELECT status, rejection_fee FROM treasury.instruments WHERE id = %s", (instrument_id,)).fetchone()
+    assert status == ("pending", None)
+    events = db.execute(
+        "SELECT count(*) FROM events.outbox WHERE event_type = 'treasury.instrument.unpaid' AND payload -> 'payload' ->> 'instrument_id' = %s",
+        (instrument_id,),
+    ).fetchone()[0]
+    assert events == 0
+
+
+def test_a_fee_on_a_cheque_already_collected_comes_on_top_of_taking_the_money_back(db, env):
+    instrument_id, _ = _cheque_receipt(db, env, 400)
+    assert isinstance(_slip(db, env, [{"instrument_id": instrument_id, "outcome": "collected"}]), Ok)
+    collected = _balance(db, env["bank"])
+    assert isinstance(_bounce(db, env, instrument_id, D("100"), env["bank"]), Ok)
+    assert _balance(db, env["bank"]) == collected - D("400") - D("100")
+
+
+def test_the_prior_year_permission_migration_moves_grants_and_is_idempotent(db, env):
+    import pathlib
+
+    migrations = pathlib.Path(__file__).parents[1] / "migrations"
+    sql = (migrations / "0007_treasury_rename_prior_year_permission.sql").read_text(encoding="utf-8")
+    old, new = "treasury.add_prior_year_invoice", "treasury.admin_add_prior_year_invoice"
+    both = str(ULID())
+    db.execute("INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')", (both, TENANT, f"{both}@test.local"))
+    for user, permission in ((env["actor"], old), (both, old), (both, new)):
+        db.execute("INSERT INTO core.user_permissions (user_id, permission) VALUES (%s, %s)", (user, permission))
+    role = str(ULID())
+    db.execute("INSERT INTO core.roles (id, tenant_id, code, name) VALUES (%s, %s, %s, %s)", (role, TENANT, f"r-{role}", "R"))
+    db.execute("INSERT INTO core.role_permissions (role_id, permission) VALUES (%s, %s)", (role, old))
+
+    db.execute(sql)
+    db.execute(sql)
+
+    held = db.execute("SELECT user_id, permission FROM core.user_permissions WHERE user_id = ANY(%s) ORDER BY user_id", ([env["actor"], both],)).fetchall()
+    assert sorted(held) == sorted([(env["actor"], new), (both, new)])
+    assert db.execute("SELECT permission FROM core.role_permissions WHERE role_id = %s", (role,)).fetchall() == [(new,)]

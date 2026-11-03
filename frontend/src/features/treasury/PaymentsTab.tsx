@@ -287,7 +287,7 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                       </Select>
                       <Input
                         type="number"
-                        step="any"
+                        step="1"
                         min="0"
                         placeholder={t("treasury.column.amount")}
                         value={payment.amount || ""}
@@ -342,7 +342,7 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                       <span className="tabular-nums text-muted-foreground">{money(invoice.remaining, invoice.currency)}</span>
                       <Input
                         type="number"
-                        step="any"
+                        step="1"
                         min="0"
                         max={invoice.remaining}
                         placeholder="0"
