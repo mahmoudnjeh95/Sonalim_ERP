@@ -756,3 +756,29 @@ def test_packed_goods_wait_in_the_line_store_and_the_shift_records_it(db, env):
     packing_id = next(s for s in _shift(db, shift_id)["sections"] if s["key"] == "packing")["payload"]["rows"][0]["id"]
     stored = db.execute("SELECT finished_goods_location_id FROM production.shift_packing_rows WHERE id = %s", (packing_id,)).fetchone()[0]
     assert stored == line
+
+
+def test_validation_is_refused_while_a_full_inventory_freezes_a_location_it_would_post_to(db, env):
+    from modules.warehouse.api.inventory_service import InventoryService
+
+    shift_id = _submitted_shift(db, env)
+    inventory = InventoryService(db).open(tenant_id=TENANT, actor_id=env["actor"], location_id=env["location"], type="full")
+    assert isinstance(inventory, Ok)
+    semolina_before = _on_hand(db, env, "semolina")
+    moves_before = db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE tenant_id = %s", (TENANT,)).fetchone()[0]
+
+    refused = _validate(db, env, shift_id)
+
+    assert isinstance(refused, Err) and refused.code == "LOCATION_FROZEN"
+    assert _on_hand(db, env, "semolina") == semolina_before
+    assert db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE tenant_id = %s", (TENANT,)).fetchone()[0] == moves_before
+    assert _shift(db, shift_id)["status"] == "submitted"
+
+    # Counting done and the inventory closed (no variance), the same shift validates.
+    opened = InventoryService(db).get(tenant_id=TENANT, inventory_id=inventory.value["id"]).value
+    for line in opened["lines"]:
+        for which in (1, 2):
+            InventoryService(db).record_count(tenant_id=TENANT, actor_id=env["actor"], inventory_id=opened["id"], line_id=line["id"],
+                                              which=which, quantity=line["theoretical_qty"])
+    assert isinstance(InventoryService(db).close(tenant_id=TENANT, actor_id=env["actor"], inventory_id=opened["id"], correlation_id="c"), Ok)
+    assert isinstance(_validate(db, env, shift_id), Ok)
