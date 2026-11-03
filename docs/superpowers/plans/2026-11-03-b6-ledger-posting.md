@@ -36,3 +36,15 @@
 
 ### Task 5 — Handoff
 - [ ] Run finance + treasury tests (report skips). Ask the accountant to confirm every `to_confirm` rule before first real posting. Do not push.
+
+## As built (2026-11-03, after the merge with the remote ledger)
+
+Implemented on top of the remote's ledger, behind a switch that is **off by default**.
+
+- **Switch:** treasury setting `ledger_posting_enabled` (boolean, default false; `PUT /treasury/settings/ledger_posting_enabled`). While off, the consumers skip treasury events: no entry and no `posting_failures` row. Events skipped while it was off are not queued; turning it on later needs a backfill of earlier documents (not written).
+- **Files:** `finance/domain/treasury_posting.py` (pure rules), `finance/api/treasury_ledger_service.py`, treasury sources in `finance/api/ledger_event_postings.py` (`SOURCES`, `_post_treasury`; retry of a refused posting works unchanged), the gate in `finance/events/ledger_consumers.py`, `treasury` added to the rule kinds in `finance/domain/posting.py`, and `TreasuryPostingService.ledger_posting_enabled` / `account_ledger_code`.
+- **No account numbers in code, and no seeded rules.** The money side of a payment is the `ledger_account_code` of the treasury account that moved; everything else comes from `finance.posting_rules` with `source = 'treasury'`. A missing rule, an incomplete rule or an account without a ledger code is refused (`POSTING_RULE_MISSING`, `LEDGER_ACCOUNT_MISSING`) and recorded in `posting_failures`; closed periods are refused by the ledger as for invoices.
+- **Rule shapes** (code = payment method, `in`/`out` for instrument kinds, or `*`): `receipt_payment` (credit = customer account; debit = holding account for a cheque/draft still in no account), `disbursement_payment` (debit = supplier account; credit = holding), `receipt_advance` / `disbursement_advance` (self-contained, the part tied to no invoice), `instrument_collected` (holding against the slip account), `instrument_unpaid` (self-contained, puts the debt back). Each names its journal.
+- **Entries:** one per payment method (`receipt_payment_<method>`) plus `..._advance`, idempotent on `(treasury, document_id, source_kind)`. Cancelling a document reverses its entries; a bounced instrument reverses its collection entry and posts `instrument_unpaid`.
+- **Not built:** account-to-account transfers (treasury has no such feature and no event), the backfill script, and the "posted / not posted + retry" display on the receipt and disbursement pages. The existing posting-failures screen and retry endpoint already cover refusals.
+- **For the accountant:** confirm the accounts for each rule listed above (the plan's suggestions: 411, 401, 413 / 4021 holding, 4191 / 4091 advances, journals BNQ / CAI / OD), set `ledger_account_code` on every treasury account (each mobile-money operator its own 5xx), decide whether a cheque rejected before the bank credited it needs an entry, and decide whether the invoice-paid entry (generic bank account) must be switched off for treasury-settled invoices (it already never fires for them). Then turn the switch on.

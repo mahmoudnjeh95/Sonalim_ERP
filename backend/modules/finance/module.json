@@ -20,7 +20,10 @@
     "finance.invoice.paid",
     "treasury.receipt.posted",
     "treasury.receipt.cancelled",
-    "treasury.instrument.unpaid"
+    "treasury.instrument.unpaid",
+    "treasury.disbursement.posted",
+    "treasury.disbursement.cancelled",
+    "treasury.instrument.collected"
   ],
   "migrations_path": "./migrations",
   "permissions": [

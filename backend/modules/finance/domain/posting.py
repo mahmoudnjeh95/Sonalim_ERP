@@ -28,6 +28,7 @@ PAYMENT_METHODS = ("bank", "mobile_money", "cash")
 RULE_KINDS: dict[str, tuple[str, ...]] = {
     "payroll": PAYROLL_LINE_KINDS + ("payment",),
     "invoice": ("issued", "paid"),
+    "treasury": ("receipt_payment", "receipt_advance", "disbursement_payment", "disbursement_advance", "instrument_collected", "instrument_unpaid"),
 }
 SELF_CONTAINED_KINDS = {("payroll", "payment"), ("invoice", "issued"), ("invoice", "paid")}
 RULE_STATUSES = ("to_confirm", "confirmed")
@@ -232,6 +233,15 @@ def validate_rule(rule: PostingRule, accounts: Mapping[str, Account], journal_co
             f"a payment rule's code is a payment method: {', '.join(PAYMENT_METHODS)} or '*'",
             f"le code d'une règle de paiement est un mode de paiement : {', '.join(PAYMENT_METHODS)} ou « * »",
         )
+    if rule.source == "treasury":
+        from modules.finance.domain.treasury_posting import valid_rule_code
+
+        if not valid_rule_code(rule.source_kind, code):
+            return Err(
+                "INVALID_POSTING_RULE",
+                f"a {rule.source_kind} rule's code is a payment method (or in/out for instruments), or '*'",
+                f"le code d'une règle {rule.source_kind} est un mode de paiement (ou in/out pour les effets), ou « * »",
+            )
     if rule.source == "invoice" and code != WILDCARD:
         return Err(
             "INVALID_POSTING_RULE",

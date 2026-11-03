@@ -24,6 +24,8 @@ DEFAULT_ALERT_OFFSETS: dict[tuple[str, str], int] = {
 SETTING_DEFAULTS: dict[str, Any] = {
     "cash_payment_limit": None,
     "prior_year_invoice_cutoff": None,
+    # Off until the accountant has confirmed the posting rules and every treasury account's ledger code.
+    "ledger_posting_enabled": False,
 }
 
 ACCOUNT_COLUMNS = (
@@ -322,6 +324,8 @@ class SettingsService:
     def set_setting(self, *, tenant_id: str, actor_id: str, key: str, value: Any) -> Result[None]:
         if key not in SETTING_DEFAULTS:
             return Err("UNKNOWN_SETTING", f"unknown treasury setting {key}", f"paramètre de trésorerie inconnu {key}")
+        if key == "ledger_posting_enabled" and not isinstance(value, bool):
+            return Err("INVALID_SETTING", "ledger_posting_enabled must be true or false", "ledger_posting_enabled doit valoir vrai ou faux")
         if key == "cash_payment_limit" and value is not None and Decimal(str(value)) <= 0:
             return Err("INVALID_SETTING", "the cash payment limit must be positive or empty", "le plafond d'espèces doit être positif ou vide")
         self._connection.execute(

@@ -14,6 +14,21 @@ class TreasuryPostingService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
 
+    def ledger_posting_enabled(self, *, tenant_id: str) -> bool:
+        """The switch that lets finance post treasury activity; off until the accountant confirms the accounts."""
+        row = self._connection.execute(
+            "SELECT value_json FROM treasury.settings WHERE tenant_id = %s AND key = 'ledger_posting_enabled'", (tenant_id,)
+        ).fetchone()
+        return row is not None and row[0] is True
+
+    def account_ledger_code(self, *, tenant_id: str, account_id: str | None) -> str | None:
+        if account_id is None:
+            return None
+        row = self._connection.execute(
+            "SELECT ledger_account_code FROM treasury.accounts WHERE id = %s AND tenant_id = %s", (account_id, tenant_id)
+        ).fetchone()
+        return row[0] if row else None
+
     def document_lines(self, *, tenant_id: str, document_id: str) -> Result[dict[str, Any]]:
         """A posted receipt or disbursement: one line per payment with the ledger code of the account it
         moved, plus the part not tied to any invoice (an advance), which the ledger books differently."""

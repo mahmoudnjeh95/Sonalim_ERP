@@ -17,6 +17,12 @@ SOURCES: dict[str, tuple[str, str, str]] = {
     "payroll.run.reversed": ("payroll", "run_id", "payroll_reversal"),
     "finance.invoice.issued": ("finance", "invoice_id", "invoice_issued"),
     "finance.invoice.paid": ("finance", "invoice_id", "invoice_paid"),
+    "treasury.receipt.posted": ("treasury", "receipt_id", "receipt_payment"),
+    "treasury.receipt.cancelled": ("treasury", "receipt_id", "receipt_cancelled"),
+    "treasury.disbursement.posted": ("treasury", "disbursement_id", "disbursement_payment"),
+    "treasury.disbursement.cancelled": ("treasury", "disbursement_id", "disbursement_cancelled"),
+    "treasury.instrument.collected": ("treasury", "instrument_id", "instrument_collected"),
+    "treasury.instrument.unpaid": ("treasury", "instrument_id", "instrument_unpaid"),
 }
 
 
@@ -81,7 +87,39 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
         if event_type == "finance.invoice.issued":
             return invoices.post_issued(issued_on=occurred_on(envelope), **common)
         return invoices.post_paid(paid_on=occurred_on(envelope), **common)
+    if event_type.startswith("treasury."):
+        return _post_treasury(connection, envelope, correlation_id, causation_id)
     raise ValueError(f"the ledger has no posting for {event_type}")
+
+
+def _post_treasury(
+    connection: psycopg.Connection, envelope: dict, correlation_id: str, causation_id: str
+) -> Result[list[dict]]:
+    from modules.finance.api.treasury_ledger_service import TreasuryLedgerService
+
+    treasury = TreasuryLedgerService(connection)
+    event_type = envelope["event_type"]
+    tenant_id = envelope["tenant_id"]
+    payload = envelope["payload"]
+    common = {"tenant_id": tenant_id, "correlation_id": correlation_id, "causation_id": causation_id}
+    if event_type in ("treasury.receipt.posted", "treasury.disbursement.posted"):
+        direction = "in" if event_type == "treasury.receipt.posted" else "out"
+        key = "receipt_id" if direction == "in" else "disbursement_id"
+        return treasury.post_document(direction=direction, document_id=str(payload[key]), **common)
+    if event_type in ("treasury.receipt.cancelled", "treasury.disbursement.cancelled"):
+        direction = "in" if event_type == "treasury.receipt.cancelled" else "out"
+        key = "receipt_id" if direction == "in" else "disbursement_id"
+        return treasury.cancel_document(
+            direction=direction, document_id=str(payload[key]), cancelled_on=occurred_on(envelope), **common
+        )
+    if event_type == "treasury.instrument.collected":
+        return treasury.post_instrument_collected(
+            instrument_id=str(payload["instrument_id"]), account_id=payload.get("account_id"),
+            collected_on=occurred_on(envelope), **common,
+        )
+    return treasury.post_instrument_unpaid(
+        instrument_id=str(payload["instrument_id"]), unpaid_on=occurred_on(envelope), **common
+    )
 
 
 def retry_failure(connection: psycopg.Connection, *, tenant_id: str, actor_id: str, failure_id: str) -> Result[list[dict]]:
