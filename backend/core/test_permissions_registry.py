@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from core.permissions_registry import (
+    ADMINISTRATOR_HELD_BACK_PERMISSIONS,
     ADMINISTRATOR_ROLE_CODE,
     DELIBERATE_GRANT_PERMISSIONS,
     DELIBERATE_GRANT_ROLES,
@@ -82,9 +83,16 @@ def test_no_everyday_role_bundles_an_admin_code():
         assert not leaked, f"{role['code']} role bundles admin codes: {leaked}"
 
 
-def test_administrator_holds_every_declared_permission():
+def test_administrator_holds_every_declared_permission_but_the_held_back_ones():
     everything = {entry["permission"] for entry in permission_catalog()}
-    assert set(_role(ADMINISTRATOR_ROLE_CODE)["permissions"]) == everything
+    assert set(_role(ADMINISTRATOR_ROLE_CODE)["permissions"]) == everything - ADMINISTRATOR_HELD_BACK_PERMISSIONS
+
+
+def test_held_back_codes_reach_no_default_role_once_declared(monkeypatch):
+    declared = permission_catalog() + [{"module": "treasury", "permission": code} for code in ADMINISTRATOR_HELD_BACK_PERMISSIONS]
+    monkeypatch.setattr("core.permissions_registry.permission_catalog", lambda: declared)
+    for role in default_role_catalog():
+        assert not ADMINISTRATOR_HELD_BACK_PERMISSIONS & set(role["permissions"]), f"{role['code']} holds a held-back code"
 
 
 def test_held_back_codes_reach_administrateur_but_no_everyday_role():
