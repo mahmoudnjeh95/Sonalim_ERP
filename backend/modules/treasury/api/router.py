@@ -13,13 +13,14 @@ from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.treasury.api.document_service import DocumentService
 from modules.treasury.api.instrument_service import InstrumentService
+from modules.treasury.api.payment_order_service import PaymentOrderService
 from modules.treasury.api.report_service import InvoiceStatusReportService, tabular_response
 from modules.treasury.api.statement_service import StatementImportService
 from modules.treasury.api.service import AccountService, BankService, SettingsService
 
 router = APIRouter(prefix="/treasury", tags=["treasury"])
 
-_CONFLICT = {"LINE_MATCHED", "INSTRUMENT_NOT_PENDING", "UNPAID_CHEQUE_ONLY", "DOCUMENT_NOT_POSTED", "INSTRUMENT_ALREADY_PROCESSED", "BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
+_CONFLICT = {"PAYMENT_ORDER_EXISTS", "NO_TRANSFER", "LINE_MATCHED", "INSTRUMENT_NOT_PENDING", "UNPAID_CHEQUE_ONLY", "DOCUMENT_NOT_POSTED", "INSTRUMENT_ALREADY_PROCESSED", "BANK_DUPLICATE", "ACCOUNT_NUMBER_DUPLICATE", "ACCOUNT_LOCKED", "ACCOUNT_HAS_MOVEMENTS"}
 
 
 def _err_status(code: str) -> int:
@@ -476,3 +477,63 @@ def sales_invoice_report(format: str | None = None, tenant: TenantContext = Depe
 @router.get("/reports/purchase-invoices")
 def purchase_invoice_report(format: str | None = None, tenant: TenantContext = Depends(require_permission("treasury.view"))):
     return _report("purchases", format, tenant)
+
+
+# ---- payment orders and notifications ----------------------------------------------------------
+class NotifyRequest(BaseModel):
+    user_id: str
+
+
+class PaymentOrderRequest(BaseModel):
+    note: str | None = None
+
+
+@router.get("/payment-orders")
+def list_payment_orders(tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return PaymentOrderService(connection).list(tenant_id=tenant.tenant_id)
+
+
+@router.post("/disbursements/{document_id}/payment-order", status_code=status.HTTP_201_CREATED)
+def create_payment_order(document_id: str, body: PaymentOrderRequest,
+                         tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, PaymentOrderService(connection).create_for_disbursement(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, disbursement_id=document_id, note=body.note))
+
+
+@router.get("/payment-orders/{order_id}")
+def get_payment_order(order_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    with get_connection() as connection:
+        result = PaymentOrderService(connection).get(tenant_id=tenant.tenant_id, order_id=order_id)
+        if isinstance(result, Err):
+            raise HTTPException(_err_status(result.code), err_detail(result))
+        return result.value
+
+
+@router.post("/payment-orders/{order_id}/notify", status_code=status.HTTP_201_CREATED)
+def notify_payment_order(order_id: str, body: NotifyRequest,
+                         tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, PaymentOrderService(connection).notify(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, order_id=order_id, user_id=body.user_id))
+
+
+@router.get("/notifiable-users")
+def notifiable_users(tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> list[dict]:
+    with get_connection() as connection:
+        return PaymentOrderService(connection).notifiable_users(tenant_id=tenant.tenant_id)
+
+
+@router.get("/notifications")
+def my_notifications(tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return PaymentOrderService(connection).notifications(tenant_id=tenant.tenant_id, user_id=tenant.user_id)
+
+
+@router.post("/notifications/{notification_id}/read", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def read_notification(notification_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> Response:
+    with get_connection() as connection:
+        _unwrap(connection, PaymentOrderService(connection).mark_read(
+            tenant_id=tenant.tenant_id, user_id=tenant.user_id, notification_id=notification_id))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
