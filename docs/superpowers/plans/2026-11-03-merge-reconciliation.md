@@ -1,5 +1,15 @@
 # Merge reconciliation: stock/treasury work vs `origin/huge_production_migration`
 
+> **Status (2026-11-03): the merge is done** on branch `merge/stock-treasury-into-remote` (merge commit `4365f4b`, not pushed).
+> - D1 valuation: **FIFO adopted, CMUP dropped.** Valued-stock report: `GET /warehouse/reports/valued-stock`.
+> - D2 count: **cycle counts are the model**; freeze + two-count rule being added to them, our inventory feature being removed (in progress).
+> - D3: the remote's `valuation.py` / `valuation_service.py` / `test_valuation.py` were taken.
+> - D4: still open; belongs to B6.
+> - Migrations renumbered: warehouse `0020`, finance `0005`, procurement `0007`/`0008`.
+> - The 17 "modify/delete" conflicts were not intended deletions: commit `202eeb9` had accidentally committed 156 working-tree deletions; restored in `2443f86` before merging.
+> - The 3 failing assistant tests (remote-branch mismatch) were fixed in `338bbc9`.
+> The text below is the analysis written before the merge.
+
 Written 2026-11-03 from a trial merge in a throwaway worktree (nothing in the real tree changed). Local `huge_production_migration` is **30 commits ahead and 343 behind** `origin/huge_production_migration` (merge base `d205bfc`). The remote carries the HR/payroll/scan/maintenance modules, the finance ledger (`0003`, `0004`), warehouse `0012`–`0019` and a large frontend rewrite.
 
 The trial merge gives **32 conflicted files**. Most are mechanical; four are decisions.
