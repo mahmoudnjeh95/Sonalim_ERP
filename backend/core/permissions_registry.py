@@ -22,6 +22,7 @@ MODULE_LABELS = {
     "production": "Production",
     "qc": "Qualité",
     "sales": "Ventes",
+    "treasury": "Trésorerie",
     "warehouse": "Entrepôt",
 }
 

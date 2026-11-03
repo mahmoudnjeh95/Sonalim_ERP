@@ -1,0 +1,20 @@
+{
+  "name": "treasury",
+  "version": "0.1.0",
+  "depends": ["core"],
+  "optional_depends": ["finance", "procurement"],
+  "provides_api": ["AccountService", "AccountMovementService"],
+  "publishes_events": [],
+  "subscribes_events": [],
+  "migrations_path": "./migrations",
+  "permissions": [
+    "treasury.view",
+    "treasury.manage_accounts",
+    "treasury.manage_receipts",
+    "treasury.manage_disbursements",
+    "treasury.collect_instruments",
+    "treasury.import_statements",
+    "treasury.admin_config",
+    "treasury.add_prior_year_invoice"
+  ]
+}

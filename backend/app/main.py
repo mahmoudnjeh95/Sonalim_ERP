@@ -38,6 +38,7 @@ from modules.warehouse.api.router import router as warehouse_router
 from modules.hr.api.router import router as hr_router
 from modules.procurement.api.router import router as procurement_router
 from modules.qc.api.router import router as qc_router
+from modules.treasury.api.router import router as treasury_router
 
 
 @asynccontextmanager
@@ -82,6 +83,7 @@ app.include_router(hr_router)
 app.include_router(procurement_router)
 app.include_router(qc_router)
 app.include_router(maintenance_router)
+app.include_router(treasury_router)
 
 
 @app.get("/")
