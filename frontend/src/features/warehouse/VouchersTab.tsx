@@ -18,7 +18,7 @@ import { ProductSelect } from "../../components/patterns/ProductSelect";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { useProductCatalog } from "../products/catalog";
-import { listLocations } from "./api";
+import { listLocations, listStock } from "./api";
 import { cancelVoucher, createVoucher, getVoucher, listVouchers, postVoucher, type VoucherInput, type VoucherType } from "./stockDocumentsApi";
 
 type Key = Parameters<ReturnType<typeof useI18n>["t"]>[0];
@@ -46,6 +46,8 @@ export function VouchersTab() {
 
   const { data: vouchers = [], isLoading } = useQuery({ queryKey: ["warehouse", "vouchers"], queryFn: () => listVouchers(token) });
   const { data: locations = [] } = useQuery({ queryKey: ["warehouse", "locations"], queryFn: () => listLocations(token) });
+  const { data: stock = [] } = useQuery({ queryKey: ["warehouse", "stock"], queryFn: () => listStock(token) });
+  const availableAt = (productId: string) => stock.find((s) => s.location_id === source && s.product_id === productId)?.quantity_available ?? 0;
   const locationName = (id: string | null) => locations.find((l) => l.id === id)?.name ?? "—";
   const visible = filter === "all" ? vouchers : vouchers.filter((v) => v.type === filter);
   const postedIssues = vouchers.filter((v) => v.type === "issue" && v.status === "posted");
@@ -233,7 +235,8 @@ export function VouchersTab() {
                 </Button>
               </div>
               {lines.map((line, index) => (
-                <div key={index} className={`grid gap-2 ${type === "receipt" ? "grid-cols-[1fr_6rem_6rem_auto]" : "grid-cols-[1fr_6rem_auto]"}`}>
+                <div key={index} className="space-y-1">
+                <div className={`grid gap-2 ${type === "receipt" ? "grid-cols-[1fr_6rem_6rem_auto]" : "grid-cols-[1fr_6rem_auto]"}`}>
                   <ProductSelect products={catalog} value={line.product_id} onChange={(e) => updateLine(index, { product_id: e.target.value })} />
                   <Input type="number" step="any" min="0" placeholder={t("voucher.quantity")} value={line.quantity || ""} onChange={(e) => updateLine(index, { quantity: Number(e.target.value) })} />
                   {type === "receipt" && (
@@ -242,6 +245,12 @@ export function VouchersTab() {
                   <Button type="button" size="sm" variant="ghost" disabled={lines.length === 1} onClick={() => setLines((l) => l.filter((_, i) => i !== index))}>
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
+                </div>
+                {(type === "issue" || type === "transfer") && source && line.product_id && (
+                  <p className={`text-xs ${line.quantity > availableAt(line.product_id) ? "text-destructive" : "text-muted-foreground"}`}>
+                    {t("voucher.available")}: {availableAt(line.product_id)}
+                  </p>
+                )}
                 </div>
               ))}
             </div>
