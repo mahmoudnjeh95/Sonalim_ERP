@@ -26,6 +26,11 @@ from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.domain.reservation import validate_reservation_expiry
 
 
+def count_start_lock_key(tenant_id: str, site_id: str) -> str:
+    """The per-site advisory lock between stock writers (shared) and a cycle count starting (exclusive)."""
+    return f"warehouse.cycle_count.start:{tenant_id}:{site_id}"
+
+
 class StockService:
     """Public API for the warehouse module. Callers commit; this class only executes writes."""
 
@@ -84,10 +89,25 @@ class StockService:
             for row_location_id, product_id, on_hand, reserved, in_production in rows
         ]
 
+    def _hold_off_count_start(self, tenant_id: str, location_id: str) -> None:
+        """Held to the end of the transaction, so a count starting on this site either waits for this
+        write and reads its result, or commits first and this write sees the freeze. Taken before any
+        stock row lock, by everything that locks stock rows: a writer holding a row while it queued
+        behind a waiting start could otherwise deadlock with one holding this lock and wanting the row.
+        A location outside any site is in no count, so it needs nothing."""
+        self._connection.execute(
+            """
+            SELECT pg_advisory_xact_lock_shared(hashtextextended('warehouse.cycle_count.start:' || %s::text || ':' || site_id, 0))
+            FROM warehouse.locations WHERE id = %s AND tenant_id = %s AND site_id IS NOT NULL
+            """,
+            (tenant_id, location_id, tenant_id),
+        )
+
     def _assert_not_frozen(self, tenant_id: str, location_id: str, own_count_id: str | None = None) -> Err | None:
         """A cycle count in progress freezes the locations in its scope: counting a shelf while stock
         moves in and out of it would make the counts meaningless. Only that count's own approved
         adjustment (`own_count_id`) passes, and never through another count's freeze."""
+        self._hold_off_count_start(tenant_id, location_id)
         row = self._connection.execute(
             """
             WITH RECURSIVE up AS (
@@ -158,6 +178,7 @@ class StockService:
             if isinstance(expiry, Err):
                 return expiry
 
+        self._hold_off_count_start(tenant_id, location_id)
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -286,6 +307,7 @@ class StockService:
         if isinstance(validation, Err):
             return validation
 
+        self._hold_off_count_start(tenant_id, location_id)
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved

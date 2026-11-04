@@ -69,6 +69,10 @@ export function listFrozenLocations(token: string) {
   return apiFetch<FrozenLocation[]>("/warehouse/frozen-locations", { token });
 }
 
+export function addCycleCountFoundLine(token: string, cycleCountId: string, input: { location_id: string; product_id: string }) {
+  return apiFetch<CycleCountLine>(`/warehouse/cycle-counts/${cycleCountId}/lines`, { method: "POST", token, body: input });
+}
+
 export function getCycleCount(token: string, cycleCountId: string) {
   return apiFetch<CycleCountDetail>(`/warehouse/cycle-counts/${cycleCountId}`, { token });
 }

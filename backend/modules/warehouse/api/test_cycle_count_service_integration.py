@@ -7,14 +7,18 @@ inventory does, scoped to a site's bins (or one subtree of them).
 """
 from __future__ import annotations
 
+import datetime
+
+import psycopg
 import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
 from modules.warehouse.api.cycle_count_service import CycleCountService
 from modules.warehouse.api.location_service import LocationService
-from modules.warehouse.api.service import StockService
+from modules.warehouse.api.service import StockService, count_start_lock_key
 from modules.warehouse.api.site_service import SiteService
+from modules.warehouse.api.valuation_service import ValuationService
 
 TENANT = "integration-test-cycle-counts"
 
@@ -367,6 +371,166 @@ def test_admin_stock_overrides_are_refused_during_a_count(db, env):
     assert isinstance(overwrite, Err) and overwrite.code == "LOCATION_FROZEN" and count.number in overwrite.message and count.number in overwrite.message_fr
     assert isinstance(delete, Err) and delete.code == "LOCATION_FROZEN"
     assert _on_hand(db, env) == 100
+
+
+def _found_product(db, env, *, purchase_price=0):
+    product = str(ULID())
+    uom = db.execute("SELECT uom_id FROM core.products WHERE id = %s", (env["product"],)).fetchone()[0]
+    db.execute(
+        "INSERT INTO core.products (id, tenant_id, sku, name, uom_id, purchase_price) VALUES (%s, %s, %s, 'Found', %s, %s)",
+        (product, TENANT, str(ULID()), uom, purchase_price),
+    )
+    return product
+
+
+def _add_found(db, env, count, location, product):
+    return CycleCountService(db).add_found_line(
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, location_id=location, product_id=product
+    )
+
+
+def test_a_found_product_follows_the_two_count_rule_and_approval_creates_valued_stock(db, env):
+    """Same valuation as any positive variance: no cost is known, so the catalog purchase price."""
+    count = _started(db, env)
+    product = _found_product(db, env, purchase_price=250)
+
+    added = _add_found(db, env, count, env["bin"].id, product)
+    assert isinstance(added, Ok), added
+    line = added.value
+    assert (line.expected_quantity, line.status, line.resolution) == (0, "pending", None)
+    service = CycleCountService(db)
+    assert service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id="c").code == "LINES_UNRESOLVED"
+
+    assert _submit(db, env, count, line, 12).value.status == "pending"
+    settled = _submit(db, env, count, line, 12).value
+    assert (settled.status, settled.counted_quantity, settled.resolution) == ("counted", 12, None)
+
+    approved = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve")
+    assert isinstance(approved, Ok), approved
+    on_hand = db.execute(
+        "SELECT quantity_on_hand FROM warehouse.stock_items WHERE tenant_id = %s AND location_id = %s AND product_id = %s",
+        (TENANT, env["bin"].id, product),
+    ).fetchone()[0]
+    assert on_hand == 12
+    [layer] = ValuationService(db).list_layers(tenant_id=TENANT, product_id=product)
+    assert (layer.quantity_remaining, layer.unit_cost, layer.reference) == (12, 250, f"cycle_count:{count.id}")
+
+
+def test_a_rejected_found_product_creates_nothing(db, env):
+    count = _started(db, env)
+    product = _found_product(db, env)
+    line = _add_found(db, env, count, env["bin"].id, product).value
+    _submit(db, env, count, line, 3)
+    _submit(db, env, count, line, 3)
+
+    assert isinstance(CycleCountService(db).resolve_line_variance(
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="reject"
+    ), Ok)
+
+    assert db.execute("SELECT 1 FROM warehouse.stock_items WHERE tenant_id = %s AND product_id = %s", (TENANT, product)).fetchone() is None
+    assert ValuationService(db).list_layers(tenant_id=TENANT, product_id=product) == []
+
+
+def test_a_found_line_refuses_a_duplicate_and_a_location_the_count_does_not_cover(db, env):
+    count = _started(db, env, scope_location_id=env["bin"].id)
+    product = _found_product(db, env)
+
+    assert isinstance(_add_found(db, env, count, env["bin"].id, product), Ok)
+    duplicate = _add_found(db, env, count, env["bin"].id, product)
+    assert isinstance(duplicate, Err) and duplicate.code == "LINE_ALREADY_EXISTS"
+    already_counted = _add_found(db, env, count, env["bin"].id, env["product"])  # a line the count started with
+    assert isinstance(already_counted, Err) and already_counted.code == "LINE_ALREADY_EXISTS"
+
+    outside = _add_found(db, env, count, env["second_bin"].id, product)
+    assert isinstance(outside, Err) and outside.code == "LOCATION_OUT_OF_SCOPE"
+    unknown = _add_found(db, env, count, env["bin"].id, str(ULID()))
+    assert isinstance(unknown, Err) and unknown.code == "NOT_FOUND"
+
+
+def test_a_found_line_needs_a_count_in_progress(db, env):
+    draft = _create_count(db, env)
+    refused = _add_found(db, env, draft, env["bin"].id, _found_product(db, env))
+    assert isinstance(refused, Err) and refused.code == "INVALID_STATE"
+
+
+def test_a_found_line_on_a_blind_count_reveals_no_books(db, env):
+    """The duplicate refusal is the only signal; its message carries no quantity, and the new line none."""
+    count = _started(db, env, count_type="blind")
+
+    added = _add_found(db, env, count, env["bin"].id, _found_product(db, env)).value
+    assert (added.expected_quantity, added.status) == (None, "pending")
+    existing = _first_line(db, count)
+    refused = _add_found(db, env, count, existing.location_id, existing.product_id)
+    assert refused.code == "LINE_ALREADY_EXISTS"
+    assert "100" not in refused.message and "100" not in refused.message_fr
+
+
+def _second_connection(db):
+    return psycopg.connect(db.info.dsn, password=db.info.password, autocommit=True)
+
+
+def _try_lock(connection, key, *, shared):
+    function = "pg_try_advisory_xact_lock_shared" if shared else "pg_try_advisory_xact_lock"
+    return connection.execute(f"SELECT {function}(hashtextextended(%s, 0))", (key,)).fetchone()[0]
+
+
+def test_a_stock_write_in_flight_keeps_a_count_from_starting_on_its_site_only(db, env):
+    """Regression: a move past the freeze check wrote after the start committed: expected 100, books
+    99, the true 99 counted twice and approved, books 98. The two-connection race itself needs
+    committed rows, so here a second connection asks for the lock a start would take."""
+    other_site = SiteService(db).create_site(tenant_id=TENANT, actor_id=env["actor"], code="elsewhere", name="Elsewhere").value
+    assert isinstance(StockService(db).issue_stock(
+        tenant_id=TENANT, product_id=env["product"], location_id=env["bin"].id, quantity=1, reference="in-flight", actor_id=env["actor"]
+    ), Ok)
+
+    with _second_connection(db) as other:
+        assert _try_lock(other, count_start_lock_key(TENANT, env["site"].id), shared=False) is False
+        assert _try_lock(other, count_start_lock_key(TENANT, env["site"].id), shared=True) is True  # writers don't block writers
+        assert _try_lock(other, count_start_lock_key(TENANT, other_site.id), shared=False) is True
+
+
+def test_a_count_starting_keeps_stock_writers_out_of_its_site(db, env):
+    other_key = count_start_lock_key(TENANT, env["site"].id)
+    _started(db, env)
+    with _second_connection(db) as other:
+        assert _try_lock(other, other_key, shared=True) is False
+
+
+@pytest.mark.parametrize("write", ["issue", "adjust", "reserve", "release"])
+def test_writers_take_the_site_lock_before_any_stock_row_and_before_reading_the_freeze(db, env, write):
+    recording = _RecordingConnection(db)
+    stock = StockService(recording)
+    common = {"tenant_id": TENANT, "product_id": env["product"], "location_id": env["bin"].id}
+    if write == "release":  # needs something held, read outside the recording
+        assert isinstance(StockService(db).reserve_stock(**common, actor_id=env["actor"], quantity=1, correlation_id="c", reference="r"), Ok)
+    {
+        "issue": lambda: stock.issue_stock(**common, quantity=1, reference="r", actor_id=env["actor"]),
+        "adjust": lambda: stock.adjust_stock(**common, delta=1, reason="r", actor_id=env["actor"]),
+        "reserve": lambda: stock.reserve_stock(**common, actor_id=env["actor"], quantity=1, correlation_id="c", reference="r"),
+        "release": lambda: stock.release_reserved_quantity(**common, quantity=1, reference="r", actor_id=env["actor"]),
+    }[write]()
+
+    position = lambda fragment: next(i for i, q in enumerate(recording.statements) if fragment in q)
+    lock = position("pg_advisory_xact_lock_shared")
+    assert lock < next(i for i, q in enumerate(recording.statements) if "stock_items" in q and "FOR UPDATE" in q)
+    if write in ("issue", "adjust"):
+        assert lock < position("warehouse.cycle_counts")
+
+
+def test_a_count_type_change_is_refused_once_started(db, env):
+    """Regression: turning a blind count scheduled mid-way showed the books to whoever was still counting."""
+    service = CycleCountService(db)
+    count = _create_count(db, env, count_type="blind")
+    assert service.admin_update_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, count_type="scheduled").value.count_type == "scheduled"
+    assert service.admin_update_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, count_type="blind").value.count_type == "blind"
+    service.start_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id)
+
+    refused = service.admin_update_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, count_type="scheduled")
+
+    assert isinstance(refused, Err) and refused.code == "INVALID_STATE"
+    assert _first_line(db, count).expected_quantity is None
+    same_type = service.admin_update_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, scheduled_for=datetime.date(2030, 1, 2))
+    assert isinstance(same_type, Ok) and same_type.value.scheduled_for == datetime.date(2030, 1, 2)
 
 
 class _RecordingConnection:

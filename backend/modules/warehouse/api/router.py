@@ -656,6 +656,11 @@ class ResolveLineVarianceRequest(BaseModel):
     decision: Literal["approve", "reject"]
 
 
+class AddFoundLineRequest(BaseModel):
+    location_id: str
+    product_id: str
+
+
 class CompleteCycleCountRequest(BaseModel):
     correlation_id: str
 
@@ -700,7 +705,7 @@ def _cycle_count_line_response(line: CycleCountLine) -> dict:
 def _cycle_count_err_status(code: str) -> int:
     if code == "NOT_FOUND":
         return status.HTTP_404_NOT_FOUND
-    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNRESOLVED", "COUNT_SCOPE_OVERLAP", "LOCATION_FROZEN"):
+    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNRESOLVED", "COUNT_SCOPE_OVERLAP", "LOCATION_FROZEN", "LINE_ALREADY_EXISTS"):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
 
@@ -794,6 +799,27 @@ def start_cycle_count(
             raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
         connection.commit()
     return _cycle_count_response(result.value)
+
+
+@router.post("/cycle-counts/{cycle_count_id}/lines", status_code=status.HTTP_201_CREATED)
+def add_cycle_count_found_line(
+    cycle_count_id: str,
+    body: AddFoundLineRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts")),
+) -> dict:
+    with get_connection() as connection:
+        result = CycleCountService(connection).add_found_line(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            cycle_count_id=cycle_count_id,
+            location_id=body.location_id,
+            product_id=body.product_id,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_line_response(result.value)
 
 
 @router.post("/cycle-counts/{cycle_count_id}/lines/{line_id}/count")

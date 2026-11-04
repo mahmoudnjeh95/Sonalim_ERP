@@ -141,9 +141,9 @@ class VoucherService:
         order = SalesOrderService(self._connection).get_order(tenant_id=tenant_id, order_id=order_id)
         if isinstance(order, Err):
             return order
-        held = self._check_order_not_in_fulfillment(tenant_id, order_id)
-        if isinstance(held, Err):
-            return held
+        issuable = self._check_order_issuable(tenant_id, order.value)
+        if isinstance(issuable, Err):
+            return issuable
         lines = []
         for line in order.value.lines:
             quantity = (quantities or {}).get(line.product_id, Decimal(str(line.quantity)))
@@ -204,11 +204,16 @@ class VoucherService:
 
     def _post_issue(self, tenant_id, actor_id, correlation_id, voucher, number, lines, merged, warnings) -> Result[None]:
         location = voucher["source_location_id"]
-        # Here as well as when drafting: a draft made before the order was confirmed can still be posted.
+        # Here as well as when drafting: a draft can wait while the order moves on.
         if voucher["ref_type"] == "sales_order" and voucher["ref_id"]:
-            held = self._check_order_not_in_fulfillment(tenant_id, voucher["ref_id"])
-            if isinstance(held, Err):
-                return held
+            from modules.sales.api.service import SalesOrderService
+
+            order = SalesOrderService(self._connection).get_order(tenant_id=tenant_id, order_id=voucher["ref_id"])
+            if isinstance(order, Err):
+                return order
+            issuable = self._check_order_issuable(tenant_id, order.value)
+            if isinstance(issuable, Err):
+                return issuable
         for product_id, quantity in merged.items():
             available = Decimal(str(self._stock.get_available_quantity(tenant_id, product_id, location)))
             checked = check_issue_available(available, quantity)
@@ -287,6 +292,17 @@ class VoucherService:
         return Ok(None)
 
     # ---- helpers ----------------------------------------------------------------------------
+
+    def _check_order_issuable(self, tenant_id: str, order: Any) -> Result[None]:
+        """Fulfillment first, so a shipped order is refused for what actually happened to it. Before
+        confirmation nothing is reserved and nothing stops fulfillment opening later on the same order."""
+        held = self._check_order_not_in_fulfillment(tenant_id, order.id)
+        if isinstance(held, Err):
+            return held
+        if order.status != "confirmed":
+            return Err("ORDER_NOT_CONFIRMED", f"an issue voucher needs a confirmed order; this one is {order.status}",
+                       f"un bon de sortie exige une commande confirmée ; celle-ci est au statut {order.status}")
+        return Ok(None)
 
     def _check_order_not_in_fulfillment(self, tenant_id: str, order_id: str) -> Result[None]:
         """An order leaves the warehouse by one route only. Once fulfillment holds it (a pick list, or

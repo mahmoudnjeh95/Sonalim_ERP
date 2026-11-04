@@ -10,7 +10,7 @@ from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
-from modules.warehouse.api.service import StockService
+from modules.warehouse.api.service import StockService, count_start_lock_key
 from modules.warehouse.domain.cycle_count import (
     CycleCount,
     CycleCountLine,
@@ -254,9 +254,9 @@ class CycleCountService:
             return transition_result
         count = transition_result.value
 
-        self._connection.execute(
-            "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (f"warehouse.cycle_count.start:{tenant_id}:{count.site_id}",)
-        )
+        # Exclusive against every stock writer on the site (they hold it shared, see StockService), and
+        # against another start: once granted, nothing is half-written and nothing new gets past the freeze.
+        self._connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (count_start_lock_key(tenant_id, count.site_id),))
         location_ids = self._location_ids_in_scope(tenant_id=tenant_id, site_id=count.site_id, scope_location_id=count.scope_location_id)
         overlap = self._overlapping_count(tenant_id, count, set(location_ids))
         if overlap is not None:
@@ -270,12 +270,10 @@ class CycleCountService:
             "UPDATE warehouse.cycle_counts SET status = 'in_progress', started_at = NOW() WHERE id = %s AND tenant_id = %s",
             (cycle_count_id, tenant_id),
         )
-        # FOR SHARE waits for a stock write already under way, so the figure read includes it.
         stock_rows = self._connection.execute(
             """
             SELECT location_id, product_id, quantity_on_hand FROM warehouse.stock_items
             WHERE tenant_id = %s AND location_id = ANY(%s) AND quantity_on_hand != 0
-            FOR SHARE
             """,
             (tenant_id, location_ids),
         ).fetchall()
@@ -313,6 +311,52 @@ class CycleCountService:
             if location_ids.intersection(theirs):
                 return reference
         return None
+
+    def add_found_line(
+        self, *, tenant_id: str, actor_id: str, cycle_count_id: str, location_id: str, product_id: str
+    ) -> Result[CycleCountLine]:
+        """A product found on a shelf the books say nothing about. The lines are read from stock rows, so
+        it has none: this adds one at an expected 0, and it goes through the same counts and the same
+        decision as any other. Approving it creates the stock through the count's own adjustment."""
+        count_result = self.get_count(tenant_id=tenant_id, cycle_count_id=cycle_count_id, lock=" FOR SHARE")
+        if isinstance(count_result, Err):
+            return count_result
+        count = count_result.value
+        if count.status != "in_progress":
+            return Err("INVALID_STATE", "the count must be in progress to add a line", "l'inventaire doit être en cours pour ajouter une ligne")
+        in_scope = self._location_ids_in_scope(tenant_id=tenant_id, site_id=count.site_id, scope_location_id=count.scope_location_id)
+        if location_id not in in_scope:
+            return Err("LOCATION_OUT_OF_SCOPE", "this count does not cover that location", "cet inventaire ne couvre pas cet emplacement")
+        product = self._connection.execute(
+            "SELECT 1 FROM core.products WHERE id = %s AND tenant_id = %s", (product_id, tenant_id)
+        ).fetchone()
+        if product is None:
+            return Err("NOT_FOUND", f"product {product_id} not found", f"produit {product_id} introuvable")
+
+        line_id = str(ULID())
+        inserted = self._connection.execute(
+            """
+            INSERT INTO warehouse.cycle_count_lines (id, tenant_id, cycle_count_id, location_id, product_id, expected_quantity)
+            VALUES (%s, %s, %s, %s, %s, 0)
+            ON CONFLICT (tenant_id, cycle_count_id, location_id, product_id) DO NOTHING
+            RETURNING id
+            """,
+            (line_id, tenant_id, cycle_count_id, location_id, product_id),
+        ).fetchone()
+        if inserted is None:
+            return Err(
+                "LINE_ALREADY_EXISTS",
+                "this product already has a line at that location in this count",
+                "ce produit a déjà une ligne à cet emplacement dans cet inventaire",
+            )
+        record_audit(
+            self._connection, tenant_id=tenant_id, actor_id=actor_id, action="cycle_count_line.added",
+            entity_type="cycle_count_line", entity_id=line_id, payload={"location_id": location_id, "product_id": product_id},
+        )
+        added = self._get_line(tenant_id=tenant_id, cycle_count_id=cycle_count_id, line_id=line_id)
+        if isinstance(added, Err):
+            return added
+        return Ok(_as_shown(added.value, count.count_type))
 
     def submit_line_count(
         self, *, tenant_id: str, actor_id: str, cycle_count_id: str, line_id: str, counted_quantity: float
@@ -501,7 +545,7 @@ class CycleCountService:
         scheduled_for: datetime.date | None = None,
         count_type: str | None = None,
     ) -> Result[CycleCount]:
-        count_result = self.get_count(tenant_id=tenant_id, cycle_count_id=cycle_count_id)
+        count_result = self.get_count(tenant_id=tenant_id, cycle_count_id=cycle_count_id, lock=" FOR UPDATE")
         if isinstance(count_result, Err):
             return count_result
         current = count_result.value
@@ -509,6 +553,13 @@ class CycleCountService:
         updated_type = count_type if count_type is not None else current.count_type
         if updated_type not in ("scheduled", "blind"):
             return Err("INVALID_COUNT_TYPE", "count_type must be 'scheduled' or 'blind'", "count_type doit être 'scheduled' ou 'blind'")
+        # Turning a blind count scheduled mid-way would show the books to whoever is still counting.
+        if updated_type != current.count_type and current.status != "draft":
+            return Err(
+                "INVALID_STATE",
+                "the count type can only be changed before the count starts",
+                "le type d'inventaire ne peut être modifié qu'avant le démarrage",
+            )
         updated_scheduled_for = scheduled_for if scheduled_for is not None else current.scheduled_for
 
         self._connection.execute(

@@ -6,12 +6,14 @@ import { useI18n } from "../../../lib/i18n";
 import { ApiError } from "../../../lib/api";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
+import { Select } from "../../../components/ui/select";
 import { Badge } from "../../../components/ui/badge";
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from "../../../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../../components/ui/dialog";
 import { useProductCatalog } from "../../products/catalog";
 import { listLocations } from "../api";
 import {
+  addCycleCountFoundLine,
   cancelCycleCount,
   completeCycleCount,
   cycleCountQueryKey,
@@ -20,8 +22,93 @@ import {
   startCycleCount,
   submitCycleCountLine,
   CYCLE_COUNTS_QUERY_KEY,
+  type CycleCountDetail,
   type CycleCountLine,
 } from "./api";
+
+/** The locations a count covers: its whole site, or its scope location and everything under it. */
+function locationsInScope<T extends { id: string; site_id: string; parent_location_id: string | null }>(all: T[], detail: CycleCountDetail): T[] {
+  const inSite = all.filter((location) => location.site_id === detail.site_id);
+  if (!detail.scope_location_id) return inSite;
+  const covered = new Set([detail.scope_location_id]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const location of inSite) {
+      if (location.parent_location_id && covered.has(location.parent_location_id) && !covered.has(location.id)) {
+        covered.add(location.id);
+        grew = true;
+      }
+    }
+  }
+  return inSite.filter((location) => covered.has(location.id));
+}
+
+function AddFoundLine({
+  cycleCountId,
+  locations,
+  products,
+}: {
+  cycleCountId: string;
+  locations: { id: string; name: string }[];
+  products: { id: string; name: string }[];
+}) {
+  const { t } = useI18n();
+  const { session } = useAuth();
+  const token = session!.token;
+  const queryClient = useQueryClient();
+  const [locationId, setLocationId] = useState("");
+  const [productId, setProductId] = useState("");
+
+  const mutation = useMutation({
+    mutationFn: () => addCycleCountFoundLine(token, cycleCountId, { location_id: locationId, product_id: productId }),
+    onSuccess: () => {
+      setProductId("");
+      queryClient.invalidateQueries({ queryKey: cycleCountQueryKey(cycleCountId) });
+    },
+  });
+
+  return (
+    <div className="space-y-1.5 rounded-md border p-3">
+      <p className="text-sm font-medium">{t("warehouse.cycleCounts.found.title")}</p>
+      <div className="flex flex-wrap items-center gap-2">
+        <Select
+          aria-label={t("warehouse.cycleCounts.column.location")}
+          className="h-8 w-auto"
+          value={locationId}
+          onChange={(event) => setLocationId(event.target.value)}
+        >
+          <option value="">{t("warehouse.cycleCounts.column.location")}</option>
+          {locations.map((location) => (
+            <option key={location.id} value={location.id}>
+              {location.name}
+            </option>
+          ))}
+        </Select>
+        <Select
+          aria-label={t("warehouse.cycleCounts.column.product")}
+          className="h-8 w-auto"
+          value={productId}
+          onChange={(event) => setProductId(event.target.value)}
+        >
+          <option value="">{t("warehouse.cycleCounts.column.product")}</option>
+          {products.map((product) => (
+            <option key={product.id} value={product.id}>
+              {product.name}
+            </option>
+          ))}
+        </Select>
+        <Button size="sm" variant="outline" onClick={() => mutation.mutate()} disabled={!locationId || !productId || mutation.isPending}>
+          {t("warehouse.cycleCounts.found.add")}
+        </Button>
+      </div>
+      {mutation.isError && (
+        <p className="text-sm text-destructive">
+          {mutation.error instanceof ApiError ? mutation.error.message : t("warehouse.cycleCounts.dialog.error")}
+        </p>
+      )}
+    </div>
+  );
+}
 
 function LineRow({
   line,
@@ -121,7 +208,7 @@ export function CycleCountDetailDialog({
   cycleCountId: string | null;
 }) {
   const { t } = useI18n();
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const token = session!.token;
   const queryClient = useQueryClient();
   const { products } = useProductCatalog();
@@ -224,6 +311,9 @@ export function CycleCountDetailDialog({
                 ))}
               </TableBody>
             </Table>
+            {detail.status === "in_progress" && hasPermission("warehouse.manage_cycle_counts") && (
+              <AddFoundLine cycleCountId={detail.id} locations={locationsInScope(locations, detail)} products={products} />
+            )}
           </>
         )}
       </DialogContent>

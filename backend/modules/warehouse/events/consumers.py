@@ -102,7 +102,8 @@ def _handle_sales_order_confirmed(connection: psycopg.Connection, envelope: dict
         lines=payload["lines"],
         reservation_reference=payload.get("reservation_reference", f"sales_order:{order_id}"),
     )
-    if isinstance(result, Err) and result.code != "EMPTY_ORDER":
+    # Neither can ever succeed on redelivery, and the voucher already records how the goods left.
+    if isinstance(result, Err) and result.code not in ("EMPTY_ORDER", "ORDER_ALREADY_ISSUED"):
         raise RuntimeError(f"failed to open a pick list for sales order {order_id}: {result.message}")
 
 

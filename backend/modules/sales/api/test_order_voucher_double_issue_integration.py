@@ -13,6 +13,7 @@ from modules.sales.api.service import SalesOrderService
 from modules.sales.domain.entities import OrderLine
 from modules.sales.events.consumers import _handle_shipment_shipped
 from modules.warehouse.api.fulfillment_service import FulfillmentService
+from modules.warehouse.api.reservation_service import ReservationService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.voucher_service import VoucherService
 from modules.warehouse.events.consumers import _handle_sales_order_confirmed
@@ -138,6 +139,52 @@ def test_without_surplus_stock_the_voucher_is_refused_the_same_way(db, env):
 
     assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
     assert _levels(db, env) == (ORDERED, ORDERED)
+
+
+def test_restarting_fulfilment_after_a_voucher_cannot_issue_the_goods_again(db, env):
+    """Cancelled pick list, voucher posted: the cancelled list is final, and an order can't be re-confirmed."""
+    order_id = _confirmed_order(db, env, stock=100)
+    fulfillment = FulfillmentService(db)
+    [pick_list] = [p for p in fulfillment.list_pick_lists(tenant_id=TENANT) if p.source_id == order_id]
+    assert isinstance(fulfillment.cancel_pick_list(tenant_id=TENANT, actor_id=env["actor"], pick_list_id=pick_list.id, correlation_id=str(ULID())), Ok)
+    assert isinstance(_post_voucher_from_order(db, env, order_id), Ok)
+    assert _levels(db, env) == (100 - ORDERED, 0)
+
+    _handle_sales_order_confirmed(db, _outbox_envelope(db, "sales.order.confirmed", "order_id", order_id))  # redelivered
+    reconfirmed = SalesOrderService(db).confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id, correlation_id=str(ULID()))
+
+    assert isinstance(reconfirmed, Err)
+    assert [p.status for p in fulfillment.list_pick_lists(tenant_id=TENANT) if p.source_id == order_id] == ["cancelled"]
+    assert _levels(db, env) == (100 - ORDERED, 0)
+
+
+def test_a_late_confirmation_event_opens_no_pick_list_on_an_order_a_voucher_already_issued(db, env):
+    """Regression: reservation released by hand before the worker ran, voucher posted, then the event.
+    The pick list opened and shipping issued the order again: 100 received, 30 + 30 ordered, on hand
+    40 and the other order's hold gone, where 70 on hand and 30 reserved is right."""
+    received = StockService(db).receive_stock(
+        tenant_id=TENANT, product_id=env["product"], location_id=env["location"], quantity=100,
+        correlation_id=str(ULID()), reference="setup", actor_id=env["actor"],
+    )
+    assert isinstance(received, Ok)
+    sales = SalesOrderService(db)
+    orders = [
+        sales.create_order(tenant_id=TENANT, actor_id=env["actor"], partner_id=env["partner"], location_id=env["location"],
+                           lines=[OrderLine(product_id=env["product"], quantity=ORDERED, unit_price=100.0)])
+        for _ in range(2)
+    ]
+    for order in orders:
+        assert isinstance(sales.confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id, correlation_id=str(ULID())), Ok)
+    issued_order = orders[0].id
+    reservations = ReservationService(db)
+    [held] = [r for r in reservations.list_reservations(tenant_id=TENANT) if r.reference == f"sales_order:{issued_order}"]
+    assert isinstance(reservations.release_reservation(tenant_id=TENANT, actor_id=env["actor"], reservation_id=held.id), Ok)
+    assert isinstance(_post_voucher_from_order(db, env, issued_order), Ok)
+
+    _handle_sales_order_confirmed(db, _outbox_envelope(db, "sales.order.confirmed", "order_id", issued_order))  # acknowledged, no raise
+
+    assert not [p for p in FulfillmentService(db).list_pick_lists(tenant_id=TENANT) if p.source_id == issued_order]
+    assert _levels(db, env) == (100 - ORDERED, ORDERED)
 
 
 def test_a_reservation_alone_is_enough_to_refuse_the_voucher(db, env):

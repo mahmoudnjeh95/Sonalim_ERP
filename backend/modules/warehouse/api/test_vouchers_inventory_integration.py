@@ -13,6 +13,7 @@ from modules.warehouse.api.cycle_count_service import CycleCountService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
 from modules.warehouse.api.movements_report_service import MovementsReportService
+from modules.warehouse.api.reservation_service import ReservationService
 from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.api.voucher_service import VoucherService
 
@@ -140,6 +141,11 @@ def test_issue_from_a_sales_order_is_capped_across_vouchers(db, env):
                                                location_id=env["main"], lines=[OrderLine(product_id=env["film"], quantity=10, unit_price=1)])
     order_id = order.id
     _receive(db, env, env["film"], 50, 5)
+    assert isinstance(SalesOrderService(db).confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id, correlation_id="c"), Ok)
+    # Fulfillment let go of the order: the only way a confirmed order can reach a voucher.
+    reservations = ReservationService(db)
+    [held] = [r for r in reservations.list_reservations(tenant_id=TENANT) if r.reference == f"sales_order:{order_id}"]
+    assert isinstance(reservations.release_reservation(tenant_id=TENANT, actor_id=env["actor"], reservation_id=held.id), Ok)
     service = VoucherService(db)
     first = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id,
                                             source_location_id=env["main"], quantities={env["film"]: D("6")})
@@ -154,12 +160,28 @@ def test_issue_from_a_sales_order_is_capped_across_vouchers(db, env):
     assert isinstance(_post(db, env, rest), Ok)
 
 
+def test_an_order_not_yet_confirmed_cannot_be_issued(db, env):
+    order = SalesOrderService(db).create_order(tenant_id=TENANT, actor_id=env["actor"], partner_id=env["customer"],
+                                               location_id=env["main"], lines=[OrderLine(product_id=env["film"], quantity=10, unit_price=1)])
+    _receive(db, env, env["film"], 50, 5)
+
+    refused = VoucherService(db).create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id, source_location_id=env["main"])
+    assert isinstance(refused, Err) and refused.code == "ORDER_NOT_CONFIRMED"
+
+    # A voucher drafted by hand with the order as its reference is stopped at posting.
+    draft = _voucher(db, env, type="issue", source_location_id=env["main"], ref_type="sales_order", ref_id=order.id,
+                     lines=[{"product_id": env["film"], "quantity": 10}])
+    posted = _post(db, env, draft)
+    assert isinstance(posted, Err) and posted.code == "ORDER_NOT_CONFIRMED"
+    assert _on_hand(db, env, env["film"], env["main"]) == D("50")
+
+
 def test_a_draft_made_before_the_order_was_confirmed_cannot_be_posted_after(db, env):
     order = SalesOrderService(db).create_order(tenant_id=TENANT, actor_id=env["actor"], partner_id=env["customer"],
                                                location_id=env["main"], lines=[OrderLine(product_id=env["film"], quantity=10, unit_price=1)])
     _receive(db, env, env["film"], 50, 5)
-    draft = VoucherService(db).create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id,
-                                                       source_location_id=env["main"])
+    draft = _voucher(db, env, type="issue", source_location_id=env["main"], ref_type="sales_order", ref_id=order.id,
+                     lines=[{"product_id": env["film"], "quantity": 10}])
     assert isinstance(draft, Ok)
     assert isinstance(SalesOrderService(db).confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id, correlation_id="c"), Ok)
 
