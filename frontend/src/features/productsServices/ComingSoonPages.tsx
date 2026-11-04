@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { motion } from "framer-motion";
-import { Boxes, Truck } from "lucide-react";
+import { Truck } from "lucide-react";
 import { useI18n, type TranslationKey } from "../../lib/i18n";
 import { Card, CardContent } from "../../components/ui/card";
 import { EmptyState } from "../../components/patterns/EmptyState";
@@ -32,16 +32,6 @@ function ComingSoonPage({
   );
 }
 
-export function InventoriesPage() {
-  return (
-    <ComingSoonPage
-      icon={<Boxes className="h-5 w-5" />}
-      titleKey="inventories.title"
-      subtitleKey="inventories.subtitle"
-      descriptionKey="inventories.comingSoon.description"
-    />
-  );
-}
 
 export function ShipmentsPage() {
   return (

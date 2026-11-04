@@ -285,7 +285,6 @@ export const fr = {
   "nav.warehouse": "Entrepôt",
   "nav.productsServices": "Produits/Services",
   "nav.products": "Produits",
-  "nav.inventories": "Inventaires",
   "nav.shipments": "Expéditions",
   "nav.purchaseOrders": "Commandes d'achat",
   "nav.commerce": "Commerce",
@@ -2368,7 +2367,7 @@ export const fr = {
   "warehouse.tabs.scanning": "Scanner",
   "warehouse.tabs.locations": "Emplacements",
   "warehouse.tabs.putaway": "Rangement",
-  "warehouse.tabs.cycleCounts": "Inventaires tournants",
+  "warehouse.tabs.cycleCounts": "Inventaires",
 
   "warehouse.putaway.suggest.title": "Suggérer et confirmer",
   "warehouse.putaway.field.site": "Site",
@@ -4484,9 +4483,6 @@ export const fr = {
   "products.statistics.packaging.table.palletsPerTonne": "Palettes/tonne",
   "products.statistics.packaging.table.packagingPerTonne": "Emballage (kg/t)",
 
-  "inventories.title": "Inventaires",
-  "inventories.subtitle": "Inventaires tournants et ajustements de stock.",
-  "inventories.comingSoon.description": "La gestion des inventaires est en cours de construction.",
 
   "shipments.title": "Expéditions",
   "shipments.subtitle": "Livraisons sortantes vers les clients.",

@@ -1,4 +1,5 @@
 import { useState, type ComponentType } from "react";
+import { useSearchParams } from "react-router-dom";
 import { AnimatePresence, motion } from "framer-motion";
 import { BarChart3, Boxes, Coins, FileText, History as HistoryIcon, LayoutDashboard, ListTree, Lock, Package, Repeat } from "lucide-react";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs";
@@ -58,7 +59,8 @@ type TabValue = string;
 export function WarehousePage() {
   const { t } = useI18n();
   const { hasPermission } = useAuth();
-  const [tab, setTab] = useState<TabValue>("overview");
+  const [searchParams] = useSearchParams();
+  const [tab, setTab] = useState<TabValue>(searchParams.get("tab") ?? "overview");
   const tabs = TABS.filter((tabDef) => !tabDef.permission || hasPermission(tabDef.permission));
   const ActiveTab = (tabs.find((tabDef) => tabDef.value === tab) ?? tabs[0]).Component;
 

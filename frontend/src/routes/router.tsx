@@ -51,7 +51,7 @@ import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
 import { PurchaseInvoicesPage } from "../features/procurement/PurchaseInvoicesPage";
 import { TreasuryPage } from "../features/treasury/TreasuryPage";
 import { ProductsPage } from "../features/products/ProductsPage";
-import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
+import { ShipmentsPage } from "../features/productsServices/ComingSoonPages";
 import { RunsPage } from "../features/payroll/runs/RunsPage";
 import { PayslipPage } from "../features/payroll/payslips/PayslipPage";
 import { PayslipPrintPage } from "../features/payroll/print/PayslipPrintPage";
@@ -121,7 +121,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/maintenance/jobs/:jobId", element: <JobPage /> },
   { path: "/warehouse", element: <WarehousePage /> },
   { path: "/products", element: <ProductsPage /> },
-  { path: "/inventories", element: <InventoriesPage /> },
+  { path: "/inventories", element: <Navigate to="/warehouse?tab=cycle-counts" replace /> },
   { path: "/shipments", element: <ShipmentsPage /> },
   { path: "/procurement", element: <PurchaseOrdersPage /> },
   { path: "/procurement/invoices", element: <PurchaseInvoicesPage /> },
