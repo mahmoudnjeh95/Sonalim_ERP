@@ -5,7 +5,7 @@
   "optional_depends": [],
   "provides_api": ["SalesOrderService"],
   "publishes_events": ["sales.order.confirmed"],
-  "subscribes_events": ["warehouse.shipment.shipped"],
+  "subscribes_events": ["warehouse.shipment.shipped", "warehouse.voucher.posted"],
   "migrations_path": "./migrations",
   "permissions": ["sales.view_orders", "sales.manage_orders", "sales.admin_orders"]
 }

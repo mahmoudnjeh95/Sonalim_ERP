@@ -251,7 +251,7 @@ class FulfillmentService:
             )
 
         for line in self.list_pick_lines(tenant_id=tenant_id, pick_list_id=pick_list_id):
-            released = self._stock.release_stock_reservation(
+            released = self._stock.release_what_is_still_held(
                 tenant_id=tenant_id,
                 product_id=line.product_id,
                 location_id=pick_list.value.location_id,
@@ -436,7 +436,7 @@ class FulfillmentService:
         lines = self.list_pick_lines(tenant_id=tenant_id, pick_list_id=pick_list.value.id)
         shipment_reference = f"shipment:{shipment_id}"
         for line in lines:
-            released = self._stock.release_stock_reservation(
+            released = self._stock.release_what_is_still_held(
                 tenant_id=tenant_id,
                 product_id=line.product_id,
                 location_id=pick_list.value.location_id,

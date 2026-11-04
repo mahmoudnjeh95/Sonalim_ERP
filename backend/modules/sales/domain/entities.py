@@ -7,8 +7,9 @@ from core.domain.result import Err, Ok, Result
 
 VALID_TRANSITIONS = {
     "draft": {"confirmed"},
-    # Set by warehouse.shipment.shipped, never by a user action: an order is
-    # shipped when the goods have physically left, which only warehouse knows.
+    # Set by warehouse.shipment.shipped or by issue vouchers covering every line,
+    # never by a user action: an order is shipped when the goods have physically
+    # left, which only warehouse knows.
     "confirmed": {"shipped"},
     "shipped": set(),
 }
@@ -54,6 +55,14 @@ def confirm(order: SalesOrder) -> Result[SalesOrder]:
             opportunity_id=order.opportunity_id,
         )
     )
+
+
+def covers_all_lines(lines: tuple[OrderLine, ...], issued_to_date: dict[str, float]) -> bool:
+    """Whether what left the warehouse covers everything ordered. Lines of one product count together."""
+    ordered: dict[str, float] = {}
+    for line in lines:
+        ordered[line.product_id] = ordered.get(line.product_id, 0.0) + line.quantity
+    return all(issued_to_date.get(product_id, 0.0) >= quantity - 1e-6 for product_id, quantity in ordered.items())
 
 
 def mark_shipped(order_status: str) -> Result[str]:

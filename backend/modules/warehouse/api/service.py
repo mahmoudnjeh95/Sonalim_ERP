@@ -288,6 +288,38 @@ class StockService:
             )
         return result
 
+    def release_what_is_still_held(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        location_id: str,
+        quantity: float,
+        reference: str,
+        actor_id: str | None = None,
+    ) -> Result[None]:
+        """For a pick list letting go of its hold. The counter is shared by every order at the location,
+        so if this reference's hold was already closed (released by hand before that was refused, or
+        before its pick list opened), releasing the full quantity would drain another order's hold, or
+        refuse and strand the pick list. Only what the ledger still has open is released. A reference
+        with no ledger rows at all predates the ledger and keeps the old behaviour."""
+        self._hold_off_count_start(tenant_id, location_id)
+        rows = self._connection.execute(
+            """
+            SELECT quantity_open, status FROM warehouse.stock_reservations
+            WHERE tenant_id = %s AND product_id = %s AND location_id = %s AND reference = %s
+            FOR UPDATE
+            """,
+            (tenant_id, product_id, location_id, reference),
+        ).fetchall()
+        release = min(quantity, sum(float(open_) for open_, status in rows if status == "active")) if rows else quantity
+        if release <= 0:
+            return Ok(None)
+        released = self.release_stock_reservation(
+            tenant_id=tenant_id, product_id=product_id, location_id=location_id, quantity=release, reference=reference, actor_id=actor_id,
+        )
+        return released if isinstance(released, Err) else Ok(None)
+
     def release_reserved_quantity(
         self,
         *,

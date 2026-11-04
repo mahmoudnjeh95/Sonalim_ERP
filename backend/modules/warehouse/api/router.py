@@ -1385,7 +1385,7 @@ def _reservation_response(reservation: StockReservation) -> dict:
 def _reservation_err_status(code: str) -> int:
     if code == "NOT_FOUND":
         return status.HTTP_404_NOT_FOUND
-    if code in ("INVALID_STATE", "INSUFFICIENT_STOCK"):
+    if code in ("INVALID_STATE", "INSUFFICIENT_STOCK", "RESERVATION_IN_FULFILLMENT"):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
 

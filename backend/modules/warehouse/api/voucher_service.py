@@ -184,8 +184,12 @@ class VoucherService:
             "UPDATE warehouse.vouchers SET status = 'posted', number = %s, posted_by = %s, posted_at = NOW() WHERE id = %s",
             (number, actor_id, voucher_id),
         )
-        publish_event(self._connection, event_type="warehouse.voucher.posted", producer="warehouse", tenant_id=tenant_id,
-                      correlation_id=correlation_id, payload={"voucher_id": voucher_id, "type": current["type"], "number": number})
+        payload: dict[str, Any] = {"voucher_id": voucher_id, "type": current["type"], "number": number,
+                                   "ref_type": current["ref_type"], "ref_id": current["ref_id"]}
+        if current["type"] == "issue" and current["ref_type"] == "sales_order" and current["ref_id"]:
+            payload["issued_to_date"] = self._order_net_issued(tenant_id, current["ref_id"])
+        publish_event(self._connection, event_type="warehouse.voucher.posted", event_version="1.1", producer="warehouse", tenant_id=tenant_id,
+                      correlation_id=correlation_id, payload=payload)
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="warehouse.voucher.posted",
                      entity_type="voucher", entity_id=voucher_id, payload={"number": number, "type": current["type"]})
         posted = self.get(tenant_id=tenant_id, voucher_id=voucher_id)
@@ -292,6 +296,29 @@ class VoucherService:
         return Ok(None)
 
     # ---- helpers ----------------------------------------------------------------------------
+
+    def _order_net_issued(self, tenant_id: str, order_id: str) -> dict[str, float]:
+        """Per product, what posted vouchers have issued for the order, net of returns. The whole figure
+        rather than this voucher's lines, so a consumer needs no running total and a replay changes nothing."""
+        issued = self._connection.execute(
+            """
+            SELECT l.product_id, SUM(l.quantity) FROM warehouse.voucher_lines l JOIN warehouse.vouchers v ON v.id = l.voucher_id
+            WHERE v.tenant_id = %s AND v.type = 'issue' AND v.status = 'posted' AND v.ref_type = 'sales_order' AND v.ref_id = %s
+            GROUP BY l.product_id
+            """,
+            (tenant_id, order_id),
+        ).fetchall()
+        returned = dict(self._connection.execute(
+            """
+            SELECT r.product_id, SUM(r.quantity) FROM warehouse.voucher_lines r
+            JOIN warehouse.vouchers rv ON rv.id = r.voucher_id
+            JOIN warehouse.vouchers iv ON iv.id = rv.return_of_voucher_id
+            WHERE rv.status = 'posted' AND iv.tenant_id = %s AND iv.ref_type = 'sales_order' AND iv.ref_id = %s
+            GROUP BY r.product_id
+            """,
+            (tenant_id, order_id),
+        ).fetchall())
+        return {product_id: float(quantity - returned.get(product_id, 0)) for product_id, quantity in issued}
 
     def _check_order_issuable(self, tenant_id: str, order: Any) -> Result[None]:
         """Fulfillment first, so a shipped order is refused for what actually happened to it. Before

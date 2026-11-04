@@ -32,6 +32,40 @@ def env(db):
     return {"actor": actor, "product": product, "location": location}
 
 
+class _RecordingConnection:
+    def __init__(self, connection) -> None:
+        self._connection = connection
+        self.statements: list[str] = []
+
+    def execute(self, query, *args, **kwargs):
+        self.statements.append(str(query))
+        return self._connection.execute(query, *args, **kwargs)
+
+    def __getattr__(self, name):
+        return getattr(self._connection, name)
+
+
+@pytest.mark.parametrize("how", ["manual", "sweep"])
+def test_closing_a_reservation_takes_the_site_lock_before_the_stock_row(db, env, how):
+    """Regression: the stock row was locked first, against the rule in StockService._hold_off_count_start;
+    a writer then queued behind a waiting count start while holding the row, and it took a deadlock to clear."""
+    past = datetime.datetime(2020, 1, 1, tzinfo=UTC)
+    _reserve(db, env, 5, "manual-hold")
+    [row] = _ledger(db, "manual-hold")
+    db.execute("UPDATE warehouse.stock_reservations SET expires_at = %s WHERE id = %s", (past, row.id))
+    recording = _RecordingConnection(db)
+    service = ReservationService(recording)
+
+    if how == "manual":
+        assert isinstance(service.release_reservation(tenant_id=TENANT, actor_id=env["actor"], reservation_id=row.id), Ok)
+    else:
+        assert len(service.expire_due_reservations(now=datetime.datetime.now(UTC), tenant_id=TENANT)) == 1
+
+    statements = recording.statements
+    lock = next(i for i, q in enumerate(statements) if "pg_advisory_xact_lock_shared" in q)
+    assert lock < next(i for i, q in enumerate(statements) if "warehouse.stock_items" in q and "FOR UPDATE" in q)
+
+
 def _reserve(db, env, quantity, reference, expires_at=None):
     result = StockService(db).reserve_stock(
         tenant_id=TENANT, product_id=env["product"], location_id=env["location"], quantity=quantity,

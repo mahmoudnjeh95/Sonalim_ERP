@@ -465,6 +465,35 @@ def test_a_found_line_on_a_blind_count_reveals_no_books(db, env):
     assert "100" not in refused.message and "100" not in refused.message_fr
 
 
+def test_a_quantity_the_unit_cannot_hold_is_refused_when_entered(db, env):
+    """Regression: 97.5 entered twice on a whole-count unit settled; approve then refused it, a recount
+    was refused as already counted, and completion was blocked for good."""
+    uom, product = str(ULID()), str(ULID())
+    db.execute("INSERT INTO core.uoms (id, tenant_id, code, name, category, is_integer_only) VALUES (%s, %s, 'ct', 'Carton', 'count', TRUE)", (uom, TENANT))
+    db.execute("INSERT INTO core.products (id, tenant_id, sku, name, uom_id) VALUES (%s, %s, 'CC-CT', 'Cartons', %s)", (product, TENANT, uom))
+    assert isinstance(StockService(db).receive_stock(tenant_id=TENANT, product_id=product, location_id=env["second_bin"].id, quantity=100,
+                                                     correlation_id=str(ULID()), reference="setup", actor_id=env["actor"]), Ok)
+    count = _started(db, env, scope_location_id=env["second_bin"].id)
+    line = _first_line(db, count)
+
+    refused = _submit(db, env, count, line, 97.5)
+
+    assert isinstance(refused, Err) and refused.code == "QUANTITY_MUST_BE_INTEGER"
+    assert _first_line(db, count).counts_recorded == 0
+    _submit(db, env, count, line, 97)
+    assert _submit(db, env, count, line, 97).value.counted_quantity == 97
+    assert isinstance(CycleCountService(db).resolve_line_variance(
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve"
+    ), Ok)
+
+
+def test_a_fractional_count_is_fine_on_a_unit_that_allows_it(db, env):
+    count = _started(db, env)
+    line = _first_line(db, count)
+    assert isinstance(_submit(db, env, count, line, 97.5), Ok)
+    assert _submit(db, env, count, line, 97.5).value.counted_quantity == 97.5
+
+
 def _second_connection(db):
     return psycopg.connect(db.info.dsn, password=db.info.password, autocommit=True)
 

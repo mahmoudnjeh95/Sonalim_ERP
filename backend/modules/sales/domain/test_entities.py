@@ -1,5 +1,5 @@
 from core.domain.result import Err, Ok
-from modules.sales.domain.entities import OrderLine, SalesOrder, confirm
+from modules.sales.domain.entities import OrderLine, SalesOrder, confirm, covers_all_lines
 
 
 def _order(status: str) -> SalesOrder:
@@ -21,3 +21,10 @@ def test_confirm_already_confirmed_order_fails():
 def test_total_amount_sums_lines():
     order = _order("draft")
     assert order.total_amount == 2 * 9.99
+
+
+def test_covers_all_lines_counts_lines_of_one_product_together():
+    lines = (OrderLine("a", 10, 1.0), OrderLine("a", 5, 1.0), OrderLine("b", 2, 1.0))
+    assert covers_all_lines(lines, {"a": 15, "b": 2}) is True
+    assert covers_all_lines(lines, {"a": 10, "b": 2}) is False
+    assert covers_all_lines(lines, {"a": 15}) is False

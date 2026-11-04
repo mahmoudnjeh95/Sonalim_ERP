@@ -380,6 +380,10 @@ class CycleCountService:
 
         if line.status == "counted":
             return Err("INVALID_STATE", "this line is already counted", "cette ligne est déjà comptée")
+        # Refused here, not at approval: a settled line can't be recounted, so the typo would be stuck.
+        unit_check = self._stock._validate_quantity(tenant_id=tenant_id, product_id=line.product_id, quantity=counted_quantity)
+        if isinstance(unit_check, Err):
+            return unit_check
 
         # Counts go into the next free slot; settle_counts decides when they are enough.
         counts = [line.count_1, line.count_2, line.count_3]

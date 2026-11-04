@@ -8,7 +8,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
-from modules.sales.domain.entities import OrderLine, SalesOrder, confirm, mark_shipped
+from modules.sales.domain.entities import OrderLine, SalesOrder, confirm, covers_all_lines, mark_shipped
 from modules.warehouse.api.service import StockService
 
 
@@ -261,8 +261,26 @@ class SalesOrderService:
         )
         return result
 
+    def mark_order_issued(
+        self, *, tenant_id: str, order_id: str, voucher_id: str, issued_to_date: dict[str, float], actor_id: str = "system:event-consumer"
+    ) -> Result[None]:
+        """Issue vouchers are the other way an order leaves: shipped once they cover every line, and
+        left confirmed while part of it is still to go."""
+        order = self.get_order(tenant_id=tenant_id, order_id=order_id)
+        if isinstance(order, Err):
+            return order
+        if not covers_all_lines(order.value.lines, issued_to_date):
+            return Ok(None)
+        return self.mark_order_shipped(tenant_id=tenant_id, order_id=order_id, voucher_id=voucher_id, actor_id=actor_id)
+
     def mark_order_shipped(
-        self, *, tenant_id: str, order_id: str, shipment_id: str, actor_id: str = "system:event-consumer"
+        self,
+        *,
+        tenant_id: str,
+        order_id: str,
+        shipment_id: str | None = None,
+        voucher_id: str | None = None,
+        actor_id: str = "system:event-consumer",
     ) -> Result[None]:
         """Idempotent: an order already shipped is left alone, so a redelivered
         warehouse.shipment.shipped is harmless even past the processed-events log."""
@@ -284,6 +302,6 @@ class SalesOrderService:
             action="sales_order.status_changed",
             entity_type="sales_order",
             entity_id=order_id,
-            payload={"from_status": row[0], "to_status": "shipped", "shipment_id": shipment_id},
+            payload={"from_status": row[0], "to_status": "shipped", "shipment_id": shipment_id, "voucher_id": voucher_id},
         )
         return Ok(None)
