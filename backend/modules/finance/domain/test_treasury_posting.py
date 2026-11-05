@@ -88,25 +88,55 @@ def test_the_ledger_still_refuses_a_fractional_amount_as_a_safety_net():
     assert isinstance(result, Err) and result.code == "INVALID_ENTRY_LINE"
 
 
+PARKING = [rule("receipt_payment", "cheque", debit="H1", credit="C1"), rule("disbursement_payment", "cheque", debit="S1", credit="H2")]
+
+
+def _instrument(kind, rules, direction="in", method="cheque", amount=D("400"), ledger_code="B1"):
+    return instrument_entry(kind, direction=direction, method=method, amount=amount, currency="XOF", partner_id="P",
+                            account_ledger_code=ledger_code, label="L", rules=PARKING + rules)
+
+
 def test_collecting_an_instrument_moves_it_from_holding_to_the_slip_account():
-    rules = [rule("instrument_collected", "in", credit="H1", journal="BNQ")]
-    result = instrument_entry("instrument_collected", direction="in", amount=D("400"), currency="XOF", partner_id="P",
-                              account_ledger_code="B1", label="L", rules=rules)
+    result = _instrument("instrument_collected", [rule("instrument_collected", "in", journal="BNQ")])
     assert [(l.account_code, l.debit, l.credit) for l in result.value.lines] == [("B1", 400, 0), ("H1", 0, 400)]
 
 
 def test_collecting_without_the_account_ledger_code_is_refused():
-    rules = [rule("instrument_collected", "in", credit="H1")]
-    result = instrument_entry("instrument_collected", direction="in", amount=D("1"), currency="XOF", partner_id="P",
-                              account_ledger_code=None, label="L", rules=rules)
+    result = _instrument("instrument_collected", [rule("instrument_collected", "in")], ledger_code=None)
     assert isinstance(result, Err) and result.code == "LEDGER_ACCOUNT_MISSING"
 
 
 def test_a_bounced_instrument_puts_the_debt_back_on_the_customer():
-    rules = [rule("instrument_unpaid", "*", debit="C1", credit="H1", journal="OD")]
-    result = instrument_entry("instrument_unpaid", direction="in", amount=D("400"), currency="XOF", partner_id="P",
-                              account_ledger_code=None, label="L", rules=rules)
+    result = _instrument("instrument_unpaid", [rule("instrument_unpaid", "*", debit="C1", journal="OD")], ledger_code=None)
     assert [(l.account_code, l.debit, l.credit, l.partner_id) for l in result.value.lines] == [("C1", 400, 0, "P"), ("H1", 0, 400, None)]
+
+
+def test_an_issued_instrument_that_bounces_puts_the_debt_back_on_the_supplier():
+    result = _instrument("instrument_unpaid", [rule("instrument_unpaid", "out", credit="S1", journal="OD")], direction="out",
+                         ledger_code=None)
+    assert [(l.account_code, l.debit, l.credit, l.partner_id) for l in result.value.lines] == [("H2", 400, 0, None), ("S1", 0, 400, "P")]
+
+
+def test_each_payment_leaves_the_holding_account_its_own_rule_parked_it_on():
+    # A cheque and a cash payment wait on the same slip in different holding accounts. One collection rule per
+    # direction used to credit its own account for both, so one holding account never cleared and the other
+    # went into credit (found when posting was first switched on end to end).
+    rules = [rule("receipt_payment", "cheque", debit="513", credit="411"), rule("receipt_payment", "cash", debit="585", credit="411"),
+             rule("instrument_collected", "in", credit="513", journal="BNQ")]
+    for method, holding in (("cheque", "513"), ("cash", "585")):
+        parked = document_entries("in", payments=[{"method": method, "amount": D("100"), "account_id": None, "ledger_account_code": None}],
+                                  unallocated="0", partner_id="P", currency="XOF", label="L", rules=rules)
+        collected = instrument_entry("instrument_collected", direction="in", method=method, amount=D("100"), currency="XOF",
+                                     partner_id="P", account_ledger_code="571", label="L", rules=rules)
+        assert parked.value[0].lines[0].account_code == holding
+        assert [(l.account_code, l.debit, l.credit) for l in collected.value.lines] == [("571", 100, 0), (holding, 0, 100)]
+
+
+def test_collecting_a_payment_whose_rule_has_no_holding_account_is_refused():
+    result = instrument_entry("instrument_collected", direction="in", method="cash", amount=D("1"), currency="XOF", partner_id="P",
+                              account_ledger_code="571", label="L",
+                              rules=[rule("receipt_payment", "cash", credit="411"), rule("instrument_collected", "in")])
+    assert isinstance(result, Err) and result.code == "POSTING_RULE_MISSING"
 
 
 def _fee(rules, ledger_code="B1", currency="XOF", amount=D("2500")):

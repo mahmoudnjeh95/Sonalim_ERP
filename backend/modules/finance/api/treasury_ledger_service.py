@@ -131,7 +131,7 @@ class TreasuryLedgerService:
             return Ok([])
         label = f"Encaissement effet {inst['number']}" if inst["direction"] == "in" else f"Paiement effet {inst['number']}"
         entry = instrument_entry(
-            KIND_COLLECTED, direction=inst["direction"], amount=inst["amount"], currency=inst["currency"],
+            KIND_COLLECTED, direction=inst["direction"], method=inst["method"], amount=inst["amount"], currency=inst["currency"],
             partner_id=inst["partner_id"],
             account_ledger_code=self._treasury.account_ledger_code(tenant_id=tenant_id, account_id=account_id or inst["account_id"]),
             label=label, rules=self._rules.rules_for(tenant_id=tenant_id, source=TREASURY_MODULE),
@@ -168,7 +168,7 @@ class TreasuryLedgerService:
         inst = instrument.value
         label = f"Effet impayé {inst['number']}"
         entry = instrument_entry(
-            KIND_UNPAID, direction=inst["direction"], amount=inst["amount"], currency=inst["currency"],
+            KIND_UNPAID, direction=inst["direction"], method=inst["method"], amount=inst["amount"], currency=inst["currency"],
             partner_id=inst["partner_id"], account_ledger_code=None, label=label,
             rules=self._rules.rules_for(tenant_id=tenant_id, source=TREASURY_MODULE),
         )

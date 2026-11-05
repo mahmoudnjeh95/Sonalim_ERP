@@ -17,7 +17,11 @@ Rule shapes (code = payment method, direction for instrument kinds, or '*' as th
                         out: debit = the supplier account, credit = the withheld-tax payable
   instrument_collected  in:  debit = the slip's account (its ledger code), credit = holding account
                         out: debit = holding account, credit = the slip's account
-  instrument_unpaid     self-contained: in: debit customer, credit holding; out: debit holding, credit supplier
+                        only its journal is read: the holding account is the one the payment's own
+                        `*_payment` rule parked it on, so a cheque and a cash payment waiting on the
+                        same slip each leave their own holding account
+  instrument_unpaid     in: debit customer, credit holding; out: debit holding, credit supplier; the
+                        holding side again comes from the payment's own rule
   instrument_rejection_fee  debit = the bank-charges account; the credit is the ledger code of the
                         treasury account the bank charged, so any credit on the rule is ignored
 
@@ -182,10 +186,24 @@ def document_entries(
     return Ok(entries)
 
 
+def _holding_account(rules: list[PostingRule], direction: str, method: str) -> Result[str]:
+    """Where a payment waited for the slip: the holding account of its own payment rule, the one
+    `document_entries` debited (or credited) when the document was posted."""
+    resolved = resolve_rule(rules, source="treasury", source_kind=f"{DIRECTION_NOUN[direction]}_payment", code=method)
+    if isinstance(resolved, Err):
+        return resolved
+    rule = resolved.value
+    holding = rule.debit_account_code if direction == "in" else rule.credit_account_code
+    if not holding:
+        return _incomplete(rule, "a holding account for instruments not yet in an account")
+    return Ok(str(holding))
+
+
 def instrument_entry(
     kind: str,
     *,
     direction: str,
+    method: str,
     amount: object,
     currency: str,
     partner_id: str | None,
@@ -199,16 +217,18 @@ def instrument_entry(
     value = _amount(amount, code=kind)
     if isinstance(value, Err):
         return value
-    resolved = resolve_rule(list(rules), source="treasury", source_kind=kind, code=direction)
+    rules = list(rules)
+    resolved = resolve_rule(rules, source="treasury", source_kind=kind, code=direction)
     if isinstance(resolved, Err):
         return resolved
     rule = resolved.value
     if not rule.journal_code:
         return _incomplete(rule, "a journal")
+    parked = _holding_account(rules, direction, method)
+    if isinstance(parked, Err):
+        return parked
+    holding = parked.value
     if kind == "instrument_collected":
-        holding = rule.credit_account_code if direction == "in" else rule.debit_account_code
-        if not holding:
-            return _incomplete(rule, "the holding account")
         if not account_ledger_code:
             return _no_ledger_code("the account the instrument was credited to or debited from")
         money_side = account_ledger_code
@@ -218,16 +238,18 @@ def instrument_entry(
             else [EntryLine(holding, debit=value.value, label=label), EntryLine(money_side, credit=value.value, label=label)]
         )
         return Ok(TreasuryEntry("", str(rule.journal_code), lines))
-    if not (rule.debit_account_code and rule.credit_account_code):
-        return _incomplete(rule, "a debit and a credit account")
     on_debit = direction == "in"
+    partner_account = rule.debit_account_code if on_debit else rule.credit_account_code
+    if not partner_account:
+        return _incomplete(rule, "the customer account (in) or the supplier account (out)")
+    debit, credit = (partner_account, holding) if on_debit else (holding, partner_account)
     return Ok(
         TreasuryEntry(
             "",
             str(rule.journal_code),
             [
-                EntryLine(rule.debit_account_code, debit=value.value, label=label, partner_id=partner_id if on_debit else None),
-                EntryLine(rule.credit_account_code, credit=value.value, label=label, partner_id=None if on_debit else partner_id),
+                EntryLine(debit, debit=value.value, label=label, partner_id=partner_id if on_debit else None),
+                EntryLine(credit, credit=value.value, label=label, partner_id=None if on_debit else partner_id),
             ],
         )
     )
