@@ -54,7 +54,6 @@ DELIBERATE_GRANT_PERMISSIONS = {
 ADMINISTRATOR_HELD_BACK_PERMISSIONS = {
     "treasury.admin_ledger_posting",
     "treasury.admin_add_prior_year_invoice",
-    "procurement.admin_invoice_beyond_receipts",
 }
 
 # Single-purpose roles for deliberate grants, so an admin hands one out by role instead of

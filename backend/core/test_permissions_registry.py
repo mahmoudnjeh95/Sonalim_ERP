@@ -88,6 +88,12 @@ def test_administrator_holds_every_declared_permission_but_the_held_back_ones():
     assert set(_role(ADMINISTRATOR_ROLE_CODE)["permissions"]) == everything - ADMINISTRATOR_HELD_BACK_PERMISSIONS
 
 
+def test_the_administrator_may_invoice_beyond_the_goods_receipts():
+    # By decision the Administrateur always holds it; the everyday procurement role does not.
+    assert "procurement.admin_invoice_beyond_receipts" in _role(ADMINISTRATOR_ROLE_CODE)["permissions"]
+    assert "procurement.admin_invoice_beyond_receipts" not in ADMINISTRATOR_HELD_BACK_PERMISSIONS
+
+
 def test_held_back_codes_reach_no_default_role_once_declared(monkeypatch):
     declared = permission_catalog() + [{"module": "treasury", "permission": code} for code in ADMINISTRATOR_HELD_BACK_PERMISSIONS]
     monkeypatch.setattr("core.permissions_registry.permission_catalog", lambda: declared)
