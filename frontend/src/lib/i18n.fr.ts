@@ -6121,6 +6121,7 @@ export const fr = {
   "treasury.method.transfer": "Virement",
   "treasury.method.mobile_money": "Monnaie mobile",
   "treasury.document.dialogDescription": "Les espèces, virements et la monnaie mobile mouvementent le compte immédiatement ; les chèques et traites attendent leur encaissement.",
+  "treasury.document.dialogDescriptionOnSlip": "Chaque paiement attend le bordereau de versement : le compte ne bouge qu'une fois le paiement encaissé.",
   "treasury.document.reason": "Motif",
   "treasury.document.reason.full": "Paiement total",
   "treasury.document.reason.advance": "Avance",

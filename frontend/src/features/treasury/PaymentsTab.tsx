@@ -18,7 +18,7 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
-import { listAccounts } from "./api";
+import { getSettings, listAccounts } from "./api";
 import {
   cancelDocument,
   createDocument,
@@ -71,6 +71,8 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
   const { data: documents = [], isLoading } = useQuery({ queryKey: key, queryFn: () => listDocuments(token, direction) });
   const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
   const { data: accounts = [] } = useQuery({ queryKey: ["treasury", "accounts"], queryFn: () => listAccounts(token) });
+  const { data: settings } = useQuery({ queryKey: ["treasury", "settings"], queryFn: () => getSettings(token) });
+  const receiptsWaitOnSlip = direction === "in" && (settings?.receipts_collect_on_slip ?? true);
   const { data: invoices = [] } = useQuery({
     queryKey: ["treasury", "open-invoices", direction, partnerId],
     queryFn: () => listOpenInvoices(token, direction, partnerId),
@@ -225,7 +227,7 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
         <DialogContent className="max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{t(`${prefix}.new` as Key)}</DialogTitle>
-            <DialogDescription>{t("treasury.document.dialogDescription")}</DialogDescription>
+            <DialogDescription>{t(receiptsWaitOnSlip ? "treasury.document.dialogDescriptionOnSlip" : "treasury.document.dialogDescription")}</DialogDescription>
           </DialogHeader>
           <form
             className="space-y-4"

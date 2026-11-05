@@ -6121,6 +6121,7 @@ export const en = {
   "treasury.method.transfer": "Bank transfer",
   "treasury.method.mobile_money": "Mobile money",
   "treasury.document.dialogDescription": "Cash, transfers and mobile money move the account at once; cheques and drafts wait until they are collected.",
+  "treasury.document.dialogDescriptionOnSlip": "Every payment waits on the deposit slip: the account moves only once it is collected there.",
   "treasury.document.reason": "Reason",
   "treasury.document.reason.full": "Full payment",
   "treasury.document.reason.advance": "Advance",

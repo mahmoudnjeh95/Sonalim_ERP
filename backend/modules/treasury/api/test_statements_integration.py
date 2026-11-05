@@ -13,6 +13,7 @@ from ulid import ULID
 from core.domain.result import Err, Ok
 from modules.finance.api.service import InvoiceService
 from modules.treasury.api.document_service import DocumentService
+from modules.treasury.api.instrument_service import InstrumentService
 from modules.treasury.api.report_service import InvoiceStatusReportService, bucket_for, tabular_response
 from modules.treasury.api.service import AccountService, BankService
 from modules.treasury.api.statement_service import StatementImportService
@@ -141,6 +142,26 @@ def test_suggestion_and_manual_match_and_summary(db, env):
     assert isinstance(refused, Err) and refused.code == "LINE_MATCHED"
     service.match(tenant_id=TENANT, actor_id=env["actor"], line_id=debit["id"], payment_id=None)
     assert isinstance(service.delete_line(tenant_id=TENANT, actor_id=env["actor"], line_id=debit["id"]), Ok)
+
+
+def test_a_payment_waiting_on_the_slip_is_matchable_once_and_only_after_collection(db, env):
+    # A transfer received while receipts wait on the deposit slip: the payment has an instrument, and it used to be
+    # offered twice once collected, and once already while still pending, before the account had received anything.
+    db.execute("UPDATE treasury.settings SET value_json = 'true' WHERE tenant_id = %s AND key = 'receipts_collect_on_slip'", (TENANT,))
+    payment = _transfer_receipt(db, env)
+    _import(db, env)
+    service = StatementImportService(db)
+    debit, _ = service.list_lines(tenant_id=TENANT, account_id=env["bank"])
+    assert service.candidate_payments(tenant_id=TENANT, account_id=env["bank"]) == []
+    early = service.match(tenant_id=TENANT, actor_id=env["actor"], line_id=debit["id"], payment_id=payment)
+    assert isinstance(early, Err) and early.code == "PAYMENT_NOT_MATCHABLE"
+
+    pending = InstrumentService(db).list_instruments(tenant_id=TENANT, status="pending")
+    InstrumentService(db).post_slip(tenant_id=TENANT, actor_id=env["actor"], account_id=None, slip_date=DAY,
+                                    items=[{"instrument_id": pending[0]["id"], "outcome": "collected"}], correlation_id="c")
+    assert [p["id"] for p in service.candidate_payments(tenant_id=TENANT, account_id=env["bank"])] == [payment]
+    assert service.suggestions(tenant_id=TENANT, account_id=env["bank"]) == {debit["id"]: payment}
+    assert service.match(tenant_id=TENANT, actor_id=env["actor"], line_id=debit["id"], payment_id=payment).value["matched_payment_id"] == payment
 
 
 def test_profile_changes_column_names(db, env):

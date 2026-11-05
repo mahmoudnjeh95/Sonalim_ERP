@@ -15,7 +15,10 @@ REM Kill any existing processes on port 8000 (backend)
 echo Cleaning up port 8000...
 REM Only listeners: a bare ":8000" also matches browsers connected to it. /T takes the process tree, and
 REM --reload serves from a child of a reloader, so a python.exe parent is stopped too or it starts another.
+REM netstat names the reloader that opened the socket even after it is gone, while the worker it spawned keeps
+REM the socket and serves old code, so that worker is stopped by its parent id too.
 for /f "tokens=5" %%a in ('netstat -aon ^| find ":8000" ^| find "LISTENING"') do (
+    powershell -NoProfile -Command "Get-CimInstance Win32_Process -Filter 'ParentProcessId=%%a' | Where-Object { $_.Name -eq 'python.exe' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }" >nul 2>&1
     powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%%a'; if ($p) { $parent = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $p.ParentProcessId); if ($parent -and $parent.Name -eq 'python.exe') { Stop-Process -Id $parent.ProcessId -Force } }" >nul 2>&1
     taskkill /F /T /PID %%a >nul 2>&1
 )

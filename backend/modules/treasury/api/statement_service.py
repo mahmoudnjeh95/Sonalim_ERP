@@ -199,15 +199,22 @@ class StatementImportService:
 
     def candidate_payments(self, *, tenant_id: str, account_id: str) -> list[dict[str, Any]]:
         """Recorded payments that hit this bank account and are not yet tied to a statement line: direct
-        payments on the account, and cheques/drafts once collected into it."""
+        payments on the account, and payments waiting on a deposit slip once collected into it. A payment with
+        an instrument is only the second kind: until the slip collects it, the account hasn't received it, and
+        once collected the slip may have named another account than the one first entered."""
         rows = self._connection.execute(
             """
             SELECT p.id, d.direction, p.amount, d.doc_date, d.number
             FROM treasury.document_payments p JOIN treasury.documents d ON d.id = p.document_id
             WHERE d.tenant_id = %s AND d.status = 'posted' AND p.account_id = %s
+              AND NOT EXISTS (SELECT 1 FROM treasury.instruments i WHERE i.payment_id = p.id)
               AND NOT EXISTS (SELECT 1 FROM treasury.bank_statement_lines l WHERE l.matched_payment_id = p.id)
             UNION ALL
-            SELECT p.id, d.direction, p.amount, i.collected_at::date, d.number
+            SELECT p.id, d.direction, p.amount,
+                   -- the slip's business date, not when it was keyed in, so a slip entered late still lines up
+                   COALESCE((SELECT s.slip_date FROM treasury.deposit_slip_items si JOIN treasury.deposit_slips s ON s.id = si.slip_id
+                             WHERE si.instrument_id = i.id AND si.outcome = 'collected' LIMIT 1), i.collected_at::date),
+                   d.number
             FROM treasury.instruments i
             JOIN treasury.document_payments p ON p.id = i.payment_id
             JOIN treasury.documents d ON d.id = i.document_id
