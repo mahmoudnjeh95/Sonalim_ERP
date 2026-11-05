@@ -17,6 +17,8 @@ SOURCES: dict[str, tuple[str, str, str]] = {
     "payroll.run.reversed": ("payroll", "run_id", "payroll_reversal"),
     "finance.invoice.issued": ("finance", "invoice_id", "invoice_issued"),
     "finance.invoice.paid": ("finance", "invoice_id", "invoice_paid"),
+    "procurement.purchase_invoice.validated": ("procurement", "invoice_id", "purchase_invoice_validated"),
+    "procurement.purchase_invoice.cancelled": ("procurement", "invoice_id", "purchase_invoice_cancelled"),
     "treasury.receipt.posted": ("treasury", "receipt_id", "receipt_payment"),
     "treasury.receipt.cancelled": ("treasury", "receipt_id", "receipt_cancelled"),
     "treasury.disbursement.posted": ("treasury", "disbursement_id", "disbursement_payment"),
@@ -87,6 +89,21 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
         if event_type == "finance.invoice.issued":
             return invoices.post_issued(issued_on=occurred_on(envelope), **common)
         return invoices.post_paid(paid_on=occurred_on(envelope), **common)
+    if event_type.startswith("procurement.purchase_invoice."):
+        from modules.finance.api.purchase_invoice_ledger_service import PurchaseInvoiceLedgerService
+
+        purchases = PurchaseInvoiceLedgerService(connection)
+        invoice_id = str(payload["invoice_id"])
+        if event_type == "procurement.purchase_invoice.validated":
+            return purchases.post_validated(
+                tenant_id=tenant_id, invoice_id=invoice_id, partner_id=str(payload["partner_id"]), amount=payload["amount"],
+                currency=str(payload["currency"]), validated_on=occurred_on(envelope),
+                correlation_id=correlation_id, causation_id=causation_id,
+            )
+        return purchases.post_cancelled(
+            tenant_id=tenant_id, invoice_id=invoice_id, cancelled_on=occurred_on(envelope),
+            correlation_id=correlation_id, causation_id=causation_id,
+        )
     if event_type.startswith("treasury."):
         return _post_treasury(connection, envelope, correlation_id, causation_id)
     raise ValueError(f"the ledger has no posting for {event_type}")

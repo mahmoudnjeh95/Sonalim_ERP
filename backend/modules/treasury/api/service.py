@@ -13,6 +13,24 @@ from core.domain.result import Err, Ok, Result
 from modules.treasury.domain.accounts import apply_movement, normalize_iban, validate_account
 from modules.treasury.domain.money import check_currency, check_whole
 
+
+def _ledger_posting_on(connection: psycopg.Connection, tenant_id: str) -> bool:
+    row = connection.execute(
+        "SELECT value_json FROM treasury.settings WHERE tenant_id = %s AND key = 'ledger_posting_enabled'", (tenant_id,)
+    ).fetchone()
+    return row is not None and row[0] is True
+
+
+def _open_in_ledger(connection: psycopg.Connection, tenant_id: str, account_id: str | None = None) -> Result[list[dict]]:
+    """Finance brings the account balances into the ledger (all accounts, or one); see
+    TreasuryLedgerService.open_accounts. Finance is an optional dependency, imported only when posting is on."""
+    import uuid
+
+    from modules.finance.api.treasury_ledger_service import TreasuryLedgerService
+
+    return TreasuryLedgerService(connection).open_accounts(
+        tenant_id=tenant_id, opened_on=datetime.date.today(), correlation_id=str(uuid.uuid4()), account_id=account_id)
+
 # The manual's offsets, in days relative to the due date. Used until a tenant saves its own;
 # nothing is seeded per tenant because the tenant ids do not exist when the migration runs.
 DEFAULT_ALERT_OFFSETS: dict[tuple[str, str], int] = {
@@ -218,6 +236,12 @@ class AccountService:
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.account.created",
                      entity_type="treasury_account", entity_id=account_id,
                      payload={"kind": kind, "name": fields["name"], "currency": fields["currency"]})
+        if _ledger_posting_on(self._connection, tenant_id):
+            # Posting is on: the ledger gets the opening balance now, and an account it cannot post
+            # (no ledger code, no opening rule) is refused rather than left out of the ledger.
+            opened = _open_in_ledger(self._connection, tenant_id, account_id)
+            if isinstance(opened, Err):
+                return opened
         return self.get_account(tenant_id=tenant_id, account_id=account_id)
 
     def update_account(self, *, tenant_id: str, actor_id: str, account_id: str, changes: dict[str, Any]) -> Result[dict[str, Any]]:
@@ -233,6 +257,9 @@ class AccountService:
             if self._has_movements(account_id):
                 return Err("ACCOUNT_LOCKED", "the opening balance cannot change once the account has movements",
                            "le solde d'ouverture ne peut plus changer une fois que le compte a des mouvements")
+            if _ledger_posting_on(self._connection, tenant_id):
+                return Err("ACCOUNT_LOCKED", "the opening balance is already in the ledger; correct it with a ledger entry",
+                           "le solde d'ouverture est déjà comptabilisé ; corrigez-le par une écriture comptable")
         if "currency" in changes and changes["currency"] != account["currency"] and self._has_movements(account_id):
             return Err("ACCOUNT_LOCKED", "the currency cannot change once the account has movements",
                        "la devise ne peut plus changer une fois que le compte a des mouvements")
@@ -420,6 +447,13 @@ class SettingsService:
             whole = check_whole(Decimal(str(value)))
             if isinstance(whole, Err):
                 return whole
+        if key == "ledger_posting_enabled" and value is True and not _ledger_posting_on(self._connection, tenant_id):
+            # Switching on brings every account's current balance into the ledger first; one refusal
+            # leaves posting off with nothing posted.
+            opened = _open_in_ledger(self._connection, tenant_id)
+            if isinstance(opened, Err):
+                return Err(opened.code, f"ledger posting stays off: {opened.message}",
+                           f"la comptabilisation reste désactivée : {opened.message_fr or opened.message}")
         self._connection.execute(
             "INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, %s, %s::jsonb) "
             "ON CONFLICT (tenant_id, key) DO UPDATE SET value_json = EXCLUDED.value_json",

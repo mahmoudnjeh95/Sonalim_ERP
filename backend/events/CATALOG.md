@@ -26,7 +26,8 @@
 | `finance.journal_entry.posted` | 1.0 | finance | — | `entry_id`, `journal_code`, `source_module`, `source_id` — an entry was posted to the ledger (manual entries have null source fields); fires once per entry, reversals included |
 | `procurement.purchase_order.status_changed` | 1.0 | procurement | — | `purchase_order_id`, `from_status`, `to_status` |
 | `procurement.purchase_order_receipt.confirmed` | 1.0 | procurement | warehouse | `purchase_order_receipt_id`, `purchase_order_id`, `location_id`, `lines` (`product_id`, `quantity`, `uom_id`, `lot_number`) |
-| `procurement.purchase_invoice.validated` | 1.0 | procurement | — | `invoice_id`, `partner_id`, `amount`, `currency`, `due_date` |
+| `procurement.purchase_invoice.validated` | 1.0 | procurement | finance (ledger: purchase entry) | `invoice_id`, `partner_id`, `amount`, `currency`, `due_date` |
+| `procurement.purchase_invoice.cancelled` | 1.0 | procurement | finance (ledger: reverses the purchase entry) | `invoice_id`, `partner_id`, `amount`, `currency` |
 | `treasury.receipt.posted` | 1.0 | treasury | finance (invoices and ledger, when enabled) | `receipt_id`, `partner_id`, `allocations` (`invoice_id`, `amount`), `total`, `currency` |
 | `treasury.receipt.cancelled` | 1.0 | treasury | finance (invoices and ledger, when enabled) | `receipt_id`, `allocations` (`invoice_id`, `amount`) |
 | `treasury.disbursement.posted` | 1.0 | treasury | procurement, finance (ledger, when enabled) | `disbursement_id`, `partner_id`, `allocations` (`invoice_id`, `amount`), `total`, `currency` |

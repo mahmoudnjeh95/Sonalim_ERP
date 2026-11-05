@@ -28,9 +28,10 @@ PAYMENT_METHODS = ("bank", "mobile_money", "cash")
 RULE_KINDS: dict[str, tuple[str, ...]] = {
     "payroll": PAYROLL_LINE_KINDS + ("payment",),
     "invoice": ("issued", "paid"),
-    "treasury": ("receipt_payment", "receipt_advance", "receipt_withheld", "disbursement_payment", "disbursement_advance", "disbursement_withheld", "instrument_collected", "instrument_unpaid", "instrument_rejection_fee"),
+    "purchase_invoice": ("validated",),
+    "treasury": ("receipt_payment", "receipt_advance", "receipt_withheld", "disbursement_payment", "disbursement_advance", "disbursement_withheld", "instrument_collected", "instrument_unpaid", "instrument_rejection_fee", "account_opening"),
 }
-SELF_CONTAINED_KINDS = {("payroll", "payment"), ("invoice", "issued"), ("invoice", "paid")}
+SELF_CONTAINED_KINDS = {("payroll", "payment"), ("invoice", "issued"), ("invoice", "paid"), ("purchase_invoice", "validated")}
 RULE_STATUSES = ("to_confirm", "confirmed")
 
 
@@ -206,6 +207,25 @@ def invoice_entry(
     return Ok((str(rule.journal_code), lines))
 
 
+def purchase_invoice_entry(
+    *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule]
+) -> Result[tuple[str, list[EntryLine]]]:
+    """A validated purchase invoice: the purchase account on the debit, the supplier on the credit with
+    the partner id."""
+    resolved = resolve_rule(rules, source="purchase_invoice", source_kind="validated", code=WILDCARD)
+    if isinstance(resolved, Err):
+        return resolved
+    complete = _complete(resolved.value, code=WILDCARD)
+    if isinstance(complete, Err):
+        return complete
+    rule = complete.value
+    lines = [
+        EntryLine(str(rule.debit_account_code), debit=amount, label=label),
+        EntryLine(str(rule.credit_account_code), credit=amount, label=label, partner_id=partner_id),
+    ]
+    return Ok((str(rule.journal_code), lines))
+
+
 def validate_rule(rule: PostingRule, accounts: Mapping[str, Account], journal_codes: set[str]) -> Result[PostingRule]:
     kinds = RULE_KINDS.get(rule.source)
     if kinds is None:
@@ -242,13 +262,16 @@ def validate_rule(rule: PostingRule, accounts: Mapping[str, Account], journal_co
                 f"a {rule.source_kind} rule's code is a payment method (or in/out for instruments), or '*'",
                 f"le code d'une règle {rule.source_kind} est un mode de paiement (ou in/out pour les effets), ou « * »",
             )
-    if rule.source == "invoice" and code != WILDCARD:
+    if rule.source in ("invoice", "purchase_invoice") and code != WILDCARD:
         return Err(
             "INVALID_POSTING_RULE",
             "invoice rules use the code '*'",
             "les règles de facture utilisent le code « * »",
         )
-    if not rule.debit_account_code and not rule.credit_account_code:
+    # A collection rule may name only its journal: both sides come from elsewhere (the slip's account and
+    # the payment rule's holding account).
+    journal_only = (rule.source, rule.source_kind) == ("treasury", "instrument_collected")
+    if not rule.debit_account_code and not rule.credit_account_code and not journal_only:
         return Err(
             "INVALID_POSTING_RULE",
             "a rule posts to at least one account",

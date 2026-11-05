@@ -141,5 +141,5 @@ def cancel_purchase_invoice(
 ) -> dict:
     with get_connection() as connection:
         service = PurchaseInvoiceService(connection)
-        result = service.cancel(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, invoice_id=invoice_id)
+        result = service.cancel(tenant_id=tenant.tenant_id, actor_id=tenant.user_id, invoice_id=invoice_id, correlation_id=str(uuid4()))
         return _finish(connection, result, service, tenant.tenant_id)

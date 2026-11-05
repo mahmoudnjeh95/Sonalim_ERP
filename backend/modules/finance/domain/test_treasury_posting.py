@@ -2,7 +2,7 @@ from decimal import Decimal
 
 from core.domain.result import Err, Ok
 from modules.finance.domain.posting import PostingRule, validate_rule
-from modules.finance.domain.treasury_posting import document_entries, instrument_entry, rejection_fee_entry, valid_rule_code
+from modules.finance.domain.treasury_posting import document_entries, instrument_entry, opening_entry, rejection_fee_entry, valid_rule_code
 
 D = Decimal
 
@@ -101,6 +101,32 @@ def test_collecting_an_instrument_moves_it_from_holding_to_the_slip_account():
     assert [(l.account_code, l.debit, l.credit) for l in result.value.lines] == [("B1", 400, 0), ("H1", 0, 400)]
 
 
+def test_a_collection_posts_in_the_journal_of_the_account_it_lands_in():
+    rules = [rule("instrument_collected", "in", journal="BNQ"), rule("instrument_collected", "cash", journal="CAI")]
+    into_register = instrument_entry("instrument_collected", direction="in", method="cheque", amount=D("400"), currency="XOF",
+                                     partner_id="P", account_ledger_code="571", label="L", rules=PARKING + rules, account_kind="cash")
+    into_bank = instrument_entry("instrument_collected", direction="in", method="cheque", amount=D("400"), currency="XOF",
+                                 partner_id="P", account_ledger_code="521", label="L", rules=PARKING + rules, account_kind="bank")
+    assert (into_register.value.journal_code, into_bank.value.journal_code) == ("CAI", "BNQ")
+
+
+def test_an_opening_entry_debits_the_account_or_credits_it_when_overdrawn():
+    rules = [rule("account_opening", "*", credit="471", journal="OD")]
+    opened = opening_entry(account_kind="bank", balance=D("1000"), currency="XOF", account_ledger_code="521", label="L", rules=rules)
+    overdrawn = opening_entry(account_kind="bank", balance=D("-300"), currency="XOF", account_ledger_code="521", label="L", rules=rules)
+    empty = opening_entry(account_kind="bank", balance=D("0"), currency="XOF", account_ledger_code="521", label="L", rules=rules)
+    assert [(l.account_code, l.debit, l.credit) for l in opened.value.lines] == [("521", 1000, 0), ("471", 0, 1000)]
+    assert [(l.account_code, l.debit, l.credit) for l in overdrawn.value.lines] == [("471", 300, 0), ("521", 0, 300)]
+    assert empty.value is None
+
+
+def test_an_opening_entry_needs_its_rule_and_the_account_ledger_code():
+    missing_rule = opening_entry(account_kind="bank", balance=D("1"), currency="XOF", account_ledger_code="521", label="L", rules=[])
+    no_code = opening_entry(account_kind="bank", balance=D("1"), currency="XOF", account_ledger_code=None, label="L",
+                            rules=[rule("account_opening", "*", credit="471")])
+    assert (missing_rule.code, no_code.code) == ("POSTING_RULE_MISSING", "LEDGER_ACCOUNT_MISSING")
+
+
 def test_collecting_without_the_account_ledger_code_is_refused():
     result = _instrument("instrument_collected", [rule("instrument_collected", "in")], ledger_code=None)
     assert isinstance(result, Err) and result.code == "LEDGER_ACCOUNT_MISSING"
@@ -159,7 +185,10 @@ def test_a_rejection_fee_refuses_rather_than_guessing_an_account():
 def test_rule_codes_are_methods_or_directions_for_instruments():
     assert valid_rule_code("receipt_payment", "mobile_money") and valid_rule_code("receipt_payment", "*")
     assert not valid_rule_code("receipt_payment", "in")
-    assert valid_rule_code("instrument_collected", "out") and not valid_rule_code("instrument_collected", "cash")
+    assert valid_rule_code("instrument_collected", "out") and not valid_rule_code("instrument_collected", "cheque")
+    # A collection rule may also be written for the kind of account the money lands in, for its journal.
+    assert valid_rule_code("instrument_collected", "cash") and not valid_rule_code("instrument_unpaid", "cash")
+    assert valid_rule_code("account_opening", "bank") and not valid_rule_code("account_opening", "in")
 
 
 def test_the_rule_validator_knows_the_treasury_source():

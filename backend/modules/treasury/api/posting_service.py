@@ -29,6 +29,25 @@ class TreasuryPostingService:
         ).fetchone()
         return row[0] if row else None
 
+    def account_kind(self, *, tenant_id: str, account_id: str | None) -> str | None:
+        if account_id is None:
+            return None
+        row = self._connection.execute(
+            "SELECT kind FROM treasury.accounts WHERE id = %s AND tenant_id = %s", (account_id, tenant_id)
+        ).fetchone()
+        return row[0] if row else None
+
+    def accounts_for_opening(self, *, tenant_id: str, account_id: str | None = None) -> list[dict[str, Any]]:
+        """Every account (or one) with what the ledger needs to bring its balance in: the current balance,
+        which is the opening balance until the account moves."""
+        rows = self._connection.execute(
+            "SELECT id, kind, name, currency, ledger_account_code, balance FROM treasury.accounts "
+            "WHERE tenant_id = %s AND (%s::text IS NULL OR id = %s) ORDER BY created_at, id",
+            (tenant_id, account_id, account_id),
+        ).fetchall()
+        keys = ["id", "kind", "name", "currency", "ledger_account_code", "balance"]
+        return [dict(zip(keys, row, strict=True)) for row in rows]
+
     def document_lines(self, *, tenant_id: str, document_id: str) -> Result[dict[str, Any]]:
         """A posted receipt or disbursement: one line per payment with the ledger code of the account it
         moved, plus the part not tied to any invoice (an advance), which the ledger books differently. A

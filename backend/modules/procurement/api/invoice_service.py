@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 from typing import Any
+from uuid import uuid4
 
 import psycopg
 from ulid import ULID
@@ -227,7 +228,7 @@ class PurchaseInvoiceService:
         )
         return self.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
 
-    def cancel(self, *, tenant_id: str, actor_id: str, invoice_id: str) -> Result[dict[str, Any]]:
+    def cancel(self, *, tenant_id: str, actor_id: str, invoice_id: str, correlation_id: str | None = None) -> Result[dict[str, Any]]:
         current = self._lock(tenant_id, invoice_id)
         if isinstance(current, Err):
             return current
@@ -244,6 +245,14 @@ class PurchaseInvoiceService:
             self._connection, tenant_id=tenant_id, actor_id=actor_id, action="purchase_invoice.cancelled",
             entity_type="purchase_invoice", entity_id=invoice_id, payload={},
         )
+        if current["status"] != "draft":
+            # Only a validated invoice reached the ledger; the ledger reverses its purchase entry.
+            publish_event(
+                self._connection, event_type="procurement.purchase_invoice.cancelled", producer="procurement",
+                tenant_id=tenant_id, correlation_id=correlation_id or str(uuid4()),
+                payload={"invoice_id": invoice_id, "partner_id": current["partner_id"], "amount": str(current["amount"]),
+                         "currency": current["currency"]},
+            )
         return self.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
 
     def apply_payment_delta(self, *, tenant_id: str, actor_id: str, invoice_id: str, delta: Decimal) -> Result[dict[str, Any]]:

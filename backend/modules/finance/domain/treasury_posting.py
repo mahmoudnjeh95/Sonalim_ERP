@@ -24,6 +24,11 @@ Rule shapes (code = payment method, direction for instrument kinds, or '*' as th
                         holding side again comes from the payment's own rule
   instrument_rejection_fee  debit = the bank-charges account; the credit is the ledger code of the
                         treasury account the bank charged, so any credit on the rule is ignored
+  account_opening       credit = the opening (à-nouveaux) account; the debit is the treasury account's
+                        own ledger code. Code = the account kind (bank, cash, mobile_money) or '*'
+
+A collection posts in the journal of the account it lands in: an instrument_collected rule written for
+an account kind (bank, cash, mobile_money) wins over the in/out rule of its direction.
 
 Every rule also names the journal. The money side of a payment is the ledger code of the treasury
 account it moved, so each mobile-money operator keeps its own 5xx account.
@@ -41,9 +46,10 @@ from modules.finance.domain.posting import WILDCARD, PostingRule, _amount, resol
 
 DIRECTION_NOUN = {"in": "receipt", "out": "disbursement"}
 METHODS = ("cash", "transfer", "mobile_money", "cheque", "draft")
+ACCOUNT_KINDS = ("bank", "cash", "mobile_money")
 INSTRUMENT_KINDS = ("instrument_collected", "instrument_unpaid", "instrument_rejection_fee")
 RULE_KINDS = ("receipt_payment", "receipt_advance", "receipt_withheld", "disbursement_payment", "disbursement_advance",
-              "disbursement_withheld") + INSTRUMENT_KINDS
+              "disbursement_withheld") + INSTRUMENT_KINDS + ("account_opening",)
 
 
 @dataclass(frozen=True)
@@ -56,6 +62,10 @@ class TreasuryEntry:
 def valid_rule_code(source_kind: str, code: str) -> bool:
     if code == WILDCARD:
         return True
+    if source_kind == "account_opening":
+        return code in ACCOUNT_KINDS
+    if source_kind == "instrument_collected":
+        return code in ("in", "out") + ACCOUNT_KINDS
     if source_kind in INSTRUMENT_KINDS:
         return code in ("in", "out")
     return code in METHODS
@@ -69,11 +79,11 @@ def _incomplete(rule: PostingRule, what: str) -> Err:
     )
 
 
-def _no_ledger_code(what: str) -> Err:
+def _no_ledger_code(what: str, what_fr: str) -> Err:
     return Err(
         "LEDGER_ACCOUNT_MISSING",
         f"{what} has no ledger account code; set one on the treasury account",
-        f"{what} n'a pas de compte comptable ; renseignez-le sur le compte de trésorerie",
+        f"{what_fr} n'a pas de compte comptable ; renseignez-le sur le compte de trésorerie",
     )
 
 
@@ -125,7 +135,7 @@ def document_entries(
             if payment.get("account_id"):
                 account = payment.get("ledger_account_code")
                 if not account:
-                    return _no_ledger_code(f"the treasury account of a {method} payment")
+                    return _no_ledger_code(f"the treasury account of a {method} payment", f"le compte de trésorerie d'un paiement {method}")
             else:
                 account = rule.debit_account_code if direction == "in" else rule.credit_account_code
                 if not account:
@@ -210,15 +220,22 @@ def instrument_entry(
     account_ledger_code: str | None,
     label: str,
     rules: Iterable[PostingRule],
+    account_kind: str | None = None,
 ) -> Result[TreasuryEntry]:
-    """`kind` is 'instrument_collected' or 'instrument_unpaid'."""
+    """`kind` is 'instrument_collected' or 'instrument_unpaid'. `account_kind` is the kind of the account a
+    collection lands in: a rule written for it gives the journal, so cash put in a register goes to its
+    cash journal."""
     if currency != "XOF":
         return _not_xof(currency)
     value = _amount(amount, code=kind)
     if isinstance(value, Err):
         return value
     rules = list(rules)
-    resolved = resolve_rule(rules, source="treasury", source_kind=kind, code=direction)
+    for_account = [
+        r for r in rules
+        if kind == "instrument_collected" and r.source == "treasury" and r.source_kind == kind and r.code == account_kind
+    ]
+    resolved = Ok(for_account[0]) if for_account else resolve_rule(rules, source="treasury", source_kind=kind, code=direction)
     if isinstance(resolved, Err):
         return resolved
     rule = resolved.value
@@ -230,7 +247,7 @@ def instrument_entry(
     holding = parked.value
     if kind == "instrument_collected":
         if not account_ledger_code:
-            return _no_ledger_code("the account the instrument was credited to or debited from")
+            return _no_ledger_code("the account the instrument was credited to or debited from", "le compte crédité ou débité de l'effet")
         money_side = account_ledger_code
         lines = (
             [EntryLine(money_side, debit=value.value, label=label), EntryLine(holding, credit=value.value, label=label)]
@@ -255,6 +272,40 @@ def instrument_entry(
     )
 
 
+def opening_entry(
+    *,
+    account_kind: str,
+    balance: object,
+    currency: str,
+    account_ledger_code: str | None,
+    label: str,
+    rules: Iterable[PostingRule],
+) -> Result[TreasuryEntry | None]:
+    """A treasury account's balance brought into the ledger against the opening account, or None for a
+    zero balance. An overdrawn account (negative balance) is credited instead of debited."""
+    if currency != "XOF":
+        return _not_xof(currency)
+    if not account_ledger_code:
+        return _no_ledger_code("the treasury account", "le compte de trésorerie")
+    resolved = resolve_rule(list(rules), source="treasury", source_kind="account_opening", code=account_kind)
+    if isinstance(resolved, Err):
+        return resolved
+    rule = resolved.value
+    if not rule.credit_account_code or not rule.journal_code:
+        return _incomplete(rule, "the opening account and a journal")
+    signed = _amount(abs(Decimal(str(balance))), code="account_opening")
+    if isinstance(signed, Err):
+        return signed
+    if signed.value == ZERO:
+        return Ok(None)
+    account = EntryLine(account_ledger_code, debit=signed.value, label=label)
+    opening = EntryLine(rule.credit_account_code, credit=signed.value, label=label)
+    if Decimal(str(balance)) < ZERO:
+        account = EntryLine(account_ledger_code, credit=signed.value, label=label)
+        opening = EntryLine(rule.credit_account_code, debit=signed.value, label=label)
+    return Ok(TreasuryEntry("", str(rule.journal_code), [account, opening] if Decimal(str(balance)) > ZERO else [opening, account]))
+
+
 def rejection_fee_entry(
     *,
     direction: str,
@@ -277,7 +328,7 @@ def rejection_fee_entry(
     if not rule.debit_account_code or not rule.journal_code:
         return _incomplete(rule, "the bank-charges account and a journal")
     if not account_ledger_code:
-        return _no_ledger_code("the account charged for the rejection")
+        return _no_ledger_code("the account charged for the rejection", "le compte débité des frais de rejet")
     return Ok(
         TreasuryEntry(
             "",

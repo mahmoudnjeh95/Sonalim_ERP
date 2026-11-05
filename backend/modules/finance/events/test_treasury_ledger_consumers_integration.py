@@ -76,8 +76,12 @@ def _rule(env, kind, code, debit=None, credit=None, journal="BNQ"):
 
 
 def _enable(env):
-    SettingsService(env["db"]).set_setting(
-        tenant_id=env["tenant"], actor_id=env["actor"], key="ledger_posting_enabled", value=True
+    # Written directly: these tests are about documents, not the opening entries the switch posts (those
+    # have their own tests below, and the fixture's code-less account would rightly refuse them).
+    env["db"].execute(
+        "INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, 'ledger_posting_enabled', 'true') "
+        "ON CONFLICT (tenant_id, key) DO UPDATE SET value_json = 'true'",
+        (env["tenant"],),
     )
 
 
@@ -680,8 +684,10 @@ def _retry_client(env, monkeypatch):
 
 
 def _set_switch(env, value):
-    SettingsService(env["db"]).set_setting(
-        tenant_id=env["tenant"], actor_id=env["actor"], key="ledger_posting_enabled", value=value
+    # Directly, for the same reason as _enable: switching on through the service posts the opening entries.
+    env["db"].execute(
+        "UPDATE treasury.settings SET value_json = %s::jsonb WHERE tenant_id = %s AND key = 'ledger_posting_enabled'",
+        ("true" if value else "false", env["tenant"]),
     )
 
 

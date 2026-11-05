@@ -26,6 +26,7 @@ from modules.finance.domain.treasury_posting import (
     TreasuryEntry,
     document_entries,
     instrument_entry,
+    opening_entry,
     rejection_fee_entry,
 )
 
@@ -35,6 +36,20 @@ WITHHELD = "withheld"
 KIND_COLLECTED = "instrument_collected"
 KIND_UNPAID = "instrument_unpaid"
 KIND_REJECTION_FEE = "instrument_rejection_fee"
+KIND_OPENING = "account_opening"
+
+# What a slip collected, in the words of its method: only cheques and drafts are "effets".
+COLLECTED_NOUN = {
+    ("in", "cheque"): "Encaissement chèque", ("in", "draft"): "Encaissement traite", ("in", "cash"): "Versement espèces",
+    ("in", "transfer"): "Virement reçu", ("in", "mobile_money"): "Mobile money reçu",
+    ("out", "cheque"): "Paiement chèque", ("out", "draft"): "Paiement traite",
+}
+UNPAID_NOUN = {"cheque": "Chèque impayé", "draft": "Traite impayée"}
+
+
+def collection_label(direction: str, method: str, number: str) -> str:
+    default = "Encaissement" if direction == "in" else "Paiement"
+    return f"{COLLECTED_NOUN.get((direction, method), default)} {number}"
 
 
 def _default_treasury_api(connection: psycopg.Connection):
@@ -129,12 +144,14 @@ class TreasuryLedgerService:
             # It bounced since: the unpaid posting found no collection to reverse, so posting one now
             # would leave the money in the bank account in the ledger for good.
             return Ok([])
-        label = f"Encaissement effet {inst['number']}" if inst["direction"] == "in" else f"Paiement effet {inst['number']}"
+        label = collection_label(inst["direction"], inst["method"], inst["number"])
+        landed_in = account_id or inst["account_id"]
         entry = instrument_entry(
             KIND_COLLECTED, direction=inst["direction"], method=inst["method"], amount=inst["amount"], currency=inst["currency"],
             partner_id=inst["partner_id"],
-            account_ledger_code=self._treasury.account_ledger_code(tenant_id=tenant_id, account_id=account_id or inst["account_id"]),
+            account_ledger_code=self._treasury.account_ledger_code(tenant_id=tenant_id, account_id=landed_in),
             label=label, rules=self._rules.rules_for(tenant_id=tenant_id, source=TREASURY_MODULE),
+            account_kind=self._treasury.account_kind(tenant_id=tenant_id, account_id=landed_in),
         )
         if isinstance(entry, Err):
             return entry
@@ -166,7 +183,7 @@ class TreasuryLedgerService:
         if isinstance(instrument, Err):
             return instrument
         inst = instrument.value
-        label = f"Effet impayé {inst['number']}"
+        label = f"{UNPAID_NOUN.get(inst['method'], 'Effet impayé')} {inst['number']}"
         entry = instrument_entry(
             KIND_UNPAID, direction=inst["direction"], method=inst["method"], amount=inst["amount"], currency=inst["currency"],
             partner_id=inst["partner_id"], account_ledger_code=None, label=label,
@@ -200,6 +217,46 @@ class TreasuryLedgerService:
         if isinstance(charged, Err):
             return charged
         return Ok(posted + charged.value)
+
+    # -- opening balances -----------------------------------------------------------------------
+
+    @atomic
+    def open_accounts(
+        self, *, tenant_id: str, opened_on: datetime.date, correlation_id: str, account_id: str | None = None
+    ) -> Result[list[dict]]:
+        """Brings each treasury account's balance (or one account's) into the ledger, once per account.
+        Called when posting is switched on, and for an account created while it is on. All or nothing: one
+        refused account refuses the lot, so the switch never stays half-opened."""
+        posted: list[dict] = []
+        rules = self._rules.rules_for(tenant_id=tenant_id, source=TREASURY_MODULE)
+        for account in self._treasury.accounts_for_opening(tenant_id=tenant_id, account_id=account_id):
+            if self._posting.find_by_source(tenant_id=tenant_id, source=SourceRef(TREASURY_MODULE, account["id"], KIND_OPENING)):
+                continue
+            label = f"Solde d'ouverture {account['name']}"
+            entry = opening_entry(
+                account_kind=account["kind"], balance=account["balance"], currency=account["currency"],
+                account_ledger_code=account["ledger_account_code"], label=label, rules=rules,
+            )
+            if isinstance(entry, Err):
+                return Err(
+                    "LEDGER_OPENING_REFUSED",
+                    f"the opening balance of {account['name']} cannot be posted: {entry.message}",
+                    f"le solde d'ouverture de {account['name']} ne peut pas être comptabilisé : {entry.message_fr or entry.message}",
+                )
+            if entry.value is None:
+                continue
+            done = self._post_all(
+                tenant_id=tenant_id, kind=KIND_OPENING, source_id=account["id"], entries=[entry.value], entry_date=opened_on,
+                label=label, reference=account["name"], correlation_id=correlation_id, causation_id=None,
+            )
+            if isinstance(done, Err):
+                return Err(
+                    "LEDGER_OPENING_REFUSED",
+                    f"the opening balance of {account['name']} cannot be posted: {done.message}",
+                    f"le solde d'ouverture de {account['name']} ne peut pas être comptabilisé : {done.message_fr or done.message}",
+                )
+            posted += done.value
+        return Ok(posted)
 
     # -- shared ---------------------------------------------------------------------------------
 
