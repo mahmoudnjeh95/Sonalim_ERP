@@ -20,6 +20,9 @@ class CycleCount:
     created_by: str
     created_at: datetime.datetime
     number: str | None = None
+    # full freezes its scope and corrects the stock; interim does neither and only records the variances.
+    mode: str = "full"
+    note: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +47,7 @@ class CycleCountLine:
     count_2: float | None = None
     count_3: float | None = None
     counts_recorded: int = 0
+    observation: str | None = None
 
 
 CYCLE_COUNT_VALID_TRANSITIONS = {
@@ -74,6 +78,17 @@ def resolve_count(*, expected_quantity: float, counted_quantity: float) -> str |
     """A count that matches the books needs no decision -- only a real variance
     is left for a supervisor to approve or reject."""
     return "matched" if counted_quantity == expected_quantity else None
+
+
+def check_decision(*, mode: str, decision: str, observation: str | None) -> Result[None]:
+    """A variance always needs an observation. A full inventory approves or rejects it; an interim one
+    changes no stock, so it can only note it."""
+    allowed = ("note",) if mode == "interim" else ("approve", "reject")
+    if decision not in allowed:
+        return Err("INVALID_DECISION", f"decision must be one of {', '.join(allowed)}", f"la décision doit être parmi {', '.join(allowed)}")
+    if not observation or not observation.strip():
+        return Err("OBSERVATION_REQUIRED", "a variance needs an observation", "un écart exige une observation")
+    return Ok(None)
 
 
 def settle_counts(count_1: float | None, count_2: float | None, count_3: float | None) -> float | None:

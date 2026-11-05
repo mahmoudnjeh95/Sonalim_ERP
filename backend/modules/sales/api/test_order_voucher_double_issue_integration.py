@@ -123,25 +123,37 @@ def test_a_voucher_after_the_shipment_does_not_issue_the_goods_again(db, env):
     assert _levels(db, env) == (100 - ORDERED, 0)
 
 
-def test_a_voucher_before_the_shipment_does_not_issue_the_goods_twice(db, env):
+def test_a_voucher_takes_over_from_a_pick_list_nobody_started_and_issues_the_goods_once(db, env):
     order_id = _confirmed_order(db, env, stock=100)
 
     posted = _post_voucher_from_order(db, env, order_id)
-    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
-    fulfillment_can_ship = [p for p in FulfillmentService(db).list_pick_lists(tenant_id=TENANT) if p.source_id == order_id]
-    assert fulfillment_can_ship
-    _ship(db, env, order_id)
 
+    assert isinstance(posted, Ok), posted
+    assert [p.status for p in FulfillmentService(db).list_pick_lists(tenant_id=TENANT) if p.source_id == order_id] == ["cancelled"]
     assert _levels(db, env) == (100 - ORDERED, 0)
 
 
-def test_without_surplus_stock_the_voucher_is_refused_the_same_way(db, env):
+def test_a_voucher_is_refused_once_someone_has_started_picking(db, env):
+    order_id = _confirmed_order(db, env, stock=100)
+    fulfillment = FulfillmentService(db)
+    [pick_list] = [p for p in fulfillment.list_pick_lists(tenant_id=TENANT) if p.source_id == order_id]
+    [line] = fulfillment.list_pick_lines(tenant_id=TENANT, pick_list_id=pick_list.id)
+    assert isinstance(fulfillment.submit_pick(tenant_id=TENANT, actor_id=env["actor"], pick_list_id=pick_list.id, line_id=line.id,
+                                              quantity_picked=1), Ok)
+
+    posted = _post_voucher_from_order(db, env, order_id)
+
+    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
+    assert _levels(db, env) == (100, ORDERED)
+
+
+def test_without_surplus_stock_the_voucher_issues_what_was_reserved_for_the_order(db, env):
     order_id = _confirmed_order(db, env, stock=ORDERED)
 
     posted = _post_voucher_from_order(db, env, order_id)
 
-    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
-    assert _levels(db, env) == (ORDERED, ORDERED)
+    assert isinstance(posted, Ok), posted
+    assert _levels(db, env) == (0, 0)
 
 
 def test_restarting_fulfilment_after_a_voucher_cannot_issue_the_goods_again(db, env):
@@ -373,7 +385,7 @@ def test_the_consumer_ignores_vouchers_that_are_not_issues_from_an_order(db, env
     assert _order_status(db, order_id) == "confirmed"
 
 
-def test_a_reservation_alone_is_enough_to_refuse_the_voucher(db, env):
+def test_a_voucher_in_the_window_before_the_pick_list_releases_the_reservation(db, env):
     """The window between confirming the order and the worker creating its pick list."""
     received = StockService(db).receive_stock(
         tenant_id=TENANT, product_id=env["product"], location_id=env["location"], quantity=100,
@@ -390,7 +402,11 @@ def test_a_reservation_alone_is_enough_to_refuse_the_voucher(db, env):
     assert not [p for p in FulfillmentService(db).list_pick_lists(tenant_id=TENANT) if p.source_id == order.id]
     posted = _post_voucher_from_order(db, env, order.id)
 
-    assert isinstance(posted, Err) and posted.code == "ORDER_IN_FULFILLMENT"
+    assert isinstance(posted, Ok), posted
+    assert _levels(db, env) == (100 - ORDERED, 0)
+    # The late event then finds the order already issued and opens nothing.
+    _handle_sales_order_confirmed(db, _outbox_envelope(db, "sales.order.confirmed", "order_id", order.id))
+    assert not [p for p in FulfillmentService(db).list_pick_lists(tenant_id=TENANT) if p.source_id == order.id]
 
 
 def test_a_cancelled_pick_list_with_no_reservation_left_lets_the_voucher_through(db, env):

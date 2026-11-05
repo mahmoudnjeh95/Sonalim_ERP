@@ -5,7 +5,7 @@ from decimal import Decimal
 from core.domain.result import Err, Ok, Result
 
 VOUCHER_TYPES = ("receipt", "issue", "return", "transfer")
-PREFIX = {"receipt": "RCP", "issue": "ISS", "return": "RET", "transfer": "TRF", "inventory": "INV"}
+PREFIX = {"receipt": "BE", "issue": "BS", "return": "BR", "transfer": "TR", "delivery": "BL"}
 
 
 def check_issue_available(available: Decimal, quantity: Decimal) -> Result[None]:
@@ -27,6 +27,14 @@ def check_return(issued: Decimal, already_returned: Decimal, quantity: Decimal) 
     if already_returned + quantity > issued:
         return Err("RETURN_QTY_EXCEEDED", f"{already_returned + quantity} would exceed the {issued} issued",
                    f"{already_returned + quantity} dépasserait les {issued} sortis")
+    return Ok(None)
+
+
+def check_delivery(source: Decimal, already_delivered: Decimal, quantity: Decimal) -> Result[None]:
+    """A delivery note can't deliver more than the document it comes from carries."""
+    if already_delivered + quantity > source:
+        return Err("DELIVERY_QTY_EXCEEDED", f"{already_delivered + quantity} would exceed the {source} on the source document",
+                   f"{already_delivered + quantity} dépasserait les {source} du document d'origine")
     return Ok(None)
 
 

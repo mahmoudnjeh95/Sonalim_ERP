@@ -172,7 +172,7 @@ def test_an_approved_variance_adjusts_stock_and_a_rejected_one_does_not(db, env)
     assert counted.value.resolution is None  # a real variance awaits a decision
 
     approved = service.resolve_line_variance(
-        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve"
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve", observation="counted again"
     )
     assert isinstance(approved, Ok)
     assert approved.value.resolution == "approved"
@@ -200,7 +200,7 @@ def test_rejecting_a_variance_leaves_stock_unchanged(db, env):
     service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=50)
 
     rejected = service.resolve_line_variance(
-        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="reject"
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="reject", observation="counted again"
     )
     assert isinstance(rejected, Ok)
     assert rejected.value.resolution == "rejected"
@@ -318,7 +318,7 @@ def test_a_count_adjustment_cannot_pass_another_counts_freeze(db, env):
     db.execute("UPDATE warehouse.cycle_counts SET status = 'in_progress' WHERE id = %s", (other.id,))  # as an older overlap would be
 
     refused = CycleCountService(db).resolve_line_variance(
-        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve"
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve", observation="counted again"
     )
 
     assert isinstance(refused, Err) and refused.code == "LOCATION_FROZEN" and other.number in refused.message
@@ -405,7 +405,7 @@ def test_a_found_product_follows_the_two_count_rule_and_approval_creates_valued_
     settled = _submit(db, env, count, line, 12).value
     assert (settled.status, settled.counted_quantity, settled.resolution) == ("counted", 12, None)
 
-    approved = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve")
+    approved = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve", observation="counted again")
     assert isinstance(approved, Ok), approved
     on_hand = db.execute(
         "SELECT quantity_on_hand FROM warehouse.stock_items WHERE tenant_id = %s AND location_id = %s AND product_id = %s",
@@ -424,7 +424,7 @@ def test_a_rejected_found_product_creates_nothing(db, env):
     _submit(db, env, count, line, 3)
 
     assert isinstance(CycleCountService(db).resolve_line_variance(
-        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="reject"
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="reject", observation="counted again"
     ), Ok)
 
     assert db.execute("SELECT 1 FROM warehouse.stock_items WHERE tenant_id = %s AND product_id = %s", (TENANT, product)).fetchone() is None
@@ -483,7 +483,7 @@ def test_a_quantity_the_unit_cannot_hold_is_refused_when_entered(db, env):
     _submit(db, env, count, line, 97)
     assert _submit(db, env, count, line, 97).value.counted_quantity == 97
     assert isinstance(CycleCountService(db).resolve_line_variance(
-        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve"
+        tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve", observation="counted again"
     ), Ok)
 
 
@@ -591,10 +591,10 @@ def test_counting_and_deciding_lock_the_line_so_two_approvals_cannot_both_adjust
     service.submit_line_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, counted_quantity=90)
 
     recording.statements.clear()
-    approved = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve")
+    approved = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve", observation="counted again")
     assert isinstance(approved, Ok) and locked_line_reads()
 
-    again = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve")
+    again = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id, decision="approve", observation="counted again")
     assert isinstance(again, Err) and again.code == "INVALID_STATE"
     assert _on_hand(db, env) == 90
 

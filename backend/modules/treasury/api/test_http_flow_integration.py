@@ -66,6 +66,8 @@ def api(db, monkeypatch):
     db.execute("INSERT INTO core.sessions (token, user_id, tenant_id, expires_at) VALUES (%s, %s, %s, NOW() + interval '1 hour')", (token, user, TENANT))
     for permission in PERMISSIONS:
         db.execute("INSERT INTO core.user_permissions (user_id, permission) VALUES (%s, %s)", (user, permission))
+    # The flows below expect cash at once; the deposit slip has its own tests.
+    db.execute("INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, 'receipts_collect_on_slip', 'false') ON CONFLICT DO NOTHING", (TENANT,))
     client = TestClient(app)
     client.headers.update({"Authorization": f"Bearer {token}"})
     return client
@@ -152,8 +154,8 @@ def test_payment_flow_over_http(api, db):
     assert refused.status_code == 400 and refused.json()["detail"]["code"] == "NO_PAYMENTS"
     assert api.get("/treasury/receipts/nope").status_code == 404
 
-    # the cheque is due today, so its alert window (due + 1 day) opens tomorrow: nothing yet
-    assert _ok(api.get("/treasury/alerts")) == []
+    # the cheque is due today, and a received cheque alerts from its due date
+    assert [a["number"] for a in _ok(api.get("/treasury/alerts"))] == ["H1"]
     bank = _ok(api.post("/treasury/banks", json={"name": "BDM"}), 201)
     branch = _ok(api.post(f"/treasury/banks/{bank['id']}/branches", json={"name": "Centre"}), 201)
     account = _ok(api.post("/treasury/accounts", json={"kind": "bank", "name": "B", "currency": "XOF", "branch_id": branch["id"], "account_number": "H-9"}), 201)
@@ -231,11 +233,11 @@ def test_stock_documents_over_http(api, db):
                                                       "lines": [{"product_id": product, "quantity": "10", "unit_cost": "5"}]}), 201)
     assert draft["status"] == "draft"
     posted = _ok(api.post(f"/warehouse/vouchers/{draft['id']}/post"))
-    assert posted["status"] == "posted" and posted["number"].startswith("RCP-")
+    assert posted["status"] == "posted" and posted["number"].startswith("BE-")
     assert api.post(f"/warehouse/vouchers/{draft['id']}/post").status_code == 409
 
-    issue = _ok(api.post("/warehouse/vouchers", json={"type": "issue", "source_location_id": main, "lines": [{"product_id": product, "quantity": "99"}]}), 201)
-    short = api.post(f"/warehouse/vouchers/{issue['id']}/post")
+    # Refused when entered, as the manual does, not only when posted.
+    short = api.post("/warehouse/vouchers", json={"type": "issue", "source_location_id": main, "lines": [{"product_id": product, "quantity": "99"}]})
     assert short.status_code == 409 and short.json()["detail"]["code"] == "STOCK_INSUFFICIENT"
 
     valuation = _ok(api.get("/warehouse/reports/valued-stock"))
@@ -263,3 +265,69 @@ def test_stock_documents_over_http(api, db):
     assert completed["status"] == "completed"
     assert api.post(f"/warehouse/cycle-counts/{count['id']}/complete", json={"correlation_id": "http-flow"}).status_code == 409
     assert api.post(f"/warehouse/vouchers/{frozen.json()['id']}/post").status_code == 200
+
+
+def test_the_manual_screens_over_http(api, db):
+    """The routes the manual's screens call: a receipt waiting on the slip, its files, the yearly journal,
+    the grouped report, the ordre de paiement and the editable master data."""
+    db.execute("UPDATE treasury.settings SET value_json = 'true' WHERE tenant_id = %s AND key = 'receipts_collect_on_slip'", (TENANT,))
+    customer, supplier, user = str(ULID()), str(ULID()), str(ULID())
+    db.execute("INSERT INTO core.partners (id, tenant_id, name, kind, status) VALUES (%s, %s, 'Client', 'customer', 'active')", (customer, TENANT))
+    db.execute("INSERT INTO core.partners (id, tenant_id, name, kind, status) VALUES (%s, %s, 'Fournisseur', 'supplier', 'active')", (supplier, TENANT))
+    db.execute("INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')", (user, TENANT, f"{user}@x.local"))
+    cash = _ok(api.post("/treasury/accounts", json={"kind": "cash", "name": "Caisse 2", "currency": "XOF", "cash_type": "secondary"}), 201)
+    assert cash["cash_type"] == "secondary"
+    assert _ok(api.patch(f"/treasury/accounts/{cash['id']}", json={"cash_type": "principal"}))["cash_type"] == "principal"
+
+    bank = _ok(api.post("/treasury/banks", json={"name": "BIM"}), 201)
+    assert _ok(api.patch(f"/treasury/banks/{bank['id']}", json={"name": "BIM SA"}))["name"] == "BIM SA"
+    branch = _ok(api.post(f"/treasury/banks/{bank['id']}/branches", json={"name": "Centre"}), 201)
+    assert _ok(api.patch(f"/treasury/branches/{branch['id']}", json={"address": "ACI"}))["address"] == "ACI"
+
+    receipt = _ok(api.post("/treasury/receipts", json={
+        "partner_id": customer, "doc_date": TODAY, "currency": "XOF", "with_details": False, "note": "Reçu",
+        "payments": [{"method": "cash", "amount": 15000, "account_id": cash["id"], "denominations": {"10000": 1, "5000": 1}}]}), 201)
+    assert receipt["note"] == "Reçu" and receipt["payments"][0]["denominations"] == {"10000": 1, "5000": 1}
+    assert float(_ok(api.get("/treasury/accounts"))[0]["balance"]) == 0
+
+    pending = _ok(api.get("/treasury/instruments?status_filter=pending"))
+    assert [(i["method"], i["account_name"]) for i in pending] == [("cash", "Caisse 2")]
+    slips = _ok(api.post("/treasury/deposit-slips", json={
+        "slip_date": TODAY, "items": [{"instrument_id": pending[0]["id"], "outcome": "collected"}]}), 201)
+    assert len(slips["slips"]) == 1
+    assert float(_ok(api.get(f"/treasury/accounts"))[0]["balance"]) == 15000
+
+    journal = _ok(api.get(f"/treasury/journals/cash?year={TODAY[:4]}"))
+    assert [(r["account_name"], r["partner_name"], r["document_number"]) for r in journal["rows"]] == [("Caisse 2", "Client", receipt["number"])]
+
+    upload = {"filename": "reçu.txt", "content_type": "text/plain", "content_base64": base64.b64encode(b"bonjour").decode()}
+    attachment = _ok(api.post(f"/treasury/receipts/{receipt['id']}/attachments", json=upload), 201)
+    assert [a["filename"] for a in _ok(api.get(f"/treasury/receipts/{receipt['id']}/attachments"))] == ["reçu.txt"]
+    downloaded = api.get(f"/treasury/receipts/{receipt['id']}/attachments/{attachment['id']}")
+    assert downloaded.status_code == 200 and downloaded.content == b"bonjour" and "attachment" in downloaded.headers["content-disposition"]
+    assert api.get(f"/treasury/disbursements/{receipt['id']}/attachments").status_code == 404
+    assert api.delete(f"/treasury/receipts/{receipt['id']}/attachments/{attachment['id']}").status_code == 204
+
+    invoice = _ok(api.post("/procurement/purchase-invoices", json={
+        "partner_id": supplier, "supplier_invoice_number": "F1", "invoice_date": TODAY, "amount": 500, "currency": "XOF"}), 201)
+    refused = api.post("/procurement/purchase-invoices", json={
+        "partner_id": supplier, "supplier_invoice_number": "F2", "invoice_date": TODAY, "amount": 500, "currency": "EUR"})
+    assert refused.status_code == 400 and refused.json()["detail"]["code"] == "INVOICE_CURRENCY_NOT_XOF"
+    _ok(api.post(f"/procurement/purchase-invoices/{invoice['id']}/validate"))
+    order = _ok(api.post("/treasury/invoice-payment-orders", json={
+        "order_date": TODAY, "due_date": TODAY, "method": "cheque", "invoice_id": invoice["id"], "employee_user_id": user, "department": "Finance"}), 201)
+    assert order["number"].startswith("ORDP-") and order["partner_name"] == "Fournisseur"
+    assert [o["id"] for o in _ok(api.get("/treasury/invoice-payment-orders"))] == [order["id"]]
+    assert api.post(f"/treasury/invoice-payment-orders/{order['id']}/notify", json={"user_id": user}).status_code == 201
+
+    report = _ok(api.get("/treasury/reports/purchase-invoices"))
+    assert report["groups"][0]["partner_name"] == "Fournisseur" and report["groups"][0]["without_document"][0]["invoice_id"] == invoice["id"]
+    french = api.get("/treasury/reports/purchase-invoices?format=csv&lang=fr")
+    assert "Fournisseur,Décaissement" in french.content.decode("utf-8-sig") and "Sans décaissement" in french.content.decode("utf-8-sig")
+
+
+def test_the_posting_switch_can_be_read_with_the_other_settings(api):
+    settings = _ok(api.get("/treasury/settings"))
+    assert settings["ledger_posting_enabled"] is False and settings["prior_year_invoice_cutoff"] == "03-16"
+    assert _ok(api.put("/treasury/settings/prior_year_invoice_cutoff", json={"value": "04-30"}))["prior_year_invoice_cutoff"] == "04-30"
+    assert api.put("/treasury/settings/prior_year_invoice_cutoff", json={"value": "soon"}).status_code == 400

@@ -104,7 +104,7 @@ class StockService:
         )
 
     def _assert_not_frozen(self, tenant_id: str, location_id: str, own_count_id: str | None = None) -> Err | None:
-        """A cycle count in progress freezes the locations in its scope: counting a shelf while stock
+        """A full cycle count in progress (an interim one holds nothing) freezes the locations in its scope: counting a shelf while stock
         moves in and out of it would make the counts meaningless. Only that count's own approved
         adjustment (`own_count_id`) passes, and never through another count's freeze."""
         self._hold_off_count_start(tenant_id, location_id)
@@ -117,7 +117,7 @@ class StockService:
                 FROM warehouse.locations l JOIN up ON l.id = up.parent_location_id
             )
             SELECT COALESCE(cc.number, cc.id) FROM warehouse.cycle_counts cc
-            WHERE cc.tenant_id = %s AND cc.status = 'in_progress'
+            WHERE cc.tenant_id = %s AND cc.status = 'in_progress' AND cc.mode = 'full'
               AND cc.site_id = (SELECT site_id FROM up LIMIT 1)
               AND (cc.scope_location_id IS NULL OR cc.scope_location_id IN (SELECT id FROM up))
               AND (%s::text IS NULL OR cc.id <> %s)

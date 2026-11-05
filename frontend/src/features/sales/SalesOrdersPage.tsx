@@ -37,7 +37,7 @@ import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listLocations, listUoms } from "../warehouse/api";
 import { listPickLists, PICK_LISTS_QUERY_KEY } from "../warehouse/fulfillment/api";
-import { listReservations, RESERVATIONS_QUERY_KEY } from "../warehouse/reservations/api";
+import { RESERVATIONS_QUERY_KEY } from "../warehouse/reservations/api";
 import { listPartners } from "../partners/api";
 import { ProductSelect } from "../../components/patterns/ProductSelect";
 import { useProductCatalog } from "../products/catalog";
@@ -82,15 +82,10 @@ export function SalesOrdersPage() {
   const { data: orders = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listOrders(token) });
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
-  // An issue voucher is only for an order fulfillment isn't handling: shipping issues the stock
-  // too, so a voucher on top would take it out twice. Without this data we can't tell, so no button.
+  // Shipping issues the stock too, so a voucher is only for an order nobody has started picking.
+  // Without this data we can't tell, so no button.
   const canSeeFulfillmentHolds =
     hasPermission("warehouse.manage_vouchers") && hasPermission("warehouse.view_moves") && hasPermission("warehouse.view_fulfillment");
-  const reservationsQuery = useQuery({
-    queryKey: RESERVATIONS_QUERY_KEY,
-    queryFn: () => listReservations(token),
-    enabled: canSeeFulfillmentHolds,
-  });
   const pickListsQuery = useQuery({
     queryKey: PICK_LISTS_QUERY_KEY,
     queryFn: () => listPickLists(token),
@@ -98,14 +93,11 @@ export function SalesOrdersPage() {
   });
   const canIssueVoucher = (order: SalesOrder) => {
     if (order.status !== "confirmed" || !canSeeFulfillmentHolds) return false;
-    if (!reservationsQuery.data || !pickListsQuery.data || reservationsQuery.isFetching || pickListsQuery.isFetching) return false;
-    const heldByReservation = reservationsQuery.data.some(
-      (reservation) => reservation.status === "active" && reservation.reference === `sales_order:${order.id}`,
+    if (!pickListsQuery.data || pickListsQuery.isFetching) return false;
+    // Posting the voucher takes the order over from a pick list nobody started; once picking began, it stays with fulfillment.
+    return !pickListsQuery.data.some(
+      (pickList) => pickList.source_type === "sales_order" && pickList.source_id === order.id && pickList.status !== "cancelled" && pickList.status !== "open",
     );
-    const heldByPickList = pickListsQuery.data.some(
-      (pickList) => pickList.source_type === "sales_order" && pickList.source_id === order.id && pickList.status !== "cancelled",
-    );
-    return !heldByReservation && !heldByPickList;
   };
   const { catalog } = useProductCatalog();
   const allProducts = catalog;
@@ -161,7 +153,7 @@ export function SalesOrdersPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["warehouse", "vouchers"] });
       toast.success(t("sales.issueVoucherCreated"));
-      navigate("/warehouse");
+      navigate("/warehouse?tab=vouchers");
     },
     onError: (error) => {
       toast.error(t("sales.issueVoucherError"), { description: error instanceof ApiError ? error.message : undefined });

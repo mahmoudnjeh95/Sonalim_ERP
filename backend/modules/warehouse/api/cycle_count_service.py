@@ -14,6 +14,7 @@ from modules.warehouse.api.service import StockService, count_start_lock_key
 from modules.warehouse.domain.cycle_count import (
     CycleCount,
     CycleCountLine,
+    check_decision,
     resolve_count,
     settle_counts,
     transition_cycle_count,
@@ -22,18 +23,18 @@ from modules.warehouse.domain.cycle_count import (
 
 _COUNT_COLUMNS = (
     "id, tenant_id, site_id, scope_location_id, count_type, status, scheduled_for, "
-    "started_at, completed_at, created_by, created_at, number"
+    "started_at, completed_at, created_by, created_at, number, mode, note"
 )
 _LINE_COLUMNS = (
     "id, tenant_id, cycle_count_id, location_id, product_id, expected_quantity, counted_quantity, "
-    "status, resolution, counted_by, counted_at, resolved_by, resolved_at, count_1, count_2, count_3"
+    "status, resolution, counted_by, counted_at, resolved_by, resolved_at, count_1, count_2, count_3, observation"
 )
 
 
 def _count_from_row(row) -> CycleCount:
     return CycleCount(
         id=row[0], tenant_id=row[1], site_id=row[2], scope_location_id=row[3], count_type=row[4], status=row[5],
-        scheduled_for=row[6], started_at=row[7], completed_at=row[8], created_by=row[9], created_at=row[10], number=row[11],
+        scheduled_for=row[6], started_at=row[7], completed_at=row[8], created_by=row[9], created_at=row[10], number=row[11], mode=row[12], note=row[13],
     )
 
 
@@ -48,6 +49,7 @@ def _line_from_row(row) -> CycleCountLine:
         count_2=float(row[14]) if row[14] is not None else None,
         count_3=float(row[15]) if row[15] is not None else None,
         counts_recorded=sum(count is not None for count in raw_counts),
+        observation=row[16],
     )
 
 
@@ -80,9 +82,13 @@ class CycleCountService:
         scope_location_id: str | None = None,
         count_type: str = "scheduled",
         scheduled_for: datetime.date | None = None,
+        mode: str = "full",
+        note: str | None = None,
     ) -> Result[CycleCount]:
         if count_type not in ("scheduled", "blind"):
             return Err("INVALID_COUNT_TYPE", "count_type must be 'scheduled' or 'blind'", "count_type doit être 'scheduled' ou 'blind'")
+        if mode not in ("full", "interim"):
+            return Err("INVALID_COUNT_MODE", "mode must be 'full' or 'interim'", "le mode doit être 'full' ou 'interim'")
 
         if scope_location_id is not None:
             scope_row = self._connection.execute(
@@ -115,10 +121,10 @@ class CycleCountService:
         number = self._next_number(tenant_id)
         self._connection.execute(
             """
-            INSERT INTO warehouse.cycle_counts (id, tenant_id, site_id, scope_location_id, count_type, scheduled_for, created_by, number)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO warehouse.cycle_counts (id, tenant_id, site_id, scope_location_id, count_type, scheduled_for, created_by, number, mode, note)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (cycle_count_id, tenant_id, site_id, scope_location_id, count_type, scheduled_for, actor_id, number),
+            (cycle_count_id, tenant_id, site_id, scope_location_id, count_type, scheduled_for, actor_id, number, mode, note),
         )
         record_audit(
             self._connection,
@@ -127,7 +133,7 @@ class CycleCountService:
             action="cycle_count.created",
             entity_type="cycle_count",
             entity_id=cycle_count_id,
-            payload={"number": number, "site_id": site_id, "scope_location_id": scope_location_id, "count_type": count_type},
+            payload={"number": number, "site_id": site_id, "scope_location_id": scope_location_id, "count_type": count_type, "mode": mode},
         )
         return self.get_count(tenant_id=tenant_id, cycle_count_id=cycle_count_id)
 
@@ -219,7 +225,7 @@ class CycleCountService:
             FROM warehouse.cycle_counts cc
             JOIN warehouse.sites s ON s.id = cc.site_id AND s.tenant_id = cc.tenant_id
             LEFT JOIN warehouse.locations l ON l.id = cc.scope_location_id AND l.tenant_id = cc.tenant_id
-            WHERE cc.tenant_id = %s AND cc.status = 'in_progress'
+            WHERE cc.tenant_id = %s AND cc.status = 'in_progress' AND cc.mode = 'full'
             ORDER BY cc.started_at, cc.id
             """,
             (tenant_id,),
@@ -258,7 +264,8 @@ class CycleCountService:
         # against another start: once granted, nothing is half-written and nothing new gets past the freeze.
         self._connection.execute("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (count_start_lock_key(tenant_id, count.site_id),))
         location_ids = self._location_ids_in_scope(tenant_id=tenant_id, site_id=count.site_id, scope_location_id=count.scope_location_id)
-        overlap = self._overlapping_count(tenant_id, count, set(location_ids))
+        # An interim inventory holds nothing still and corrects nothing, so it overlaps harmlessly.
+        overlap = self._overlapping_count(tenant_id, count, set(location_ids)) if count.mode == "full" else None
         if overlap is not None:
             return Err(
                 "COUNT_SCOPE_OVERLAP",
@@ -302,7 +309,7 @@ class CycleCountService:
         others = self._connection.execute(
             """
             SELECT COALESCE(number, id), scope_location_id FROM warehouse.cycle_counts
-            WHERE tenant_id = %s AND site_id = %s AND status = 'in_progress' AND id <> %s
+            WHERE tenant_id = %s AND site_id = %s AND status = 'in_progress' AND mode = 'full' AND id <> %s
             """,
             (tenant_id, count.site_id, count.id),
         ).fetchall()
@@ -422,11 +429,8 @@ class CycleCountService:
         return Ok(_as_shown(updated.value, count_result.value.count_type))
 
     def resolve_line_variance(
-        self, *, tenant_id: str, actor_id: str, cycle_count_id: str, line_id: str, decision: str
+        self, *, tenant_id: str, actor_id: str, cycle_count_id: str, line_id: str, decision: str, observation: str | None = None
     ) -> Result[CycleCountLine]:
-        if decision not in ("approve", "reject"):
-            return Err("INVALID_DECISION", "decision must be 'approve' or 'reject'", "la décision doit être 'approve' ou 'reject'")
-
         count_result = self.get_count(tenant_id=tenant_id, cycle_count_id=cycle_count_id, lock=" FOR SHARE")
         if isinstance(count_result, Err):
             return count_result
@@ -436,6 +440,9 @@ class CycleCountService:
                 "the count must be in progress to resolve a variance",
                 "l'inventaire doit être en cours pour résoudre un écart",
             )
+        checked = check_decision(mode=count_result.value.mode, decision=decision, observation=observation)
+        if isinstance(checked, Err):
+            return checked
 
         # FOR UPDATE: the second of two simultaneous approvals waits, then finds the line resolved.
         line_result = self._get_line(tenant_id=tenant_id, cycle_count_id=cycle_count_id, line_id=line_id, lock=" FOR UPDATE")
@@ -465,16 +472,18 @@ class CycleCountService:
                 if isinstance(adjust_result, Err):
                     return adjust_result
 
-        resolution = "approved" if decision == "approve" else "rejected"
+        resolution = {"approve": "approved", "reject": "rejected", "note": "noted"}[decision]
         now = datetime.datetime.now(datetime.timezone.utc)
         self._connection.execute(
-            "UPDATE warehouse.cycle_count_lines SET resolution = %s, resolved_by = %s, resolved_at = %s WHERE id = %s AND tenant_id = %s",
-            (resolution, actor_id, now, line_id, tenant_id),
+            "UPDATE warehouse.cycle_count_lines SET resolution = %s, resolved_by = %s, resolved_at = %s, observation = %s "
+            "WHERE id = %s AND tenant_id = %s",
+            (resolution, actor_id, now, observation.strip(), line_id, tenant_id),
         )
         record_audit(
             self._connection, tenant_id=tenant_id, actor_id=actor_id, action="cycle_count_line.resolved",
             entity_type="cycle_count_line", entity_id=line_id,
-            payload={"decision": decision, "expected_quantity": line.expected_quantity, "counted_quantity": line.counted_quantity},
+            payload={"decision": decision, "expected_quantity": line.expected_quantity, "counted_quantity": line.counted_quantity,
+                     "observation": observation.strip()},
         )
         return self._get_line(tenant_id=tenant_id, cycle_count_id=cycle_count_id, line_id=line_id)
 
@@ -520,6 +529,7 @@ class CycleCountService:
             payload={
                 "cycle_count_id": cycle_count_id,
                 "site_id": transition_result.value.site_id,
+                "mode": transition_result.value.mode,
                 "line_count": line_count,
                 "variance_count": variance_count,
             },
@@ -548,6 +558,7 @@ class CycleCountService:
         cycle_count_id: str,
         scheduled_for: datetime.date | None = None,
         count_type: str | None = None,
+        note: str | None = None,
     ) -> Result[CycleCount]:
         count_result = self.get_count(tenant_id=tenant_id, cycle_count_id=cycle_count_id, lock=" FOR UPDATE")
         if isinstance(count_result, Err):
@@ -567,8 +578,8 @@ class CycleCountService:
         updated_scheduled_for = scheduled_for if scheduled_for is not None else current.scheduled_for
 
         self._connection.execute(
-            "UPDATE warehouse.cycle_counts SET scheduled_for = %s, count_type = %s WHERE id = %s AND tenant_id = %s",
-            (updated_scheduled_for, updated_type, cycle_count_id, tenant_id),
+            "UPDATE warehouse.cycle_counts SET scheduled_for = %s, count_type = %s, note = %s WHERE id = %s AND tenant_id = %s",
+            (updated_scheduled_for, updated_type, note if note is not None else current.note, cycle_count_id, tenant_id),
         )
         record_audit(
             self._connection, tenant_id=tenant_id, actor_id=actor_id, action="cycle_count.updated",

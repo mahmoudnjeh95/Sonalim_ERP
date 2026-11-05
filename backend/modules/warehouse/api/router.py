@@ -641,11 +641,14 @@ class CreateCycleCountRequest(BaseModel):
     scope_location_id: str | None = None
     count_type: Literal["scheduled", "blind"] = "scheduled"
     scheduled_for: datetime.date | None = None
+    mode: Literal["full", "interim"] = "full"
+    note: str | None = None
 
 
 class UpdateCycleCountRequest(BaseModel):
     scheduled_for: datetime.date | None = None
     count_type: Literal["scheduled", "blind"] | None = None
+    note: str | None = None
 
 
 class SubmitLineCountRequest(BaseModel):
@@ -653,7 +656,8 @@ class SubmitLineCountRequest(BaseModel):
 
 
 class ResolveLineVarianceRequest(BaseModel):
-    decision: Literal["approve", "reject"]
+    decision: Literal["approve", "reject", "note"]
+    observation: str | None = None
 
 
 class AddFoundLineRequest(BaseModel):
@@ -669,6 +673,8 @@ def _cycle_count_response(count: CycleCount) -> dict:
     return {
         "id": count.id,
         "number": count.number,
+        "mode": count.mode,
+        "note": count.note,
         "site_id": count.site_id,
         "scope_location_id": count.scope_location_id,
         "count_type": count.count_type,
@@ -699,6 +705,7 @@ def _cycle_count_line_response(line: CycleCountLine) -> dict:
         "count_2": line.count_2,
         "count_3": line.count_3,
         "counts_recorded": line.counts_recorded,
+        "observation": line.observation,
     }
 
 
@@ -742,6 +749,8 @@ def create_cycle_count(
             scope_location_id=body.scope_location_id,
             count_type=body.count_type,
             scheduled_for=body.scheduled_for,
+            mode=body.mode,
+            note=body.note,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -779,6 +788,7 @@ def update_cycle_count(
             cycle_count_id=cycle_count_id,
             scheduled_for=body.scheduled_for,
             count_type=body.count_type,
+            note=body.note,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -860,6 +870,7 @@ def resolve_cycle_count_line(
             cycle_count_id=cycle_count_id,
             line_id=line_id,
             decision=body.decision,
+            observation=body.observation,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -1463,6 +1474,7 @@ def get_valuation(tenant: TenantContext = Depends(require_permission("warehouse.
             "value": valuation.value,
             "unvalued_quantity": valuation.unvalued_quantity,
             "average_unit_cost": valuation.average_unit_cost,
+            "last_received_at": valuation.last_received_at,
             "currency": "XOF",
         }
         for valuation in valuations

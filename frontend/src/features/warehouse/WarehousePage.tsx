@@ -22,6 +22,7 @@ import { FrozenLocationsNotice } from "./FrozenLocationsNotice";
 import { ScannerTab } from "./scanning/ScannerTab";
 import { LocationsTab } from "./locations/LocationsTab";
 import { CycleCountsTab } from "./cycleCounts/CycleCountsTab";
+import { MovementsReportTab } from "./MovementsReportTab";
 import { PutAwayTab } from "./putaway/PutAwayTab";
 import { FulfillmentTab } from "./fulfillment/FulfillmentTab";
 import { ReservationsTab } from "./reservations/ReservationsTab";
@@ -51,6 +52,7 @@ const TABS: readonly {
   { value: "history", labelKey: "warehouse.tabs.history", icon: HistoryIcon, Component: HistoryTab },
   { value: "stock-history", labelKey: "warehouse.tabs.stockHistory", icon: ListTree, Component: StockHistoryTab },
   { value: "vouchers", labelKey: "warehouse.tabs.vouchers", icon: FileText, Component: VouchersTab },
+  { value: "movements-report", labelKey: "warehouse.tabs.movementsReport", icon: HistoryIcon, Component: MovementsReportTab },
   { value: "scanning", labelKey: "warehouse.tabs.scanning", icon: ScanIcon, Component: ScannerTab },
 ];
 

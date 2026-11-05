@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { CheckCircle2, XCircle } from "lucide-react";
+import { CheckCircle2, ClipboardList, Eye, NotebookPen, Printer, XCircle } from "lucide-react";
 import { useAuth } from "../../../lib/auth";
 import { useI18n } from "../../../lib/i18n";
 import { ApiError } from "../../../lib/api";
@@ -12,6 +12,8 @@ import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead } from ".
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../../components/ui/dialog";
 import { useProductCatalog } from "../../products/catalog";
 import { listLocations } from "../api";
+import { DocumentAttachments } from "../DocumentAttachments";
+import { openDocument } from "../printDocument";
 import {
   addCycleCountFoundLine,
   cancelCycleCount,
@@ -116,18 +118,21 @@ function LineRow({
   locationName,
   countInProgress,
   cycleCountId,
+  interim,
 }: {
   line: CycleCountLine;
   productName: string;
   locationName: string;
   countInProgress: boolean;
   cycleCountId: string;
+  interim: boolean;
 }) {
   const { t } = useI18n();
   const { session } = useAuth();
   const token = session!.token;
   const queryClient = useQueryClient();
   const [draft, setDraft] = useState("");
+  const [observation, setObservation] = useState("");
 
   const submitMutation = useMutation({
     mutationFn: () => submitCycleCountLine(token, cycleCountId, line.id, Number(draft)),
@@ -138,7 +143,7 @@ function LineRow({
     },
   });
   const resolveMutation = useMutation({
-    mutationFn: (decision: "approve" | "reject") => resolveCycleCountLine(token, cycleCountId, line.id, decision),
+    mutationFn: (decision: "approve" | "reject" | "note") => resolveCycleCountLine(token, cycleCountId, line.id, decision, observation),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: cycleCountQueryKey(cycleCountId) });
       queryClient.invalidateQueries({ queryKey: ["warehouse", "stock"] });
@@ -181,16 +186,41 @@ function LineRow({
         {line.resolution === "matched" && <Badge variant="success">{t("warehouse.cycleCounts.resolution.matched")}</Badge>}
         {line.resolution === "approved" && <Badge variant="success">{t("warehouse.cycleCounts.resolution.approved")}</Badge>}
         {line.resolution === "rejected" && <Badge variant="outline">{t("warehouse.cycleCounts.resolution.rejected")}</Badge>}
+        {line.resolution === "noted" && <Badge variant="outline">{t("warehouse.cycleCounts.resolution.noted")}</Badge>}
+        {line.observation && <p className="mt-1 text-xs text-muted-foreground">{line.observation}</p>}
         {needsDecision && (
-          <div className="flex items-center gap-1">
-            <Button variant="ghost" size="sm" onClick={() => resolveMutation.mutate("approve")} disabled={resolveMutation.isPending}>
-              <CheckCircle2 className="h-3.5 w-3.5 text-success" />
-              {t("warehouse.cycleCounts.line.approve")}
-            </Button>
-            <Button variant="ghost" size="sm" onClick={() => resolveMutation.mutate("reject")} disabled={resolveMutation.isPending}>
-              <XCircle className="h-3.5 w-3.5 text-destructive" />
-              {t("warehouse.cycleCounts.line.reject")}
-            </Button>
+          <div className="space-y-1">
+            <Input
+              aria-label={t("warehouse.cycleCounts.column.observation")}
+              placeholder={t("warehouse.cycleCounts.column.observation")}
+              value={observation}
+              onChange={(event) => setObservation(event.target.value)}
+              className="h-8"
+            />
+            <div className="flex items-center gap-1">
+              {interim ? (
+                <Button variant="ghost" size="sm" onClick={() => resolveMutation.mutate("note")} disabled={resolveMutation.isPending || !observation.trim()}>
+                  <NotebookPen className="h-3.5 w-3.5" />
+                  {t("warehouse.cycleCounts.line.note")}
+                </Button>
+              ) : (
+                <>
+                  <Button variant="ghost" size="sm" onClick={() => resolveMutation.mutate("approve")} disabled={resolveMutation.isPending || !observation.trim()}>
+                    <CheckCircle2 className="h-3.5 w-3.5 text-success" />
+                    {t("warehouse.cycleCounts.line.approve")}
+                  </Button>
+                  <Button variant="ghost" size="sm" onClick={() => resolveMutation.mutate("reject")} disabled={resolveMutation.isPending || !observation.trim()}>
+                    <XCircle className="h-3.5 w-3.5 text-destructive" />
+                    {t("warehouse.cycleCounts.line.reject")}
+                  </Button>
+                </>
+              )}
+            </div>
+            {resolveMutation.isError && (
+              <p className="text-xs text-destructive">
+                {resolveMutation.error instanceof ApiError ? resolveMutation.error.message : t("warehouse.cycleCounts.dialog.error")}
+              </p>
+            )}
           </div>
         )}
       </TableCell>
@@ -243,15 +273,84 @@ export function CycleCountDetailDialog({
   const productName = (productId: string) => products.find((p) => p.id === productId)?.name ?? productId;
   const locationName = (locationId: string) => locations.find((l) => l.id === locationId)?.name ?? locationId;
 
+  const headerFields = (current: CycleCountDetail): [string, string][] => [
+    [t("warehouse.cycleCounts.field.mode"), t(`warehouse.cycleCounts.mode.${current.mode}`)],
+    [t("warehouse.cycleCounts.field.scope"), current.scope_location_id ? locationName(current.scope_location_id) : t("warehouse.cycleCounts.field.scope.wholeSite")],
+    [t("warehouse.cycleCounts.field.countType"), t(`warehouse.cycleCounts.type.${current.count_type}`)],
+    [t("voucher.date"), String(current.started_at ?? current.created_at).slice(0, 10)],
+  ];
+  const documentTitle = (current: CycleCountDetail) => `${t(`warehouse.cycleCounts.mode.${current.mode}`)} ${current.number ?? ""}`;
+  // The manual's blank report: products and book quantities, count and observation columns empty. A blind
+  // count's sheet leaves the book quantity out too, or the counter would carry it to the shelf.
+  const blankSheet = (current: CycleCountDetail) => {
+    const showBooks = current.count_type !== "blind";
+    openDocument(
+      {
+        title: documentTitle(current),
+        fields: headerFields(current),
+        headers: [
+          t("warehouse.cycleCounts.column.product"),
+          t("warehouse.cycleCounts.column.location"),
+          ...(showBooks ? [t("warehouse.cycleCounts.column.expected")] : []),
+          t("warehouse.cycleCounts.column.count1"),
+          t("warehouse.cycleCounts.column.count2"),
+          t("warehouse.cycleCounts.column.count3"),
+          t("warehouse.cycleCounts.column.observation"),
+        ],
+        rows: current.lines.map((line) => [
+          productName(line.product_id),
+          locationName(line.location_id),
+          ...(showBooks ? [line.expected_quantity ?? ""] : []),
+          "",
+          "",
+          "",
+          "",
+        ]),
+      },
+      { print: false },
+    );
+  };
+  const printCount = (current: CycleCountDetail, print: boolean) => {
+    const dash = (value: number | null) => value ?? "—";
+    openDocument(
+      {
+        title: documentTitle(current),
+        fields: headerFields(current),
+        headers: [
+          t("warehouse.cycleCounts.column.product"),
+          t("warehouse.cycleCounts.column.location"),
+          t("warehouse.cycleCounts.column.expected"),
+          t("warehouse.cycleCounts.column.count1"),
+          t("warehouse.cycleCounts.column.count2"),
+          t("warehouse.cycleCounts.column.count3"),
+          t("warehouse.cycleCounts.column.variance"),
+          t("warehouse.cycleCounts.column.observation"),
+        ],
+        rows: current.lines.map((line) => [
+          productName(line.product_id),
+          locationName(line.location_id),
+          dash(line.expected_quantity),
+          dash(line.count_1),
+          dash(line.count_2),
+          dash(line.count_3),
+          line.counted_quantity !== null && line.expected_quantity !== null ? line.counted_quantity - line.expected_quantity : "—",
+          line.observation ?? "",
+        ]),
+        footer: current.note ?? undefined,
+      },
+      { print },
+    );
+  };
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-3xl">
+      <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{t("warehouse.cycleCounts.detail.title")}</DialogTitle>
           {detail && (
             <DialogDescription>
               {detail.number ? `${detail.number} · ` : ""}
-              {t(`warehouse.cycleCounts.status.${detail.status}`)} · {t(`warehouse.cycleCounts.type.${detail.count_type}`)}
+              {t(`warehouse.cycleCounts.mode.${detail.mode}`)} · {t(`warehouse.cycleCounts.status.${detail.status}`)} · {t(`warehouse.cycleCounts.type.${detail.count_type}`)}
             </DialogDescription>
           )}
         </DialogHeader>
@@ -274,7 +373,24 @@ export function CycleCountDetailDialog({
                   {t("warehouse.cycleCounts.action.cancel")}
                 </Button>
               )}
+              {detail.lines.length > 0 && (
+                <>
+                  <Button variant="outline" size="sm" onClick={() => blankSheet(detail)}>
+                    <ClipboardList className="h-3.5 w-3.5" />
+                    {t("warehouse.cycleCounts.action.blankSheet")}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => printCount(detail, false)}>
+                    <Eye className="h-3.5 w-3.5" />
+                    {t("voucher.preview")}
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => printCount(detail, true)}>
+                    <Printer className="h-3.5 w-3.5" />
+                    {t("voucher.print")}
+                  </Button>
+                </>
+              )}
             </div>
+            {detail.note && <p className="text-sm"><span className="font-medium">{t("voucher.note")} :</span> {detail.note}</p>}
             {detail.status === "draft" && <p className="text-sm text-muted-foreground">{t("warehouse.cycleCounts.detail.linesOnStart")}</p>}
             {startMutation.isError && (
               <p className="text-sm text-destructive">
@@ -307,6 +423,7 @@ export function CycleCountDetailDialog({
                     locationName={locationName(line.location_id)}
                     countInProgress={detail.status === "in_progress"}
                     cycleCountId={detail.id}
+                    interim={detail.mode === "interim"}
                   />
                 ))}
               </TableBody>
@@ -314,6 +431,7 @@ export function CycleCountDetailDialog({
             {detail.status === "in_progress" && hasPermission("warehouse.manage_cycle_counts") && (
               <AddFoundLine cycleCountId={detail.id} locations={locationsInScope(locations, detail)} products={products} />
             )}
+            <DocumentAttachments entityType="cycle_count" entityId={detail.id} canManage={hasPermission("warehouse.manage_cycle_counts")} />
           </>
         )}
       </DialogContent>

@@ -6,6 +6,7 @@ export interface ProductValuation {
   value: number;
   unvalued_quantity: number;
   average_unit_cost: number | null;
+  last_received_at: string | null;
   currency: "XOF";
 }
 

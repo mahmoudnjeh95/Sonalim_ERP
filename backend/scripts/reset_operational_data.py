@@ -153,6 +153,7 @@ PURGE_TABLES = [
     "warehouse.vouchers",
     "warehouse.voucher_lines",
     "warehouse.voucher_counters",
+    "warehouse.document_attachments",
     # legacy: the inventory feature was replaced by cycle counts; no migration creates these any more,
     # but a database that applied the earlier 0020 still has them
     "warehouse.inventories",
@@ -165,6 +166,8 @@ PURGE_TABLES = [
     "treasury.deposit_slips",
     "treasury.deposit_slip_items",
     "treasury.payment_orders",
+    "treasury.invoice_payment_orders",
+    "treasury.document_attachments",
     "treasury.user_notifications",
     "treasury.account_movements",
     "treasury.bank_statement_lines",
@@ -200,6 +203,7 @@ EDITED_TABLES = [
 
 # Master data and configuration: never touched.
 KEPT_TABLES = [
+    "warehouse.settings",
     "core.companies",
     "core.currencies",
     "core.exchange_rates",

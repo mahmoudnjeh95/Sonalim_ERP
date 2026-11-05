@@ -61,7 +61,7 @@ def _receive(db, env, product, qty, cost, location=None):
 
 def test_receipt_posts_stock_number_and_stamps_moves(db, env):
     posted = _receive(db, env, env["film"], 100, 10)
-    assert posted["number"].startswith("RCP-") and posted["status"] == "posted"
+    assert posted["number"].startswith("BE-") and posted["status"] == "posted"
     assert _on_hand(db, env, env["film"], env["main"]) == D("100")
     move = db.execute("SELECT source_type, source_id, unit_cost FROM warehouse.stock_moves WHERE tenant_id = %s AND reference = %s",
                       (TENANT, posted["number"])).fetchone()
@@ -89,8 +89,11 @@ def test_draft_edit_and_cancel_rules(db, env):
 
 def test_issue_refused_without_stock_and_leaves_no_partial_moves(db, env):
     _receive(db, env, env["film"], 10, 5)
+    _receive(db, env, env["pasta"], 1, 5)
     voucher = _voucher(db, env, type="issue", source_location_id=env["main"], lines=[
         {"product_id": env["film"], "quantity": 4}, {"product_id": env["pasta"], "quantity": 1}])
+    # The stock leaves while the draft waits: posting checks again.
+    assert isinstance(StockService(db).issue_stock(tenant_id=TENANT, product_id=env["pasta"], location_id=env["main"], quantity=1, reference="other"), Ok)
     result = _post(db, env, voucher)
     assert isinstance(result, Err) and result.code == "STOCK_INSUFFICIENT"
     assert _on_hand(db, env, env["film"], env["main"]) == D("10")
@@ -101,7 +104,7 @@ def test_issue_posts_and_warns_below_minimum(db, env):
     _receive(db, env, env["film"], 10, 5)
     voucher = _voucher(db, env, type="issue", source_location_id=env["main"], lines=[{"product_id": env["film"], "quantity": 4}])
     result = _post(db, env, voucher)
-    assert isinstance(result, Ok) and result.value["number"].startswith("ISS-")
+    assert isinstance(result, Ok) and result.value["number"].startswith("BS-")
     assert _on_hand(db, env, env["film"], env["main"]) == D("6")
     assert [w["code"] for w in result.value["warnings"]] == ["BELOW_MINIMUM"]
     assert result.value["lines"][0]["unit_cost"] == D("5.0000")  # cost recorded at issue
@@ -111,7 +114,7 @@ def test_transfer_moves_between_locations_and_rejects_same_location(db, env):
     _receive(db, env, env["film"], 10, 5)
     same = _voucher(db, env, type="transfer", source_location_id=env["main"], dest_location_id=env["main"],
                     lines=[{"product_id": env["film"], "quantity": 1}])
-    assert isinstance(_post(db, env, same), Err)
+    assert isinstance(same, Err) and same.code == "INVALID_TRANSFER"
     ok = _voucher(db, env, type="transfer", source_location_id=env["main"], dest_location_id=env["annex"],
                   lines=[{"product_id": env["film"], "quantity": 3}])
     assert isinstance(_post(db, env, ok), Ok)
@@ -142,18 +145,13 @@ def test_issue_from_a_sales_order_is_capped_across_vouchers(db, env):
     order_id = order.id
     _receive(db, env, env["film"], 50, 5)
     assert isinstance(SalesOrderService(db).confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id, correlation_id="c"), Ok)
-    # Fulfillment let go of the order: the only way a confirmed order can reach a voucher.
-    reservations = ReservationService(db)
-    [held] = [r for r in reservations.list_reservations(tenant_id=TENANT) if r.reference == f"sales_order:{order_id}"]
-    assert isinstance(reservations.release_reservation(tenant_id=TENANT, actor_id=env["actor"], reservation_id=held.id), Ok)
     service = VoucherService(db)
     first = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id,
                                             source_location_id=env["main"], quantities={env["film"]: D("6")})
     assert first.value["partner_id"] == env["customer"] and first.value["ref_type"] == "sales_order"
     assert isinstance(_post(db, env, first), Ok)
-    second = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id,
+    capped = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id,
                                              source_location_id=env["main"], quantities={env["film"]: D("5")})
-    capped = _post(db, env, second)
     assert isinstance(capped, Err) and capped.code == "ORDER_QTY_EXCEEDED"
     rest = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id,
                                            source_location_id=env["main"], quantities={env["film"]: D("4")})
@@ -176,7 +174,7 @@ def test_an_order_not_yet_confirmed_cannot_be_issued(db, env):
     assert _on_hand(db, env, env["film"], env["main"]) == D("50")
 
 
-def test_a_draft_made_before_the_order_was_confirmed_cannot_be_posted_after(db, env):
+def test_a_draft_made_before_the_order_was_confirmed_posts_after_and_takes_its_reservation_over(db, env):
     order = SalesOrderService(db).create_order(tenant_id=TENANT, actor_id=env["actor"], partner_id=env["customer"],
                                                location_id=env["main"], lines=[OrderLine(product_id=env["film"], quantity=10, unit_price=1)])
     _receive(db, env, env["film"], 50, 5)
@@ -185,11 +183,10 @@ def test_a_draft_made_before_the_order_was_confirmed_cannot_be_posted_after(db, 
     assert isinstance(draft, Ok)
     assert isinstance(SalesOrderService(db).confirm_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id, correlation_id="c"), Ok)
 
-    refused = _post(db, env, draft)
+    posted = _post(db, env, draft)
 
-    assert isinstance(refused, Err) and refused.code == "ORDER_IN_FULFILLMENT"
-    assert _on_hand(db, env, env["film"], env["main"]) == D("50")
-    assert VoucherService(db).get(tenant_id=TENANT, voucher_id=draft.value["id"]).value["status"] == "draft"
+    assert isinstance(posted, Ok), posted
+    assert _on_hand(db, env, env["film"], env["main"]) == D("40")
 
 
 # ---- valuation ---------------------------------------------------------------------------------
@@ -297,7 +294,7 @@ def test_the_count_rule_two_equal_counts_else_a_third_and_approval_adjusts_stock
     refused = service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id="c")
     assert isinstance(refused, Err) and refused.code == "LINES_UNRESOLVED"
     resolved = service.resolve_line_variance(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, line_id=line.id,
-                                             decision="approve")
+                                             decision="approve", observation="counted again")
     assert isinstance(resolved, Ok)  # the count's own adjustment passes its own freeze
     assert _on_hand(db, env, env["film"], env["main"]) == D("8")
     assert isinstance(service.complete_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.id, correlation_id="c"), Ok)

@@ -33,7 +33,7 @@
 | `treasury.disbursement.cancelled` | 1.0 | treasury | procurement, finance (ledger, when enabled) | `disbursement_id`, `allocations` (`invoice_id`, `amount`) |
 | `treasury.instrument.collected` | 1.0 | treasury | finance (ledger, when enabled) | `instrument_id`, `direction`, `method`, `amount`, `currency`, `account_id` |
 | `treasury.instrument.unpaid` | 1.0 | treasury | finance (invoices and ledger, when enabled), procurement | `instrument_id`, `direction`, `amount`, `currency`, `rejection_fee` (null when none), `allocations` (`invoice_id`, `amount`) |
-| `warehouse.voucher.posted` | 1.1 | warehouse | sales | `voucher_id`, `type`, `number`, `ref_type`, `ref_id`; on an issue from a sales order also `issued_to_date` (product id to quantity issued for the order so far, net of returns) |
+| `warehouse.voucher.posted` | 1.1 | warehouse | sales | `voucher_id`, `type` (`receipt`, `issue`, `return`, `transfer`, `delivery`), `number`, `ref_type`, `ref_id`; on an issue from a sales order also `issued_to_date` (product id to quantity issued for the order so far, net of returns) |
 | `qc.quality_report.validated` | 1.0 | qc | — | `quality_report_id`, `is_conforming` |
 | `qc.non_conformity.raised` | 1.0 | qc | — | `non_conformity_id`, `of_id`, `product_id`, `quantity`, `location_id` |
 | `qc.non_conformity.dispositioned` | 1.0 | qc | production | `non_conformity_id`, `of_id`, `product_id`, `lines` (`component`, `disposition`, `quantity`) |

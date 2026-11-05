@@ -2,12 +2,16 @@ import { apiFetch } from "../../../lib/api";
 
 export type CycleCountStatus = "draft" | "in_progress" | "completed" | "cancelled";
 export type CycleCountType = "scheduled" | "blind";
+// full freezes its scope and corrects the stock; interim does neither and only records the variances.
+export type CycleCountMode = "full" | "interim";
 export type CycleCountLineStatus = "pending" | "counted";
-export type CycleCountLineResolution = "matched" | "approved" | "rejected" | null;
+export type CycleCountLineResolution = "matched" | "approved" | "rejected" | "noted" | null;
 
 export interface CycleCount {
   id: string;
   number: string | null;
+  mode: CycleCountMode;
+  note: string | null;
   site_id: string;
   scope_location_id: string | null;
   count_type: CycleCountType;
@@ -39,6 +43,7 @@ export interface CycleCountLine {
   count_2: number | null;
   count_3: number | null;
   counts_recorded: number;
+  observation: string | null;
 }
 
 export interface CycleCountDetail extends CycleCount {
@@ -82,6 +87,8 @@ export interface CreateCycleCountInput {
   scope_location_id?: string | null;
   count_type?: CycleCountType;
   scheduled_for?: string | null;
+  mode?: CycleCountMode;
+  note?: string | null;
 }
 
 export function createCycleCount(token: string, input: CreateCycleCountInput) {
@@ -100,11 +107,11 @@ export function submitCycleCountLine(token: string, cycleCountId: string, lineId
   });
 }
 
-export function resolveCycleCountLine(token: string, cycleCountId: string, lineId: string, decision: "approve" | "reject") {
+export function resolveCycleCountLine(token: string, cycleCountId: string, lineId: string, decision: "approve" | "reject" | "note", observation: string) {
   return apiFetch<CycleCountLine>(`/warehouse/cycle-counts/${cycleCountId}/lines/${lineId}/resolve`, {
     method: "POST",
     token,
-    body: { decision },
+    body: { decision, observation },
   });
 }
 
