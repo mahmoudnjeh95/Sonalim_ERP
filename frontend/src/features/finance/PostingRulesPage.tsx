@@ -38,6 +38,7 @@ export const SOURCE_KEYS: Record<RuleSource, TranslationKey> = {
   payroll: "finance.rules.source.payroll",
   invoice: "finance.rules.source.invoice",
   purchase_invoice: "finance.rules.source.purchase_invoice",
+  treasury: "finance.rules.source.treasury",
 };
 
 export const KIND_KEYS: Record<string, TranslationKey> = {
@@ -53,6 +54,16 @@ export const KIND_KEYS: Record<string, TranslationKey> = {
   paid: "finance.rules.kind.paid",
   validated: "finance.rules.kind.validated",
   vat: "finance.rules.kind.vat",
+  receipt_payment: "finance.rules.kind.receipt_payment",
+  receipt_advance: "finance.rules.kind.receipt_advance",
+  receipt_withheld: "finance.rules.kind.receipt_withheld",
+  disbursement_payment: "finance.rules.kind.disbursement_payment",
+  disbursement_advance: "finance.rules.kind.disbursement_advance",
+  disbursement_withheld: "finance.rules.kind.disbursement_withheld",
+  instrument_collected: "finance.rules.kind.instrument_collected",
+  instrument_unpaid: "finance.rules.kind.instrument_unpaid",
+  instrument_rejection_fee: "finance.rules.kind.instrument_rejection_fee",
+  account_opening: "finance.rules.kind.account_opening",
 };
 
 export function kindLabel(t: (key: TranslationKey) => string, kind: string): string {
@@ -385,6 +396,7 @@ function RuleDialog({ rule, onClose }: { rule: PostingRule | null; onClose: () =
               <div className="space-y-1.5">
                 <Label htmlFor="rule_code">{t("finance.rules.column.code")}</Label>
                 <Input id="rule_code" placeholder="*" {...register("code")} />
+                {source === "treasury" && <p className="text-xs text-muted-foreground">{t("finance.rules.treasuryCodeHint")}</p>}
                 {errors.code && <p className="text-sm text-destructive">{errors.code.message}</p>}
               </div>
             </div>
