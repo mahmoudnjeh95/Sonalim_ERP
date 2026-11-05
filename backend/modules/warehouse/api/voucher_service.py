@@ -92,7 +92,8 @@ class VoucherService:
         checked = check_lines(type, lines)
         if isinstance(checked, Err):
             return checked
-        stock = self._check_draft_stock(tenant_id, type, source_location_id, dest_location_id, ref_type, ref_id, lines)
+        stock = self._check_draft_stock(tenant_id, type, source_location_id, dest_location_id, ref_type, ref_id, lines,
+                                        return_of_voucher_id)
         if isinstance(stock, Err):
             return stock
         voucher_id = str(ULID())
@@ -126,7 +127,8 @@ class VoucherService:
             if isinstance(checked, Err):
                 return checked
         stock = self._check_draft_stock(tenant_id, current["type"], merged["source_location_id"], merged["dest_location_id"],
-                                        current["ref_type"], current["ref_id"], lines if lines is not None else self._lines(voucher_id))
+                                        current["ref_type"], current["ref_id"], lines if lines is not None else self._lines(voucher_id),
+                                        current["return_of_voucher_id"])
         if isinstance(stock, Err):
             return stock
         if values:
@@ -408,14 +410,11 @@ class VoucherService:
         self._warn_minimum(tenant_id, source, merged, warnings)
         return Ok(None)
 
-    def _post_return(self, tenant_id, actor_id, correlation_id, voucher, number, lines, merged, warnings) -> Result[None]:
-        source = self._return_source(tenant_id, voucher["return_of_voucher_id"])
-        if isinstance(source, Err):
-            return source
+    def _check_return_cap(self, return_of_voucher_id: str, merged: dict[str, Decimal]) -> Result[None]:
         for product_id, quantity in merged.items():
             issued = self._connection.execute(
                 "SELECT COALESCE(SUM(quantity), 0) FROM warehouse.voucher_lines WHERE voucher_id = %s AND product_id = %s",
-                (voucher["return_of_voucher_id"], product_id),
+                (return_of_voucher_id, product_id),
             ).fetchone()[0]
             if issued == 0:
                 continue  # the manual lets a return add a product the source document didn't carry; only those it carried are capped
@@ -424,11 +423,20 @@ class VoucherService:
                 SELECT COALESCE(SUM(l.quantity), 0) FROM warehouse.voucher_lines l JOIN warehouse.vouchers v ON v.id = l.voucher_id
                 WHERE v.return_of_voucher_id = %s AND v.status = 'posted' AND l.product_id = %s
                 """,
-                (voucher["return_of_voucher_id"], product_id),
+                (return_of_voucher_id, product_id),
             ).fetchone()[0]
             checked = check_return(issued, returned, quantity)
             if isinstance(checked, Err):
                 return checked
+        return Ok(None)
+
+    def _post_return(self, tenant_id, actor_id, correlation_id, voucher, number, lines, merged, warnings) -> Result[None]:
+        source = self._return_source(tenant_id, voucher["return_of_voucher_id"])
+        if isinstance(source, Err):
+            return source
+        capped = self._check_return_cap(voucher["return_of_voucher_id"], merged)
+        if isinstance(capped, Err):
+            return capped
         costs = dict(self._connection.execute(
             "SELECT product_id, SUM(quantity * unit_cost) / NULLIF(SUM(quantity), 0) FROM warehouse.voucher_lines "
             "WHERE voucher_id = %s AND unit_cost IS NOT NULL GROUP BY product_id",
@@ -469,10 +477,12 @@ class VoucherService:
         return Decimal(str(row[0]))
 
     def _check_draft_stock(self, tenant_id: str, voucher_type: str, source: str | None, dest: str | None, ref_type: str | None,
-                           ref_id: str | None, lines: list[dict[str, Any]]) -> Result[None]:
+                           ref_id: str | None, lines: list[dict[str, Any]], return_of_voucher_id: str | None = None) -> Result[None]:
         """The manual refuses at entry, not only at posting: an out-of-stock product stops the voucher being
         added at all. Posting checks again, because stock can leave while a draft waits. What is reserved
         for this very order counts as available to it: posting takes it over from fulfillment."""
+        if voucher_type == "return" and return_of_voucher_id:
+            return self._check_return_cap(return_of_voucher_id, self._merge_by_product(lines))
         if voucher_type not in ("issue", "transfer"):
             return Ok(None)
         for product_id, quantity in self._merge_by_product(lines).items():

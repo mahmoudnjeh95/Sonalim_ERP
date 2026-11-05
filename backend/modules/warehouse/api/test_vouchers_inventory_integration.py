@@ -125,16 +125,20 @@ def test_return_is_capped_by_the_issue_and_restocks(db, env):
     _receive(db, env, env["film"], 10, 5)
     issue = _voucher(db, env, type="issue", source_location_id=env["main"], lines=[{"product_id": env["film"], "quantity": 6}])
     issued = _post(db, env, issue).value
+    # Refused when entered, like a shortage, not only when posted.
     too_many = _voucher(db, env, type="return", dest_location_id=env["annex"], return_of_voucher_id=issued["id"],
                         lines=[{"product_id": env["film"], "quantity": 7}])
-    refused = _post(db, env, too_many)
-    assert isinstance(refused, Err) and refused.code == "RETURN_QTY_EXCEEDED"
+    assert isinstance(too_many, Err) and too_many.code == "RETURN_QTY_EXCEEDED"
     ok = _voucher(db, env, type="return", dest_location_id=env["annex"], return_of_voucher_id=issued["id"],
                   lines=[{"product_id": env["film"], "quantity": 4}])
+    waiting = _voucher(db, env, type="return", dest_location_id=env["annex"], return_of_voucher_id=issued["id"],
+                       lines=[{"product_id": env["film"], "quantity": 4}])
+    assert isinstance(waiting, Ok)  # fits on its own while the first is still a draft
     assert isinstance(_post(db, env, ok), Ok) and _on_hand(db, env, env["film"], env["annex"]) == D("4")
+    assert _post(db, env, waiting).code == "RETURN_QTY_EXCEEDED"  # posting checks again
     rest = _voucher(db, env, type="return", dest_location_id=env["annex"], return_of_voucher_id=issued["id"],
                     lines=[{"product_id": env["film"], "quantity": 3}])
-    assert _post(db, env, rest).code == "RETURN_QTY_EXCEEDED"
+    assert rest.code == "RETURN_QTY_EXCEEDED"
     no_source = _voucher(db, env, type="return", dest_location_id=env["annex"], lines=[{"product_id": env["film"], "quantity": 1}])
     assert no_source.code == "RETURN_SOURCE_INVALID"
 

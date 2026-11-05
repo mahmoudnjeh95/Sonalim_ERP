@@ -20,7 +20,8 @@ export function TreasurySettingsTab() {
   const canSwitchPosting = hasPermission("treasury.admin_ledger_posting");
 
   const { data: settings } = useQuery({ queryKey: ["treasury", "settings"], queryFn: () => getSettings(token) });
-  const { data: rules = [] } = useQuery({ queryKey: ["treasury", "alert-rules"], queryFn: () => listAlertRules(token) });
+  const { data: rulesData } = useQuery({ queryKey: ["treasury", "alert-rules"], queryFn: () => listAlertRules(token) });
+  const rules = rulesData ?? [];
   const [limit, setLimit] = useState("");
   const [cutoff, setCutoff] = useState("");
   const [offsets, setOffsets] = useState<Record<string, string>>({});
@@ -32,8 +33,10 @@ export function TreasurySettingsTab() {
     }
   }, [settings]);
   useEffect(() => {
-    setOffsets(Object.fromEntries(rules.map((r) => [`${r.direction}:${r.method}`, String(r.offset_days)])));
-  }, [rules]);
+    if (!rulesData) return;
+    // Keyed on the query result, not on `rules`: its `?? []` fallback is a new array each render.
+    setOffsets(Object.fromEntries(rulesData.map((r) => [`${r.direction}:${r.method}`, String(r.offset_days)])));
+  }, [rulesData]);
 
   const fail = (error: unknown) =>
     toast.error(t("treasury.settings.saveError"), { description: error instanceof ApiError ? error.message : undefined });

@@ -13,20 +13,23 @@ echo.
 
 REM Kill any existing processes on port 8000 (backend)
 echo Cleaning up port 8000...
-for /f "tokens=5" %%a in ('netstat -aon ^| find ":8000"') do (
-    taskkill /F /PID %%a >nul 2>&1
+REM Only listeners: a bare ":8000" also matches browsers connected to it. /T takes the process tree, and
+REM --reload serves from a child of a reloader, so a python.exe parent is stopped too or it starts another.
+for /f "tokens=5" %%a in ('netstat -aon ^| find ":8000" ^| find "LISTENING"') do (
+    powershell -NoProfile -Command "$p = Get-CimInstance Win32_Process -Filter 'ProcessId=%%a'; if ($p) { $parent = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $p.ParentProcessId); if ($parent -and $parent.Name -eq 'python.exe') { Stop-Process -Id $parent.ProcessId -Force } }" >nul 2>&1
+    taskkill /F /T /PID %%a >nul 2>&1
 )
 
 REM Kill any existing processes on port 5173 (frontend)
 echo Cleaning up port 5173...
-for /f "tokens=5" %%a in ('netstat -aon ^| find ":5173"') do (
-    taskkill /F /PID %%a >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -aon ^| find ":5173" ^| find "LISTENING"') do (
+    taskkill /F /T /PID %%a >nul 2>&1
 )
 
 REM Kill any existing processes on port 8100 (OCR service)
 echo Cleaning up port 8100...
-for /f "tokens=5" %%a in ('netstat -aon ^| find ":8100"') do (
-    taskkill /F /PID %%a >nul 2>&1
+for /f "tokens=5" %%a in ('netstat -aon ^| find ":8100" ^| find "LISTENING"') do (
+    taskkill /F /T /PID %%a >nul 2>&1
 )
 
 REM Wait a moment for ports to be released

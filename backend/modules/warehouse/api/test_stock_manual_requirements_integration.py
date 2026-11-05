@@ -219,8 +219,7 @@ def test_a_return_against_a_delivery_note_counts_against_the_issue(db, env):
     assert returned["return_of_voucher_id"] == issue["id"]
     over = _service(db).create_draft(tenant_id=TENANT, actor_id=env["actor"], type="return", dest_location_id=env["main"],
                                      return_of_voucher_id=note.value["id"], lines=[{"product_id": env["film"], "quantity": D(1)}])
-    refused = _service(db).post(tenant_id=TENANT, actor_id=env["actor"], voucher_id=over.value["id"], correlation_id="c")
-    assert isinstance(refused, Err) and refused.code == "RETURN_QTY_EXCEEDED"
+    assert isinstance(over, Err) and over.code == "RETURN_QTY_EXCEEDED"
 
 
 def test_a_return_can_add_a_product_and_restocks_at_the_cost_it_left_at(db, env):
