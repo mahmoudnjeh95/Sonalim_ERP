@@ -144,6 +144,20 @@ def test_suggestion_and_manual_match_and_summary(db, env):
     assert isinstance(service.delete_line(tenant_id=TENANT, actor_id=env["actor"], line_id=debit["id"]), Ok)
 
 
+def test_a_payment_too_far_from_the_line_to_be_suggested_can_still_be_matched_by_hand(db, env):
+    doc = DocumentService(db).create_and_post(
+        tenant_id=TENANT, actor_id=env["actor"], direction="in", partner_id=env["customer"], doc_date=DAY - datetime.timedelta(days=20),
+        currency="XOF", payments=[{"method": "transfer", "amount": 1000, "account_id": env["bank"]}], with_details=False, correlation_id="c")
+    payment = doc.value["payments"][0]["id"]
+    _import(db, env)
+    service = StatementImportService(db)
+    debit, _credit = service.list_lines(tenant_id=TENANT, account_id=env["bank"])
+    assert service.suggestions(tenant_id=TENANT, account_id=env["bank"]) == {}
+    assert [p["id"] for p in service.candidate_payments(tenant_id=TENANT, account_id=env["bank"])] == [payment]
+    matched = service.match(tenant_id=TENANT, actor_id=env["actor"], line_id=debit["id"], payment_id=payment)
+    assert isinstance(matched, Ok) and matched.value["matched_payment_id"] == payment
+
+
 def test_a_payment_waiting_on_the_slip_is_matchable_once_and_only_after_collection(db, env):
     # A transfer received while receipts wait on the deposit slip: the payment has an instrument, and it used to be
     # offered twice once collected, and once already while still pending, before the account had received anything.

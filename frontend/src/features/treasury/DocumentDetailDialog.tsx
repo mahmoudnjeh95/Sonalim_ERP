@@ -164,7 +164,9 @@ export function DocumentDetailDialog({ direction, documentId, onClose }: { direc
                         <Download className="h-3.5 w-3.5" />
                       </Button>
                       {canManage && (
-                        <Button size="sm" variant="ghost" aria-label={t("treasury.attachment.delete")} title={t("treasury.attachment.delete")} onClick={() => deleteMutation.mutate(attachment.id)}>
+                        <Button size="sm" variant="ghost" aria-label={t("treasury.attachment.delete")} title={t("treasury.attachment.delete")} disabled={deleteMutation.isPending} onClick={() => {
+                          if (window.confirm(t("attachment.deleteConfirm").replace("{name}", attachment.filename))) deleteMutation.mutate(attachment.id);
+                        }}>
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
                       )}

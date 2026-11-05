@@ -45,6 +45,11 @@ export interface UnvoucheredPurchaseReceipt {
   receipt_id: string;
   received_at: string;
   lines: number;
+  purchase_order_id: string | null;
+  order_date: string | null;
+  supplier_id: string | null;
+  supplier_name: string | null;
+  invoice_number: string | null;
 }
 
 export const listVouchers = (token: string, type?: VoucherType) =>

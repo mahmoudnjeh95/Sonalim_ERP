@@ -237,9 +237,18 @@ export function VouchersTab() {
           <CardContent className="flex flex-wrap items-center gap-2 border-b text-sm">
             <span className="text-muted-foreground">{t("voucher.fromReception")}</span>
             {purchaseReceipts.map((receipt) => (
-              <Button key={receipt.receipt_id} size="sm" variant="outline" disabled={fromReceiptMutation.isPending} onClick={() => fromReceiptMutation.mutate(receipt.receipt_id)}>
+              <Button key={receipt.receipt_id} size="sm" variant="outline" className="h-auto py-1.5" disabled={fromReceiptMutation.isPending} onClick={() => fromReceiptMutation.mutate(receipt.receipt_id)}>
                 <PackageCheck className="h-3.5 w-3.5" />
-                {new Date(receipt.received_at).toLocaleDateString()} · {receipt.lines} {t("voucher.lines").toLowerCase()}
+                <span className="flex flex-col items-start text-left leading-tight">
+                  <span className="font-medium">{receipt.supplier_name ?? t("voucher.receipt.unknownSupplier")}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {[
+                      new Date(receipt.received_at).toLocaleDateString(),
+                      receipt.invoice_number ? t("voucher.receipt.invoice").replace("{number}", receipt.invoice_number) : null,
+                      t(receipt.lines === 1 ? "voucher.receipt.oneLine" : "voucher.receipt.lineCount").replace("{count}", String(receipt.lines)),
+                    ].filter(Boolean).join(" · ")}
+                  </span>
+                </span>
               </Button>
             ))}
           </CardContent>

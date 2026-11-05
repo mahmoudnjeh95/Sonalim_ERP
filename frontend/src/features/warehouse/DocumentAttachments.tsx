@@ -81,7 +81,9 @@ export function DocumentAttachments({ entityType, entityId, canManage }: { entit
               <Download className="h-3.5 w-3.5" />
             </Button>
             {canManage && (
-              <Button size="sm" variant="ghost" aria-label={t("attachment.delete")} disabled={deleteMutation.isPending} onClick={() => deleteMutation.mutate(file.id)}>
+              <Button size="sm" variant="ghost" aria-label={t("attachment.delete")} disabled={deleteMutation.isPending} onClick={() => {
+                if (window.confirm(t("attachment.deleteConfirm").replace("{name}", file.filename))) deleteMutation.mutate(file.id);
+              }}>
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
             )}

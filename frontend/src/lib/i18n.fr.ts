@@ -6438,4 +6438,11 @@ export const fr = {
   "treasury.alerts.draftDue": "la date d'échéance de la traite N°",
   "treasury.alerts.isOn": "est le",
   "voucher.averageCost": "Coût moyen pondéré",
+  "voucher.receipt.unknownSupplier": "Fournisseur inconnu",
+  "voucher.receipt.invoice": "facture {number}",
+  "voucher.receipt.oneLine": "1 ligne",
+  "voucher.receipt.lineCount": "{count} lignes",
+  "attachment.deleteConfirm": "Supprimer « {name} » ? Le fichier ne pourra pas être récupéré.",
+  "treasury.statement.chooseMatch": "Rapprocher avec…",
+  "treasury.statement.chooseOther": "Un autre paiement…",
 };

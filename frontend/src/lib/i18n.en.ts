@@ -6438,4 +6438,11 @@ export const en = {
   "treasury.alerts.draftDue": "the due date of draft no.",
   "treasury.alerts.isOn": "is",
   "voucher.averageCost": "Weighted average cost",
+  "voucher.receipt.unknownSupplier": "Unknown supplier",
+  "voucher.receipt.invoice": "invoice {number}",
+  "voucher.receipt.oneLine": "1 line",
+  "voucher.receipt.lineCount": "{count} lines",
+  "attachment.deleteConfirm": "Delete \"{name}\"? The file can't be recovered.",
+  "treasury.statement.chooseMatch": "Match with…",
+  "treasury.statement.chooseOther": "Another payment…",
 } as const;

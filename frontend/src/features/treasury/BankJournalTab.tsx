@@ -145,6 +145,14 @@ export function BankJournalTab() {
               {lines.map((line) => {
                 const suggested = suggestions?.suggestions[line.id];
                 const payment = suggestions?.payments.find((p) => p.id === suggested);
+                // The suggestion only looks 5 days around the line; any payment of the same direction and
+                // amount can still be chosen by hand, nearest date first.
+                const direction = Number(line.debit) > 0 ? "in" : "out";
+                const amount = Number(direction === "in" ? line.debit : line.credit);
+                const lineTime = new Date(line.line_date).getTime();
+                const others = (suggestions?.payments ?? [])
+                  .filter((p) => p.id !== suggested && p.direction === direction && Number(p.amount) === amount)
+                  .sort((a, b) => Math.abs(new Date(a.date).getTime() - lineTime) - Math.abs(new Date(b.date).getTime() - lineTime));
                 return (
                   <TableRow key={line.id}>
                     <TableCell>{line.line_date}</TableCell>
@@ -172,12 +180,29 @@ export function BankJournalTab() {
                           </Button>
                         )
                       ) : (
-                        canImport &&
-                        payment && (
-                          <Button size="sm" variant="outline" onClick={() => matchMutation.mutate({ lineId: line.id, paymentId: payment.id })}>
-                            <Link2 className="h-3.5 w-3.5" />
-                            {payment.document_number}
-                          </Button>
+                        canImport && (
+                          <div className="flex flex-wrap items-center justify-end gap-2">
+                            {payment && (
+                              <Button size="sm" variant="outline" disabled={matchMutation.isPending} onClick={() => matchMutation.mutate({ lineId: line.id, paymentId: payment.id })}>
+                                <Link2 className="h-3.5 w-3.5" />
+                                {payment.document_number}
+                              </Button>
+                            )}
+                            {others.length > 0 && (
+                              <Select
+                                aria-label={t("treasury.statement.chooseMatch")}
+                                className="h-8 w-auto"
+                                value=""
+                                disabled={matchMutation.isPending}
+                                onChange={(e) => e.target.value && matchMutation.mutate({ lineId: line.id, paymentId: e.target.value })}
+                              >
+                                <option value="">{t(payment ? "treasury.statement.chooseOther" : "treasury.statement.chooseMatch")}</option>
+                                {others.map((p) => (
+                                  <option key={p.id} value={p.id}>{p.document_number} · {p.date}</option>
+                                ))}
+                              </Select>
+                            )}
+                          </div>
                         )
                       )}
                     </TableCell>

@@ -229,7 +229,29 @@ class VoucherService:
             """,
             (tenant_id,),
         ).fetchall()
-        return [{"receipt_id": r[0], "received_at": r[1], "lines": r[2]} for r in rows]
+        from core.api.service import CoreService
+        from modules.procurement.api.service import PurchaseOrderService
+
+        # Enough to tell receipts apart: who delivered, against which order, under which supplier invoice.
+        procurement = PurchaseOrderService(self._connection)
+        core = CoreService(self._connection)
+        orders = {o.id: o for o in procurement.list_purchase_orders(tenant_id=tenant_id)} if rows else {}
+        names: dict[str, str | None] = {}
+        result = []
+        for receipt_id, received_at, line_count in rows:
+            receipt = procurement.get_receipt(tenant_id=tenant_id, receipt_id=receipt_id)
+            order = orders.get(receipt.purchase_order_id) if receipt else None
+            supplier_id = order.supplier_id if order else None
+            if supplier_id and supplier_id not in names:
+                partner = core.get_partner(tenant_id, supplier_id)
+                names[supplier_id] = partner.name if partner else None
+            result.append({
+                "receipt_id": receipt_id, "received_at": received_at, "lines": line_count,
+                "purchase_order_id": order.id if order else None, "order_date": order.order_date if order else None,
+                "supplier_id": supplier_id, "supplier_name": names.get(supplier_id) if supplier_id else None,
+                "invoice_number": receipt.invoice_number if receipt else None,
+            })
+        return result
 
     @atomic
     def generate_delivery_note(self, *, tenant_id: str, actor_id: str, voucher_id: str, correlation_id: str,

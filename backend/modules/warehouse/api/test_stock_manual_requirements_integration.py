@@ -2,12 +2,15 @@
 checks at entry, the valuation method, goods-receipt vouchers, and attached files."""
 from __future__ import annotations
 
+import datetime
+
 from decimal import Decimal
 
 import pytest
 from ulid import ULID
 
 from core.domain.result import Err, Ok
+from modules.procurement.api.service import PurchaseOrderService
 from modules.sales.api.service import SalesOrderService
 from modules.sales.domain.entities import OrderLine
 from modules.warehouse.api.attachment_service import MAX_ATTACHMENT_BYTES, AttachmentService
@@ -330,6 +333,30 @@ def test_a_goods_receipt_gets_one_entry_voucher_and_no_second_stock_move(db, env
     again = service.create_receipt_from_purchase_receipt(tenant_id=TENANT, actor_id=env["actor"], receipt_id=receipt_id, correlation_id="c")
     assert again.value["id"] == voucher.value["id"]
     assert service.list_unvouchered_purchase_receipts(tenant_id=TENANT) == []
+
+
+def test_the_receipts_waiting_for_a_voucher_say_who_delivered_what(db, env):
+    supplier = str(ULID())
+    db.execute("INSERT INTO core.partners (id, tenant_id, name, kind, status) VALUES (%s, %s, 'Moulins du Sahel', 'supplier', 'active')",
+               (supplier, TENANT))
+    uom = db.execute("SELECT uom_id FROM core.products WHERE id = %s", (env["film"],)).fetchone()[0]
+    procurement = PurchaseOrderService(db)
+    order = procurement.create_purchase_order(
+        tenant_id=TENANT, actor_id=env["actor"], supplier_id=supplier, order_date=datetime.date(2026, 10, 1), currency_code="XOF",
+        lines=[{"product_id": env["film"], "uom_id": uom, "quantity_ordered": 5, "unit_price": 100, "unit_price_currency": "XOF"}],
+    ).value
+    for method in ("validate_order", "approve_order", "place_order"):
+        assert isinstance(getattr(procurement, method)(tenant_id=TENANT, actor_id=env["actor"], order_id=order.id), Ok)
+    line = procurement.list_lines(tenant_id=TENANT, purchase_order_id=order.id)[0]
+    receipt = procurement.create_receipt(
+        tenant_id=TENANT, actor_id=env["actor"], purchase_order_id=order.id, location_id=env["main"], currency_code="XOF",
+        invoice_number="FAC-778", invoice_date=datetime.date(2026, 10, 2), lines=[{"purchase_order_line_id": line.id, "quantity": 5}],
+        base_cost=500,
+    ).value
+    assert isinstance(procurement.confirm_receipt(tenant_id=TENANT, actor_id=env["actor"], receipt_id=receipt.id, correlation_id="c"), Ok)
+    [waiting] = _service(db).list_unvouchered_purchase_receipts(tenant_id=TENANT)
+    assert waiting["receipt_id"] == receipt.id and waiting["purchase_order_id"] == order.id
+    assert waiting["supplier_name"] == "Moulins du Sahel" and waiting["invoice_number"] == "FAC-778" and waiting["lines"] == 1
 
 
 def test_a_goods_receipt_that_moved_no_stock_gets_no_voucher(db, env):
