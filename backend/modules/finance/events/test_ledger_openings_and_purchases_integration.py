@@ -228,3 +228,61 @@ def test_a_refused_purchase_posting_is_recorded_and_its_retry_skips_an_invoice_c
 
     assert isinstance(retried, Ok) and retried.value == []
     assert _purchase_entries(env, invoice_id) == []
+
+
+def _priced_invoice(env):
+    """A film line on the product's own purchase account (602) with 18 % VAT, and a transport line with no VAT."""
+    db, tenant = env["db"], env["tenant"]
+    uom, film = str(ULID()), str(ULID())
+    db.execute("INSERT INTO core.uoms (id, tenant_id, code, name, category) VALUES (%s, %s, %s, 'Piece', 'count')", (uom, tenant, f"pc-{uom}"))
+    db.execute("INSERT INTO core.products (id, tenant_id, sku, name, uom_id, accounting_code_purchase) VALUES (%s, %s, %s, 'Film', %s, '602')",
+               (film, tenant, f"FILM-{film}", uom))
+    service = PurchaseInvoiceService(db)
+    draft = service.create_draft(tenant_id=tenant, actor_id=env["actor"], partner_id=env["supplier"], supplier_invoice_number=f"F-{ULID()}",
+                                 invoice_date=datetime.date(2030, 3, 4), lines=[
+                                     {"product_id": film, "quantity": 10, "unit_price": 100, "vat_rate": 18},
+                                     {"description": "Transport", "quantity": 1, "unit_price": 500, "vat_rate": 0}])
+    assert isinstance(draft, Ok), draft
+    assert isinstance(service.validate(tenant_id=tenant, actor_id=env["actor"], invoice_id=draft.value["id"], correlation_id="c"), Ok)
+    return draft.value["id"], service.list_lines(tenant_id=tenant, invoice_id=draft.value["id"])
+
+
+def test_a_priced_invoice_posts_purchases_per_account_and_deductible_vat(env):
+    invoice_id, _ = _priced_invoice(env)
+    assert _deliver(env, _envelope(env, "procurement.purchase_invoice.validated", invoice_id)) is True
+    [(kind, journal, status, lines)] = _purchase_entries(env, invoice_id)
+    assert (kind, journal, status) == ("purchase_invoice_validated", "ACH", "posted")
+    assert sorted(lines) == sorted([("602", D(1000), D(0), None), ("601", D(500), D(0), None), ("445", D(180), D(0), None),
+                                    ("401", D(0), D(1680), env["supplier"])])
+
+
+def test_a_credit_note_posts_the_mirror_of_its_share_once(env):
+    from modules.procurement.api.credit_note_service import PurchaseCreditNoteService
+
+    invoice_id, lines = _priced_invoice(env)
+    notes = PurchaseCreditNoteService(env["db"])
+    note = notes.create_draft(tenant_id=env["tenant"], actor_id=env["actor"], invoice_id=invoice_id, note_date=datetime.date(2030, 3, 5),
+                              reason="Retour", lines=[{"invoice_line_id": lines[0]["id"], "quantity": 2}])
+    assert isinstance(note, Ok), note
+    assert isinstance(notes.validate(tenant_id=env["tenant"], actor_id=env["actor"], note_id=note.value["id"], correlation_id="c"), Ok)
+    envelope = env["db"].execute(
+        "SELECT payload FROM events.outbox WHERE event_type = 'procurement.purchase_credit_note.validated' "
+        "AND payload -> 'payload' ->> 'credit_note_id' = %s", (note.value["id"],),
+    ).fetchone()[0]
+    envelope["occurred_at"] = "2030-03-05T10:00:00+00:00"
+
+    assert _deliver(env, envelope) is True
+    assert _deliver(env, {**envelope, "event_id": str(ULID())}) is True  # replayed: the first entry is found
+    [(kind, journal, status, entry)] = _purchase_entries(env, note.value["id"])
+    assert (kind, journal, status) == ("purchase_credit_note_validated", "ACH", "posted")
+    assert sorted(entry) == sorted([("602", D(0), D(200), None), ("445", D(0), D(36), None), ("401", D(236), D(0), env["supplier"])])
+
+
+def test_a_vat_invoice_without_a_vat_rule_is_refused(env):
+    env["db"].execute("DELETE FROM finance.posting_rules WHERE tenant_id = %s AND source = 'purchase_invoice' AND source_kind = 'vat'",
+                      (env["tenant"],))
+    invoice_id, _ = _priced_invoice(env)
+    assert _deliver(env, _envelope(env, "procurement.purchase_invoice.validated", invoice_id)) is False
+    assert env["db"].execute(
+        "SELECT error_code FROM finance.posting_failures WHERE tenant_id = %s AND source_id = %s", (env["tenant"], invoice_id),
+    ).fetchone()[0] == "POSTING_RULE_MISSING"

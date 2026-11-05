@@ -291,6 +291,22 @@ class DocumentService:
         effective = max(invoice.value["amount"] - committed, Decimal("0"))
         return Ok({**invoice.value, "remaining": whole_francs_payable(min(invoice.value["remaining"], effective))})
 
+    def payments_for_invoice(self, *, tenant_id: str, direction: str, invoice_id: str) -> list[dict[str, Any]]:
+        """Every receipt or disbursement allocated to one invoice, for the invoice's owner to show: what each
+        allocated, what an unpaid instrument took back, and how it was paid."""
+        rows = self._connection.execute(
+            """
+            SELECT d.id, d.number, d.doc_date, d.status, a.amount, a.reversed,
+                   (SELECT string_agg(DISTINCT p.method, ',' ORDER BY p.method) FROM treasury.document_payments p WHERE p.document_id = d.id)
+            FROM treasury.document_allocations a JOIN treasury.documents d ON d.id = a.document_id
+            WHERE d.tenant_id = %s AND d.direction = %s AND a.invoice_id = %s
+            ORDER BY d.doc_date, d.number
+            """,
+            (tenant_id, direction, invoice_id),
+        ).fetchall()
+        return [{"document_id": r[0], "number": r[1], "doc_date": r[2], "status": r[3], "amount": r[4], "reversed": r[5],
+                 "methods": r[6].split(",") if r[6] else []} for r in rows]
+
     def _invoice(self, tenant_id: str, direction: str, invoice_id: str) -> Result[dict[str, Any]]:
         return self.open_invoice(tenant_id, direction, invoice_id, lock=True)
 

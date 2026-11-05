@@ -28,7 +28,7 @@ PAYMENT_METHODS = ("bank", "mobile_money", "cash")
 RULE_KINDS: dict[str, tuple[str, ...]] = {
     "payroll": PAYROLL_LINE_KINDS + ("payment",),
     "invoice": ("issued", "paid"),
-    "purchase_invoice": ("validated",),
+    "purchase_invoice": ("validated", "vat"),
     "treasury": ("receipt_payment", "receipt_advance", "receipt_withheld", "disbursement_payment", "disbursement_advance", "disbursement_withheld", "instrument_collected", "instrument_unpaid", "instrument_rejection_fee", "account_opening"),
 }
 SELF_CONTAINED_KINDS = {("payroll", "payment"), ("invoice", "issued"), ("invoice", "paid"), ("purchase_invoice", "validated")}
@@ -207,11 +207,31 @@ def invoice_entry(
     return Ok((str(rule.journal_code), lines))
 
 
+def _split_whole(total: Decimal, parts: list[tuple[str, Decimal]]) -> list[tuple[str, Decimal]]:
+    """Whole francs per account summing exactly to `total`: each part rounded, the rounding gap put on the
+    largest one."""
+    grouped: dict[str, Decimal] = defaultdict(lambda: ZERO)
+    for account, value in parts:
+        grouped[account] += value
+    rounded = {account: value.quantize(Decimal("1"), rounding=ROUND_HALF_UP) for account, value in grouped.items()}
+    gap = total - sum(rounded.values(), ZERO)
+    if gap and rounded:
+        largest = max(rounded, key=lambda account: rounded[account])
+        rounded[largest] += gap
+    return [(account, value) for account, value in rounded.items() if value]
+
+
 def purchase_invoice_entry(
-    *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule]
+    *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule], vat: Decimal = ZERO,
+    lines: Iterable[tuple[str | None, Decimal]] = (), mirror: bool = False,
 ) -> Result[tuple[str, list[EntryLine]]]:
-    """A validated purchase invoice: the purchase account on the debit, the supplier on the credit with
-    the partner id."""
+    """A validated purchase invoice: the purchases excluding tax on the debit, the deductible VAT on the
+    debit, the supplier on the credit for the total including tax (`amount`), with the partner id.
+
+    `lines` are (purchase account or None, value excluding tax): a line whose product names its own purchase
+    account posts there, the others to the rule's account. Without lines everything but the VAT goes to the
+    rule's account. `mirror` swaps the sides, for a credit note."""
+    rules = list(rules)
     resolved = resolve_rule(rules, source="purchase_invoice", source_kind="validated", code=WILDCARD)
     if isinstance(resolved, Err):
         return resolved
@@ -219,11 +239,32 @@ def purchase_invoice_entry(
     if isinstance(complete, Err):
         return complete
     rule = complete.value
-    lines = [
-        EntryLine(str(rule.debit_account_code), debit=amount, label=label),
-        EntryLine(str(rule.credit_account_code), credit=amount, label=label, partner_id=partner_id),
-    ]
-    return Ok((str(rule.journal_code), lines))
+    vat_account: str | None = None
+    if vat:
+        vat_rule = resolve_rule(rules, source="purchase_invoice", source_kind="vat", code=WILDCARD)
+        if isinstance(vat_rule, Err):
+            return vat_rule
+        if not vat_rule.value.debit_account_code:
+            return Err(
+                "POSTING_RULE_MISSING",
+                "the purchase_invoice / vat / * rule needs the deductible VAT account on the debit",
+                "la règle purchase_invoice / vat / * doit indiquer le compte de TVA déductible au débit",
+            )
+        vat_account = str(vat_rule.value.debit_account_code)
+    excl = amount - vat
+    parts = [(account or str(rule.debit_account_code), value) for account, value in lines] or [(str(rule.debit_account_code), excl)]
+    purchases = _split_whole(excl, parts)
+
+    def side(account: str, value: Decimal, *, debit: bool, partner: str | None = None) -> EntryLine:
+        if debit != mirror:
+            return EntryLine(account, debit=value, label=label, partner_id=partner)
+        return EntryLine(account, credit=value, label=label, partner_id=partner)
+
+    entry = [side(account, value, debit=True) for account, value in purchases]
+    if vat_account:
+        entry.append(side(vat_account, vat, debit=True))
+    entry.append(side(str(rule.credit_account_code), amount, debit=False, partner=partner_id))
+    return Ok((str(rule.journal_code), entry))
 
 
 def validate_rule(rule: PostingRule, accounts: Mapping[str, Account], journal_codes: set[str]) -> Result[PostingRule]:

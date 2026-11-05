@@ -307,8 +307,11 @@ def test_a_sales_invoice_of_1000_50_is_settled_by_1000_and_not_stuck_on_50_cents
     assert (invoice["status"], invoice["amount_paid"], invoice["remaining"]) == ("paid", D("1000"), D("0"))
 
 
-def test_a_purchase_invoice_of_1000_50_is_settled_by_1000_and_not_stuck_on_50_cents(db, env):
-    invoice_id = _purchase_invoice(db, env, D("1000.50"))
+def test_a_purchase_invoice_entered_with_cents_is_due_in_whole_francs_and_settles(db, env):
+    # A purchase invoice's total is rounded to the franc when it is entered (F CFA has no cents), so
+    # 999.50 is due as 1000 and a whole-franc payment of 1000 settles it.
+    invoice_id = _purchase_invoice(db, env, D("999.50"))
+    assert PurchaseInvoiceService(db).get_invoice(tenant_id=TENANT, invoice_id=invoice_id).value["amount"] == D("1000")
     doc = _post(db, env, "out", [{"method": "cash", "amount": 1000, "account_id": env["cash"]}], [{"invoice_id": invoice_id, "amount": 1000}])
     assert isinstance(doc, Ok), doc
     _deliver(db, procurement_consumers, "treasury.disbursement.posted", doc.value["id"])

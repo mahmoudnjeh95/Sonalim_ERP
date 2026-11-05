@@ -674,6 +674,21 @@ class InvoicePaymentOrderRequest(BaseModel):
     note: str | None = None
 
 
+@router.get("/invoice-activity")
+def invoice_activity(direction: str, invoice_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    """What treasury did for one invoice -- its receipts or disbursements and, for a purchase invoice, its
+    payment orders -- so the invoice's own screen can show it without reading treasury's tables."""
+    if direction not in ("in", "out"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": "INVALID_DIRECTION", "message": "direction must be in or out",
+                                                          "message_fr": "le sens doit être in ou out"})
+    with get_connection() as connection:
+        orders = PaymentOrderService(connection).list_invoice_orders(tenant_id=tenant.tenant_id) if direction == "out" else []
+        return {
+            "documents": DocumentService(connection).payments_for_invoice(tenant_id=tenant.tenant_id, direction=direction, invoice_id=invoice_id),
+            "payment_orders": [o for o in orders if o["invoice_id"] == invoice_id],
+        }
+
+
 @router.get("/invoice-payment-orders")
 def list_invoice_payment_orders(tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
     with get_connection() as connection:

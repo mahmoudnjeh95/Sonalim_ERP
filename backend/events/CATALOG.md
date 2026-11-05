@@ -26,7 +26,8 @@
 | `finance.journal_entry.posted` | 1.0 | finance | — | `entry_id`, `journal_code`, `source_module`, `source_id` — an entry was posted to the ledger (manual entries have null source fields); fires once per entry, reversals included |
 | `procurement.purchase_order.status_changed` | 1.0 | procurement | — | `purchase_order_id`, `from_status`, `to_status` |
 | `procurement.purchase_order_receipt.confirmed` | 1.0 | procurement | warehouse | `purchase_order_receipt_id`, `purchase_order_id`, `location_id`, `lines` (`product_id`, `quantity`, `uom_id`, `lot_number`) |
-| `procurement.purchase_invoice.validated` | 1.0 | procurement | finance (ledger: purchase entry) | `invoice_id`, `partner_id`, `amount`, `currency`, `due_date` |
+| `procurement.purchase_invoice.validated` | 1.1 | procurement | finance (ledger: purchase entry) | `invoice_id`, `number`, `partner_id`, `amount` (total incl. tax), `total_excl_tax`, `total_vat`, `lines` (`product_id`, `net` excl. tax), `currency`, `due_date` — 1.1 added `number`, the totals and `lines`; a 1.0 event posts `amount` without VAT |
+| `procurement.purchase_credit_note.validated` | 1.0 | procurement | finance (ledger: mirror of the purchase entry) | `credit_note_id`, `number`, `invoice_id`, `partner_id`, `amount` (incl. tax), `total_excl_tax`, `total_vat`, `lines` (`product_id`, `net`), `currency` |
 | `procurement.purchase_invoice.cancelled` | 1.0 | procurement | finance (ledger: reverses the purchase entry) | `invoice_id`, `partner_id`, `amount`, `currency` |
 | `treasury.receipt.posted` | 1.0 | treasury | finance (invoices and ledger, when enabled) | `receipt_id`, `partner_id`, `allocations` (`invoice_id`, `amount`), `total`, `currency` |
 | `treasury.receipt.cancelled` | 1.0 | treasury | finance (invoices and ledger, when enabled) | `receipt_id`, `allocations` (`invoice_id`, `amount`) |

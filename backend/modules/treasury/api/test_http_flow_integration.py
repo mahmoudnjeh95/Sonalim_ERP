@@ -208,11 +208,11 @@ def test_purchase_invoice_over_http(api, db):
     db.execute("INSERT INTO core.partners (id, tenant_id, name, kind, status) VALUES (%s, %s, 'Fournisseur', 'supplier', 'active')", (supplier, TENANT))
     created = _ok(api.post("/procurement/purchase-invoices", json={
         "partner_id": supplier, "supplier_invoice_number": "H-1", "invoice_date": TODAY, "amount": "100",
-        "lines": [{"description": "Film", "quantity": "2", "unit_price": "50"}]}), 201)
+        "lines": [{"description": "Film", "quantity": "2", "unit_price": "50", "vat_rate": "0"}]}), 201)
     assert created["status"] == "draft" and created["lines"][0]["description"] == "Film"
     mismatch = api.post("/procurement/purchase-invoices", json={
         "partner_id": supplier, "supplier_invoice_number": "H-2", "invoice_date": TODAY, "amount": "100",
-        "lines": [{"description": "Film", "quantity": "1", "unit_price": "10"}]})
+        "lines": [{"description": "Film", "quantity": "1", "unit_price": "10", "vat_rate": "0"}]})
     assert mismatch.status_code == 400 and mismatch.json()["detail"]["code"] == "TOTAL_MISMATCH"
     validated = _ok(api.post(f"/procurement/purchase-invoices/{created['id']}/validate"))
     assert validated["number"].startswith("FA-") and validated["remaining"] == "100.00"

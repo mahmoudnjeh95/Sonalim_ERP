@@ -45,11 +45,12 @@ export interface AccountingPeriod {
   closed_at: string | null;
 }
 
-export const RULE_SOURCES = ["payroll", "invoice"] as const;
+export const RULE_SOURCES = ["payroll", "invoice", "purchase_invoice"] as const;
 export type RuleSource = (typeof RULE_SOURCES)[number];
 export const RULE_KINDS: Record<RuleSource, readonly string[]> = {
   payroll: ["earning", "deduction", "employee_contribution", "employer_contribution", "employer_charge", "tax", "net", "payment"],
   invoice: ["issued", "paid"],
+  purchase_invoice: ["validated", "vat"],
 };
 export type RuleStatus = "to_confirm" | "confirmed";
 

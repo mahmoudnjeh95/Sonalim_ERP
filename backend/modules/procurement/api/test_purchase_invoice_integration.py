@@ -50,7 +50,7 @@ def test_draft_with_and_without_lines(db, env):
     plain = _draft(service, env, "F-001")
     assert isinstance(plain, Ok) and plain.value["status"] == "draft" and plain.value["number"] is None
     with_lines = _draft(
-        service, env, "F-002", lines=[{"description": "Film", "quantity": 2, "unit_price": 500}],
+        service, env, "F-002", lines=[{"description": "Film", "quantity": 2, "unit_price": 500, "vat_rate": 0}],
     )
     assert isinstance(with_lines, Ok)
     assert len(service.list_lines(tenant_id=TENANT, invoice_id=with_lines.value["id"])) == 1

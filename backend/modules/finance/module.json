@@ -20,6 +20,7 @@
     "finance.invoice.paid",
     "procurement.purchase_invoice.validated",
     "procurement.purchase_invoice.cancelled",
+    "procurement.purchase_credit_note.validated",
     "treasury.receipt.posted",
     "treasury.receipt.cancelled",
     "treasury.instrument.unpaid",

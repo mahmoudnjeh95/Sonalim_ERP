@@ -37,6 +37,7 @@ import {
 export const SOURCE_KEYS: Record<RuleSource, TranslationKey> = {
   payroll: "finance.rules.source.payroll",
   invoice: "finance.rules.source.invoice",
+  purchase_invoice: "finance.rules.source.purchase_invoice",
 };
 
 export const KIND_KEYS: Record<string, TranslationKey> = {
@@ -50,6 +51,8 @@ export const KIND_KEYS: Record<string, TranslationKey> = {
   payment: "finance.rules.kind.payment",
   issued: "finance.rules.kind.issued",
   paid: "finance.rules.kind.paid",
+  validated: "finance.rules.kind.validated",
+  vat: "finance.rules.kind.vat",
 };
 
 export function kindLabel(t: (key: TranslationKey) => string, kind: string): string {
