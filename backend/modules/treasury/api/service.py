@@ -16,7 +16,8 @@ from modules.treasury.domain.money import check_currency, check_whole
 # The manual's offsets, in days relative to the due date. Used until a tenant saves its own;
 # nothing is seeded per tenant because the tenant ids do not exist when the migration runs.
 DEFAULT_ALERT_OFFSETS: dict[tuple[str, str], int] = {
-    ("in", "cheque"): 1,
+    # The manual: "le jour même ou un jour après", so the alert is up from the due date itself.
+    ("in", "cheque"): 0,
     ("in", "draft"): 15,
     ("out", "cheque"): -1,
     ("out", "draft"): -15,
@@ -24,14 +25,18 @@ DEFAULT_ALERT_OFFSETS: dict[tuple[str, str], int] = {
 
 SETTING_DEFAULTS: dict[str, Any] = {
     "cash_payment_limit": None,
-    "prior_year_invoice_cutoff": None,
+    # The manual's "jusqu'au 16 mars de l'année suivante", as MM-DD; null removes the date limit.
+    "prior_year_invoice_cutoff": "03-16",
+    # The manual's deposit slip: a receipt's payments stay pending until they are marked collected, and only
+    # then does the account move. Off, cash, transfers and mobile money reach the account at once.
+    "receipts_collect_on_slip": True,
     # Off until the accountant has confirmed the posting rules and every treasury account's ledger code.
     "ledger_posting_enabled": False,
 }
 
 ACCOUNT_COLUMNS = (
     "id, kind, name, currency, account_number, iban, branch_id, operator, phone, opening_balance, "
-    "balance, allow_overdraft, ledger_account_code, is_active"
+    "balance, allow_overdraft, ledger_account_code, is_active, cash_type"
 )
 
 
@@ -111,6 +116,47 @@ class BankService:
         return Ok({"id": branch_id, "bank_id": bank_id, "name": name, "city": city, "address": address, "phone": phone})
 
 
+    def update_bank(self, *, tenant_id: str, actor_id: str, bank_id: str, changes: dict[str, Any]) -> Result[dict[str, Any]]:
+        row = self._connection.execute(
+            "SELECT name, code, swift, country, is_active FROM treasury.banks WHERE id = %s AND tenant_id = %s FOR UPDATE", (bank_id, tenant_id)
+        ).fetchone()
+        if row is None:
+            return _not_found("bank", bank_id)
+        merged = {**dict(zip(("name", "code", "swift", "country", "is_active"), row, strict=True)), **changes}
+        if not (merged["name"] or "").strip():
+            return Err("BANK_NAME_REQUIRED", "a bank needs a name", "une banque doit avoir un nom")
+        taken = self._connection.execute(
+            "SELECT 1 FROM treasury.banks WHERE tenant_id = %s AND lower(name) = lower(%s) AND id <> %s", (tenant_id, merged["name"], bank_id)
+        ).fetchone()
+        if taken:
+            return Err("BANK_DUPLICATE", "a bank with this name already exists", "une banque porte déjà ce nom")
+        self._connection.execute(
+            "UPDATE treasury.banks SET name = %s, code = %s, swift = %s, country = %s WHERE id = %s AND tenant_id = %s",
+            (merged["name"], merged["code"], merged["swift"], merged["country"], bank_id, tenant_id),
+        )
+        record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.bank.updated",
+                     entity_type="bank", entity_id=bank_id, payload={k: str(v) for k, v in changes.items()})
+        return Ok({"id": bank_id, **merged})
+
+    def update_branch(self, *, tenant_id: str, actor_id: str, branch_id: str, changes: dict[str, Any]) -> Result[dict[str, Any]]:
+        row = self._connection.execute(
+            "SELECT bank_id, name, city, address, phone FROM treasury.bank_branches WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            (branch_id, tenant_id),
+        ).fetchone()
+        if row is None:
+            return _not_found("branch", branch_id)
+        merged = {**dict(zip(("bank_id", "name", "city", "address", "phone"), row, strict=True)), **changes}
+        if not (merged["name"] or "").strip():
+            return Err("BRANCH_NAME_REQUIRED", "a branch needs a name", "une agence doit avoir un nom")
+        self._connection.execute(
+            "UPDATE treasury.bank_branches SET name = %s, city = %s, address = %s, phone = %s WHERE id = %s AND tenant_id = %s",
+            (merged["name"], merged["city"], merged["address"], merged["phone"], branch_id, tenant_id),
+        )
+        record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.branch.updated",
+                     entity_type="bank_branch", entity_id=branch_id, payload={k: str(v) for k, v in changes.items()})
+        return Ok({"id": branch_id, **merged})
+
+
 class AccountService:
     def __init__(self, connection: psycopg.Connection) -> None:
         self._connection = connection
@@ -147,6 +193,9 @@ class AccountService:
         money = _check_account_money(fields["currency"], fields.get("opening_balance") or 0)
         if isinstance(money, Err):
             return money
+        cash_type = _check_cash_type(kind, fields.get("cash_type"))
+        if isinstance(cash_type, Err):
+            return cash_type
         taken = self._number_taken(tenant_id, fields.get("account_number"), fields.get("iban"), exclude_id=None)
         if taken:
             return taken
@@ -159,12 +208,12 @@ class AccountService:
             """
             INSERT INTO treasury.accounts
                 (id, tenant_id, kind, name, currency, account_number, iban, branch_id, operator, phone,
-                 opening_balance, balance, allow_overdraft, ledger_account_code)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 opening_balance, balance, allow_overdraft, ledger_account_code, cash_type)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (account_id, tenant_id, kind, fields["name"], fields["currency"], fields.get("account_number"),
              fields.get("iban"), fields.get("branch_id"), fields.get("operator"), fields.get("phone"),
-             opening, opening, bool(fields.get("allow_overdraft", False)), fields.get("ledger_account_code")),
+             opening, opening, bool(fields.get("allow_overdraft", False)), fields.get("ledger_account_code"), cash_type.value),
         )
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.account.created",
                      entity_type="treasury_account", entity_id=account_id,
@@ -196,6 +245,9 @@ class AccountService:
         money = _check_account_money(merged["currency"], merged["opening_balance"])
         if isinstance(money, Err):
             return money
+        cash_type = _check_cash_type(account["kind"], merged.get("cash_type"))
+        if isinstance(cash_type, Err):
+            return cash_type
         taken = self._number_taken(tenant_id, merged.get("account_number"), merged.get("iban"), exclude_id=account_id)
         if taken:
             return taken
@@ -207,12 +259,12 @@ class AccountService:
             """
             UPDATE treasury.accounts SET name = %s, currency = %s, account_number = %s, iban = %s, branch_id = %s,
                 operator = %s, phone = %s, opening_balance = %s, balance = %s, allow_overdraft = %s,
-                ledger_account_code = %s, is_active = %s
+                ledger_account_code = %s, is_active = %s, cash_type = %s
             WHERE id = %s AND tenant_id = %s
             """,
             (merged["name"], merged["currency"], merged.get("account_number"), merged.get("iban"), merged.get("branch_id"),
              merged.get("operator"), merged.get("phone"), opening, balance, merged["allow_overdraft"],
-             merged.get("ledger_account_code"), merged["is_active"], account_id, tenant_id),
+             merged.get("ledger_account_code"), merged["is_active"], cash_type.value, account_id, tenant_id),
         )
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.account.updated",
                      entity_type="treasury_account", entity_id=account_id,
@@ -318,11 +370,31 @@ class AccountMovementService:
         return Ok(moved.value)
 
 
+def _check_cash_type(kind: str, cash_type: str | None) -> Result[str | None]:
+    """A cash register is principal unless it says otherwise; other accounts have no such type."""
+    if kind != "cash":
+        return Ok(None)
+    if cash_type is None:
+        return Ok("principal")
+    if cash_type not in ("principal", "secondary"):
+        return Err("INVALID_CASH_TYPE", f"unknown cash register type {cash_type}", f"type de caisse inconnu {cash_type}")
+    return Ok(cash_type)
+
+
 def _check_account_money(currency: str, opening_balance: Any) -> Result[None]:
     checked = check_currency(currency)
     if isinstance(checked, Err):
         return checked
     return check_whole(Decimal(str(opening_balance)))
+
+
+def _valid_month_day(value: Any) -> bool:
+    try:
+        # 2024 is a leap year, so 02-29 is accepted as a real date.
+        datetime.datetime.strptime(f"2024-{value}", "%Y-%m-%d")
+    except (TypeError, ValueError):
+        return False
+    return True
 
 
 class SettingsService:
@@ -338,8 +410,10 @@ class SettingsService:
     def set_setting(self, *, tenant_id: str, actor_id: str, key: str, value: Any) -> Result[None]:
         if key not in SETTING_DEFAULTS:
             return Err("UNKNOWN_SETTING", f"unknown treasury setting {key}", f"paramètre de trésorerie inconnu {key}")
-        if key == "ledger_posting_enabled" and not isinstance(value, bool):
-            return Err("INVALID_SETTING", "ledger_posting_enabled must be true or false", "ledger_posting_enabled doit valoir vrai ou faux")
+        if key in ("ledger_posting_enabled", "receipts_collect_on_slip") and not isinstance(value, bool):
+            return Err("INVALID_SETTING", f"{key} must be true or false", f"{key} doit valoir vrai ou faux")
+        if key == "prior_year_invoice_cutoff" and value is not None and not _valid_month_day(value):
+            return Err("INVALID_SETTING", "the prior-year cutoff must be a date as MM-DD", "la date limite doit être au format MM-JJ")
         if key == "cash_payment_limit" and value is not None and Decimal(str(value)) <= 0:
             return Err("INVALID_SETTING", "the cash payment limit must be positive or empty", "le plafond d'espèces doit être positif ou vide")
         if key == "cash_payment_limit" and value is not None:

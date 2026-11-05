@@ -32,6 +32,35 @@ export interface TreasuryNotification {
   created_at: string;
 }
 
+export interface InvoicePaymentOrder {
+  id: string;
+  number: string;
+  order_date: string;
+  due_date: string;
+  method: string;
+  partner_id: string;
+  partner_name: string;
+  invoice_id: string;
+  invoice_number: string | null;
+  supplier_invoice_number: string | null;
+  invoice_date: string | null;
+  amount: string | null;
+  remaining: string | null;
+  currency: string | null;
+  employee_user_id: string;
+  employee_email: string;
+  department: string | null;
+  note: string | null;
+}
+
+export const listInvoicePaymentOrders = (token: string) => apiFetch<InvoicePaymentOrder[]>("/treasury/invoice-payment-orders", { token });
+export const createInvoicePaymentOrder = (
+  token: string,
+  body: { order_date: string; due_date: string; method: string; invoice_id: string; employee_user_id: string; department?: string; note?: string },
+) => apiFetch<InvoicePaymentOrder>("/treasury/invoice-payment-orders", { method: "POST", token, body });
+export const notifyInvoicePaymentOrder = (token: string, orderId: string, userId: string) =>
+  apiFetch<{ id: string }>(`/treasury/invoice-payment-orders/${orderId}/notify`, { method: "POST", token, body: { user_id: userId } });
+
 export const listPaymentOrders = (token: string) => apiFetch<PaymentOrderSummary[]>("/treasury/payment-orders", { token });
 export const getPaymentOrder = (token: string, id: string) => apiFetch<PaymentOrder>(`/treasury/payment-orders/${id}`, { token });
 export const createPaymentOrder = (token: string, disbursementId: string) =>

@@ -40,6 +40,14 @@ def transition(invoice: Invoice, new_status: str) -> Result[Invoice]:
     )
 
 
+def check_new_invoice_currency(currency: str) -> Result[None]:
+    """Invoices are in XOF (F CFA). One that already exists in another currency keeps it; it just cannot gain one."""
+    if currency != "XOF":
+        return Err("INVOICE_CURRENCY_NOT_XOF", f"invoices are in XOF (F CFA), not {currency}",
+                   f"les factures sont en XOF (F CFA), pas en {currency}")
+    return Ok(None)
+
+
 def status_for_payment(amount: float, amount_paid: float) -> str:
     """The status an issued invoice has once `amount_paid` has been applied to it. Treasury pays in
     whole francs, so what is left under one franc of an amount with cents can never be paid: settled."""

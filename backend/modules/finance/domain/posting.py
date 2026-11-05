@@ -28,7 +28,7 @@ PAYMENT_METHODS = ("bank", "mobile_money", "cash")
 RULE_KINDS: dict[str, tuple[str, ...]] = {
     "payroll": PAYROLL_LINE_KINDS + ("payment",),
     "invoice": ("issued", "paid"),
-    "treasury": ("receipt_payment", "receipt_advance", "disbursement_payment", "disbursement_advance", "instrument_collected", "instrument_unpaid", "instrument_rejection_fee"),
+    "treasury": ("receipt_payment", "receipt_advance", "receipt_withheld", "disbursement_payment", "disbursement_advance", "disbursement_withheld", "instrument_collected", "instrument_unpaid", "instrument_rejection_fee"),
 }
 SELF_CONTAINED_KINDS = {("payroll", "payment"), ("invoice", "issued"), ("invoice", "paid")}
 RULE_STATUSES = ("to_confirm", "confirmed")

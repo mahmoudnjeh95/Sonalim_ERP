@@ -18,6 +18,14 @@ PAYABLE_STATUSES = {"validated", "partially_paid"}
 LINES_TOLERANCE = Decimal("0.01")
 
 
+def check_new_invoice_currency(currency: str) -> Result[None]:
+    """Purchase invoices are in XOF (F CFA); treasury cannot settle anything else."""
+    if currency != "XOF":
+        return Err("INVOICE_CURRENCY_NOT_XOF", f"purchase invoices are in XOF (F CFA), not {currency}",
+                   f"les factures d'achat sont en XOF (F CFA), pas en {currency}")
+    return Ok(None)
+
+
 def check_transition(current: str, target: str) -> Result[None]:
     if target not in MANUAL_TRANSITIONS.get(current, set()):
         return Err(

@@ -138,3 +138,30 @@ def test_the_rule_validator_knows_the_treasury_source():
     assert isinstance(bad, Err) and bad.code == "INVALID_POSTING_RULE"
     unknown = validate_rule(rule("nonsense", "*", credit="411"), accounts, {"BNQ"})
     assert isinstance(unknown, Err) and unknown.code == "INVALID_POSTING_RULE"
+
+
+def test_what_the_customer_withheld_is_booked_by_its_own_rule():
+    rules = [*RECEIPT_RULES, rule("receipt_withheld", "*", debit="4449", credit="411")]
+    result = document_entries(
+        "in", payments=[{"method": "transfer", "amount": D("900"), "account_id": "a", "ledger_account_code": "521"}], unallocated="0",
+        partner_id="p", currency="XOF", label="L", rules=rules, withheld=D("100"),
+    )
+    entry = next(e for e in result.value if e.suffix == "withheld")
+    assert [(line.account_code, line.debit, line.credit) for line in entry.lines] == [("4449", D("100"), D("0")), ("411", D("0"), D("100"))]
+    assert entry.lines[1].partner_id == "p"
+
+
+def test_a_withheld_amount_with_no_rule_refuses_the_posting():
+    result = document_entries(
+        "in", payments=[{"method": "transfer", "amount": D("900"), "account_id": "a", "ledger_account_code": "521"}], unallocated="0",
+        partner_id="p", currency="XOF", label="L", rules=RECEIPT_RULES, withheld=D("100"),
+    )
+    assert result.code == "POSTING_RULE_MISSING"
+
+
+def test_a_cash_payment_waiting_on_the_slip_debits_the_holding_account():
+    result = document_entries(
+        "in", payments=[{"method": "cash", "amount": D("100"), "account_id": None, "ledger_account_code": None}], unallocated="0",
+        partner_id="p", currency="XOF", label="L", rules=[rule("receipt_payment", "*", debit="5112", credit="411")],
+    )
+    assert [line.account_code for line in result.value[0].lines] == ["5112", "411"]

@@ -70,14 +70,31 @@ export const setLinePartner = (token: string, lineId: string, partnerId: string 
 export const matchLine = (token: string, lineId: string, paymentId: string | null) =>
   apiFetch<StatementLine>(`/treasury/statements/lines/${lineId}/match`, { method: "PATCH", token, body: { payment_id: paymentId } });
 
-export const getInvoiceReport = (token: string, kind: "sales" | "purchase") =>
-  apiFetch<{ partners: PartnerPosition[] }>(`/treasury/reports/${kind === "sales" ? "sales-invoices" : "purchase-invoices"}`, { token });
+export interface ReportInvoice {
+  invoice_id: string;
+  number: string | null;
+  invoice_date: string;
+  amount: string;
+  paid: string;
+  remaining: string;
+  status: string;
+}
 
-export async function downloadInvoiceReport(token: string, kind: "sales" | "purchase", format: "csv" | "xlsx"): Promise<Blob> {
+export interface ReportPartnerGroup {
+  partner_id: string;
+  partner_name: string | null;
+  documents: { document_id: string; number: string; net_to_pay: string; withheld: string; invoices: ReportInvoice[] }[];
+  without_document: ReportInvoice[];
+}
+
+export const getInvoiceReport = (token: string, kind: "sales" | "purchase") =>
+  apiFetch<{ partners: PartnerPosition[]; groups: ReportPartnerGroup[] }>(`/treasury/reports/${kind === "sales" ? "sales-invoices" : "purchase-invoices"}`, { token });
+
+export async function downloadInvoiceReport(token: string, kind: "sales" | "purchase", format: "csv" | "xlsx", lang: string): Promise<Blob> {
   let response: Response;
   try {
     response = await fetch(
-      `${API_BASE_URL}/treasury/reports/${kind === "sales" ? "sales-invoices" : "purchase-invoices"}?format=${format}`,
+      `${API_BASE_URL}/treasury/reports/${kind === "sales" ? "sales-invoices" : "purchase-invoices"}?format=${format}&lang=${lang}`,
       { headers: { Authorization: `Bearer ${token}` } },
     );
   } catch {

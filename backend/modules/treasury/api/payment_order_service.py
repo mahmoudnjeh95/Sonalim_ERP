@@ -104,6 +104,96 @@ class PaymentOrderService:
                      entity_type="payment_order", entity_id=order_id, payload={"user_id": user_id})
         return Ok({"id": notification_id})
 
+    # ---- ordres de paiement: a request to pay a purchase invoice, before any disbursement ----------
+
+    def create_invoice_order(self, *, tenant_id: str, actor_id: str, order_date: datetime.date, due_date: datetime.date,
+                             method: str, invoice_id: str, employee_user_id: str, department: str | None = None,
+                             note: str | None = None) -> Result[dict[str, Any]]:
+        from modules.procurement.api.invoice_service import PurchaseInvoiceService
+        from modules.treasury.domain.allocation import METHODS
+
+        if method not in METHODS:
+            return Err("INVALID_METHOD", f"unknown payment method {method}", f"mode de paiement inconnu {method}")
+        if due_date < order_date:
+            return Err("INVALID_DUE_DATE", "the payment due date cannot be before the order date",
+                       "la date d'échéance de paiement ne peut pas précéder la date de l'ordre")
+        invoice = PurchaseInvoiceService(self._connection).get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+        if isinstance(invoice, Err):
+            return invoice
+        if invoice.value["status"] not in ("validated", "partially_paid"):
+            return Err("INVOICE_NOT_VALIDATED", "this invoice is not open for payment", "cette facture n'est pas ouverte au paiement")
+        if self._connection.execute("SELECT 1 FROM core.users WHERE id = %s AND tenant_id = %s", (employee_user_id, tenant_id)).fetchone() is None:
+            return Err("NOT_FOUND", f"user {employee_user_id} not found", f"utilisateur {employee_user_id} introuvable")
+        order_id = str(ULID())
+        row = self._connection.execute(
+            """
+            INSERT INTO treasury.document_counters (tenant_id, direction, year, last_number) VALUES (%s, 'ordp', %s, 1)
+            ON CONFLICT (tenant_id, direction, year)
+            DO UPDATE SET last_number = treasury.document_counters.last_number + 1
+            RETURNING last_number
+            """,
+            (tenant_id, order_date.year),
+        ).fetchone()
+        number = f"ORDP-{order_date.year}-{row[0]:06d}"
+        self._connection.execute(
+            "INSERT INTO treasury.invoice_payment_orders (id, tenant_id, number, order_date, due_date, method, partner_id, "
+            "invoice_id, employee_user_id, department, note, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (order_id, tenant_id, number, order_date, due_date, method, invoice.value["partner_id"], invoice_id,
+             employee_user_id, department, note, actor_id),
+        )
+        record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.invoice_payment_order.created",
+                     entity_type="invoice_payment_order", entity_id=order_id, payload={"number": number, "invoice_id": invoice_id})
+        return self.get_invoice_order(tenant_id=tenant_id, order_id=order_id)
+
+    def _invoice_order_dict(self, tenant_id: str, row: tuple) -> dict[str, Any]:
+        from modules.procurement.api.invoice_service import PurchaseInvoiceService
+
+        keys = ["id", "number", "order_date", "due_date", "method", "partner_id", "invoice_id", "employee_user_id",
+                "department", "note", "created_at", "employee_email", "partner_name"]
+        order = dict(zip(keys, row, strict=True))
+        invoice = PurchaseInvoiceService(self._connection).get_invoice(tenant_id=tenant_id, invoice_id=order["invoice_id"])
+        if not isinstance(invoice, Err):
+            order.update({"invoice_number": invoice.value["number"], "supplier_invoice_number": invoice.value["supplier_invoice_number"],
+                          "invoice_date": invoice.value["invoice_date"], "amount": invoice.value["amount"],
+                          "remaining": invoice.value["remaining"], "currency": invoice.value["currency"]})
+        return order
+
+    _INVOICE_ORDER_SELECT = (
+        "SELECT o.id, o.number, o.order_date, o.due_date, o.method, o.partner_id, o.invoice_id, o.employee_user_id, "
+        "o.department, o.note, o.created_at, u.email, p.name FROM treasury.invoice_payment_orders o "
+        "JOIN core.users u ON u.id = o.employee_user_id JOIN core.partners p ON p.id = o.partner_id "
+    )
+
+    def get_invoice_order(self, *, tenant_id: str, order_id: str) -> Result[dict[str, Any]]:
+        row = self._connection.execute(self._INVOICE_ORDER_SELECT + "WHERE o.id = %s AND o.tenant_id = %s", (order_id, tenant_id)).fetchone()
+        if row is None:
+            return Err("NOT_FOUND", f"payment order {order_id} not found", f"ordre de paiement {order_id} introuvable")
+        return Ok(self._invoice_order_dict(tenant_id, row))
+
+    def list_invoice_orders(self, *, tenant_id: str) -> list[dict[str, Any]]:
+        rows = self._connection.execute(
+            self._INVOICE_ORDER_SELECT + "WHERE o.tenant_id = %s ORDER BY o.order_date DESC, o.number DESC", (tenant_id,)
+        ).fetchall()
+        return [self._invoice_order_dict(tenant_id, r) for r in rows]
+
+    def notify_invoice_order(self, *, tenant_id: str, actor_id: str, order_id: str, user_id: str) -> Result[dict[str, Any]]:
+        order = self.get_invoice_order(tenant_id=tenant_id, order_id=order_id)
+        if isinstance(order, Err):
+            return order
+        if self._connection.execute("SELECT 1 FROM core.users WHERE id = %s AND tenant_id = %s", (user_id, tenant_id)).fetchone() is None:
+            return Err("NOT_FOUND", f"user {user_id} not found", f"utilisateur {user_id} introuvable")
+        number = order.value["number"]
+        notification_id = str(ULID())
+        self._connection.execute(
+            "INSERT INTO treasury.user_notifications (id, tenant_id, user_id, kind, ref_id, message_en, message_fr, created_by) "
+            "VALUES (%s, %s, %s, 'invoice_payment_order', %s, %s, %s, %s)",
+            (notification_id, tenant_id, user_id, order_id, f"Payment order {number} is waiting for you",
+             f"L'ordre de paiement {number} vous attend", actor_id),
+        )
+        record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.invoice_payment_order.notified",
+                     entity_type="invoice_payment_order", entity_id=order_id, payload={"user_id": user_id})
+        return Ok({"id": notification_id})
+
     def notifications(self, *, tenant_id: str, user_id: str, include_read: bool = False) -> list[dict[str, Any]]:
         clause = "" if include_read else " AND read_at IS NULL"
         rows = self._connection.execute(

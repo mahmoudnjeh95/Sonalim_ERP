@@ -11,6 +11,7 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.procurement.domain.purchase_invoice import (
+    check_new_invoice_currency,
     PAYABLE_STATUSES,
     check_lines_total,
     check_payment_delta,
@@ -124,6 +125,9 @@ class PurchaseInvoiceService:
         note: str | None = None,
         lines: list[dict] | None = None,
     ) -> Result[dict[str, Any]]:
+        currency_checked = check_new_invoice_currency(currency)
+        if isinstance(currency_checked, Err):
+            return currency_checked
         lines = lines or []
         checked = self._check_lines(amount, lines)
         if isinstance(checked, Err):
@@ -159,6 +163,10 @@ class PurchaseInvoiceService:
 
         allowed = {"partner_id", "supplier_invoice_number", "purchase_order_id", "invoice_date", "due_date", "currency", "amount", "note"}
         values = {k: v for k, v in changes.items() if k in allowed}
+        if "currency" in values and values["currency"] != current["currency"]:
+            currency_checked = check_new_invoice_currency(values["currency"])
+            if isinstance(currency_checked, Err):
+                return currency_checked
         lines = changes.get("lines")
         amount = values.get("amount", current["amount"])
         if lines is not None:

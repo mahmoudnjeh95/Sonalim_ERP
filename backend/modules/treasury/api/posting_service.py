@@ -31,9 +31,10 @@ class TreasuryPostingService:
 
     def document_lines(self, *, tenant_id: str, document_id: str) -> Result[dict[str, Any]]:
         """A posted receipt or disbursement: one line per payment with the ledger code of the account it
-        moved, plus the part not tied to any invoice (an advance), which the ledger books differently."""
+        moved, plus the part not tied to any invoice (an advance), which the ledger books differently. A
+        payment waiting on the deposit slip has moved no account yet, so it reads like a cheque: no account."""
         head = self._connection.execute(
-            "SELECT direction, number, partner_id, doc_date, currency, status, unallocated "
+            "SELECT direction, number, partner_id, doc_date, currency, status, unallocated, withheld_amount "
             "FROM treasury.documents WHERE id = %s AND tenant_id = %s",
             (document_id, tenant_id),
         ).fetchone()
@@ -41,8 +42,11 @@ class TreasuryPostingService:
             return Err("NOT_FOUND", f"document {document_id} not found", f"document {document_id} introuvable")
         payments = self._connection.execute(
             """
-            SELECT p.id, p.method, p.amount, p.account_id, a.ledger_account_code, a.kind
-            FROM treasury.document_payments p LEFT JOIN treasury.accounts a ON a.id = p.account_id
+            SELECT p.id, p.method, p.amount, CASE WHEN i.id IS NULL THEN p.account_id END,
+                   CASE WHEN i.id IS NULL THEN a.ledger_account_code END, a.kind
+            FROM treasury.document_payments p
+            LEFT JOIN treasury.accounts a ON a.id = p.account_id
+            LEFT JOIN treasury.instruments i ON i.payment_id = p.id
             WHERE p.document_id = %s ORDER BY p.id
             """,
             (document_id,),
@@ -50,7 +54,7 @@ class TreasuryPostingService:
         keys = ["payment_id", "method", "amount", "account_id", "ledger_account_code", "account_kind"]
         return Ok({
             "direction": head[0], "number": head[1], "partner_id": head[2], "date": head[3], "currency": head[4],
-            "status": head[5], "unallocated": head[6],
+            "status": head[5], "unallocated": head[6], "withheld": head[7],
             "payments": [dict(zip(keys, p, strict=True)) for p in payments],
         })
 

@@ -13,6 +13,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { EmptyState } from "../../components/patterns/EmptyState";
 import { listPartners } from "../partners/api";
+import { InvoicePaymentOrdersCard } from "./InvoicePaymentOrdersCard";
 import { getPaymentOrder, listNotifiableUsers, listPaymentOrders, notifyPaymentOrder } from "./paymentOrdersApi";
 
 const money = (value: string, currency: string) => {
@@ -48,7 +49,8 @@ export function PaymentOrdersTab() {
   });
 
   return (
-    <>
+    <div className="space-y-6">
+      <InvoicePaymentOrdersCard />
       <Card>
         <CardHeader>
           <CardTitle>{t("treasury.order.title")}</CardTitle>
@@ -150,6 +152,6 @@ export function PaymentOrdersTab() {
           )}
         </DialogContent>
       </Dialog>
-    </>
+    </div>
   );
 }

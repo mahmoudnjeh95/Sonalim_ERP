@@ -9,7 +9,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
-from modules.finance.domain.entities import Invoice, status_for_payment, transition
+from modules.finance.domain.entities import Invoice, check_new_invoice_currency, status_for_payment, transition
 
 
 class InvoiceService:
@@ -165,6 +165,10 @@ class InvoiceService:
         )
         if updated.amount < 0:
             return Err("INVALID_AMOUNT", "amount cannot be negative", "le montant ne peut pas être négatif")
+        if updated.currency != current_currency:
+            currency_checked = check_new_invoice_currency(updated.currency)
+            if isinstance(currency_checked, Err):
+                return currency_checked
 
         self._connection.execute(
             "UPDATE finance.invoices SET partner_id = %s, amount = %s, currency = %s WHERE id = %s AND tenant_id = %s",

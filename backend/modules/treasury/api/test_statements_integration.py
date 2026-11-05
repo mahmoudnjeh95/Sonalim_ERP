@@ -30,6 +30,8 @@ def b64(text: str) -> str:
 
 @pytest.fixture
 def env(db):
+    # These tests are about money reaching the account at once; the deposit slip has its own in test_manual_requirements_integration.
+    db.execute("INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, 'receipts_collect_on_slip', 'false') ON CONFLICT DO NOTHING", (TENANT,))
     actor, customer, supplier = (str(ULID()) for _ in range(3))
     db.execute("INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
                (actor, TENANT, f"{actor}@test.local"))

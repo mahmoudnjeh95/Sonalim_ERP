@@ -12,6 +12,9 @@ Rule shapes (code = payment method, direction for instrument kinds, or '*' as th
                         cheque or draft (effets à payer)
   receipt_advance /     self-contained: the part of a document tied to no invoice moves from the
   disbursement_advance  customer/supplier account to the advance account
+  receipt_withheld /    self-contained: what the partner kept back settles the invoice without moving money.
+  disbursement_withheld in: debit = the withheld-tax receivable, credit = the customer account;
+                        out: debit = the supplier account, credit = the withheld-tax payable
   instrument_collected  in:  debit = the slip's account (its ledger code), credit = holding account
                         out: debit = holding account, credit = the slip's account
   instrument_unpaid     self-contained: in: debit customer, credit holding; out: debit holding, credit supplier
@@ -35,7 +38,8 @@ from modules.finance.domain.posting import WILDCARD, PostingRule, _amount, resol
 DIRECTION_NOUN = {"in": "receipt", "out": "disbursement"}
 METHODS = ("cash", "transfer", "mobile_money", "cheque", "draft")
 INSTRUMENT_KINDS = ("instrument_collected", "instrument_unpaid", "instrument_rejection_fee")
-RULE_KINDS = ("receipt_payment", "receipt_advance", "disbursement_payment", "disbursement_advance") + INSTRUMENT_KINDS
+RULE_KINDS = ("receipt_payment", "receipt_advance", "receipt_withheld", "disbursement_payment", "disbursement_advance",
+              "disbursement_withheld") + INSTRUMENT_KINDS
 
 
 @dataclass(frozen=True)
@@ -86,8 +90,10 @@ def document_entries(
     currency: str,
     label: str,
     rules: Iterable[PostingRule],
+    withheld: object = 0,
 ) -> Result[list[TreasuryEntry]]:
-    """One entry per payment method of a receipt or a disbursement, then one for its advance part."""
+    """One entry per payment method of a receipt or a disbursement, then one each for its advance and
+    withheld parts."""
     if currency != "XOF":
         return _not_xof(currency)
     rules = list(rules)
@@ -149,6 +155,27 @@ def document_entries(
                 [
                     EntryLine(rule.debit_account_code, debit=advance.value, label=label, partner_id=partner_id if on_debit else None),
                     EntryLine(rule.credit_account_code, credit=advance.value, label=label, partner_id=None if on_debit else partner_id),
+                ],
+            )
+        )
+    kept = _amount(withheld, code="withheld")
+    if isinstance(kept, Err):
+        return kept
+    if kept.value > ZERO:
+        resolved = resolve_rule(rules, source="treasury", source_kind=f"{noun}_withheld", code=WILDCARD)
+        if isinstance(resolved, Err):
+            return resolved
+        rule = resolved.value
+        if not (rule.debit_account_code and rule.credit_account_code and rule.journal_code):
+            return _incomplete(rule, "a debit account, a credit account and a journal")
+        customer_side = direction == "in"
+        entries.append(
+            TreasuryEntry(
+                "withheld",
+                str(rule.journal_code),
+                [
+                    EntryLine(rule.debit_account_code, debit=kept.value, label=label, partner_id=None if customer_side else partner_id),
+                    EntryLine(rule.credit_account_code, credit=kept.value, label=label, partner_id=partner_id if customer_side else None),
                 ],
             )
         )

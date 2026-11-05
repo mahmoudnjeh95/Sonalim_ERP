@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Banknote, Landmark, Undo2 } from "lucide-react";
+import { ArrowRight, Landmark, Undo2 } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { ApiError } from "../../lib/api";
@@ -11,17 +11,14 @@ import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Checkbox } from "../../components/ui/checkbox";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
-import { EmptyState } from "../../components/patterns/EmptyState";
 import { FilterTabs } from "../../components/patterns/FilterTabs";
-import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
 import { listAccounts } from "./api";
 import { listInstruments, markUnpaid, postDepositSlip, type Instrument } from "./instrumentsApi";
 
 type Key = Parameters<ReturnType<typeof useI18n>["t"]>[0];
-type StatusFilter = "all" | Instrument["status"];
+type Direction = Instrument["direction"];
 
 function money(value: string, currency: string) {
   try {
@@ -32,14 +29,24 @@ function money(value: string, currency: string) {
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
+const COLUMNS: Instrument["status"][] = ["pending", "collected", "unpaid"];
+// The account a payment may be collected into depends on how it was paid.
+const ACCOUNT_KINDS: Record<Instrument["method"], string[]> = {
+  cash: ["cash"],
+  transfer: ["bank"],
+  mobile_money: ["mobile_money"],
+  cheque: ["bank", "cash"],
+  draft: ["bank", "cash"],
+};
 
+/** The manual's deposit slip: payments in three columns, moved from pending to collected, and a cheque to unpaid. */
 export function InstrumentsTab() {
   const { session, hasPermission } = useAuth();
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
   const canCollect = hasPermission("treasury.collect_instruments");
-  const [filter, setFilter] = useState<StatusFilter>("pending");
+  const [direction, setDirection] = useState<Direction>("in");
   const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [slipOpen, setSlipOpen] = useState(false);
   const [accountId, setAccountId] = useState("");
@@ -48,29 +55,38 @@ export function InstrumentsTab() {
   const [feeAmount, setFeeAmount] = useState("");
   const [feeAccountId, setFeeAccountId] = useState("");
 
-  const { data: instruments = [], isLoading } = useQuery({ queryKey: ["treasury", "instruments"], queryFn: () => listInstruments(token) });
+  const { data: instruments = [] } = useQuery({ queryKey: ["treasury", "instruments"], queryFn: () => listInstruments(token) });
   const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
   const { data: accounts = [] } = useQuery({ queryKey: ["treasury", "accounts"], queryFn: () => listAccounts(token) });
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
 
-  const visible = filter === "all" ? instruments : instruments.filter((i) => i.status === filter);
-  const chosen = instruments.filter((i) => selected[i.id] && i.status === "pending");
+  const visible = instruments.filter((i) => i.direction === direction);
+  const chosen = visible.filter((i) => selected[i.id] && i.status === "pending");
+  const needsAccount = chosen.some((i) => !i.account_id);
+  const eligibleAccounts = accounts.filter((a) => a.is_active && chosen.every((i) => ACCOUNT_KINDS[i.method].includes(a.kind)));
+  const feeAccounts = accounts.filter((a) => (a.kind === "bank" || a.kind === "cash") && a.is_active);
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ["treasury", "instruments"] });
     queryClient.invalidateQueries({ queryKey: ["treasury", "accounts"] });
     queryClient.invalidateQueries({ queryKey: ["treasury", "alerts"] });
+    queryClient.invalidateQueries({ queryKey: ["treasury", "cash-journal"] });
   };
   const fail = (key: Key) => (error: unknown) =>
     toast.error(t(key), { description: error instanceof ApiError ? error.message : undefined });
 
   const slipMutation = useMutation({
-    mutationFn: (outcome: "collected" | "unpaid") =>
-      postDepositSlip(token, { account_id: accountId, slip_date: slipDate, items: chosen.map((i) => ({ instrument_id: i.id, outcome })) }),
+    mutationFn: () =>
+      postDepositSlip(token, {
+        account_id: accountId || undefined,
+        slip_date: slipDate,
+        items: chosen.map((i) => ({ instrument_id: i.id, outcome: "collected" as const })),
+      }),
     onSuccess: () => {
       refresh();
       setSlipOpen(false);
       setSelected({});
+      setAccountId("");
       toast.success(t("treasury.instruments.slipPosted"));
     },
     onError: fail("treasury.instruments.slipError"),
@@ -86,8 +102,6 @@ export function InstrumentsTab() {
     onError: fail("treasury.instruments.unpaidError"),
   });
 
-  const eligibleAccounts = accounts.filter((a) => (a.kind === "bank" || a.kind === "cash") && a.is_active);
-  const feeAccounts = eligibleAccounts;
   const feeEntered = feeAmount.trim() !== "";
   const feeValid = !feeEntered || (Number.isInteger(Number(feeAmount)) && Number(feeAmount) > 0 && feeAccountId !== "");
   const openUnpaid = (instrument: Instrument) => {
@@ -103,87 +117,89 @@ export function InstrumentsTab() {
           <div className="flex flex-wrap items-center gap-3">
             <CardTitle>{t("treasury.instruments.title")}</CardTitle>
             <FilterTabs
-              value={filter}
-              onChange={setFilter}
+              value={direction}
+              onChange={(value) => {
+                setDirection(value);
+                setSelected({});
+              }}
               options={[
-                { value: "pending", label: t("treasury.instruments.status.pending") },
-                { value: "collected", label: t("treasury.instruments.status.collected") },
-                { value: "unpaid", label: t("treasury.instruments.status.unpaid") },
-                { value: "all", label: t("common.all") },
+                { value: "in", label: t("treasury.tabs.receipts") },
+                { value: "out", label: t("treasury.tabs.disbursements") },
               ]}
             />
           </div>
           {canCollect && (
             <Button disabled={chosen.length === 0} onClick={() => setSlipOpen(true)}>
-              <Landmark className="h-4 w-4" />
-              {t("treasury.instruments.slip")} ({chosen.length})
+              <ArrowRight className="h-4 w-4" />
+              {t("treasury.instruments.collect")} ({chosen.length})
             </Button>
           )}
         </CardHeader>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead className="w-10" />
-                <TableHead>{t("treasury.instruments.column.instrument")}</TableHead>
-                <TableHead>{t("treasury.column.partner")}</TableHead>
-                <TableHead>{t("treasury.instruments.column.due")}</TableHead>
-                <TableHead className="text-right">{t("treasury.column.amount")}</TableHead>
-                <TableHead>{t("treasury.column.status")}</TableHead>
-                <TableHead className="text-right">{t("treasury.column.action")}</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading && <TableLoadingRow colSpan={7} />}
-              {!isLoading && visible.length === 0 && (
-                <TableRow>
-                  <TableCell colSpan={7} className="p-0">
-                    <EmptyState icon={<Banknote className="h-5 w-5" />} title={t("treasury.instruments.empty.title")} description={t("treasury.instruments.empty.description")} />
-                  </TableCell>
-                </TableRow>
-              )}
-              {visible.map((instrument) => {
-                const overdue = instrument.status === "pending" && instrument.due_date < today();
-                return (
-                  <TableRow key={instrument.id}>
-                    <TableCell>
-                      {instrument.status === "pending" && (
-                        <Checkbox
-                          checked={!!selected[instrument.id]}
-                          onCheckedChange={(value) => setSelected((s) => ({ ...s, [instrument.id]: value === true }))}
-                        />
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <span className="font-medium">{t(`treasury.method.${instrument.method}` as Key)} {instrument.number}</span>
-                      <span className="block text-xs text-muted-foreground">
-                        {t(instrument.direction === "in" ? "treasury.instruments.received" : "treasury.instruments.issued")} · {instrument.bank_name}
-                      </span>
-                    </TableCell>
-                    <TableCell>{partnerName(instrument.partner_id)}</TableCell>
-                    <TableCell className={overdue ? "font-medium text-destructive" : undefined}>{instrument.due_date}</TableCell>
-                    <TableCell className="text-right tabular-nums">{money(instrument.amount, instrument.currency)}</TableCell>
-                    <TableCell>
-                      {t(`treasury.instruments.status.${instrument.status}` as Key)}
-                      {instrument.rejection_fee && (
-                        <span className="block text-xs text-muted-foreground">
-                          {t("treasury.instruments.rejectionFee")} : {money(instrument.rejection_fee, instrument.currency)}
-                        </span>
-                      )}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {canCollect && instrument.method === "cheque" && (instrument.status === "collected" || instrument.status === "pending") && (
-                        <Button size="sm" variant="outline" onClick={() => openUnpaid(instrument)} disabled={unpaidMutation.isPending}>
-                          <Undo2 className="h-3.5 w-3.5" />
-                          {t("treasury.instruments.markUnpaid")}
-                        </Button>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                );
-              })}
-            </TableBody>
-          </Table>
+        <CardContent>
+          <p className="mb-3 text-sm text-muted-foreground">{t("treasury.instruments.boardHelp")}</p>
+          <div className="grid gap-4 lg:grid-cols-3">
+            {COLUMNS.map((column) => {
+              const items = visible.filter((i) => i.status === column);
+              return (
+                <section key={column} className="rounded-md border border-border" aria-label={t(`treasury.instruments.status.${column}` as Key)}>
+                  <h3 className="border-b border-border px-3 py-2 text-center text-sm font-semibold">
+                    {t(`treasury.instruments.status.${column}` as Key)} ({items.length})
+                  </h3>
+                  <ul className="max-h-[32rem] divide-y divide-border overflow-y-auto">
+                    {items.length === 0 && <li className="px-3 py-6 text-center text-sm text-muted-foreground">{t("treasury.instruments.columnEmpty")}</li>}
+                    {items.map((instrument) => {
+                      const overdue = column === "pending" && instrument.due_date < today();
+                      const canReject = canCollect && instrument.method === "cheque" && column !== "unpaid";
+                      return (
+                        <li key={instrument.id} className="flex items-start gap-2 px-3 py-2 text-sm">
+                          {canCollect && column === "pending" && (
+                            <Checkbox
+                              aria-label={instrument.number}
+                              checked={!!selected[instrument.id]}
+                              onCheckedChange={(value) => setSelected((s) => ({ ...s, [instrument.id]: value === true }))}
+                            />
+                          )}
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium">
+                              {instrument.document_number} : {t(`treasury.method.${instrument.method}` as Key)}
+                              {instrument.number !== instrument.document_number && ` ${instrument.number}`}
+                            </p>
+                            <p className="text-muted-foreground">
+                              {partnerName(instrument.partner_id)} | <span className="tabular-nums">{money(instrument.amount, instrument.currency)}</span>
+                              {instrument.account_name && ` | ${instrument.account_name}`}
+                            </p>
+                            {(instrument.method === "cheque" || instrument.method === "draft") && (
+                              <p className={overdue ? "font-medium text-destructive" : "text-muted-foreground"}>
+                                {t("treasury.instruments.column.due")} : {instrument.due_date}
+                                {instrument.bank_name && ` · ${instrument.bank_name}`}
+                                {instrument.branch_name && ` · ${instrument.branch_name}`}
+                              </p>
+                            )}
+                            {instrument.slip_reference && (
+                              <p className="text-xs text-muted-foreground">
+                                {t("treasury.instruments.slip")} {instrument.slip_reference}
+                                {instrument.deposit_date && ` · ${instrument.deposit_date}`}
+                              </p>
+                            )}
+                            {instrument.rejection_fee && (
+                              <p className="text-xs text-muted-foreground">
+                                {t("treasury.instruments.rejectionFee")} : {money(instrument.rejection_fee, instrument.currency)}
+                              </p>
+                            )}
+                          </div>
+                          {canReject && (
+                            <Button size="sm" variant="ghost" title={t("treasury.instruments.markUnpaid")} aria-label={t("treasury.instruments.markUnpaid")} onClick={() => openUnpaid(instrument)}>
+                              <Undo2 className="h-3.5 w-3.5" />
+                            </Button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </section>
+              );
+            })}
+          </div>
         </CardContent>
       </Card>
 
@@ -228,7 +244,7 @@ export function InstrumentsTab() {
               <div className="space-y-1.5">
                 <Label htmlFor="slip_account">{t("treasury.instruments.slipAccount")}</Label>
                 <Select id="slip_account" value={accountId} onChange={(e) => setAccountId(e.target.value)}>
-                  <option value="">—</option>
+                  <option value="">{needsAccount ? "—" : t("treasury.instruments.ownAccount")}</option>
                   {eligibleAccounts.map((a) => (
                     <option key={a.id} value={a.id}>{a.name}</option>
                   ))}
@@ -241,20 +257,16 @@ export function InstrumentsTab() {
             </div>
             <ul className="space-y-1 text-sm">
               {chosen.map((i) => (
-                <li key={i.id} className="flex justify-between">
-                  <span>{i.number}</span>
+                <li key={i.id} className="flex justify-between gap-2">
+                  <span>{i.document_number} · {t(`treasury.method.${i.method}` as Key)} {i.account_name ? `· ${i.account_name}` : ""}</span>
                   <span className="tabular-nums">{money(i.amount, i.currency)}</span>
                 </li>
               ))}
             </ul>
-            <div className="flex gap-2">
-              <Button className="flex-1" disabled={!accountId || slipMutation.isPending} onClick={() => slipMutation.mutate("collected")}>
-                {t("treasury.instruments.collect")}
-              </Button>
-              <Button className="flex-1" variant="outline" disabled={!accountId || slipMutation.isPending || chosen.some((i) => i.method !== "cheque")} onClick={() => slipMutation.mutate("unpaid")}>
-                {t("treasury.instruments.rejectAll")}
-              </Button>
-            </div>
+            <Button className="w-full" disabled={(needsAccount && !accountId) || slipMutation.isPending} onClick={() => slipMutation.mutate()}>
+              <Landmark className="h-4 w-4" />
+              {t("treasury.instruments.collect")}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { History, Plus, Power, Wallet } from "lucide-react";
+import { History, Pencil, Plus, Power, Wallet } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { ApiError } from "../../lib/api";
@@ -23,6 +23,7 @@ import {
   updateAccount,
   type AccountInput,
   type AccountKind,
+  type CashType,
   type TreasuryAccount,
 } from "./api";
 
@@ -48,6 +49,7 @@ export function AccountsTab() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [form, setForm] = useState<AccountInput>(EMPTY);
   const [movementsFor, setMovementsFor] = useState<TreasuryAccount | null>(null);
+  const [editing, setEditing] = useState<TreasuryAccount | null>(null);
 
   const { data: accounts = [], isLoading } = useQuery({ queryKey: ACCOUNTS_KEY, queryFn: () => listAccounts(token, true) });
   const { data: banks = [] } = useQuery({ queryKey: ["treasury", "banks"], queryFn: () => listBanks(token) });
@@ -72,6 +74,27 @@ export function AccountsTab() {
       toast.success(t("treasury.account.created"));
     },
     onError: fail("treasury.account.createError"),
+  });
+  const editMutation = useMutation({
+    mutationFn: () => {
+      const account = editing!;
+      return updateAccount(token, account.id, {
+        name: account.name,
+        account_number: account.account_number ?? undefined,
+        iban: account.iban ?? undefined,
+        operator: account.operator ?? undefined,
+        phone: account.phone ?? undefined,
+        opening_balance: Number(account.opening_balance),
+        ledger_account_code: account.ledger_account_code ?? undefined,
+        cash_type: account.cash_type ?? undefined,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ACCOUNTS_KEY });
+      setEditing(null);
+      toast.success(t("treasury.account.updated"));
+    },
+    onError: fail("treasury.account.updateError"),
   });
   const toggleMutation = useMutation({
     mutationFn: (account: TreasuryAccount) => updateAccount(token, account.id, { is_active: !account.is_active }),
@@ -132,7 +155,7 @@ export function AccountsTab() {
                   <TableCell className="text-sm text-muted-foreground">
                     {account.kind === "bank" && (account.account_number ?? "—")}
                     {account.kind === "mobile_money" && `${account.operator ?? ""} ${account.phone ?? ""}`}
-                    {account.kind === "cash" && "—"}
+                    {account.kind === "cash" && t(`treasury.cashType.${account.cash_type ?? "principal"}`)}
                     {account.ledger_account_code && ` · ${account.ledger_account_code}`}
                   </TableCell>
                   <TableCell className="text-right tabular-nums">{money(account.balance, account.currency)}</TableCell>
@@ -142,6 +165,12 @@ export function AccountsTab() {
                         <History className="h-3.5 w-3.5" />
                         {t("treasury.account.movements")}
                       </Button>
+                      {canManage && (
+                        <Button size="sm" variant="outline" onClick={() => setEditing(account)}>
+                          <Pencil className="h-3.5 w-3.5" />
+                          {t("treasury.account.edit")}
+                        </Button>
+                      )}
                       {canManage && (
                         <Button size="sm" variant="outline" onClick={() => toggleMutation.mutate(account)}>
                           <Power className="h-3.5 w-3.5" />
@@ -213,6 +242,15 @@ export function AccountsTab() {
                 </div>
               </>
             )}
+            {form.kind === "cash" && (
+              <div className="space-y-1.5">
+                <Label htmlFor="acc_cash_type">{t("treasury.column.kind")}</Label>
+                <Select id="acc_cash_type" value={form.cash_type ?? "principal"} onChange={(e) => set("cash_type", e.target.value as CashType)}>
+                  <option value="principal">{t("treasury.cashType.principal")}</option>
+                  <option value="secondary">{t("treasury.cashType.secondary")}</option>
+                </Select>
+              </div>
+            )}
             {form.kind === "mobile_money" && (
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1.5">
@@ -239,6 +277,67 @@ export function AccountsTab() {
               {createMutation.isPending ? t("treasury.account.creating") : t("treasury.account.create")}
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={editing !== null} onOpenChange={(open) => !open && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("treasury.account.edit")}</DialogTitle>
+            <DialogDescription>{t("treasury.account.editDescription")}</DialogDescription>
+          </DialogHeader>
+          {editing && (
+            <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); editMutation.mutate(); }}>
+              <div className="space-y-1.5">
+                <Label htmlFor="edit_name">{t("treasury.column.name")}</Label>
+                <Input id="edit_name" required value={editing.name} onChange={(e) => setEditing({ ...editing, name: e.target.value })} />
+              </div>
+              {editing.kind === "bank" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit_number">{t("treasury.field.accountNumber")}</Label>
+                    <Input id="edit_number" required value={editing.account_number ?? ""} onChange={(e) => setEditing({ ...editing, account_number: e.target.value })} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit_iban">IBAN</Label>
+                    <Input id="edit_iban" value={editing.iban ?? ""} onChange={(e) => setEditing({ ...editing, iban: e.target.value })} />
+                  </div>
+                </div>
+              )}
+              {editing.kind === "cash" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit_cash_type">{t("treasury.column.kind")}</Label>
+                  <Select id="edit_cash_type" value={editing.cash_type ?? "principal"} onChange={(e) => setEditing({ ...editing, cash_type: e.target.value as CashType })}>
+                    <option value="principal">{t("treasury.cashType.principal")}</option>
+                    <option value="secondary">{t("treasury.cashType.secondary")}</option>
+                  </Select>
+                </div>
+              )}
+              {editing.kind === "mobile_money" && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit_operator">{t("treasury.field.operator")}</Label>
+                    <Input id="edit_operator" required value={editing.operator ?? ""} onChange={(e) => setEditing({ ...editing, operator: e.target.value })} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="edit_phone">{t("treasury.field.phone")}</Label>
+                    <Input id="edit_phone" required value={editing.phone ?? ""} onChange={(e) => setEditing({ ...editing, phone: e.target.value })} />
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit_opening">{t("treasury.field.openingBalance")}</Label>
+                  <Input id="edit_opening" type="number" step="1" value={editing.opening_balance} onChange={(e) => setEditing({ ...editing, opening_balance: e.target.value })} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit_ledger">{t("treasury.field.ledgerAccount")}</Label>
+                  <Input id="edit_ledger" value={editing.ledger_account_code ?? ""} onChange={(e) => setEditing({ ...editing, ledger_account_code: e.target.value })} />
+                </div>
+              </div>
+              <Button type="submit" className="w-full" disabled={editMutation.isPending}>{t("common.save")}</Button>
+            </form>
+          )}
         </DialogContent>
       </Dialog>
 

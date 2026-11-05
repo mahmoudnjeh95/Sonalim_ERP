@@ -1,7 +1,8 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, FileText, Plus, Trash2, Wallet } from "lucide-react";
+import { Ban, Calculator, Eye, FileText, Plus, Trash2, Wallet } from "lucide-react";
 import { createPaymentOrder } from "./paymentOrdersApi";
+import { DocumentDetailDialog } from "./DocumentDetailDialog";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { ApiError } from "../../lib/api";
@@ -41,6 +42,8 @@ function money(value: string | number, currency: string) {
   }
 }
 
+// The notes and coins in circulation, in F CFA.
+const DENOMINATIONS = [10000, 5000, 2000, 1000, 500, 250, 200, 100, 50, 25, 10, 5];
 const today = () => new Date().toISOString().slice(0, 10);
 const blankPayment = (): PaymentInput => ({ method: "cash", amount: 0 });
 
@@ -60,6 +63,10 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
   const [withDetails, setWithDetails] = useState(true);
   const [payments, setPayments] = useState<PaymentInput[]>([blankPayment()]);
   const [allocations, setAllocations] = useState<Record<string, number>>({});
+  const [withheld, setWithheld] = useState("");
+  const [note, setNote] = useState("");
+  const [countingIndex, setCountingIndex] = useState<number | null>(null);
+  const [viewing, setViewing] = useState<string | null>(null);
 
   const { data: documents = [], isLoading } = useQuery({ queryKey: key, queryFn: () => listDocuments(token, direction) });
   const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
@@ -73,6 +80,7 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
 
   const total = payments.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
   const allocated = Object.values(allocations).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  const partnerChoices = partners.filter((p) => p.status === "active" && p.kind !== (direction === "in" ? "supplier" : "customer"));
 
   function reset() {
     setPartnerId("");
@@ -81,6 +89,8 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
     setWithDetails(true);
     setPayments([blankPayment()]);
     setAllocations({});
+    setWithheld("");
+    setNote("");
   }
 
   const fail = (messageKey: Key) => (error: unknown) =>
@@ -94,6 +104,8 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
         currency: "XOF",
         reason,
         with_details: withDetails,
+        note: note.trim() || undefined,
+        withheld_amount: Number(withheld) || 0,
         payments: payments.map((p) => ({ ...p, amount: Number(p.amount), due_date: p.due_date || undefined })),
         allocations: Object.entries(allocations)
           .filter(([, amount]) => Number(amount) > 0)
@@ -178,6 +190,10 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">
+                      <Button size="sm" variant="outline" onClick={() => setViewing(doc.id)}>
+                        <Eye className="h-3.5 w-3.5" />
+                        {t("treasury.order.view")}
+                      </Button>
                       {canManage && direction === "out" && doc.status === "posted" && (
                         <Button size="sm" variant="outline" onClick={() => orderMutation.mutate(doc.id)} disabled={orderMutation.isPending}>
                           <FileText className="h-3.5 w-3.5" />
@@ -231,13 +247,11 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                   }}
                 >
                   <option value="">—</option>
-                  {partners
-                    .filter((p) => p.status === "active")
-                    .map((p) => (
-                      <option key={p.id} value={p.id}>
-                        {p.name}
-                      </option>
-                    ))}
+                  {partnerChoices.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
                 </Select>
               </div>
               <div className="space-y-1.5">
@@ -315,11 +329,45 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                           ))}
                       </Select>
                     )}
+                    {payment.method === "cash" && (
+                      <Button type="button" size="sm" variant="outline" onClick={() => setCountingIndex(index)}>
+                        <Calculator className="h-3.5 w-3.5" />
+                        {t("treasury.document.countCash")}
+                      </Button>
+                    )}
+                    {(payment.method === "transfer" || payment.method === "mobile_money") && (
+                      <Input required placeholder={t("treasury.document.reference")} value={payment.reference ?? ""} onChange={(e) => updatePayment(index, { reference: e.target.value })} />
+                    )}
                     {isInstrument && (
-                      <div className="grid grid-cols-3 gap-2">
-                        <Input required placeholder={t("treasury.document.instrumentNumber")} value={payment.number ?? ""} onChange={(e) => updatePayment(index, { number: e.target.value })} />
-                        <Input required placeholder={t("treasury.document.instrumentBank")} value={payment.bank_name ?? ""} onChange={(e) => updatePayment(index, { bank_name: e.target.value })} />
-                        <Input required type="date" value={payment.due_date ?? ""} onChange={(e) => updatePayment(index, { due_date: e.target.value })} />
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label htmlFor={`inst_number_${index}`}>{t("treasury.document.instrumentNumber")}</Label>
+                          <Input id={`inst_number_${index}`} required value={payment.number ?? ""} onChange={(e) => updatePayment(index, { number: e.target.value })} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor={`inst_issue_${index}`}>{t("treasury.instrument.issueDate")}</Label>
+                          <Input id={`inst_issue_${index}`} required type="date" value={payment.issue_date ?? ""} onChange={(e) => updatePayment(index, { issue_date: e.target.value })} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor={`inst_bank_${index}`}>{t("treasury.document.instrumentBank")}</Label>
+                          <Input id={`inst_bank_${index}`} required value={payment.bank_name ?? ""} onChange={(e) => updatePayment(index, { bank_name: e.target.value })} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor={`inst_branch_${index}`}>{t("treasury.instrument.branch")}</Label>
+                          <Input id={`inst_branch_${index}`} required value={payment.branch_name ?? ""} onChange={(e) => updatePayment(index, { branch_name: e.target.value })} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor={`inst_due_${index}`}>{t("treasury.instruments.column.due")}</Label>
+                          <Input id={`inst_due_${index}`} required type="date" value={payment.due_date ?? ""} onChange={(e) => updatePayment(index, { due_date: e.target.value })} />
+                        </div>
+                        <div className="space-y-1">
+                          <Label htmlFor={`inst_deposit_${index}`}>{t("treasury.instrument.depositDate")}</Label>
+                          <Input id={`inst_deposit_${index}`} type="date" value={payment.deposit_date ?? ""} onChange={(e) => updatePayment(index, { deposit_date: e.target.value || undefined })} />
+                        </div>
+                        <div className="col-span-2 space-y-1">
+                          <Label htmlFor={`inst_slip_${index}`}>{t("treasury.instrument.slipReference")}</Label>
+                          <Input id={`inst_slip_${index}`} value={payment.slip_reference ?? ""} onChange={(e) => updatePayment(index, { slip_reference: e.target.value || undefined })} />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -338,7 +386,10 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                 ) : (
                   invoices.map((invoice) => (
                     <div key={invoice.id} className="grid grid-cols-[1fr_auto_8rem] items-center gap-2 text-sm">
-                      <span>{invoice.number ?? invoice.supplier_invoice_number ?? invoice.id.slice(-6)}</span>
+                      <span className="flex items-center gap-2">
+                        {invoice.number ?? invoice.supplier_invoice_number ?? invoice.id.slice(-6)}
+                        <StatusBadge status={invoice.status} />
+                      </span>
                       <span className="tabular-nums text-muted-foreground">{money(invoice.remaining, invoice.currency)}</span>
                       <Input
                         type="number"
@@ -358,10 +409,71 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
               </div>
             )}
 
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="doc_withheld">{t("treasury.document.withheld")}</Label>
+                <Input id="doc_withheld" type="number" min="0" step="1" value={withheld} onChange={(e) => setWithheld(e.target.value)} />
+              </div>
+              <div className="space-y-1.5">
+                <Label>{t("treasury.document.settlement")}</Label>
+                <p className="pt-2 tabular-nums">{money(total, "XOF")}</p>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="doc_note">{t("treasury.document.note")}</Label>
+              <textarea
+                id="doc_note"
+                rows={2}
+                className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+              />
+            </div>
+
             <Button type="submit" className="w-full" disabled={createMutation.isPending || total <= 0}>
               {createMutation.isPending ? t("treasury.document.posting") : t("treasury.document.post")}
             </Button>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <DocumentDetailDialog direction={direction} documentId={viewing} onClose={() => setViewing(null)} />
+
+      <Dialog open={countingIndex !== null} onOpenChange={(value) => !value && setCountingIndex(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("treasury.document.countCash")}</DialogTitle>
+            <DialogDescription>{t("treasury.document.countCashHelp")}</DialogDescription>
+          </DialogHeader>
+          {countingIndex !== null && (
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-x-4 gap-y-2">
+                {DENOMINATIONS.map((value) => {
+                  const count = payments[countingIndex]?.denominations?.[String(value)] ?? 0;
+                  return (
+                    <div key={value} className="grid grid-cols-[5rem_1fr_6rem] items-center gap-2 text-sm">
+                      <Label htmlFor={`denom_${value}`} className="tabular-nums">{value.toLocaleString(currentLocale())}</Label>
+                      <Input
+                        id={`denom_${value}`}
+                        type="number"
+                        min="0"
+                        step="1"
+                        value={count || ""}
+                        onChange={(e) => {
+                          const denominations = { ...payments[countingIndex]?.denominations, [String(value)]: Math.max(0, Math.trunc(Number(e.target.value) || 0)) };
+                          const counted = Object.entries(denominations).reduce((sum, [v, c]) => sum + Number(v) * c, 0);
+                          updatePayment(countingIndex, { denominations, amount: counted });
+                        }}
+                      />
+                      <span className="text-right tabular-nums text-muted-foreground">{(value * count).toLocaleString(currentLocale())}</span>
+                    </div>
+                  );
+                })}
+              </div>
+              <p className="text-right font-medium tabular-nums">{t("treasury.document.total")}: {money(payments[countingIndex]?.amount ?? 0, "XOF")}</p>
+              <Button type="button" className="w-full" onClick={() => setCountingIndex(null)}>{t("common.save")}</Button>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
     </>

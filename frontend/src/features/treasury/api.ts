@@ -1,6 +1,7 @@
 import { apiFetch } from "../../lib/api";
 
 export type AccountKind = "bank" | "cash" | "mobile_money";
+export type CashType = "principal" | "secondary";
 
 export interface Branch {
   id: string;
@@ -36,6 +37,7 @@ export interface TreasuryAccount {
   allow_overdraft: boolean;
   ledger_account_code: string | null;
   is_active: boolean;
+  cash_type: CashType | null;
 }
 
 export interface AccountInput {
@@ -50,6 +52,7 @@ export interface AccountInput {
   opening_balance?: number;
   allow_overdraft?: boolean;
   ledger_account_code?: string;
+  cash_type?: CashType;
 }
 
 export interface AccountMovement {
@@ -72,6 +75,8 @@ export interface AlertRule {
 export interface TreasurySettings {
   cash_payment_limit: number | null;
   prior_year_invoice_cutoff: string | null;
+  receipts_collect_on_slip: boolean;
+  ledger_posting_enabled: boolean;
 }
 
 export const listBanks = (token: string) => apiFetch<Bank[]>("/treasury/banks", { token });
@@ -79,6 +84,11 @@ export const createBank = (token: string, body: { name: string; code?: string; s
   apiFetch<Bank>("/treasury/banks", { method: "POST", token, body });
 export const addBranch = (token: string, bankId: string, body: { name: string; city?: string; address?: string; phone?: string }) =>
   apiFetch<Branch>(`/treasury/banks/${bankId}/branches`, { method: "POST", token, body });
+
+export const updateBank = (token: string, id: string, body: { name?: string; code?: string; swift?: string; country?: string }) =>
+  apiFetch<Bank>(`/treasury/banks/${id}`, { method: "PATCH", token, body });
+export const updateBranch = (token: string, id: string, body: { name?: string; city?: string; address?: string; phone?: string }) =>
+  apiFetch<Branch>(`/treasury/branches/${id}`, { method: "PATCH", token, body });
 
 export const listAccounts = (token: string, includeInactive = false) =>
   apiFetch<TreasuryAccount[]>(`/treasury/accounts${includeInactive ? "?include_inactive=true" : ""}`, { token });

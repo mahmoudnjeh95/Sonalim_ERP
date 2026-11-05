@@ -12,14 +12,27 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.treasury.api.service import AccountMovementService, AccountService, SettingsService
-from modules.treasury.domain.instruments import alert_due, check_outcome, check_rejection_fee, split_reduction, unpaid_reverses_balance
+from modules.treasury.domain.instruments import (
+    alert_due,
+    check_collection_account,
+    check_outcome,
+    check_rejection_fee,
+    split_reduction,
+    unpaid_reverses_balance,
+)
 
 INSTRUMENT_COLUMNS = (
     "i.id, i.direction, i.method, i.number, i.bank_name, i.due_date, i.amount, i.currency, i.status, "
-    "i.document_id, i.account_id, d.partner_id, d.number, i.rejection_fee, i.rejection_fee_account_id"
+    "i.document_id, i.account_id, d.partner_id, d.number, i.rejection_fee, i.rejection_fee_account_id, "
+    "i.issue_date, i.branch_name, i.deposit_date, i.slip_reference, a.name"
 )
 INSTRUMENT_KEYS = ["id", "direction", "method", "number", "bank_name", "due_date", "amount", "currency", "status",
-                   "document_id", "account_id", "partner_id", "document_number", "rejection_fee", "rejection_fee_account_id"]
+                   "document_id", "account_id", "partner_id", "document_number", "rejection_fee", "rejection_fee_account_id",
+                   "issue_date", "branch_name", "deposit_date", "slip_reference", "account_name"]
+INSTRUMENT_FROM = (
+    "treasury.instruments i JOIN treasury.documents d ON d.id = i.document_id "
+    "LEFT JOIN treasury.accounts a ON a.id = i.account_id"
+)
 
 
 class InstrumentService:
@@ -39,7 +52,7 @@ class InstrumentService:
                 clauses.append(f"{column} {op} %s")
                 params.append(value)
         rows = self._connection.execute(
-            f"SELECT {INSTRUMENT_COLUMNS} FROM treasury.instruments i JOIN treasury.documents d ON d.id = i.document_id "
+            f"SELECT {INSTRUMENT_COLUMNS} FROM {INSTRUMENT_FROM} "
             f"WHERE {' AND '.join(clauses)} ORDER BY i.due_date, i.id",
             params,
         ).fetchall()
@@ -86,18 +99,83 @@ class InstrumentService:
             })
         return Ok({"account": account.value, "opening_balance": opening, "closing_balance": running, "rows": rows})
 
+    def cash_journal_for_year(self, *, tenant_id: str, year: int, account_id: str | None = None) -> dict[str, Any]:
+        """The manual's journal des caisses: one year across every cash register (or one), opening on what
+        all of them held on 1 January, each row saying which register moved, its balance and the third party."""
+        first_day = datetime.date(year, 1, 1)
+        account_clause = " AND a.id = %s" if account_id else ""
+        account_params = (account_id,) if account_id else ()
+        opening = self._connection.execute(
+            f"""
+            SELECT COALESCE(SUM(a.opening_balance), 0) + COALESCE((
+                SELECT SUM(m.amount) FROM treasury.account_movements m JOIN treasury.accounts a ON a.id = m.account_id
+                WHERE m.tenant_id = %s AND a.kind = 'cash' AND m.occurred_on < %s{account_clause}
+            ), 0)
+            FROM treasury.accounts a WHERE a.tenant_id = %s AND a.kind = 'cash'{account_clause}
+            """,
+            (tenant_id, first_day, *account_params, tenant_id, *account_params),
+        ).fetchone()[0]
+        rows = self._connection.execute(
+            f"""
+            SELECT m.occurred_on, a.id, a.name, m.amount, m.balance_after, m.source_type, m.note,
+                   COALESCE(d.number, instrument_doc.number), COALESCE(d.direction, instrument_doc.direction),
+                   COALESCE(d.partner_id, instrument_doc.partner_id), p.name
+            FROM treasury.account_movements m
+            JOIN treasury.accounts a ON a.id = m.account_id
+            LEFT JOIN treasury.documents d ON d.id = m.source_id
+            LEFT JOIN treasury.instruments i ON i.id = m.source_id
+            LEFT JOIN treasury.documents instrument_doc ON instrument_doc.id = i.document_id
+            LEFT JOIN core.partners p ON p.id = COALESCE(d.partner_id, instrument_doc.partner_id)
+            WHERE m.tenant_id = %s AND a.kind = 'cash' AND m.occurred_on >= %s AND m.occurred_on < %s{account_clause}
+            ORDER BY m.occurred_on, m.created_at, m.id
+            """,
+            (tenant_id, first_day, datetime.date(year + 1, 1, 1), *account_params),
+        ).fetchall()
+        journal_rows = [
+            {
+                "date": r[0], "account_id": r[1], "account_name": r[2],
+                "money_in": r[3] if r[3] > 0 else Decimal("0"), "money_out": -r[3] if r[3] < 0 else Decimal("0"),
+                "balance": r[4], "source_type": r[5], "label": r[7] or r[6] or r[5], "document_number": r[7],
+                "direction": r[8], "partner_id": r[9], "partner_name": r[10],
+            }
+            for r in rows
+        ]
+        moved = sum((r["money_in"] - r["money_out"] for r in journal_rows), Decimal("0"))
+        return {"year": year, "opening_balance": opening, "closing_balance": opening + moved, "rows": journal_rows}
+
     # ---- writes -----------------------------------------------------------------------------
 
     @atomic
-    def post_slip(self, *, tenant_id: str, actor_id: str, account_id: str, slip_date: datetime.date,
-                  items: list[dict[str, str]], correlation_id: str, note: str | None = None) -> Result[dict[str, Any]]:
+    def post_slip(self, *, tenant_id: str, actor_id: str, account_id: str | None, slip_date: datetime.date,
+                  items: list[dict[str, Any]], correlation_id: str, note: str | None = None) -> Result[dict[str, Any]]:
+        """With an account, every item goes on one slip for it. Without one, each payment goes to the
+        account named when it was recorded, one slip per account."""
         if not items:
             return Err("NO_ITEMS", "a deposit slip needs at least one instrument", "un bordereau doit comporter au moins un effet")
+        if account_id:
+            return self._post_one_slip(tenant_id, actor_id, account_id, slip_date, items, correlation_id, note)
+        by_account: dict[str, list[dict[str, Any]]] = {}
+        for item in items:
+            instrument = self._lock(tenant_id, item["instrument_id"])
+            if isinstance(instrument, Err):
+                return instrument
+            if not instrument.value["account_id"]:
+                return Err("SLIP_ACCOUNT_REQUIRED", f"{instrument.value['number']} names no account; choose the one it goes to",
+                           f"{instrument.value['number']} n'indique aucun compte ; choisissez celui qui le reçoit")
+            by_account.setdefault(instrument.value["account_id"], []).append(item)
+        slips = []
+        for target, grouped in by_account.items():
+            slip = self._post_one_slip(tenant_id, actor_id, target, slip_date, grouped, correlation_id, note)
+            if isinstance(slip, Err):
+                return slip
+            slips.append(slip.value)
+        return Ok({"slips": slips})
+
+    def _post_one_slip(self, tenant_id: str, actor_id: str, account_id: str, slip_date: datetime.date,
+                       items: list[dict[str, Any]], correlation_id: str, note: str | None) -> Result[dict[str, Any]]:
         account = AccountService(self._connection).get_account(tenant_id=tenant_id, account_id=account_id)
         if isinstance(account, Err):
             return account
-        if account.value["kind"] == "mobile_money" or not account.value["is_active"]:
-            return Err("ACCOUNT_NOT_ELIGIBLE", "a slip needs an active bank or cash account", "un bordereau exige un compte bancaire ou de caisse actif")
 
         slip_id = str(ULID())
         number = self._next_slip_number(tenant_id, slip_date.year)
@@ -118,16 +196,28 @@ class InstrumentService:
             checked = check_outcome(instrument.value["method"], instrument.value["status"], outcome)
             if isinstance(checked, Err):
                 return checked
-            if outcome == "collected" and instrument.value["currency"] != account.value["currency"]:
-                return Err("CURRENCY_MISMATCH", "the slip account is in another currency than the instrument",
-                           "le compte du bordereau est dans une autre devise que l'effet")
+            if outcome == "collected":
+                eligible = check_collection_account(instrument.value["method"], account.value["kind"], account.value["is_active"])
+                if isinstance(eligible, Err):
+                    return eligible
+                if instrument.value["currency"] != account.value["currency"]:
+                    return Err("CURRENCY_MISMATCH", "the slip account is in another currency than the instrument",
+                               "le compte du bordereau est dans une autre devise que l'effet")
             self._connection.execute(
                 "INSERT INTO treasury.deposit_slip_items (slip_id, instrument_id, outcome) VALUES (%s, %s, %s)",
                 (slip_id, item["instrument_id"], outcome),
             )
-            applied = self._apply(tenant_id, actor_id, instrument.value, outcome, account_id, slip_date, correlation_id)
+            if outcome == "unpaid":
+                applied = self._reject(tenant_id, actor_id, instrument.value, item.get("rejection_fee"),
+                                       item.get("rejection_fee_account_id"), slip_date, correlation_id)
+            else:
+                applied = self._apply(tenant_id, actor_id, instrument.value, outcome, account_id, slip_date, correlation_id)
             if isinstance(applied, Err):
                 return applied
+            self._connection.execute(
+                "UPDATE treasury.instruments SET deposit_date = %s, slip_reference = %s WHERE id = %s",
+                (slip_date, number, item["instrument_id"]),
+            )
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="treasury.deposit_slip.posted",
                      entity_type="deposit_slip", entity_id=slip_id, payload={"number": number, "items": len(items)})
         return Ok({"id": slip_id, "number": number, "account_id": account_id, "slip_date": slip_date, "items": items})
@@ -143,7 +233,18 @@ class InstrumentService:
         checked = check_outcome(instrument.value["method"], instrument.value["status"], "unpaid")
         if isinstance(checked, Err):
             return checked
-        fee = check_rejection_fee(rejection_fee, rejection_fee_account_id, currency=instrument.value["currency"])
+        applied = self._reject(tenant_id, actor_id, instrument.value, rejection_fee, rejection_fee_account_id,
+                               datetime.date.today(), correlation_id)
+        if isinstance(applied, Err):
+            return applied
+        return self._lock(tenant_id, instrument_id)
+
+    # ---- helpers ----------------------------------------------------------------------------
+
+    def _reject(self, tenant_id: str, actor_id: str, instrument: dict[str, Any], rejection_fee: Decimal | None,
+                rejection_fee_account_id: str | None, on: datetime.date, correlation_id: str) -> Result[None]:
+        """Mark a cheque unpaid, on a slip or on its own, with what the bank charged when the user enters it."""
+        fee = check_rejection_fee(rejection_fee, rejection_fee_account_id, currency=instrument["currency"])
         if isinstance(fee, Err):
             return fee
         if fee.value is not None:
@@ -153,32 +254,29 @@ class InstrumentService:
             if account.value["kind"] == "mobile_money" or not account.value["is_active"]:
                 return Err("ACCOUNT_NOT_ELIGIBLE", "a rejection fee needs an active bank or cash account",
                            "des frais de rejet exigent un compte bancaire ou de caisse actif")
-            if account.value["currency"] != instrument.value["currency"]:
+            if account.value["currency"] != instrument["currency"]:
                 return Err("CURRENCY_MISMATCH", "the fee account is in another currency than the cheque",
                            "le compte des frais est dans une autre devise que le chèque")
-        today = datetime.date.today()
-        applied = self._apply(tenant_id, actor_id, instrument.value, "unpaid", None, today, correlation_id, rejection_fee=fee.value)
+        applied = self._apply(tenant_id, actor_id, instrument, "unpaid", None, on, correlation_id, rejection_fee=fee.value)
         if isinstance(applied, Err):
             return applied
         if fee.value is not None:
             moved = AccountMovementService(self._connection).post(
                 tenant_id=tenant_id, actor_id=actor_id, account_id=rejection_fee_account_id, signed_amount=-fee.value,
-                source_type="instrument_rejection_fee", source_id=instrument_id, occurred_on=today,
-                note=f"Frais de rejet {instrument.value['number']}",
+                source_type="instrument_rejection_fee", source_id=instrument["id"], occurred_on=on,
+                note=f"Frais de rejet {instrument['number']}",
             )
             if isinstance(moved, Err):
                 return moved
             self._connection.execute(
                 "UPDATE treasury.instruments SET rejection_fee = %s, rejection_fee_account_id = %s WHERE id = %s",
-                (fee.value, rejection_fee_account_id, instrument_id),
+                (fee.value, rejection_fee_account_id, instrument["id"]),
             )
-        return self._lock(tenant_id, instrument_id)
-
-    # ---- helpers ----------------------------------------------------------------------------
+        return Ok(None)
 
     def _lock(self, tenant_id: str, instrument_id: str) -> Result[dict[str, Any]]:
         row = self._connection.execute(
-            f"SELECT {INSTRUMENT_COLUMNS} FROM treasury.instruments i JOIN treasury.documents d ON d.id = i.document_id "
+            f"SELECT {INSTRUMENT_COLUMNS} FROM {INSTRUMENT_FROM} "
             "WHERE i.id = %s AND i.tenant_id = %s FOR UPDATE OF i",
             (instrument_id, tenant_id),
         ).fetchone()

@@ -23,6 +23,8 @@ TODAY = datetime.date(2026, 3, 1)
 
 @pytest.fixture
 def env(db):
+    # These tests are about money reaching the account at once; the deposit slip has its own in test_manual_requirements_integration.
+    db.execute("INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, 'receipts_collect_on_slip', 'false') ON CONFLICT DO NOTHING", (TENANT,))
     actor = str(ULID())
     customer, supplier = str(ULID()), str(ULID())
     db.execute("INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
@@ -334,7 +336,9 @@ def test_an_invoice_in_another_currency_cannot_be_settled_through_treasury(db, e
 
     service = PurchaseInvoiceService(db)
     created = service.create_draft(tenant_id=TENANT, actor_id=env["actor"], partner_id=env["supplier"], supplier_invoice_number=str(ULID()),
-                                   invoice_date=TODAY, amount=D("500"), currency="USD")
+                                   invoice_date=TODAY, amount=D("500"))
+    # Such an invoice can no longer be created; one from before that rule is what this guards against.
+    db.execute("UPDATE procurement.purchase_invoices SET currency = 'USD' WHERE id = %s", (created.value["id"],))
     service.validate(tenant_id=TENANT, actor_id=env["actor"], invoice_id=created.value["id"], correlation_id="c")
     refused = _post(db, env, "out", [{"method": "cash", "amount": 500, "account_id": env["cash"]}], [{"invoice_id": created.value["id"], "amount": 500}])
     assert isinstance(refused, Err) and refused.code == "INVOICE_CURRENCY_NOT_XOF"

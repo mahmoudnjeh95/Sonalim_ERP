@@ -5,6 +5,7 @@ from decimal import Decimal
 from typing import Any
 
 import psycopg
+from psycopg.types.json import Jsonb
 from ulid import ULID
 
 from core.atomic import atomic
@@ -41,13 +42,13 @@ class DocumentService:
     def get(self, *, tenant_id: str, document_id: str, direction: str | None = None) -> Result[dict[str, Any]]:
         row = self._connection.execute(
             "SELECT id, direction, number, partner_id, doc_date, reason, with_details, currency, total, unallocated, "
-            "status, note, created_at FROM treasury.documents WHERE id = %s AND tenant_id = %s",
+            "status, note, created_at, withheld_amount FROM treasury.documents WHERE id = %s AND tenant_id = %s",
             (document_id, tenant_id),
         ).fetchone()
         if row is None or (direction is not None and row[1] != direction):
             return _not_found(document_id)
         keys = ["id", "direction", "number", "partner_id", "doc_date", "reason", "with_details", "currency", "total",
-                "unallocated", "status", "note", "created_at"]
+                "unallocated", "status", "note", "created_at", "withheld_amount"]
         document = dict(zip(keys, row, strict=True))
         document["allocations"] = [
             {"invoice_id": r[0], "amount": r[1]}
@@ -57,18 +58,18 @@ class DocumentService:
             ).fetchall()
         ]
         document["payments"] = [
-            {"id": r[0], "method": r[1], "amount": r[2], "account_id": r[3], "reference": r[4]}
+            {"id": r[0], "method": r[1], "amount": r[2], "account_id": r[3], "reference": r[4], "denominations": r[5]}
             for r in self._connection.execute(
-                "SELECT id, method, amount, account_id, reference FROM treasury.document_payments "
+                "SELECT id, method, amount, account_id, reference, denominations FROM treasury.document_payments "
                 "WHERE document_id = %s ORDER BY id",
                 (document_id,),
             ).fetchall()
         ]
         document["instruments"] = [
             {"id": r[0], "method": r[1], "number": r[2], "bank_name": r[3], "due_date": r[4], "amount": r[5],
-             "status": r[6], "payment_id": r[7]}
+             "status": r[6], "payment_id": r[7], "issue_date": r[8], "branch_name": r[9], "deposit_date": r[10], "slip_reference": r[11]}
             for r in self._connection.execute(
-                "SELECT id, method, number, bank_name, due_date, amount, status, payment_id "
+                "SELECT id, method, number, bank_name, due_date, amount, status, payment_id, issue_date, branch_name, deposit_date, slip_reference "
                 "FROM treasury.instruments WHERE document_id = %s ORDER BY due_date, id",
                 (document_id,),
             ).fetchall()
@@ -84,11 +85,11 @@ class DocumentService:
                 clauses.append(f"{column} {op} %s")
                 params.append(value)
         rows = self._connection.execute(
-            "SELECT id, number, partner_id, doc_date, reason, currency, total, unallocated, status "
+            "SELECT id, number, partner_id, doc_date, reason, currency, total, unallocated, status, withheld_amount "
             f"FROM treasury.documents WHERE {' AND '.join(clauses)} ORDER BY doc_date DESC, number DESC",
             params,
         ).fetchall()
-        keys = ["id", "number", "partner_id", "doc_date", "reason", "currency", "total", "unallocated", "status"]
+        keys = ["id", "number", "partner_id", "doc_date", "reason", "currency", "total", "unallocated", "status", "withheld_amount"]
         return [dict(zip(keys, r, strict=True)) for r in rows]
 
     # ---- writes -----------------------------------------------------------------------------
@@ -109,18 +110,22 @@ class DocumentService:
         with_details: bool = True,
         note: str | None = None,
         can_add_prior_year: bool = False,
+        withheld_amount: Decimal = Decimal("0"),
         correlation_id: str,
     ) -> Result[dict[str, Any]]:
         allocations = allocations or []
+        withheld = Decimal(str(withheld_amount))
         currency_checked = check_currency(currency)
         if isinstance(currency_checked, Err):
             return currency_checked
-        limit = SettingsService(self._connection).get_settings(tenant_id=tenant_id)["cash_payment_limit"]
+        settings = SettingsService(self._connection).get_settings(tenant_id=tenant_id)
+        limit = settings["cash_payment_limit"]
+        on_slip = direction == "in" and settings["receipts_collect_on_slip"]
         total = check_payments(Decimal("0"), payments, Decimal(str(limit)) if limit is not None else None)
         if isinstance(total, Err):
             return total
         pairs = [(a["invoice_id"], Decimal(str(a["amount"]))) for a in allocations]
-        unallocated = check_allocations(total.value, pairs, with_details=with_details, reason=reason)
+        unallocated = check_allocations(total.value, pairs, with_details=with_details, reason=reason, withheld=withheld)
         if isinstance(unallocated, Err):
             return unallocated
 
@@ -131,11 +136,13 @@ class DocumentService:
             checked = check_invoice_target(invoice.value, amount, direction=direction, document_currency=currency, partner_id=partner_id)
             if isinstance(checked, Err):
                 return checked
-            prior = check_prior_year(invoice.value["invoice_date"], doc_date, allowed=can_add_prior_year)
+            prior = check_prior_year(invoice.value["invoice_date"], doc_date, allowed=can_add_prior_year,
+                                     cutoff=settings["prior_year_invoice_cutoff"])
             if isinstance(prior, Err):
                 return prior
 
         accounts = AccountService(self._connection)
+        account_names: dict[str, str] = {}
         for payment in payments:
             kind = ACCOUNT_KIND_FOR_METHOD.get(payment["method"])
             if kind is None:
@@ -151,14 +158,15 @@ class DocumentService:
             if account.value["currency"] != currency:
                 return Err("CURRENCY_MISMATCH", "the account is in another currency than the payment",
                            "le compte est dans une autre devise que le paiement")
+            account_names[payment["account_id"]] = account.value["name"]
 
         document_id = str(ULID())
         number = self._next_number(tenant_id, direction, doc_date.year)
         self._connection.execute(
             "INSERT INTO treasury.documents (id, tenant_id, direction, number, partner_id, doc_date, reason, with_details, "
-            "currency, total, unallocated, note, created_by) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "currency, total, unallocated, note, created_by, withheld_amount) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (document_id, tenant_id, direction, number, partner_id, doc_date, reason, with_details, currency,
-             total.value, unallocated.value, note, actor_id),
+             total.value, unallocated.value, note, actor_id, withheld),
         )
         for invoice_id, amount in pairs:
             self._connection.execute(
@@ -174,16 +182,23 @@ class DocumentService:
             method = payment["method"]
             account_id = payment.get("account_id") if method not in INSTRUMENT_METHODS else None
             self._connection.execute(
-                "INSERT INTO treasury.document_payments (id, document_id, method, amount, account_id, reference) "
-                "VALUES (%s, %s, %s, %s, %s, %s)",
-                (payment_id, document_id, method, amount, account_id, payment.get("reference")),
+                "INSERT INTO treasury.document_payments (id, document_id, method, amount, account_id, reference, denominations) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                (payment_id, document_id, method, amount, account_id, payment.get("reference"),
+                 Jsonb(payment["denominations"]) if payment.get("denominations") else None),
             )
-            if method in INSTRUMENT_METHODS:
+            if method in INSTRUMENT_METHODS or on_slip:
+                # Waits on the deposit slip. Only cheques and drafts carry their own identity; the rest
+                # are known by their reference and the account that will receive them.
                 self._connection.execute(
                     "INSERT INTO treasury.instruments (id, tenant_id, direction, method, number, bank_name, due_date, amount, "
-                    "currency, payment_id, document_id, account_id) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-                    (str(ULID()), tenant_id, direction, method, payment["number"], payment["bank_name"],
-                     payment["due_date"], amount, currency, payment_id, document_id, payment.get("account_id")),
+                    "currency, payment_id, document_id, account_id, issue_date, branch_name, deposit_date, slip_reference) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    (str(ULID()), tenant_id, direction, method, payment.get("number") or payment.get("reference") or number,
+                     payment.get("bank_name") or account_names.get(payment.get("account_id"), ""),
+                     payment.get("due_date") or doc_date, amount, currency, payment_id, document_id, payment.get("account_id"),
+                     payment.get("issue_date") or doc_date, payment.get("branch_name"), payment.get("deposit_date"),
+                     payment.get("slip_reference")),
                 )
                 continue
             moved = movements.post(
@@ -196,7 +211,7 @@ class DocumentService:
         self._publish(tenant_id, correlation_id, direction, "posted", document_id, partner_id, pairs, total.value, currency)
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action=f"treasury.{NOUN[direction]}.posted",
                      entity_type=NOUN[direction], entity_id=document_id,
-                     payload={"number": number, "total": str(total.value), "partner_id": partner_id})
+                     payload={"number": number, "total": str(total.value), "partner_id": partner_id, "withheld": str(withheld)})
         return self.get(tenant_id=tenant_id, document_id=document_id)
 
     @atomic
@@ -221,12 +236,13 @@ class DocumentService:
 
         movements = AccountMovementService(self._connection)
         reverse = Decimal("-1") if direction == "in" else Decimal("1")
+        # A payment still waiting on the deposit slip never moved an account, so there is nothing to put back.
         payments = self._connection.execute(
-            "SELECT method, amount, account_id FROM treasury.document_payments WHERE document_id = %s", (document_id,)
+            "SELECT p.amount, p.account_id FROM treasury.document_payments p "
+            "WHERE p.document_id = %s AND NOT EXISTS (SELECT 1 FROM treasury.instruments i WHERE i.payment_id = p.id)",
+            (document_id,),
         ).fetchall()
-        for method, amount, account_id in payments:
-            if method in INSTRUMENT_METHODS:
-                continue
+        for amount, account_id in payments:
             moved = movements.post(
                 tenant_id=tenant_id, actor_id=actor_id, account_id=account_id, signed_amount=reverse * amount,
                 source_type=f"{NOUN[direction]}_cancelled", source_id=document_id, occurred_on=datetime.date.today(),

@@ -7,6 +7,7 @@ from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.finance.api.service import InvoiceService
+from modules.finance.domain.entities import check_new_invoice_currency
 
 router = APIRouter(prefix="/finance", tags=["finance"])
 
@@ -53,6 +54,9 @@ def list_invoices(
 def create_invoice(
     body: CreateInvoiceRequest, tenant: TenantContext = Depends(require_permission("finance.manage_invoices"))
 ) -> dict:
+    currency_checked = check_new_invoice_currency(body.currency)
+    if isinstance(currency_checked, Err):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(currency_checked))
     with get_connection() as connection:
         service = InvoiceService(connection)
         invoice = service.create_draft_invoice(

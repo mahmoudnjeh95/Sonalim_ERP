@@ -64,6 +64,11 @@ export function TreasuryAlertBanner() {
             {t("treasury.alerts.summary")} {received > 0 && `${received} ${t("treasury.instruments.received").toLowerCase()}`}
             {received > 0 && issued > 0 && " · "}
             {issued > 0 && `${issued} ${t("treasury.instruments.issued").toLowerCase()}`}
+            {alerts.slice(0, 5).map((alert) => (
+              <span key={alert.id} className="block text-xs">
+                {alert.document_number} : {t(alert.method === "draft" ? "treasury.alerts.draftDue" : "treasury.alerts.chequeDue")} {alert.number} {t("treasury.alerts.isOn")} {alert.due_date}
+              </span>
+            ))}
           </p>
           <Link to="/treasury" className="font-medium underline">
             {t("treasury.alerts.view")}

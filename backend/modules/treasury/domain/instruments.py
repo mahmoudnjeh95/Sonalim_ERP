@@ -15,8 +15,8 @@ def check_outcome(method: str, status: str, outcome: str) -> Result[None]:
     if outcome not in OUTCOMES:
         return Err("INVALID_OUTCOME", f"unknown outcome {outcome}", f"issue inconnue {outcome}")
     if outcome == "collected" and status != "pending":
-        return Err("INSTRUMENT_NOT_PENDING", "only a pending cheque or draft can be collected",
-                   "seul un chèque ou une traite en attente peut être encaissé")
+        return Err("INSTRUMENT_NOT_PENDING", "only a pending payment can be collected",
+                   "seul un règlement en attente peut être encaissé")
     if outcome == "unpaid":
         if method != "cheque":
             return Err("UNPAID_CHEQUE_ONLY", "only a cheque can be marked unpaid", "seul un chèque peut être marqué impayé")
@@ -44,6 +44,19 @@ def check_rejection_fee(amount: Decimal | None, account_id: str | None, *, curre
     if not account_id:
         return Err("REJECTION_FEE_ACCOUNT_REQUIRED", "a rejection fee needs the account it was charged to", "des frais de rejet exigent le compte débité")
     return Ok(amount)
+
+
+# Which kinds of account can receive each method when it is collected.
+COLLECTION_ACCOUNT_KINDS = {
+    "cash": ("cash",), "transfer": ("bank",), "mobile_money": ("mobile_money",), "cheque": ("bank", "cash"), "draft": ("bank", "cash"),
+}
+
+
+def check_collection_account(method: str, kind: str, is_active: bool) -> Result[None]:
+    if not is_active or kind not in COLLECTION_ACCOUNT_KINDS[method]:
+        return Err("ACCOUNT_NOT_ELIGIBLE", f"a {method} payment cannot be collected into this account",
+                   "ce règlement ne peut pas être encaissé sur ce compte")
+    return Ok(None)
 
 
 def unpaid_reverses_balance(status_before: str) -> bool:

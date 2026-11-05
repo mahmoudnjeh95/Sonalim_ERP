@@ -7,6 +7,7 @@ import { useI18n } from "../../lib/i18n";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
+import { Switch } from "../../components/ui/switch";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
 import { getSettings, listAlertRules, putAlertRule, putSetting } from "./api";
 
@@ -16,14 +17,19 @@ export function TreasurySettingsTab() {
   const token = session!.token;
   const queryClient = useQueryClient();
   const canEdit = hasPermission("treasury.admin_config");
+  const canSwitchPosting = hasPermission("treasury.admin_ledger_posting");
 
   const { data: settings } = useQuery({ queryKey: ["treasury", "settings"], queryFn: () => getSettings(token) });
   const { data: rules = [] } = useQuery({ queryKey: ["treasury", "alert-rules"], queryFn: () => listAlertRules(token) });
   const [limit, setLimit] = useState("");
+  const [cutoff, setCutoff] = useState("");
   const [offsets, setOffsets] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    if (settings) setLimit(settings.cash_payment_limit === null ? "" : String(settings.cash_payment_limit));
+    if (settings) {
+      setLimit(settings.cash_payment_limit === null ? "" : String(settings.cash_payment_limit));
+      setCutoff(settings.prior_year_invoice_cutoff ?? "");
+    }
   }, [settings]);
   useEffect(() => {
     setOffsets(Object.fromEntries(rules.map((r) => [`${r.direction}:${r.method}`, String(r.offset_days)])));
@@ -34,6 +40,14 @@ export function TreasurySettingsTab() {
 
   const limitMutation = useMutation({
     mutationFn: () => putSetting(token, "cash_payment_limit", limit === "" ? null : Number(limit)),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["treasury", "settings"] });
+      toast.success(t("treasury.settings.saved"));
+    },
+    onError: fail,
+  });
+  const settingMutation = useMutation({
+    mutationFn: ({ key, value }: { key: "receipts_collect_on_slip" | "ledger_posting_enabled" | "prior_year_invoice_cutoff"; value: unknown }) => putSetting(token, key, value),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["treasury", "settings"] });
       toast.success(t("treasury.settings.saved"));
@@ -67,6 +81,50 @@ export function TreasurySettingsTab() {
               {t("common.save")}
             </Button>
           )}
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>{t("treasury.settings.flow.title")}</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{t("treasury.settings.onSlip.label")}</p>
+              <p className="text-sm text-muted-foreground">{t("treasury.settings.onSlip.help")}</p>
+            </div>
+            <Switch
+              aria-label={t("treasury.settings.onSlip.label")}
+              checked={settings?.receipts_collect_on_slip ?? true}
+              disabled={!canEdit || settingMutation.isPending}
+              onCheckedChange={(value: boolean) => settingMutation.mutate({ key: "receipts_collect_on_slip", value })}
+            />
+          </div>
+          <div className="space-y-1.5">
+            <Label htmlFor="prior_cutoff">{t("treasury.settings.cutoff.label")}</Label>
+            <p className="text-sm text-muted-foreground">{t("treasury.settings.cutoff.help")}</p>
+            <div className="flex gap-2">
+              <Input id="prior_cutoff" placeholder="03-16" value={cutoff} disabled={!canEdit} onChange={(e) => setCutoff(e.target.value)} />
+              {canEdit && (
+                <Button variant="outline" disabled={settingMutation.isPending} onClick={() => settingMutation.mutate({ key: "prior_year_invoice_cutoff", value: cutoff.trim() || null })}>
+                  {t("common.save")}
+                </Button>
+              )}
+            </div>
+          </div>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-medium">{t("treasury.settings.ledger.label")}</p>
+              <p className="text-sm text-muted-foreground">{t("treasury.settings.ledger.help")}</p>
+            </div>
+            <Switch
+              aria-label={t("treasury.settings.ledger.label")}
+              checked={settings?.ledger_posting_enabled ?? false}
+              disabled={!canSwitchPosting || settingMutation.isPending}
+              onCheckedChange={(value: boolean) => settingMutation.mutate({ key: "ledger_posting_enabled", value })}
+            />
+          </div>
         </CardContent>
       </Card>
 

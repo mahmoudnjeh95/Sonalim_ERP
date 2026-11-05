@@ -3,6 +3,7 @@ from __future__ import annotations
 import datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
@@ -11,6 +12,7 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, require_session, user_has_permission
+from modules.treasury.api.attachment_service import DocumentAttachmentService
 from modules.treasury.api.document_service import DocumentService
 from modules.treasury.api.instrument_service import InstrumentService
 from modules.treasury.api.payment_order_service import PaymentOrderService
@@ -53,6 +55,20 @@ class BranchRequest(BaseModel):
     phone: str | None = None
 
 
+class BankUpdateRequest(BaseModel):
+    name: str | None = None
+    code: str | None = None
+    swift: str | None = None
+    country: str | None = None
+
+
+class BranchUpdateRequest(BaseModel):
+    name: str | None = None
+    city: str | None = None
+    address: str | None = None
+    phone: str | None = None
+
+
 class AccountRequest(BaseModel):
     kind: str
     name: str
@@ -65,6 +81,7 @@ class AccountRequest(BaseModel):
     opening_balance: Decimal = Decimal("0")
     allow_overdraft: bool = False
     ledger_account_code: str | None = None
+    cash_type: str | None = None
 
 
 class AccountUpdateRequest(BaseModel):
@@ -79,6 +96,7 @@ class AccountUpdateRequest(BaseModel):
     allow_overdraft: bool | None = None
     ledger_account_code: str | None = None
     is_active: bool | None = None
+    cash_type: str | None = None
 
 
 class SettingRequest(BaseModel):
@@ -100,6 +118,20 @@ def create_bank(body: BankRequest, tenant: TenantContext = Depends(require_permi
     with get_connection() as connection:
         return _unwrap(connection, BankService(connection).create_bank(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+@router.patch("/banks/{bank_id}")
+def update_bank(bank_id: str, body: BankUpdateRequest, tenant: TenantContext = Depends(require_permission("treasury.manage_accounts"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, BankService(connection).update_bank(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, bank_id=bank_id, changes=body.model_dump(exclude_unset=True)))
+
+
+@router.patch("/branches/{branch_id}")
+def update_branch(branch_id: str, body: BranchUpdateRequest, tenant: TenantContext = Depends(require_permission("treasury.manage_accounts"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, BankService(connection).update_branch(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, branch_id=branch_id, changes=body.model_dump(exclude_unset=True)))
 
 
 @router.post("/banks/{bank_id}/active")
@@ -208,6 +240,11 @@ class PaymentRequest(BaseModel):
     bank_name: str | None = None
     due_date: datetime.date | None = None
     reference: str | None = None
+    issue_date: datetime.date | None = None
+    branch_name: str | None = None
+    deposit_date: datetime.date | None = None
+    slip_reference: str | None = None
+    denominations: dict[str, int] | None = None
 
 
 class AllocationRequest(BaseModel):
@@ -222,6 +259,7 @@ class DocumentRequest(BaseModel):
     reason: str = "full"
     with_details: bool = True
     note: str | None = None
+    withheld_amount: Decimal = Decimal("0")
     payments: list[PaymentRequest]
     allocations: list[AllocationRequest] = []
 
@@ -232,7 +270,7 @@ def _create_document(direction: str, body: DocumentRequest, tenant: TenantContex
         result = DocumentService(connection).create_and_post(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, direction=direction, partner_id=body.partner_id,
             doc_date=body.doc_date, currency=body.currency, reason=body.reason, with_details=body.with_details,
-            note=body.note, can_add_prior_year=allowed, correlation_id=str(uuid4()),
+            note=body.note, can_add_prior_year=allowed, correlation_id=str(uuid4()), withheld_amount=body.withheld_amount,
             payments=[p.model_dump() for p in body.payments], allocations=[a.model_dump() for a in body.allocations],
         )
         return _unwrap(connection, result)
@@ -252,6 +290,71 @@ def _cancel_document(direction: str, document_id: str, tenant: TenantContext) ->
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, document_id=document_id, direction=direction,
             correlation_id=str(uuid4()))
         return _unwrap(connection, result)
+
+
+class AttachmentRequest(BaseModel):
+    filename: str
+    content_type: str | None = None
+    content_base64: str
+
+
+ATTACHMENT_MANAGE_PERMISSION = {"in": "treasury.manage_receipts", "out": "treasury.manage_disbursements"}
+
+
+def _attachment_direction(kind: str) -> str:
+    if kind not in ("receipts", "disbursements"):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, {"code": "NOT_FOUND", "message": "unknown document type", "message_fr": "type de document inconnu"})
+    return "in" if kind == "receipts" else "out"
+
+
+def _check_attachment_manager(connection, tenant: TenantContext, direction: str) -> None:
+    permission = ATTACHMENT_MANAGE_PERMISSION[direction]
+    if not user_has_permission(connection, user_id=tenant.user_id, permission=permission):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, {"code": "FORBIDDEN", "message": f"missing permission: {permission}",
+                                                        "message_fr": f"permission manquante : {permission}"})
+
+
+@router.get("/{kind}/{document_id}/attachments")
+def list_attachments(kind: str, document_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    direction = _attachment_direction(kind)
+    with get_connection() as connection:
+        result = DocumentAttachmentService(connection).list(tenant_id=tenant.tenant_id, direction=direction, document_id=document_id)
+        if isinstance(result, Err):
+            raise HTTPException(_err_status(result.code), err_detail(result))
+        return result.value
+
+
+@router.post("/{kind}/{document_id}/attachments", status_code=status.HTTP_201_CREATED)
+def add_attachment(kind: str, document_id: str, body: AttachmentRequest, tenant: TenantContext = Depends(require_session)) -> dict:
+    direction = _attachment_direction(kind)
+    with get_connection() as connection:
+        _check_attachment_manager(connection, tenant, direction)
+        return _unwrap(connection, DocumentAttachmentService(connection).add(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, direction=direction, document_id=document_id,
+            filename=body.filename, content_type=body.content_type, content_base64=body.content_base64))
+
+
+@router.get("/{kind}/{document_id}/attachments/{attachment_id}")
+def download_attachment(kind: str, document_id: str, attachment_id: str, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> Response:
+    direction = _attachment_direction(kind)
+    with get_connection() as connection:
+        result = DocumentAttachmentService(connection).read(
+            tenant_id=tenant.tenant_id, direction=direction, document_id=document_id, attachment_id=attachment_id)
+        if isinstance(result, Err):
+            raise HTTPException(_err_status(result.code), err_detail(result))
+    safe_name = quote(result.value["filename"])
+    return Response(result.value["content"], media_type=result.value["content_type"],
+                    headers={"Content-Disposition": f"attachment; filename*=UTF-8''{safe_name}"})
+
+
+@router.delete("/{kind}/{document_id}/attachments/{attachment_id}", status_code=status.HTTP_204_NO_CONTENT, response_class=Response)
+def delete_attachment(kind: str, document_id: str, attachment_id: str, tenant: TenantContext = Depends(require_session)) -> Response:
+    direction = _attachment_direction(kind)
+    with get_connection() as connection:
+        _check_attachment_manager(connection, tenant, direction)
+        _unwrap(connection, DocumentAttachmentService(connection).delete(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, direction=direction, document_id=document_id, attachment_id=attachment_id))
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 @router.get("/receipts")
@@ -336,10 +439,13 @@ def list_open_invoices(direction: str, partner_id: str, tenant: TenantContext = 
 class SlipItemRequest(BaseModel):
     instrument_id: str
     outcome: str
+    rejection_fee: Decimal | None = None
+    rejection_fee_account_id: str | None = None
 
 
 class SlipRequest(BaseModel):
-    account_id: str
+    # Empty: each payment goes to the account named when it was recorded.
+    account_id: str | None = None
     slip_date: datetime.date
     note: str | None = None
     items: list[SlipItemRequest]
@@ -383,9 +489,13 @@ def list_alerts(tenant: TenantContext = Depends(require_permission("treasury.vie
 
 
 @router.get("/journals/cash")
-def cash_journal(account_id: str, date_from: datetime.date | None = None, date_to: datetime.date | None = None,
-                 tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+def cash_journal(account_id: str | None = None, year: int | None = None, date_from: datetime.date | None = None,
+                 date_to: datetime.date | None = None, tenant: TenantContext = Depends(require_permission("treasury.view"))) -> dict:
+    """One register over a date range, or (with `year`) one year across every register, or one."""
     with get_connection() as connection:
+        if year is not None or account_id is None:
+            return InstrumentService(connection).cash_journal_for_year(
+                tenant_id=tenant.tenant_id, year=year or datetime.date.today().year, account_id=account_id)
         result = InstrumentService(connection).cash_journal(
             tenant_id=tenant.tenant_id, account_id=account_id, date_from=date_from, date_to=date_to)
         if isinstance(result, Err):
@@ -478,27 +588,40 @@ def put_statement_profile(account_id: str, body: dict[str, Any], tenant: TenantC
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, account_id=account_id, profile=body))
 
 
-def _report(kind: str, fmt: str | None, tenant: TenantContext):
+REPORT_HEADERS = {
+    ("sales", "fr"): ["Client", "Encaissement", "Numéro", "Date", "Montant de facture", "Montant de règlement", "Montant restant", "Etat"],
+    ("purchases", "fr"): ["Fournisseur", "Décaissement", "Numéro", "Date", "Montant de facture", "Montant de règlement", "Montant restant", "Etat"],
+    ("sales", "en"): ["Customer", "Receipt", "Number", "Date", "Invoice amount", "Settled amount", "Remaining amount", "Status"],
+    ("purchases", "en"): ["Supplier", "Disbursement", "Number", "Date", "Invoice amount", "Settled amount", "Remaining amount", "Status"],
+}
+REPORT_WITHOUT_DOCUMENT = {
+    ("sales", "fr"): "Sans encaissement", ("purchases", "fr"): "Sans décaissement",
+    ("sales", "en"): "No receipt", ("purchases", "en"): "No disbursement",
+}
+
+
+def _report(kind: str, fmt: str | None, lang: str, tenant: TenantContext):
+    direction = "in" if kind == "sales" else "out"
+    language = "fr" if lang == "fr" else "en"
     with get_connection() as connection:
         service = InvoiceStatusReportService(connection)
         rows = service.sales(tenant_id=tenant.tenant_id) if kind == "sales" else service.purchases(tenant_id=tenant.tenant_id)
-        groups = InvoiceStatusReportService.by_partner(rows)
+        summary = InvoiceStatusReportService.by_partner(rows)
+        groups = service.by_partner_and_document(tenant_id=tenant.tenant_id, direction=direction, rows=rows)
     if fmt in ("csv", "xlsx"):
-        headers = ["partner_id", "currency", "invoiced", "paid", "remaining", "0-30", "31-60", "61-90", "90+", "invoices"]
-        data = [[g["partner_id"], g["currency"], g["invoiced"], g["paid"], g["remaining"], g["bucket_0-30"], g["bucket_31-60"],
-                 g["bucket_61-90"], g["bucket_90+"], g["count"]] for g in groups]
-        return tabular_response(headers, data, fmt, f"{kind}-invoice-status")
-    return {"partners": groups, "invoices": rows}
+        data = InvoiceStatusReportService.flat_rows(groups, without_label=REPORT_WITHOUT_DOCUMENT[(kind, language)])
+        return tabular_response(REPORT_HEADERS[(kind, language)], data, fmt, f"{kind}-invoice-status")
+    return {"partners": summary, "groups": groups, "invoices": rows}
 
 
 @router.get("/reports/sales-invoices")
-def sales_invoice_report(format: str | None = None, tenant: TenantContext = Depends(require_permission("treasury.view"))):
-    return _report("sales", format, tenant)
+def sales_invoice_report(format: str | None = None, lang: str = "en", tenant: TenantContext = Depends(require_permission("treasury.view"))):
+    return _report("sales", format, lang, tenant)
 
 
 @router.get("/reports/purchase-invoices")
-def purchase_invoice_report(format: str | None = None, tenant: TenantContext = Depends(require_permission("treasury.view"))):
-    return _report("purchases", format, tenant)
+def purchase_invoice_report(format: str | None = None, lang: str = "en", tenant: TenantContext = Depends(require_permission("treasury.view"))):
+    return _report("purchases", format, lang, tenant)
 
 
 # ---- payment orders and notifications ----------------------------------------------------------
@@ -538,6 +661,38 @@ def notify_payment_order(order_id: str, body: NotifyRequest,
                          tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
     with get_connection() as connection:
         return _unwrap(connection, PaymentOrderService(connection).notify(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, order_id=order_id, user_id=body.user_id))
+
+
+class InvoicePaymentOrderRequest(BaseModel):
+    order_date: datetime.date
+    due_date: datetime.date
+    method: str
+    invoice_id: str
+    employee_user_id: str
+    department: str | None = None
+    note: str | None = None
+
+
+@router.get("/invoice-payment-orders")
+def list_invoice_payment_orders(tenant: TenantContext = Depends(require_permission("treasury.view"))) -> list[dict]:
+    with get_connection() as connection:
+        return PaymentOrderService(connection).list_invoice_orders(tenant_id=tenant.tenant_id)
+
+
+@router.post("/invoice-payment-orders", status_code=status.HTTP_201_CREATED)
+def create_invoice_payment_order(body: InvoicePaymentOrderRequest,
+                                 tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, PaymentOrderService(connection).create_invoice_order(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, **body.model_dump()))
+
+
+@router.post("/invoice-payment-orders/{order_id}/notify", status_code=status.HTTP_201_CREATED)
+def notify_invoice_payment_order(order_id: str, body: NotifyRequest,
+                                 tenant: TenantContext = Depends(require_permission("treasury.manage_disbursements"))) -> dict:
+    with get_connection() as connection:
+        return _unwrap(connection, PaymentOrderService(connection).notify_invoice_order(
             tenant_id=tenant.tenant_id, actor_id=tenant.user_id, order_id=order_id, user_id=body.user_id))
 
 

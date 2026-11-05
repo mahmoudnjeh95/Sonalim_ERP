@@ -31,6 +31,7 @@ from modules.finance.domain.treasury_posting import (
 
 TREASURY_MODULE = "treasury"
 ADVANCE = "advance"
+WITHHELD = "withheld"
 KIND_COLLECTED = "instrument_collected"
 KIND_UNPAID = "instrument_unpaid"
 KIND_REJECTION_FEE = "instrument_rejection_fee"
@@ -81,6 +82,7 @@ class TreasuryLedgerService:
             currency=doc["currency"],
             label=label,
             rules=self._rules.rules_for(tenant_id=tenant_id, source=TREASURY_MODULE),
+            withheld=doc.get("withheld", 0),
         )
         if isinstance(entries, Err):
             return entries
@@ -98,7 +100,7 @@ class TreasuryLedgerService:
         """Reverses whatever was posted for the document; a document that was never posted is a no-op."""
         noun = DIRECTION_NOUN[direction]
         reversed_entries: list[dict] = []
-        for suffix in (*METHODS, ADVANCE):
+        for suffix in (*METHODS, ADVANCE, WITHHELD):
             original = self._posting.find_by_source(
                 tenant_id=tenant_id, source=SourceRef(TREASURY_MODULE, document_id, f"{noun}_payment_{suffix}")
             )

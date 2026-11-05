@@ -24,7 +24,6 @@ import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listPartners } from "../partners/api";
-import { listCurrencies } from "../settings/exchangeRatesApi";
 import {
   cancelPurchaseInvoice,
   createPurchaseInvoice,
@@ -76,7 +75,6 @@ export function PurchaseInvoicesPage() {
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listPurchaseInvoices(token) });
   const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
-  const { data: currencies = [] } = useQuery({ queryKey: ["core", "currencies"], queryFn: () => listCurrencies(token) });
   const suppliers = partners.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
 
@@ -330,14 +328,7 @@ export function PurchaseInvoicesPage() {
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="pi_currency">{t("purchaseInvoice.field.currency")}</Label>
-                      <Select id="pi_currency" {...register("currency")}>
-                        {currencies.length === 0 && <option value="XOF">XOF</option>}
-                        {currencies.map((c) => (
-                          <option key={c.code} value={c.code}>
-                            {c.code}
-                          </option>
-                        ))}
-                      </Select>
+                      <Input id="pi_currency" value="F CFA" disabled />
                     </div>
                   </div>
                   <div className="space-y-2">

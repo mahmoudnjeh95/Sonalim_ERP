@@ -39,6 +39,7 @@ class InvoiceStatusReportService:
                 "invoice_id": invoice.id, "number": None, "partner_id": detail["partner_id"], "currency": detail["currency"],
                 "amount": detail["amount"], "paid": detail["amount_paid"], "remaining": detail["remaining"],
                 "status": detail["status"], "reference_date": detail["invoice_date"], "due_date": None,
+                "invoice_date": detail["invoice_date"],
             })
         return self._with_age(rows, today)
 
@@ -54,8 +55,54 @@ class InvoiceStatusReportService:
                 "currency": invoice["currency"], "amount": invoice["amount"], "paid": invoice["amount_paid"],
                 "remaining": invoice["remaining"], "status": invoice["status"],
                 "reference_date": invoice["due_date"] or invoice["invoice_date"], "due_date": invoice["due_date"],
+                "invoice_date": invoice["invoice_date"],
             })
         return self._with_age(rows, today)
+
+    def by_partner_and_document(self, *, tenant_id: str, direction: str, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """The manual's layout: per partner, per receipt or disbursement with its net and withheld amounts,
+        the invoices it settled; then the invoices no document touched."""
+        names = dict(self._connection.execute("SELECT id, name FROM core.partners WHERE tenant_id = %s", (tenant_id,)).fetchall())
+        settled_by: dict[str, list[tuple]] = {}
+        for invoice_id, document_id, number, total, withheld in self._connection.execute(
+            """
+            SELECT a.invoice_id, d.id, d.number, d.total, d.withheld_amount
+            FROM treasury.document_allocations a JOIN treasury.documents d ON d.id = a.document_id
+            WHERE d.tenant_id = %s AND d.direction = %s AND d.status = 'posted' ORDER BY d.number
+            """,
+            (tenant_id, direction),
+        ).fetchall():
+            settled_by.setdefault(invoice_id, []).append((document_id, number, total, withheld))
+        partners: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            partner = partners.setdefault(row["partner_id"], {
+                "partner_id": row["partner_id"], "partner_name": names.get(row["partner_id"]), "documents": {}, "without_document": [],
+            })
+            documents = settled_by.get(row["invoice_id"])
+            if not documents:
+                partner["without_document"].append(row)
+            for document_id, number, total, withheld in documents or []:
+                document = partner["documents"].setdefault(document_id, {
+                    "document_id": document_id, "number": number, "net_to_pay": total, "withheld": withheld, "invoices": [],
+                })
+                document["invoices"].append(row)
+        ordered = sorted(partners.values(), key=lambda p: p["partner_name"] or "")
+        return [{**p, "documents": sorted(p["documents"].values(), key=lambda d: d["number"])} for p in ordered]
+
+    @staticmethod
+    def flat_rows(groups: list[dict[str, Any]], *, without_label: str) -> list[list[Any]]:
+        """The grouped report as spreadsheet rows, one per invoice under its partner and document."""
+        rows: list[list[Any]] = []
+        def add(partner: dict[str, Any], label: str, invoice: dict[str, Any]) -> None:
+            rows.append([partner["partner_name"], label, invoice["number"] or invoice["invoice_id"], invoice["invoice_date"],
+                         invoice["amount"], invoice["paid"], invoice["remaining"], invoice["status"]])
+        for partner in groups:
+            for document in partner["documents"]:
+                for invoice in document["invoices"]:
+                    add(partner, document["number"], invoice)
+            for invoice in partner["without_document"]:
+                add(partner, without_label, invoice)
+        return rows
 
     @staticmethod
     def _with_age(rows: list[dict[str, Any]], today: datetime.date | None) -> list[dict[str, Any]]:

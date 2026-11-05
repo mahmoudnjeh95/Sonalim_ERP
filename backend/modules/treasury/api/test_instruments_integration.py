@@ -22,6 +22,8 @@ DUE = datetime.date(2026, 4, 1)
 
 @pytest.fixture
 def env(db):
+    # These tests are about money reaching the account at once; the deposit slip has its own in test_manual_requirements_integration.
+    db.execute("INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, 'receipts_collect_on_slip', 'false') ON CONFLICT DO NOTHING", (TENANT,))
     actor, customer, supplier = (str(ULID()) for _ in range(3))
     db.execute("INSERT INTO core.users (id, tenant_id, email, password_hash) VALUES (%s, %s, %s, 'x')",
                (actor, TENANT, f"{actor}@test.local"))
@@ -122,9 +124,9 @@ def test_slip_rejects_mobile_money_and_empty(db, env):
 
 
 def test_alerts_follow_configured_offsets(db, env):
-    _cheque_receipt(db, env, 10, number="A1")  # received cheque, due 2026-04-01, alert from 04-02
+    _cheque_receipt(db, env, 10, number="A1")  # received cheque, due 2026-04-01, alert from the due date
     service = InstrumentService(db)
-    assert service.alerts(tenant_id=TENANT, today=datetime.date(2026, 4, 1)) == []
+    assert service.alerts(tenant_id=TENANT, today=datetime.date(2026, 3, 31)) == []
     alerts = service.alerts(tenant_id=TENANT, today=datetime.date(2026, 4, 5))
     assert len(alerts) == 1 and alerts[0]["days_overdue"] == 4
     _cheque_receipt(db, env, 10, method="draft", number="A2")  # received draft: +15 days

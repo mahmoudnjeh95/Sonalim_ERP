@@ -27,6 +27,8 @@ DUE = datetime.date(2030, 4, 4)
 @pytest.fixture
 def env(ledger):
     db, tenant, actor = ledger["db"], ledger["tenant"], ledger["actor"]
+    # These tests post cash at once; a payment waiting on the deposit slip reads like a cheque, covered separately.
+    db.execute("INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, 'receipts_collect_on_slip', 'false') ON CONFLICT DO NOTHING", (tenant,))
     customer, supplier = str(ULID()), str(ULID())
     for pid, kind in ((customer, "customer"), (supplier, "supplier")):
         db.execute(
@@ -506,6 +508,8 @@ def test_a_mixed_receipt_partly_allocated_advances_only_the_rest(env):
     invoices = InvoiceService(env["db"])
     invoice = invoices.create_draft_invoice(tenant_id=env["tenant"], partner_id=env["customer"], amount=1500, currency="XOF")
     invoices.issue_invoice(tenant_id=env["tenant"], actor_id=env["actor"], invoice_id=invoice.id, correlation_id="c")
+    # DAY is years after the invoice's real creation date, which the prior-year cutoff would refuse.
+    env["db"].execute("INSERT INTO treasury.settings (tenant_id, key, value_json) VALUES (%s, 'prior_year_invoice_cutoff', 'null')", (env["tenant"],))
     result = DocumentService(env["db"]).create_and_post(
         tenant_id=env["tenant"], actor_id=env["actor"], direction="in", partner_id=env["customer"], doc_date=DAY, currency="XOF",
         payments=[

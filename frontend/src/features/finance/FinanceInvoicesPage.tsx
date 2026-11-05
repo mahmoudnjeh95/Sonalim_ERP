@@ -34,7 +34,6 @@ import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { createInvoice, issueInvoice, listInvoices, payInvoice, updateInvoice, type Invoice, type InvoiceStatus } from "./api";
-import { listCurrencies } from "../settings/exchangeRatesApi";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
 
@@ -73,7 +72,6 @@ export function FinanceInvoicesPage() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listInvoices(token) });
-  const { data: currencies = [] } = useQuery({ queryKey: ["core", "currencies"], queryFn: () => listCurrencies(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
   const activePartners = partners.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
@@ -320,14 +318,7 @@ export function FinanceInvoicesPage() {
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="currency">{t("finance.field.currency")}</Label>
-                    <Select id="currency" {...register("currency")}>
-                      {currencies.length === 0 && <option value="XOF">XOF</option>}
-                      {currencies.map((currency) => (
-                        <option key={currency.code} value={currency.code}>
-                          {currency.code}
-                        </option>
-                      ))}
-                    </Select>
+                    <Input id="currency" value="F CFA" disabled />
                   </div>
                 </div>
                 {createMutation.isError && (
@@ -374,14 +365,7 @@ export function FinanceInvoicesPage() {
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="edit_currency">{t("finance.field.currency")}</Label>
-                    <Select id="edit_currency" {...registerEdit("currency")}>
-                      {currencies.length === 0 && <option value="XOF">XOF</option>}
-                      {currencies.map((currency) => (
-                        <option key={currency.code} value={currency.code}>
-                          {currency.code}
-                        </option>
-                      ))}
-                    </Select>
+                    <Input id="edit_currency" disabled {...registerEdit("currency")} />
                   </div>
                 </div>
                 {updateMutation.isError && (
