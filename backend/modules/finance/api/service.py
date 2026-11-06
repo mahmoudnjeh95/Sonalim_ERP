@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from decimal import Decimal
 from typing import Any
 
@@ -10,6 +11,26 @@ from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.finance.domain.entities import Invoice, check_new_invoice_currency, status_for_payment, transition
+
+
+_INVOICE_COLUMNS = (
+    "id, partner_id, amount, amount_credited, amount_paid, currency, status, COALESCE(invoice_date, created_at::date), number, "
+    "source_type, source_id, source_number, source_order_id"
+)
+
+
+def _invoice_row(row) -> dict[str, Any]:
+    total, credited, paid = row[2], row[3], row[4]
+    due = max(total - credited, Decimal("0"))
+    return {
+        "id": row[0], "partner_id": row[1], "amount": due, "total": total, "amount_credited": credited, "amount_paid": paid,
+        # Under one franc is settled (see status_for_payment), so it is not shown as still due.
+        "remaining": due - paid if due - paid >= 1 else Decimal("0"),
+        # A credit note can bring what is due below what was already paid: that is owed back to the customer.
+        "customer_credit": paid - due if paid > due else Decimal("0"),
+        "currency": row[5], "status": row[6], "invoice_date": row[7], "number": row[8], "source_type": row[9],
+        "source_id": row[10], "source_number": row[11], "source_order_id": row[12],
+    }
 
 
 class InvoiceService:
@@ -26,13 +47,19 @@ class InvoiceService:
         source_order_id: str | None = None,
         actor_id: str | None = None,
     ) -> Invoice:
+        from modules.finance.api.billing_service import INVOICE_PREFIX, next_number
+
         invoice_id = str(ULID())
+        today = datetime.date.today()
+        number = next_number(self._connection, tenant_id, INVOICE_PREFIX, today.year)
         self._connection.execute(
             """
-            INSERT INTO finance.invoices (id, tenant_id, partner_id, amount, currency, status, source_order_id)
-            VALUES (%s, %s, %s, %s, %s, 'draft', %s)
+            INSERT INTO finance.invoices (id, tenant_id, partner_id, amount, currency, status, source_order_id, number, invoice_date,
+                                          source_type, source_id)
+            VALUES (%s, %s, %s, %s, %s, 'draft', %s, %s, %s, %s, %s)
             """,
-            (invoice_id, tenant_id, partner_id, amount, currency, source_order_id),
+            (invoice_id, tenant_id, partner_id, amount, currency, source_order_id, number, today,
+             "order" if source_order_id else None, source_order_id),
         )
         record_audit(
             self._connection,
@@ -75,21 +102,43 @@ class InvoiceService:
         ]
 
     def get_invoice(self, *, tenant_id: str, invoice_id: str) -> Result[dict[str, Any]]:
-        """Public read for treasury: what a receipt needs to know before allocating to an invoice."""
+        """Public read for treasury: what a receipt needs to know before allocating to an invoice. `amount` is
+        what is due, the invoiced total less credit notes; `total` is what was invoiced."""
         row = self._connection.execute(
-            """
-            SELECT id, partner_id, amount, amount_paid, currency, status, created_at::date
-            FROM finance.invoices WHERE id = %s AND tenant_id = %s
-            """,
+            f"SELECT {_INVOICE_COLUMNS} FROM finance.invoices WHERE id = %s AND tenant_id = %s",
             (invoice_id, tenant_id),
         ).fetchone()
         if row is None:
             return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
+        return Ok(_invoice_row(row))
+
+    def list_invoice_rows(self, *, tenant_id: str, status: str | None = None, source_order_id: str | None = None) -> list[dict[str, Any]]:
+        clauses, params = ["tenant_id = %s"], [tenant_id]
+        if status is not None:
+            clauses.append("status = %s")
+            params.append(status)
+        if source_order_id is not None:
+            clauses.append("source_order_id = %s")
+            params.append(source_order_id)
+        rows = self._connection.execute(
+            f"SELECT {_INVOICE_COLUMNS} FROM finance.invoices WHERE {' AND '.join(clauses)} ORDER BY id DESC", params
+        ).fetchall()
+        return [_invoice_row(row) for row in rows]
+
+    def get_invoice_detail(self, *, tenant_id: str, invoice_id: str) -> Result[dict[str, Any]]:
+        """The invoice with its lines and credit notes, for the invoices screen."""
+        from modules.finance.api.billing_service import DeliveryBillingService
+
+        invoice = self.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
+        if isinstance(invoice, Err):
+            return invoice
+        lines = self._connection.execute(
+            "SELECT product_id, quantity, unit_price, amount FROM finance.invoice_lines WHERE invoice_id = %s ORDER BY id", (invoice_id,)
+        ).fetchall()
         return Ok({
-            "id": row[0], "partner_id": row[1], "amount": row[2], "amount_paid": row[3],
-            # Under one franc is settled (see status_for_payment), so it is not shown as still due.
-            "remaining": row[2] - row[3] if row[2] - row[3] >= 1 else Decimal("0"),
-            "currency": row[4], "status": row[5], "invoice_date": row[6],
+            **invoice.value,
+            "lines": [{"product_id": l[0], "quantity": l[1], "unit_price": l[2], "amount": l[3]} for l in lines],
+            "credit_notes": DeliveryBillingService(self._connection).list_credit_notes(tenant_id=tenant_id, invoice_id=invoice_id),
         })
 
     def apply_payment_delta(
@@ -111,12 +160,12 @@ class InvoiceService:
         if already:
             return self.get_invoice(tenant_id=tenant_id, invoice_id=invoice_id)
         row = self._connection.execute(
-            "SELECT amount, amount_paid, status FROM finance.invoices WHERE id = %s AND tenant_id = %s FOR UPDATE",
+            "SELECT amount - amount_credited, amount_paid, status FROM finance.invoices WHERE id = %s AND tenant_id = %s FOR UPDATE",
             (invoice_id, tenant_id),
         ).fetchone()
         if row is None:
             return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
-        amount, amount_paid, status = row
+        amount, amount_paid, status = row  # amount: what is due once credit notes are taken off
         if status in ("draft",):
             return Err("INVOICE_NOT_VALIDATED", "only an issued invoice can be paid", "seule une facture émise peut être payée")
         new_paid = amount_paid + delta
@@ -233,7 +282,7 @@ class InvoiceService:
             return result
 
         self._connection.execute(
-            "UPDATE finance.invoices SET status = %s, amount_paid = CASE WHEN %s::text = 'paid' THEN amount ELSE amount_paid END WHERE id = %s",
+            "UPDATE finance.invoices SET status = %s, amount_paid = CASE WHEN %s::text = 'paid' THEN amount - amount_credited ELSE amount_paid END WHERE id = %s",
             (new_status, new_status, invoice_id),
         )
         publish_event(

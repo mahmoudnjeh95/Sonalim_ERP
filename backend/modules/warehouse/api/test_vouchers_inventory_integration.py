@@ -157,9 +157,12 @@ def test_issue_from_a_sales_order_is_capped_across_vouchers(db, env):
     capped = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id,
                                              source_location_id=env["main"], quantities={env["film"]: D("5")})
     assert isinstance(capped, Err) and capped.code == "ORDER_QTY_EXCEEDED"
-    rest = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id,
-                                           source_location_id=env["main"], quantities={env["film"]: D("4")})
+    # Without quantities the draft carries only what is left to ship.
+    rest = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id, source_location_id=env["main"])
+    assert [D(str(line["quantity"])) for line in rest.value["lines"]] == [D("4")]
     assert isinstance(_post(db, env, rest), Ok)
+    done = service.create_issue_from_order(tenant_id=TENANT, actor_id=env["actor"], order_id=order_id, source_location_id=env["main"])
+    assert isinstance(done, Err) and done.code == "ORDER_FULLY_ISSUED"
 
 
 def test_an_order_not_yet_confirmed_cannot_be_issued(db, env):

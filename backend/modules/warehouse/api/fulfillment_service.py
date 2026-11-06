@@ -477,11 +477,13 @@ class FulfillmentService:
         publish_event(
             self._connection,
             event_type="warehouse.shipment.shipped",
+            event_version="1.1",
             producer="warehouse",
             tenant_id=tenant_id,
             correlation_id=correlation_id,
             payload={
                 "shipment_id": shipment_id,
+                "number": shipment.value.number,
                 "pick_list_id": pick_list.value.id,
                 "source_type": pick_list.value.source_type,
                 "source_id": pick_list.value.source_id,

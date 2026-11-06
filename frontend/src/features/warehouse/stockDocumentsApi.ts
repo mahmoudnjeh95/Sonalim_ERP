@@ -109,6 +109,9 @@ export interface MovementRow {
   reference: string | null;
   voucher_number: string | null;
   voucher_type: VoucherType | null;
+  /** An invoice or credit note: listed, but it moves no stock. */
+  informational: boolean;
+  partner: string | null;
 }
 
 export interface MovementsFilter {

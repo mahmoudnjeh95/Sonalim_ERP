@@ -21,6 +21,7 @@ import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { listPartners } from "../partners/api";
+import { LedgerStatusBadge, LedgerStatusFilterTabs, matchesLedgerFilter, useLedgerStatuses, type LedgerStatusFilter } from "../finance/ledgerStatus";
 import { PRODUCTS_QUERY_KEY } from "../products/catalog";
 import { listProducts } from "../warehouse/api";
 import { FromReceiptsDialog } from "./FromReceiptsDialog";
@@ -98,12 +99,15 @@ export function PurchaseInvoicesPage() {
     }
   }
 
-  const statusFiltered =
+  const ledgerStatuses = useLedgerStatuses("procurement", invoices.map((i) => i.id));
+  const [ledgerFilter, setLedgerFilter] = useState<LedgerStatusFilter>("all");
+  const statusFiltered = (
     statusFilter === "all"
       ? invoices
       : statusFilter === "overdue"
         ? invoices.filter(isOverdue)
-        : invoices.filter((i) => i.status === statusFilter);
+        : invoices.filter((i) => i.status === statusFilter)
+  ).filter((i) => matchesLedgerFilter(ledgerFilter, ledgerStatuses[i.id]));
 
   const filterFields: FilterField<PurchaseInvoice>[] = [
     { key: "number", kind: "text", getValue: (i) => i.number ?? "" },
@@ -210,6 +214,13 @@ export function PurchaseInvoicesPage() {
       sortValue: (i) => i.status,
     },
     {
+      key: "ledger",
+      header: t("finance.ledgerStatus.column"),
+      defaultWidth: 200,
+      cell: (i) => <LedgerStatusBadge status={ledgerStatuses[i.id]} />,
+      sortValue: (i) => ledgerStatuses[i.id]?.status ?? "",
+    },
+    {
       key: "action",
       header: t("purchaseInvoice.column.action"),
       defaultWidth: 110,
@@ -289,6 +300,7 @@ export function PurchaseInvoicesPage() {
                 { value: "overdue", label: t("purchaseInvoice.overdue") },
               ]}
             />
+            <LedgerStatusFilterTabs value={ledgerFilter} onChange={setLedgerFilter} />
             <div className="space-y-1">
               <Label htmlFor="pi_filter_supplier" className="text-xs">{t("purchaseInvoice.field.supplier")}</Label>
               <Select id="pi_filter_supplier" className="h-8" value={supplierFilter} onChange={(e) => setSupplierFilter(e.target.value)}>

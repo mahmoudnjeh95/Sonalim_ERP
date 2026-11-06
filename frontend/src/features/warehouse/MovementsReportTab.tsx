@@ -1,10 +1,11 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { Download, History } from "lucide-react";
+import { Download, History, Info } from "lucide-react";
 import { toast } from "sonner";
 import { useAuth } from "../../lib/auth";
 import { ApiError } from "../../lib/api";
 import { useI18n } from "../../lib/i18n";
+import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -17,7 +18,19 @@ import { downloadMovementsReport, getMovementsReport, saveBlob, type MovementRow
 
 type Key = Parameters<ReturnType<typeof useI18n>["t"]>[0];
 
-const TYPE_FILTERS = ["receipt", "issue", "return", "delivery", "adjustment", "transfer_in", "transfer_out"];
+const TYPE_FILTERS = [
+  "receipt",
+  "issue",
+  "return",
+  "delivery",
+  "adjustment",
+  "transfer_in",
+  "transfer_out",
+  "sales_invoice",
+  "sales_credit_note",
+  "purchase_invoice",
+  "purchase_credit_note",
+];
 
 /** What a line of the report is, in the manual's words: the document first, the raw move type otherwise. */
 function kindOf(row: MovementRow) {
@@ -91,6 +104,11 @@ export function MovementsReportTab() {
         </Button>
       </div>
 
+      <p className="flex items-start gap-2 text-sm text-muted-foreground">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        {t("movements.informationalNote")}
+      </p>
+
       <Table>
         <TableHeader>
           <TableRow>
@@ -98,30 +116,37 @@ export function MovementsReportTab() {
             <TableHead>{t("movements.type")}</TableHead>
             <TableHead>{t("movements.document")}</TableHead>
             <TableHead>{t("movements.location")}</TableHead>
+            <TableHead>{t("movements.partner")}</TableHead>
             <TableHead className="text-right">{t("movements.quantity")}</TableHead>
             <TableHead>{t("movements.date")}</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
-          {isLoading && <TableLoadingRow colSpan={6} />}
+          {isLoading && <TableLoadingRow colSpan={7} />}
           {!isLoading && rows.length === 0 && (
             <TableRow>
-              <TableCell colSpan={6} className="p-0">
+              <TableCell colSpan={7} className="p-0">
                 <EmptyState icon={<History className="h-5 w-5" />} title={t("movements.empty.title")} description={t("movements.empty.description")} />
               </TableCell>
             </TableRow>
           )}
           {groups.map(([sku, group]) => [
             <TableRow key={sku} className="bg-muted/50">
-              <TableCell colSpan={6} className="font-medium">{sku} · {group[0].product}</TableCell>
+              <TableCell colSpan={7} className="font-medium">{sku} · {group[0].product}</TableCell>
             </TableRow>,
             ...group.map((row, index) => (
-              <TableRow key={`${sku}-${index}`}>
+              <TableRow key={`${sku}-${index}`} className={row.informational ? "text-muted-foreground" : undefined}>
                 <TableCell className="text-muted-foreground">{row.product}</TableCell>
-                <TableCell>{label(row)}</TableCell>
+                <TableCell>
+                  <span className="flex flex-wrap items-center gap-2">
+                    {label(row)}
+                    {row.informational && <Badge>{t("movements.informational")}</Badge>}
+                  </span>
+                </TableCell>
                 <TableCell className="font-mono text-xs">{row.voucher_number ?? row.reference ?? "—"}</TableCell>
                 <TableCell>{row.location ?? "—"}</TableCell>
-                <TableCell className="text-right tabular-nums">{Number(row.quantity)}</TableCell>
+                <TableCell>{row.partner ?? "—"}</TableCell>
+                <TableCell className={`text-right tabular-nums${row.informational ? " italic" : ""}`}>{Number(row.quantity)}</TableCell>
                 <TableCell>{new Date(row.created_at).toLocaleDateString()}</TableCell>
               </TableRow>
             )),

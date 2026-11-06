@@ -165,11 +165,21 @@ class VoucherService:
         issuable = self._check_order_issuable(tenant_id, order.value)
         if isinstance(issuable, Err):
             return issuable
-        lines = []
+        # Without quantities the draft carries what the order still has to ship, net of earlier exits and returns.
+        remaining: dict[str, Decimal] = {}
         for line in order.value.lines:
-            quantity = (quantities or {}).get(line.product_id, Decimal(str(line.quantity)))
+            remaining[line.product_id] = remaining.get(line.product_id, Decimal("0")) + Decimal(str(line.quantity))
+        for product_id, issued in self._order_net_issued(tenant_id, order_id).items():
+            if product_id in remaining:
+                remaining[product_id] = max(remaining[product_id] - Decimal(str(issued)), Decimal("0"))
+        lines = []
+        for product_id, left in remaining.items():
+            quantity = (quantities or {}).get(product_id, left)
             if quantity > 0:
-                lines.append({"product_id": line.product_id, "quantity": quantity})
+                lines.append({"product_id": product_id, "quantity": quantity})
+        if not lines:
+            return Err("ORDER_FULLY_ISSUED", "every line of this order has already left the warehouse",
+                       "toutes les lignes de cette commande sont déjà sorties de l'entrepôt")
         return self.create_draft(tenant_id=tenant_id, actor_id=actor_id, type="issue", lines=lines,
                                  source_location_id=source_location_id, partner_id=order.value.partner_id,
                                  ref_type="sales_order", ref_id=order_id)
@@ -209,7 +219,7 @@ class VoucherService:
             "UPDATE warehouse.stock_moves SET source_type = 'voucher', source_id = %s WHERE tenant_id = %s AND reference = %s AND source_id IS NULL",
             (voucher_id, tenant_id, reference),
         )
-        publish_event(self._connection, event_type="warehouse.voucher.posted", event_version="1.1", producer="warehouse", tenant_id=tenant_id,
+        publish_event(self._connection, event_type="warehouse.voucher.posted", event_version="1.2", producer="warehouse", tenant_id=tenant_id,
                       correlation_id=correlation_id, payload={"voucher_id": voucher_id, "type": "receipt", "number": number,
                                                               "ref_type": "purchase_receipt", "ref_id": receipt_id})
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="warehouse.voucher.posted",
@@ -311,9 +321,14 @@ class VoucherService:
             "UPDATE warehouse.stock_moves SET source_type = 'voucher', source_id = %s WHERE tenant_id = %s AND reference = %s AND source_id IS NULL",
             (delivery_id, tenant_id, number),
         )
-        publish_event(self._connection, event_type="warehouse.voucher.posted", event_version="1.1", producer="warehouse", tenant_id=tenant_id,
-                      correlation_id=correlation_id, payload={"voucher_id": delivery_id, "type": "delivery", "number": number,
-                                                              "ref_type": None, "ref_id": None})
+        # 1.2: what finance bills a delivery note from -- the order behind the voucher it came from, and its lines.
+        publish_event(self._connection, event_type="warehouse.voucher.posted", event_version="1.2", producer="warehouse", tenant_id=tenant_id,
+                      correlation_id=correlation_id, payload={
+                          "voucher_id": delivery_id, "type": "delivery", "number": number, "ref_type": None, "ref_id": None,
+                          "billable": not from_return, "from_voucher_id": voucher_id, "partner_id": source["partner_id"],
+                          "order_id": self._sales_order_of(source), "document_date": datetime.date.today().isoformat(),
+                          "lines": [{"product_id": line["product_id"], "quantity": str(line["quantity"])} for line in lines],
+                      })
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="warehouse.voucher.posted",
                      entity_type="voucher", entity_id=delivery_id,
                      payload={"number": number, "type": "delivery", "from_voucher": voucher_id, "billable": not from_return})
@@ -354,12 +369,32 @@ class VoucherService:
                                    "ref_type": current["ref_type"], "ref_id": current["ref_id"]}
         if current["type"] == "issue" and current["ref_type"] == "sales_order" and current["ref_id"]:
             payload["issued_to_date"] = self._order_net_issued(tenant_id, current["ref_id"])
-        publish_event(self._connection, event_type="warehouse.voucher.posted", event_version="1.1", producer="warehouse", tenant_id=tenant_id,
+        payload["partner_id"] = current["partner_id"]
+        payload["document_date"] = (current["document_date"] or datetime.date.today()).isoformat()
+        payload["lines"] = [{"product_id": product_id, "quantity": str(quantity)} for product_id, quantity in merged.items()]
+        if current["type"] == "return" and current["return_of_voucher_id"]:
+            # 1.2: what finance credits a return against -- the billable delivery notes of the voucher it
+            # returns to, and the order behind that voucher (an order invoiced under the old rule).
+            payload["return_of_voucher_id"] = current["return_of_voucher_id"]
+            payload["delivery_note_ids"] = self._billable_deliveries_of(tenant_id, current["return_of_voucher_id"])
+            source = self._connection.execute(
+                "SELECT ref_type, ref_id FROM warehouse.vouchers WHERE id = %s", (current["return_of_voucher_id"],)
+            ).fetchone()
+            payload["order_id"] = source[1] if source and source[0] == "sales_order" else None
+        publish_event(self._connection, event_type="warehouse.voucher.posted", event_version="1.2", producer="warehouse", tenant_id=tenant_id,
                       correlation_id=correlation_id, payload=payload)
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="warehouse.voucher.posted",
                      entity_type="voucher", entity_id=voucher_id, payload={"number": number, "type": current["type"]})
         posted = self.get(tenant_id=tenant_id, voucher_id=voucher_id)
-        return Ok({**posted.value, "warnings": warnings})
+        result = {**posted.value, "warnings": warnings}
+        if current["type"] == "issue" and self._sales_order_of(current):
+            # Goods sold under an order can't leave unbilled: their delivery note, which finance invoices, is
+            # made in the same transaction. A manual "Générer un BL" then finds nothing left to deliver.
+            note = self.generate_delivery_note(tenant_id=tenant_id, actor_id=actor_id, voucher_id=voucher_id, correlation_id=correlation_id)
+            if isinstance(note, Err):
+                return note
+            result["delivery_note"] = {"id": note.value["id"], "number": note.value["number"]}
+        return Ok(result)
 
     def _post_receipt(self, tenant_id, actor_id, correlation_id, voucher, number, lines, merged, warnings) -> Result[None]:
         for line in lines:
@@ -476,6 +511,19 @@ class VoucherService:
         return Ok(None)
 
     # ---- helpers ----------------------------------------------------------------------------
+
+    @staticmethod
+    def _sales_order_of(voucher: dict[str, Any]) -> str | None:
+        return voucher["ref_id"] if voucher.get("ref_type") == "sales_order" else None
+
+    def _billable_deliveries_of(self, tenant_id: str, voucher_id: str) -> list[str]:
+        """The billable delivery notes a voucher gave rise to, or the voucher itself when it is one."""
+        rows = self._connection.execute(
+            "SELECT id FROM warehouse.vouchers WHERE tenant_id = %s AND type = 'delivery' AND status = 'posted' AND billable "
+            "AND (from_voucher_id = %s OR id = %s) ORDER BY posted_at, id",
+            (tenant_id, voucher_id, voucher_id),
+        ).fetchall()
+        return [row[0] for row in rows]
 
     def _return_source(self, tenant_id: str, voucher_id: str) -> Err | dict[str, Any]:
         row = self._connection.execute(

@@ -3,7 +3,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { useForm } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { BadgeDollarSign, CircleDollarSign, Pencil, Plus, Receipt, Send } from "lucide-react";
+import { BadgeDollarSign, CircleDollarSign, Eye, Pencil, Plus, Receipt, Send } from "lucide-react";
 import { toast } from "sonner";
 import { z } from "zod";
 import { useAuth } from "../../lib/auth";
@@ -36,6 +36,9 @@ import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
 import { createInvoice, issueInvoice, listInvoices, payInvoice, updateInvoice, type Invoice, type InvoiceStatus } from "./api";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
+import { CreditNotesCard } from "./CreditNotesCard";
+import { InvoiceDetailDialog, invoiceSourceLabel } from "./InvoiceDetailDialog";
+import { LedgerStatusBadge, LedgerStatusFilterTabs, matchesLedgerFilter, useLedgerStatuses, type LedgerStatusFilter } from "./ledgerStatus";
 
 const newInvoiceSchema = z.object({
   partner_id: z.string().min(1, "Required"),
@@ -70,6 +73,7 @@ export function FinanceInvoicesPage() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [detailId, setDetailId] = useState<string | null>(null);
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listInvoices(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
@@ -150,7 +154,11 @@ export function FinanceInvoicesPage() {
 
   const paidTotal = invoices.filter((i) => i.status === "paid").reduce((sum, i) => sum + i.amount, 0);
   const outstandingCount = invoices.filter((i) => i.status !== "paid").length;
-  const statusFilteredInvoices = statusFilter === "all" ? invoices : invoices.filter((i) => i.status === statusFilter);
+  const ledgerStatuses = useLedgerStatuses("finance", invoices.map((i) => i.id));
+  const [ledgerFilter, setLedgerFilter] = useState<LedgerStatusFilter>("all");
+  const statusFilteredInvoices = (statusFilter === "all" ? invoices : invoices.filter((i) => i.status === statusFilter)).filter(
+    (i) => matchesLedgerFilter(ledgerFilter, ledgerStatuses[i.id]),
+  );
 
   const columnFilterFields: FilterField<Invoice>[] = [
     { key: "partner_id", kind: "text", getValue: (i) => partnerName(i.partner_id) },
@@ -160,6 +168,24 @@ export function FinanceInvoicesPage() {
   const filteredInvoices = columnFilters.apply(statusFilteredInvoices);
 
   const columns: ColumnDef<Invoice>[] = [
+    {
+      key: "number",
+      header: t("finance.column.number"),
+      defaultWidth: 150,
+      cell: (invoice) => (
+        <button type="button" className="font-medium tabular-nums text-primary underline-offset-2 hover:underline" onClick={() => setDetailId(invoice.id)}>
+          {invoice.number ?? "—"}
+        </button>
+      ),
+      sortValue: (invoice) => invoice.number ?? "",
+    },
+    {
+      key: "source",
+      header: t("finance.column.source"),
+      defaultWidth: 190,
+      cell: (invoice) => <span className="text-muted-foreground">{invoiceSourceLabel(t, invoice)}</span>,
+      sortValue: (invoice) => invoiceSourceLabel(t, invoice),
+    },
     {
       key: "partner_id",
       header: t("finance.column.partner"),
@@ -207,13 +233,23 @@ export function FinanceInvoicesPage() {
       sortValue: (invoice) => invoice.status,
     },
     {
+      key: "ledger",
+      header: t("finance.ledgerStatus.column"),
+      defaultWidth: 200,
+      cell: (invoice) => <LedgerStatusBadge status={ledgerStatuses[invoice.id]} />,
+      sortValue: (invoice) => ledgerStatuses[invoice.id]?.status ?? "",
+    },
+    {
       key: "action",
       header: t("finance.column.action"),
-      defaultWidth: 220,
+      defaultWidth: 270,
       alwaysVisible: true,
       headerClassName: "text-right",
       cell: (invoice) => (
         <div className="flex justify-end gap-2">
+          <Button size="sm" variant="ghost" aria-label={t("finance.detail.open")} title={t("finance.detail.open")} onClick={() => setDetailId(invoice.id)}>
+            <Eye className="h-3.5 w-3.5" />
+          </Button>
           <Button size="sm" variant="outline" onClick={() => openEditDialog(invoice)}>
             <Pencil className="h-3.5 w-3.5" />
             {t("finance.edit")}
@@ -278,6 +314,7 @@ export function FinanceInvoicesPage() {
                 { value: "paid", label: t("status.paid") },
               ]}
             />
+            <LedgerStatusFilterTabs value={ledgerFilter} onChange={setLedgerFilter} />
             {columnFilters.isActive && (
               <Button variant="ghost" size="sm" onClick={columnFilters.reset}>
                 {t("common.clearFilters")}
@@ -434,6 +471,9 @@ export function FinanceInvoicesPage() {
           </Table>
         </CardContent>
       </Card>
+
+      <CreditNotesCard partnerName={partnerName} onOpenInvoice={setDetailId} />
+      <InvoiceDetailDialog invoiceId={detailId} onClose={() => setDetailId(null)} />
     </div>
   );
 }

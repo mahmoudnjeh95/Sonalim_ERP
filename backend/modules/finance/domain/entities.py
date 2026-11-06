@@ -50,7 +50,11 @@ def check_new_invoice_currency(currency: str) -> Result[None]:
 
 def status_for_payment(amount: float, amount_paid: float) -> str:
     """The status an issued invoice has once `amount_paid` has been applied to it. Treasury pays in
-    whole francs, so what is left under one franc of an amount with cents can never be paid: settled."""
+    whole francs, so what is left under one franc of an amount with cents can never be paid: settled.
+    `amount` is what is due once credit notes are taken off: an invoice credited in full is settled,
+    and one credited below what was already paid is paid (the difference is a customer credit)."""
+    if amount < 1:
+        return "paid"
     if amount_paid <= 0:
         return "issued"
     if amount - amount_paid < 1:

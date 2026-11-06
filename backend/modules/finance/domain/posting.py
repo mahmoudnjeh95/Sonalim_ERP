@@ -188,10 +188,11 @@ def to_xof(raw: object, *, currency: str) -> Result[Decimal]:
 
 
 def invoice_entry(
-    kind: str, *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule]
+    kind: str, *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule], mirror: bool = False
 ) -> Result[tuple[str, list[EntryLine]]]:
     """The entry of an issued invoice (the customer side is the debit) or of its payment (the
-    customer side is the credit). The partner id rides on the customer line only."""
+    customer side is the credit). The partner id rides on the customer line only. `mirror` swaps the
+    sides of the issued rule: a credit note takes back from the customer what the invoice charged."""
     resolved = resolve_rule(rules, source="invoice", source_kind=kind, code=WILDCARD)
     if isinstance(resolved, Err):
         return resolved
@@ -204,6 +205,8 @@ def invoice_entry(
         EntryLine(str(rule.debit_account_code), debit=amount, label=label, partner_id=partner_id if customer_on_debit else None),
         EntryLine(str(rule.credit_account_code), credit=amount, label=label, partner_id=None if customer_on_debit else partner_id),
     ]
+    if mirror:
+        lines = [replace(line, debit=line.credit, credit=line.debit) for line in lines]
     return Ok((str(rule.journal_code), lines))
 
 

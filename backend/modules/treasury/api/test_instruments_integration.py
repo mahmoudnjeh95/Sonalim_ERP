@@ -237,3 +237,17 @@ def test_the_prior_year_permission_migration_moves_grants_and_is_idempotent(db, 
     held = db.execute("SELECT user_id, permission FROM core.user_permissions WHERE user_id = ANY(%s) ORDER BY user_id", ([env["actor"], both],)).fetchall()
     assert sorted(held) == sorted([(env["actor"], new), (both, new)])
     assert db.execute("SELECT permission FROM core.role_permissions WHERE role_id = %s", (role,)).fetchall() == [(new,)]
+
+
+def test_the_ledger_reads_each_documents_instruments_in_one_call(db, env):
+    from modules.treasury.api.posting_service import TreasuryPostingService
+
+    first_instrument, first_doc = _cheque_receipt(db, env, 400, number="CH-A")
+    second_instrument, second_doc = _cheque_receipt(db, env, 300, number="CH-B")
+    assert isinstance(_bounce(db, env, second_instrument, D("2500"), env["bank"]), Ok)
+    found = TreasuryPostingService(db).instruments_of_documents(tenant_id=TENANT, document_ids=[first_doc, second_doc, "unknown"])
+    assert found == {
+        first_doc: [{"id": first_instrument, "number": "CH-A", "status": "pending", "has_rejection_fee": False}],
+        second_doc: [{"id": second_instrument, "number": "CH-B", "status": "unpaid", "has_rejection_fee": True}],
+    }
+    assert TreasuryPostingService(db).instruments_of_documents(tenant_id=TENANT, document_ids=[]) == {}

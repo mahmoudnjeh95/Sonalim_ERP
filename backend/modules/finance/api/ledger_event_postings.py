@@ -17,6 +17,7 @@ SOURCES: dict[str, tuple[str, str, str]] = {
     "payroll.run.reversed": ("payroll", "run_id", "payroll_reversal"),
     "finance.invoice.issued": ("finance", "invoice_id", "invoice_issued"),
     "finance.invoice.paid": ("finance", "invoice_id", "invoice_paid"),
+    "finance.credit_note.issued": ("finance", "credit_note_id", "invoice_credit_note"),
     "procurement.purchase_invoice.validated": ("procurement", "invoice_id", "purchase_invoice_validated"),
     "procurement.purchase_invoice.cancelled": ("procurement", "invoice_id", "purchase_invoice_cancelled"),
     "procurement.purchase_credit_note.validated": ("procurement", "credit_note_id", "purchase_credit_note_validated"),
@@ -90,6 +91,14 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
         if event_type == "finance.invoice.issued":
             return invoices.post_issued(issued_on=occurred_on(envelope), **common)
         return invoices.post_paid(paid_on=occurred_on(envelope), **common)
+    if event_type == "finance.credit_note.issued":
+        from modules.finance.api.invoice_ledger_service import InvoiceLedgerService
+
+        return InvoiceLedgerService(connection).post_credit_note(
+            tenant_id=tenant_id, credit_note_id=str(payload["credit_note_id"]), invoice_id=str(payload["invoice_id"]),
+            partner_id=str(payload["partner_id"]), amount=payload["amount"], currency=str(payload["currency"]),
+            number=payload.get("number"), credited_on=occurred_on(envelope), correlation_id=correlation_id, causation_id=causation_id,
+        )
     if event_type == "procurement.purchase_credit_note.validated":
         from modules.finance.api.purchase_invoice_ledger_service import PurchaseInvoiceLedgerService
 

@@ -75,6 +75,8 @@ export function VouchersTab() {
   const visible = filter === "all" ? vouchers : vouchers.filter((v) => v.type === filter);
   // The manual returns against a delivery note; an issue voucher with no note yet stands in for it.
   const returnable = vouchers.filter((v) => (v.type === "issue" || v.type === "delivery") && v.status === "posted");
+  // An exit from a sales order gets its delivery note when it is posted; its button opens that note instead.
+  const deliveryOf = new Map(vouchers.filter((v) => v.type === "delivery" && v.from_voucher_id).map((v) => [v.from_voucher_id as string, v]));
   // The manual's entry voucher shows each product's weighted average cost next to its cost.
   const canSeeValuation = hasPermission("warehouse.view_valuation");
   const { data: valuations = [] } = useQuery({ queryKey: ["warehouse", "valuation"], queryFn: () => getValuation(token), enabled: canSeeValuation });
@@ -295,7 +297,14 @@ export function VouchersTab() {
                           <Pencil className="h-3.5 w-3.5" />
                         </Button>
                       )}
-                      {canPost && voucher.status === "posted" && (voucher.type === "issue" || voucher.type === "return") && (
+                      {voucher.type === "issue" && voucher.ref_type === "sales_order" && deliveryOf.has(voucher.id) && (
+                        <Button size="sm" variant="outline" onClick={() => setViewing(deliveryOf.get(voucher.id)!.id)}>
+                          <Truck className="h-3.5 w-3.5" />
+                          {deliveryOf.get(voucher.id)!.number}
+                        </Button>
+                      )}
+                      {canPost && voucher.status === "posted" && (voucher.type === "issue" || voucher.type === "return") &&
+                        !(voucher.type === "issue" && voucher.ref_type === "sales_order" && deliveryOf.has(voucher.id)) && (
                         <Button size="sm" variant="outline" disabled={deliveryMutation.isPending} onClick={() => deliveryMutation.mutate(voucher.id)}>
                           <Truck className="h-3.5 w-3.5" />
                           {t("voucher.generateDelivery")}

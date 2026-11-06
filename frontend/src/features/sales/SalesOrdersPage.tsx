@@ -12,6 +12,8 @@ import { useI18n } from "../../lib/i18n";
 import { formatXofWithCode } from "../../lib/currency";
 import { ApiError } from "../../lib/api";
 import { productRequiresIntegerQuantity } from "../../lib/units";
+import { listInvoices } from "../finance/api";
+import { InvoiceDetailDialog } from "../finance/InvoiceDetailDialog";
 import { Button } from "../../components/ui/button";
 import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
@@ -78,8 +80,13 @@ export function SalesOrdersPage() {
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<SalesOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [invoiceDetailId, setInvoiceDetailId] = useState<string | null>(null);
 
   const { data: orders = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listOrders(token) });
+  // Invoices follow the deliveries, so an order can have several; shown only to those who may see invoices.
+  const canSeeInvoices = hasPermission("finance.view_invoices");
+  const { data: invoices = [] } = useQuery({ queryKey: ["finance", "invoices"], queryFn: () => listInvoices(token), enabled: canSeeInvoices });
+  const invoicesOf = (orderId: string) => invoices.filter((invoice) => invoice.source_order_id === orderId);
   const { data: locations = [] } = useQuery({ queryKey: LOCATIONS_QUERY_KEY, queryFn: () => listLocations(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
   // Shipping issues the stock too, so a voucher is only for an order nobody has started picking.
@@ -279,6 +286,28 @@ export function SalesOrdersPage() {
       cell: (order) => <StatusBadge status={order.status} />,
       sortValue: (order) => order.status,
     },
+    ...(canSeeInvoices
+      ? [
+          {
+            key: "invoices",
+            header: t("sales.column.invoices"),
+            defaultWidth: 170,
+            cell: (order: SalesOrder) => {
+              const own = invoicesOf(order.id);
+              if (own.length === 0) return <span className="text-muted-foreground">{order.status === "draft" ? "—" : t("sales.invoices.none")}</span>;
+              return (
+                <div className="flex flex-wrap gap-x-2">
+                  {own.map((invoice) => (
+                    <button key={invoice.id} type="button" className="text-primary underline-offset-2 hover:underline" onClick={() => setInvoiceDetailId(invoice.id)}>
+                      {invoice.number ?? t("sales.invoices.unnumbered")}
+                    </button>
+                  ))}
+                </div>
+              );
+            },
+          } satisfies ColumnDef<SalesOrder>,
+        ]
+      : []),
     {
       key: "action",
       header: t("sales.column.action"),
@@ -662,6 +691,7 @@ export function SalesOrdersPage() {
           </Table>
         </CardContent>
       </Card>
+      <InvoiceDetailDialog invoiceId={invoiceDetailId} onClose={() => setInvoiceDetailId(null)} />
     </div>
   );
 }

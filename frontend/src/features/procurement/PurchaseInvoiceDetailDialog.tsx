@@ -12,6 +12,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { fileToBase64 } from "../treasury/statementsApi";
+import { LedgerStatusBadge, useLedgerStatuses } from "../finance/ledgerStatus";
 import { openDocument } from "../warehouse/printDocument";
 import { formatXof, plain } from "./invoiceFormat";
 import {
@@ -54,6 +55,7 @@ export function PurchaseInvoiceDetailDialog({
   const detailKey = [...PURCHASE_INVOICES_KEY, invoiceId] as const;
 
   const { data: invoice } = useQuery({ queryKey: detailKey, queryFn: () => getPurchaseInvoice(token, invoiceId!), enabled: !!invoiceId });
+  const ledgerStatuses = useLedgerStatuses("procurement", invoiceId ? [invoiceId] : []);
   const { data: attachments = [] } = useQuery({
     queryKey: [...detailKey, "attachments"],
     queryFn: () => listInvoiceAttachments(token, invoiceId!),
@@ -146,6 +148,7 @@ export function PurchaseInvoiceDetailDialog({
           <DialogTitle className="flex flex-wrap items-center gap-2">
             {t("purchaseInvoice.detail.title")} {invoice?.number ?? ""}
             {invoice && <StatusBadge status={invoice.status} />}
+            {invoice && <LedgerStatusBadge status={ledgerStatuses[invoice.id]} />}
           </DialogTitle>
           <DialogDescription>
             {invoice ? `${partnerName(invoice.partner_id)} · ${invoice.supplier_invoice_number}` : t("purchaseInvoice.detail.loading")}
@@ -353,6 +356,7 @@ function CreditNotesSection({ invoice, canManage, onChanged }: { invoice: Purcha
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [prices, setPrices] = useState<Record<string, string>>({});
   const creditable = ["validated", "partially_paid", "paid"].includes(invoice.status);
+  const noteStatuses = useLedgerStatuses("procurement", invoice.credit_notes.map((note) => note.id));
 
   useEffect(() => {
     setFormOpen(false);
@@ -414,7 +418,7 @@ function CreditNotesSection({ invoice, canManage, onChanged }: { invoice: Purcha
             <li key={note.id} className="flex flex-wrap items-center justify-between gap-2 rounded-md border px-3 py-2">
               <span>
                 <span className="font-medium">{note.number ?? t("status.draft")}</span> · {note.note_date} · {note.reason}{" "}
-                <StatusBadge status={note.status} />
+                <StatusBadge status={note.status} /> <LedgerStatusBadge status={noteStatuses[note.id]} />
               </span>
               <span className="flex items-center gap-2">
                 <span className="tabular-nums">− {formatXof(note.total_incl_tax)}</span>

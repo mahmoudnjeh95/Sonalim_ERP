@@ -36,7 +36,7 @@ class InvoiceStatusReportService:
                 continue
             detail = service.get_invoice(tenant_id=tenant_id, invoice_id=invoice.id).value
             rows.append({
-                "invoice_id": invoice.id, "number": None, "partner_id": detail["partner_id"], "currency": detail["currency"],
+                "invoice_id": invoice.id, "number": detail.get("number"), "partner_id": detail["partner_id"], "currency": detail["currency"],
                 "amount": detail["amount"], "paid": detail["amount_paid"], "remaining": detail["remaining"],
                 "status": detail["status"], "reference_date": detail["invoice_date"], "due_date": None,
                 "invoice_date": detail["invoice_date"],

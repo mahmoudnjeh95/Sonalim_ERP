@@ -77,6 +77,24 @@ class TreasuryPostingService:
             "payments": [dict(zip(keys, p, strict=True)) for p in payments],
         })
 
+    def instruments_of_documents(self, *, tenant_id: str, document_ids: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Per document, its instruments (cheques, drafts and payments waiting on the slip) in one query: what the
+        ledger status of a page of documents needs to look at their collection, unpaid and fee postings too."""
+        found: dict[str, list[dict[str, Any]]] = {}
+        if not document_ids:
+            return found
+        for document_id, instrument_id, number, status, rejection_fee in self._connection.execute(
+            """
+            SELECT document_id, id, number, status, rejection_fee FROM treasury.instruments
+            WHERE tenant_id = %s AND document_id = ANY(%s) ORDER BY document_id, number, id
+            """,
+            (tenant_id, list(document_ids)),
+        ).fetchall():
+            found.setdefault(document_id, []).append(
+                {"id": instrument_id, "number": number, "status": status, "has_rejection_fee": rejection_fee is not None}
+            )
+        return found
+
     def instrument_lines(self, *, tenant_id: str, instrument_id: str) -> Result[dict[str, Any]]:
         row = self._connection.execute(
             """

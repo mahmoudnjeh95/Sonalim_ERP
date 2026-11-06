@@ -18,6 +18,7 @@ import { EmptyState } from "../../components/patterns/EmptyState";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
+import { LedgerStatusBadge, LedgerStatusFilterTabs, matchesLedgerFilter, useLedgerStatuses, type LedgerStatusFilter } from "../finance/ledgerStatus";
 import { getSettings, listAccounts } from "./api";
 import {
   cancelDocument,
@@ -69,6 +70,9 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
   const [viewing, setViewing] = useState<string | null>(null);
 
   const { data: documents = [], isLoading } = useQuery({ queryKey: key, queryFn: () => listDocuments(token, direction) });
+  const ledgerStatuses = useLedgerStatuses("treasury", documents.map((doc) => doc.id));
+  const [ledgerFilter, setLedgerFilter] = useState<LedgerStatusFilter>("all");
+  const shown = documents.filter((doc) => matchesLedgerFilter(ledgerFilter, ledgerStatuses[doc.id]));
   const { data: partners = [] } = useQuery({ queryKey: ["core", "partners"], queryFn: () => listPartners(token) });
   const { data: accounts = [] } = useQuery({ queryKey: ["treasury", "accounts"], queryFn: () => listAccounts(token) });
   const { data: settings } = useQuery({ queryKey: ["treasury", "settings"], queryFn: () => getSettings(token) });
@@ -156,6 +160,9 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
             </Button>
           )}
         </CardHeader>
+        <CardContent className="border-b">
+          <LedgerStatusFilterTabs value={ledgerFilter} onChange={setLedgerFilter} />
+        </CardContent>
         <CardContent className="p-0">
           <Table>
             <TableHeader>
@@ -165,14 +172,15 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                 <TableHead>{t("treasury.column.partner")}</TableHead>
                 <TableHead className="text-right">{t("treasury.column.amount")}</TableHead>
                 <TableHead>{t("treasury.column.status")}</TableHead>
+                <TableHead>{t("finance.ledgerStatus.column")}</TableHead>
                 <TableHead className="text-right">{t("treasury.column.action")}</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
-              {isLoading && <TableLoadingRow colSpan={6} />}
-              {!isLoading && documents.length === 0 && (
+              {isLoading && <TableLoadingRow colSpan={7} />}
+              {!isLoading && shown.length === 0 && (
                 <TableRow>
-                  <TableCell colSpan={6} className="p-0">
+                  <TableCell colSpan={7} className="p-0">
                     <EmptyState
                       icon={<Wallet className="h-5 w-5" />}
                       title={t(`${prefix}.empty.title` as Key)}
@@ -181,7 +189,7 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                   </TableCell>
                 </TableRow>
               )}
-              {documents.map((doc) => (
+              {shown.map((doc) => (
                 <TableRow key={doc.id} className={doc.status === "cancelled" ? "opacity-50" : undefined}>
                   <TableCell className="font-mono text-xs">{doc.number}</TableCell>
                   <TableCell>{doc.doc_date}</TableCell>
@@ -189,6 +197,9 @@ export function PaymentsTab({ direction }: { direction: Direction }) {
                   <TableCell className="text-right tabular-nums">{money(doc.total, doc.currency)}</TableCell>
                   <TableCell>
                     <StatusBadge status={doc.status === "posted" ? "confirmed" : "cancelled"} />
+                  </TableCell>
+                  <TableCell>
+                    <LedgerStatusBadge status={ledgerStatuses[doc.id]} />
                   </TableCell>
                   <TableCell>
                     <div className="flex justify-end gap-2">

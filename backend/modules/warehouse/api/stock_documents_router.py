@@ -268,8 +268,9 @@ def movements_report(product_id: str | None = None, location_id: str | None = No
             tenant_id=tenant.tenant_id, product_id=product_id, location_id=location_id, move_type=move_type,
             date_from=date_from, date_to=date_to)
     if format in ("csv", "xlsx"):
+        # informational: an invoice or credit note, listed but never part of the stock figures
         data = [[r["created_at"].isoformat(), r["move_type"], r["sku"], r["product"], r["location"], r["quantity"], r["unit_cost"],
-                 r["reference"], r["voucher_number"]] for r in rows]
-        return tabular_response(["date", "type", "sku", "product", "location", "quantity", "unit_cost", "reference", "voucher"],
-                                data, format, "stock-movements")
+                 r["reference"], r["voucher_number"], r["partner"], "yes" if r["informational"] else "no"] for r in rows]
+        return tabular_response(["date", "type", "sku", "product", "location", "quantity", "unit_cost", "reference", "voucher",
+                                 "partner", "informational"], data, format, "stock-movements")
     return rows

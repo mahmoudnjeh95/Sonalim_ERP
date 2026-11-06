@@ -8,6 +8,7 @@ import { currentLocale, useI18n } from "../../lib/i18n";
 import { Button } from "../../components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
+import { LedgerStatusBadge, useLedgerStatuses } from "../finance/ledgerStatus";
 import { addAttachment, deleteAttachment, downloadAttachment, getDocument, listAttachments, type Direction } from "./paymentsApi";
 
 type Key = Parameters<ReturnType<typeof useI18n>["t"]>[0];
@@ -38,6 +39,7 @@ export function DocumentDetailDialog({ direction, documentId, onClose }: { direc
     queryFn: () => getDocument(token, direction, documentId!),
     enabled: documentId !== null,
   });
+  const ledgerStatuses = useLedgerStatuses("treasury", documentId ? [documentId] : []);
   const { data: attachments = [] } = useQuery({
     queryKey: attachmentsKey,
     queryFn: () => listAttachments(token, direction, documentId!),
@@ -78,7 +80,10 @@ export function DocumentDetailDialog({ direction, documentId, onClose }: { direc
       <DialogContent className="max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>{document?.number}</DialogTitle>
-          <DialogDescription>{document?.doc_date}</DialogDescription>
+          <DialogDescription className="flex flex-wrap items-center gap-2">
+            {document?.doc_date}
+            {documentId && <LedgerStatusBadge status={ledgerStatuses[documentId]} />}
+          </DialogDescription>
         </DialogHeader>
         {document && (
           <div className="space-y-4 text-sm">
