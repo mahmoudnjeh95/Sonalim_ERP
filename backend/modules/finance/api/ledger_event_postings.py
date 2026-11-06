@@ -89,7 +89,8 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
             "causation_id": causation_id,
         }
         if event_type == "finance.invoice.issued":
-            return invoices.post_issued(issued_on=occurred_on(envelope), **common)
+            # 1.1 (additive): the collected VAT inside `amount`; a 1.0 event had none
+            return invoices.post_issued(issued_on=occurred_on(envelope), vat=payload.get("vat") or 0, **common)
         return invoices.post_paid(paid_on=occurred_on(envelope), **common)
     if event_type == "finance.credit_note.issued":
         from modules.finance.api.invoice_ledger_service import InvoiceLedgerService
@@ -98,6 +99,7 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
             tenant_id=tenant_id, credit_note_id=str(payload["credit_note_id"]), invoice_id=str(payload["invoice_id"]),
             partner_id=str(payload["partner_id"]), amount=payload["amount"], currency=str(payload["currency"]),
             number=payload.get("number"), credited_on=occurred_on(envelope), correlation_id=correlation_id, causation_id=causation_id,
+            vat=payload.get("vat") or 0,
         )
     if event_type == "procurement.purchase_credit_note.validated":
         from modules.finance.api.purchase_invoice_ledger_service import PurchaseInvoiceLedgerService

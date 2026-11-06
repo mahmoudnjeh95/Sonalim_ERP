@@ -15,7 +15,7 @@ from modules.finance.domain.entities import Invoice, check_new_invoice_currency,
 
 _INVOICE_COLUMNS = (
     "id, partner_id, amount, amount_credited, amount_paid, currency, status, COALESCE(invoice_date, created_at::date), number, "
-    "source_type, source_id, source_number, source_order_id"
+    "source_type, source_id, source_number, source_order_id, due_date, payment_term_code"
 )
 
 
@@ -30,6 +30,7 @@ def _invoice_row(row) -> dict[str, Any]:
         "customer_credit": paid - due if paid > due else Decimal("0"),
         "currency": row[5], "status": row[6], "invoice_date": row[7], "number": row[8], "source_type": row[9],
         "source_id": row[10], "source_number": row[11], "source_order_id": row[12],
+        "due_date": row[13], "payment_term_code": row[14],
     }
 
 
@@ -61,6 +62,9 @@ class InvoiceService:
             (invoice_id, tenant_id, partner_id, amount, currency, source_order_id, number, today,
              "order" if source_order_id else None, source_order_id),
         )
+        from modules.finance.api.payment_schedule import apply_customer_terms
+
+        apply_customer_terms(self._connection, tenant_id=tenant_id, invoice_id=invoice_id, partner_id=partner_id, invoice_date=today)
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -133,11 +137,19 @@ class InvoiceService:
         if isinstance(invoice, Err):
             return invoice
         lines = self._connection.execute(
-            "SELECT product_id, quantity, unit_price, amount FROM finance.invoice_lines WHERE invoice_id = %s ORDER BY id", (invoice_id,)
+            "SELECT product_id, quantity, unit_price, amount, vat_rate, list_price, discount_rate FROM finance.invoice_lines "
+            "WHERE invoice_id = %s ORDER BY id",
+            (invoice_id,),
         ).fetchall()
+        totals = self._connection.execute(
+            "SELECT COALESCE(amount_excl_tax, amount), vat_amount FROM finance.invoices WHERE id = %s", (invoice_id,)
+        ).fetchone()
         return Ok({
             **invoice.value,
-            "lines": [{"product_id": l[0], "quantity": l[1], "unit_price": l[2], "amount": l[3]} for l in lines],
+            "amount_excl_tax": totals[0],
+            "vat_amount": totals[1],
+            "lines": [{"product_id": l[0], "quantity": l[1], "unit_price": l[2], "amount": l[3], "vat_rate": l[4], "list_price": l[5],
+                       "discount_rate": l[6]} for l in lines],
             "credit_notes": DeliveryBillingService(self._connection).list_credit_notes(tenant_id=tenant_id, invoice_id=invoice_id),
         })
 
@@ -196,6 +208,7 @@ class InvoiceService:
         partner_id: str | None = None,
         amount: float | None = None,
         currency: str | None = None,
+        due_date: datetime.date | None = None,
     ) -> Result[Invoice]:
         row = self._connection.execute(
             "SELECT partner_id, amount, currency, status FROM finance.invoices WHERE id = %s AND tenant_id = %s FOR UPDATE",
@@ -223,6 +236,16 @@ class InvoiceService:
             "UPDATE finance.invoices SET partner_id = %s, amount = %s, currency = %s WHERE id = %s AND tenant_id = %s",
             (updated.partner_id, updated.amount, updated.currency, invoice_id, tenant_id),
         )
+        from modules.finance.api import payment_schedule
+
+        if due_date is not None:
+            payment_schedule.set_single_due_date(self._connection, tenant_id=tenant_id, invoice_id=invoice_id, due_date=due_date)
+        elif updated.partner_id != current_partner_id:
+            # Another customer, another agreement: the new customer's terms apply.
+            self._connection.execute("UPDATE finance.invoices SET payment_term_rule = NULL WHERE id = %s", (invoice_id,))
+            payment_schedule.redate(self._connection, tenant_id=tenant_id, invoice_id=invoice_id)
+        elif Decimal(str(updated.amount)) != Decimal(str(current_amount)):
+            payment_schedule.redate(self._connection, tenant_id=tenant_id, invoice_id=invoice_id)
         record_audit(
             self._connection,
             tenant_id=tenant_id,
@@ -230,7 +253,8 @@ class InvoiceService:
             action="invoice.updated",
             entity_type="invoice",
             entity_id=invoice_id,
-            payload={"partner_id": updated.partner_id, "amount": updated.amount, "currency": updated.currency},
+            payload={"partner_id": updated.partner_id, "amount": updated.amount, "currency": updated.currency,
+                     "due_date": due_date.isoformat() if due_date else None},
         )
         return Ok(updated)
 
@@ -259,7 +283,7 @@ class InvoiceService:
     ) -> Result[Invoice]:
         row = self._connection.execute(
             """
-            SELECT partner_id, amount, currency, status, amount_paid
+            SELECT partner_id, amount, currency, status, amount_paid, vat_amount
             FROM finance.invoices
             WHERE id = %s AND tenant_id = %s
             FOR UPDATE
@@ -269,7 +293,7 @@ class InvoiceService:
         if row is None:
             return Err("NOT_FOUND", f"invoice {invoice_id} not found", f"facture {invoice_id} introuvable")
 
-        partner_id, amount, currency, status, amount_paid = row
+        partner_id, amount, currency, status, amount_paid, vat_amount = row
         if new_status == "paid" and amount_paid > 0:
             return Err(
                 "INVOICE_HAS_PAYMENTS",
@@ -291,7 +315,10 @@ class InvoiceService:
             producer="finance",
             tenant_id=tenant_id,
             correlation_id=correlation_id,
-            payload={"invoice_id": invoice_id, "partner_id": partner_id, "amount": float(amount), "currency": currency},
+            # 1.1 (additive): the collected VAT inside `amount`
+            event_version="1.1",
+            payload={"invoice_id": invoice_id, "partner_id": partner_id, "amount": float(amount), "currency": currency,
+                     "vat": float(vat_amount or 0)},
         )
         record_audit(
             self._connection,

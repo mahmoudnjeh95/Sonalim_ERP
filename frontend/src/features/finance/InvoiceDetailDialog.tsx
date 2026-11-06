@@ -1,10 +1,13 @@
 import { useQuery } from "@tanstack/react-query";
+import { Eye, Printer } from "lucide-react";
 import { useAuth } from "../../lib/auth";
 import { useI18n } from "../../lib/i18n";
 import { formatXofWithCode } from "../../lib/currency";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "../../components/ui/dialog";
 import { StatusBadge } from "../../components/patterns/StatusBadge";
+import { Button } from "../../components/ui/button";
+import { openDocument } from "../warehouse/printDocument";
 import { listProducts } from "../warehouse/api";
 import { getInvoice, type Invoice } from "./api";
 import { LedgerStatusBadge, useLedgerStatuses } from "./ledgerStatus";
@@ -31,6 +34,36 @@ export function InvoiceDetailDialog({ invoiceId, onClose }: { invoiceId: string 
   const { data: products = [] } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token), enabled: invoiceId !== null });
   const ledgerStatuses = useLedgerStatuses("finance", invoice ? [invoice.id, ...invoice.credit_notes.map((note) => note.id)] : []);
   const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
+  const hasVat = (invoice?.vat_amount ?? 0) > 0 || (invoice?.lines ?? []).some((line) => (line.vat_rate ?? 0) > 0);
+
+  function print(printNow: boolean) {
+    if (!invoice) return;
+    const money = (value: number) => formatXofWithCode(value);
+    openDocument(
+      {
+        title: `${t("finance.detail.invoice")} ${invoice.number ?? ""}`.trim(),
+        fields: [
+          [t("finance.detail.date"), invoice.invoice_date ?? ""],
+          [t("finance.detail.source"), invoiceSourceLabel(t, invoice)],
+        ],
+        headers: [t("finance.detail.product"), t("finance.detail.quantity"), t("finance.detail.unitPrice"), t("finance.detail.discount"), t("finance.detail.vatRate"), t("finance.detail.amountExclTax")],
+        rows: invoice.lines.map((line) => [
+          productName(line.product_id),
+          line.quantity,
+          money(line.unit_price),
+          line.discount_rate ? `${Number(line.discount_rate.toFixed(2))} %` : "—",
+          `${line.vat_rate ?? 0} %`,
+          money(line.amount),
+        ]),
+        footer: [
+          `${t("finance.detail.amountExclTax")} : ${money(invoice.amount_excl_tax ?? invoice.total ?? invoice.amount)}`,
+          `${t("finance.detail.vat")} : ${money(invoice.vat_amount ?? 0)}`,
+          `${t("finance.detail.total")} : ${money(invoice.total ?? invoice.amount)}`,
+        ].join("\n"),
+      },
+      { print: printNow },
+    );
+  }
 
   return (
     <Dialog open={invoiceId !== null} onOpenChange={(open) => !open && onClose()}>
@@ -45,8 +78,26 @@ export function InvoiceDetailDialog({ invoiceId, onClose }: { invoiceId: string 
               <StatusBadge status={invoice.status} />
               <LedgerStatusBadge status={ledgerStatuses[invoice.id]} />
               <span>{t("finance.detail.date")} : {invoice.invoice_date}</span>
+              <span className="ml-auto flex gap-2">
+                <Button size="sm" variant="outline" onClick={() => print(false)}>
+                  <Eye className="h-3.5 w-3.5" />
+                  {t("finance.detail.preview")}
+                </Button>
+                <Button size="sm" variant="outline" onClick={() => print(true)}>
+                  <Printer className="h-3.5 w-3.5" />
+                  {t("finance.detail.print")}
+                </Button>
+              </span>
             </div>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-1 sm:grid-cols-3">
+              {hasVat && (
+                <>
+                  <dt className="text-muted-foreground">{t("finance.detail.amountExclTax")}</dt>
+                  <dd className="tabular-nums sm:col-span-2">{formatXofWithCode(invoice.amount_excl_tax ?? 0)}</dd>
+                  <dt className="text-muted-foreground">{t("finance.detail.vat")}</dt>
+                  <dd className="tabular-nums sm:col-span-2">{formatXofWithCode(invoice.vat_amount ?? 0)}</dd>
+                </>
+              )}
               <dt className="text-muted-foreground">{t("finance.detail.total")}</dt>
               <dd className="tabular-nums sm:col-span-2">{formatXofWithCode(invoice.total ?? invoice.amount)}</dd>
               <dt className="text-muted-foreground">{t("finance.detail.credited")}</dt>
@@ -76,7 +127,9 @@ export function InvoiceDetailDialog({ invoiceId, onClose }: { invoiceId: string 
                       <TableHead>{t("finance.detail.product")}</TableHead>
                       <TableHead className="text-right">{t("finance.detail.quantity")}</TableHead>
                       <TableHead className="text-right">{t("finance.detail.unitPrice")}</TableHead>
-                      <TableHead className="text-right">{t("finance.column.amount")}</TableHead>
+                      <TableHead className="text-right">{t("finance.detail.discount")}</TableHead>
+                      <TableHead className="text-right">{t("finance.detail.vatRate")}</TableHead>
+                      <TableHead className="text-right">{t("finance.detail.amountExclTax")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
@@ -84,7 +137,14 @@ export function InvoiceDetailDialog({ invoiceId, onClose }: { invoiceId: string 
                       <TableRow key={i}>
                         <TableCell>{productName(line.product_id)}</TableCell>
                         <TableCell className="text-right tabular-nums">{line.quantity}</TableCell>
-                        <TableCell className="text-right tabular-nums">{formatXofWithCode(line.unit_price)}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatXofWithCode(line.unit_price)}
+                          {line.list_price && line.discount_rate ? (
+                            <span className="block text-xs text-muted-foreground line-through">{formatXofWithCode(line.list_price)}</span>
+                          ) : null}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{line.discount_rate ? `${Number(line.discount_rate.toFixed(2))} %` : "—"}</TableCell>
+                        <TableCell className="text-right tabular-nums">{line.vat_rate ?? 0} %</TableCell>
                         <TableCell className="text-right tabular-nums">{formatXofWithCode(line.amount)}</TableCell>
                       </TableRow>
                     ))}

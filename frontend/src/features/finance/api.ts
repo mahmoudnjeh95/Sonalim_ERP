@@ -28,8 +28,14 @@ export interface Invoice {
 export interface BilledLine {
   product_id: string;
   quantity: number;
+  /** excluding tax, after the order's discounts */
   unit_price: number;
+  /** excluding tax */
   amount: number;
+  vat_rate?: number;
+  /** the order's price before discounts, and the combined discount, when the line came from an order */
+  list_price?: number | null;
+  discount_rate?: number;
 }
 
 export interface CreditNote {
@@ -43,16 +49,23 @@ export interface CreditNote {
   credit_date: string;
   amount: number;
   currency: string;
+  amount_excl_tax?: number;
+  vat_amount?: number;
   lines: BilledLine[];
 }
 
 export interface InvoiceDetail extends Invoice {
+  amount_excl_tax?: number;
+  vat_amount?: number;
   lines: BilledLine[];
   credit_notes: CreditNote[];
 }
 
 // Money comes back as JSON numbers or decimal strings depending on the route; the screens want numbers.
-const MONEY_KEYS = ["amount", "amount_paid", "total", "amount_credited", "remaining", "customer_credit", "quantity", "unit_price"] as const;
+const MONEY_KEYS = [
+  "amount", "amount_paid", "total", "amount_credited", "remaining", "customer_credit", "quantity", "unit_price",
+  "amount_excl_tax", "vat_amount", "vat_rate", "list_price", "discount_rate",
+] as const;
 function numbers<T extends object>(row: T): T {
   const copy = { ...row } as Record<string, unknown>;
   for (const key of MONEY_KEYS) if (copy[key] !== undefined && copy[key] !== null) copy[key] = Number(copy[key]);

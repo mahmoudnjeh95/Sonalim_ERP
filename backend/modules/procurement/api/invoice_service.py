@@ -280,6 +280,14 @@ class PurchaseInvoiceService:
         if due_date is not None and due_date < invoice_date:
             return Err("INVALID_DUE_DATE", "the due date cannot be before the invoice date",
                        "l'échéance ne peut pas précéder la date de la facture")
+        if due_date is None:
+            # Left blank, the due date follows the supplier's payment terms (a shared-kernel partner field).
+            from core.payment_terms import PaymentTermService
+
+            terms = PaymentTermService(self._connection)
+            if terms.partner_terms(tenant_id=tenant_id, partner_id=partner_id)["supplier"] is not None:
+                due_date = terms.schedule_for(tenant_id=tenant_id, partner_id=partner_id, side="supplier",
+                                              invoice_date=invoice_date, amount=Decimal("1"))["due_date"]
         if not lines:
             if amount is None:
                 return Err("LINES_REQUIRED", "an invoice needs at least one line", "une facture doit avoir au moins une ligne")

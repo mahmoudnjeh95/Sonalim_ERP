@@ -5,7 +5,7 @@ holds once earlier invoices are counted. A credit note takes back, at the price 
 return brought back, never more than those invoices still carry once earlier credit notes are counted."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable, Mapping
 
@@ -16,10 +16,13 @@ ZERO = Decimal("0")
 class BilledLine:
     product_id: str
     quantity: Decimal
+    # excluding tax, after the order's discounts
     unit_price: Decimal
+    vat_rate: Decimal = ZERO
 
     @property
     def amount(self) -> Decimal:
+        """Excluding tax."""
         return (self.quantity * self.unit_price).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
 
@@ -41,6 +44,7 @@ def lines_to_invoice(
     delivered: Mapping[str, Decimal],
     ordered: Mapping[str, tuple[Decimal, Decimal]],
     already_invoiced: Mapping[str, Decimal],
+    vat_rates: Mapping[str, Decimal] | None = None,
 ) -> list[BilledLine]:
     """What a delivery bills. A product the order doesn't hold is not billed; past what the order holds
     nothing more is billed, so a second delivery of the same goods can't bill them twice."""
@@ -52,13 +56,36 @@ def lines_to_invoice(
         left = on_order - already_invoiced.get(product_id, ZERO)
         billed = min(quantity, left)
         if billed > 0:
-            lines.append(BilledLine(product_id, billed, price))
+            lines.append(BilledLine(product_id, billed, price, (vat_rates or {}).get(product_id, ZERO)))
     return lines
 
 
 def whole_francs(lines: Iterable[BilledLine]) -> Decimal:
-    """The invoice total. XOF has no cents, so the total is rounded half up to the franc."""
+    """The total excluding tax. XOF has no cents, so the total is rounded half up to the franc."""
     return sum((line.quantity * line.unit_price for line in lines), ZERO).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+
+
+def vat_total(lines: Iterable[BilledLine]) -> Decimal:
+    """The VAT of the lines, computed on each net line and rounded once on the total."""
+    return sum((line.quantity * line.unit_price * line.vat_rate / Decimal("100") for line in lines), ZERO).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP)
+
+
+def document_totals(lines: Iterable[BilledLine]) -> tuple[Decimal, Decimal, Decimal]:
+    """(excluding tax, VAT, including tax) in whole francs; including tax is what the customer owes."""
+    lines = list(lines)
+    excl, vat = whole_francs(lines), vat_total(lines)
+    return excl, vat, excl + vat
+
+
+def order_vat_rates(lines: Iterable[tuple[str, Decimal, Decimal]]) -> dict[str, Decimal]:
+    """Per product, the VAT rate of its order lines: (product, net value, rate). A product on lines at different
+    rates (unusual) takes the rate of the larger value."""
+    best: dict[str, tuple[Decimal, Decimal]] = {}
+    for product_id, value, rate in lines:
+        if product_id not in best or value > best[product_id][0]:
+            best[product_id] = (value, rate)
+    return {product_id: rate for product_id, (_, rate) in best.items()}
 
 
 @dataclass(frozen=True)
@@ -68,6 +95,8 @@ class CreditableInvoice:
     lines: Mapping[str, tuple[Decimal, Decimal]]
     # product -> quantity already credited
     credited: Mapping[str, Decimal]
+    # product -> VAT rate invoiced
+    vat_rates: Mapping[str, Decimal] = field(default_factory=dict)
 
 
 def lines_to_credit(returned: Mapping[str, Decimal], invoices: Iterable[CreditableInvoice]) -> dict[str, list[BilledLine]]:
@@ -84,7 +113,8 @@ def lines_to_credit(returned: Mapping[str, Decimal], invoices: Iterable[Creditab
             room = invoiced - invoice.credited.get(product_id, ZERO)
             take = min(wanted, room)
             if take > 0:
-                result.setdefault(invoice.invoice_id, []).append(BilledLine(product_id, take, price))
+                result.setdefault(invoice.invoice_id, []).append(
+                    BilledLine(product_id, take, price, invoice.vat_rates.get(product_id, ZERO)))
                 left[product_id] = wanted - take
     return result
 

@@ -10,7 +10,9 @@
     "LedgerPostingService",
     "LedgerQueryService",
     "LedgerReportService",
-    "PeriodService"
+    "PeriodService",
+    "ReceivablesService",
+    "DunningService"
   ],
   "publishes_events": ["finance.invoice.issued", "finance.invoice.paid", "finance.credit_note.issued", "finance.journal_entry.posted"],
   "subscribes_events": [
@@ -43,6 +45,11 @@
     "finance.manage_accounts",
     "finance.admin_accounts",
     "finance.admin_periods",
-    "finance.manage_posting_rules"
+    "finance.manage_posting_rules",
+    "finance.view_receivables",
+    "finance.manage_receivables",
+    "finance.admin_receivables",
+    "finance.manage_dunning",
+    "finance.admin_credit_override"
   ]
 }

@@ -5,6 +5,7 @@ was posted; a correction is a manual OD entry."""
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 import psycopg
 
@@ -35,10 +36,11 @@ class InvoiceLedgerService:
         issued_on: datetime.date,
         correlation_id: str,
         causation_id: str | None = None,
+        vat: object = 0,
     ) -> Result[list[dict]]:
         return self._post(
             "issued", tenant_id=tenant_id, invoice_id=invoice_id, partner_id=partner_id, amount=amount,
-            currency=currency, entry_date=issued_on, correlation_id=correlation_id, causation_id=causation_id,
+            currency=currency, entry_date=issued_on, correlation_id=correlation_id, causation_id=causation_id, vat=vat,
         )
 
     def post_paid(
@@ -78,6 +80,7 @@ class InvoiceLedgerService:
         credited_on: datetime.date,
         correlation_id: str,
         causation_id: str | None = None,
+        vat: object = 0,
     ) -> Result[list[dict]]:
         """The mirror of the invoice's VTE entry for what a credit note took back. Like a payment, it waits
         for the invoice's own entry: an invoice still in draft has charged the customer nothing yet."""
@@ -91,7 +94,7 @@ class InvoiceLedgerService:
         return self._post(
             "credit_note", tenant_id=tenant_id, invoice_id=credit_note_id, partner_id=partner_id, amount=amount,
             currency=currency, entry_date=credited_on, correlation_id=correlation_id, causation_id=causation_id,
-            label_ref=number or credit_note_id,
+            label_ref=number or credit_note_id, vat=vat,
         )
 
     def _post(
@@ -107,6 +110,7 @@ class InvoiceLedgerService:
         correlation_id: str,
         causation_id: str | None,
         label_ref: str | None = None,
+        vat: object = 0,
     ) -> Result[list[dict]]:
         source = SourceRef(INVOICE_MODULE, invoice_id, f"invoice_{kind}")
         existing = self._posting.find_by_source(tenant_id=tenant_id, source=source)
@@ -115,11 +119,18 @@ class InvoiceLedgerService:
         xof = to_xof(amount, currency=currency)
         if isinstance(xof, Err):
             return xof
+        vat_amount = Decimal("0")
+        if vat and Decimal(str(vat)) != 0:
+            vat_xof = to_xof(vat, currency=currency)
+            if isinstance(vat_xof, Err):
+                return vat_xof
+            vat_amount = vat_xof.value
         label = LABELS[kind].format(invoice_id=label_ref or invoice_id)
         # A credit note has no rule of its own: it reverses the issued invoice's rule.
         entry = invoice_entry(
             "issued" if kind == "credit_note" else kind, amount=xof.value, partner_id=partner_id, label=label,
             rules=self._rules.rules_for(tenant_id=tenant_id, source="invoice"), mirror=kind == "credit_note",
+            vat=vat_amount,
         )
         if isinstance(entry, Err):
             return entry

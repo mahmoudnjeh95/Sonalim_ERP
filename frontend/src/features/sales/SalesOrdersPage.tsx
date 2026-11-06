@@ -1,9 +1,9 @@
 import { useState } from "react";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useFieldArray, useForm } from "react-hook-form";
+import { useForm, type UseFormReturn } from "react-hook-form";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
-import { CheckCircle2, PackageCheck, Pencil, Plus, ShoppingCart, Trash2 } from "lucide-react";
+import { CheckCircle2, PackageCheck, Pencil, Plus, ShoppingCart } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { z } from "zod";
@@ -15,7 +15,6 @@ import { productRequiresIntegerQuantity } from "../../lib/units";
 import { listInvoices } from "../finance/api";
 import { InvoiceDetailDialog } from "../finance/InvoiceDetailDialog";
 import { Button } from "../../components/ui/button";
-import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { Select } from "../../components/ui/select";
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card";
@@ -41,21 +40,18 @@ import { listLocations, listUoms } from "../warehouse/api";
 import { listPickLists, PICK_LISTS_QUERY_KEY } from "../warehouse/fulfillment/api";
 import { RESERVATIONS_QUERY_KEY } from "../warehouse/reservations/api";
 import { listPartners } from "../partners/api";
-import { ProductSelect } from "../../components/patterns/ProductSelect";
 import { useProductCatalog } from "../products/catalog";
 import { listProductTags } from "../products/api";
 import { confirmOrder, createIssueVoucherFromOrder, createOrder, listOrders, updateOrder, type SalesOrder, type SalesOrderStatus } from "./api";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
+import { ConfirmOrderCreditDialog } from "./ConfirmOrderCreditDialog";
+import { newPricedLine, PricedLinesFields, pricedLineSchema, useSalesSettings, type PricedFormShape } from "./PricedLinesFields";
 
-const lineSchema = z.object({
-  product_id: z.string().min(1, "Required"),
-  quantity: z.coerce.number().positive("Must be > 0"),
-  unit_price: z.coerce.number().nonnegative("Must be ≥ 0"),
-});
 const newOrderSchema = z.object({
   partner_id: z.string().min(1, "Required"),
   location_id: z.string().min(1, "Required"),
-  lines: z.array(lineSchema).min(1, "Add at least one line"),
+  discount_rate: z.coerce.number().min(0).max(100).default(0),
+  lines: z.array(pricedLineSchema).min(1, "Add at least one line"),
 });
 type NewOrderForm = z.infer<typeof newOrderSchema>;
 type EditOrderForm = NewOrderForm;
@@ -81,6 +77,8 @@ export function SalesOrdersPage() {
   const [editingOrder, setEditingOrder] = useState<SalesOrder | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [invoiceDetailId, setInvoiceDetailId] = useState<string | null>(null);
+  // Confirming goes through the credit check dialog first (finance's credit control).
+  const [confirmingOrder, setConfirmingOrder] = useState<SalesOrder | null>(null);
 
   const { data: orders = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listOrders(token) });
   // Invoices follow the deliveries, so an order can have several; shown only to those who may see invoices.
@@ -125,29 +123,29 @@ export function SalesOrdersPage() {
     const isSac = !!sacTagId && !!product?.tag_ids?.includes(sacTagId);
     return isSac ? t("production.classifications.packagingFormat.sac") : t("production.classifications.packagingFormat.carton");
   };
+  const defaultVat = Number(useSalesSettings().data?.default_vat_rate ?? 18);
+  const emptyOrder = (): NewOrderForm => ({ partner_id: "", location_id: "", discount_rate: 0, lines: [newPricedLine(defaultVat)] });
   const customers = partners.filter((p) => p.kind === "customer" || p.kind === "both");
   const activeCustomers = customers.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
 
+  const createForm = useForm<NewOrderForm>({
+    resolver: zodResolver(newOrderSchema),
+    defaultValues: { partner_id: "", location_id: "", discount_rate: 0, lines: [newPricedLine(18)] },
+  });
   const {
     register,
-    control,
     handleSubmit,
     reset,
-    watch,
     formState: { errors },
-  } = useForm<NewOrderForm>({
-    resolver: zodResolver(newOrderSchema),
-    defaultValues: { partner_id: "", location_id: "", lines: [{ product_id: "", quantity: 1, unit_price: 0 }] },
-  });
-  const { fields, append, remove } = useFieldArray({ control, name: "lines" });
+  } = createForm;
 
   const createMutation = useMutation({
     mutationFn: (input: NewOrderForm) => createOrder(token, input),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       setDialogOpen(false);
-      reset({ partner_id: "", location_id: "", lines: [{ product_id: "", quantity: 1, unit_price: 0 }] });
+      reset(emptyOrder());
       toast.success(t("sales.created"));
     },
     onError: (error) => {
@@ -168,8 +166,9 @@ export function SalesOrdersPage() {
   });
 
   const confirmMutation = useMutation({
-    mutationFn: (orderId: string) => confirmOrder(token, orderId),
+    mutationFn: ({ orderId, override }: { orderId: string; override: boolean }) => confirmOrder(token, orderId, override),
     onSuccess: () => {
+      setConfirmingOrder(null);
       queryClient.invalidateQueries({ queryKey: QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: RESERVATIONS_QUERY_KEY });
       queryClient.invalidateQueries({ queryKey: PICK_LISTS_QUERY_KEY });
@@ -180,18 +179,16 @@ export function SalesOrdersPage() {
     },
   });
 
+  const editForm = useForm<EditOrderForm>({
+    resolver: zodResolver(newOrderSchema),
+    defaultValues: { partner_id: "", location_id: "", discount_rate: 0, lines: [newPricedLine(18)] },
+  });
   const {
     register: registerEdit,
-    control: editControl,
     handleSubmit: handleEditSubmit,
     reset: resetEdit,
-    watch: watchEdit,
     formState: { errors: editErrors },
-  } = useForm<EditOrderForm>({
-    resolver: zodResolver(newOrderSchema),
-    defaultValues: { partner_id: "", location_id: "", lines: [{ product_id: "", quantity: 1, unit_price: 0 }] },
-  });
-  const { fields: editFields, append: appendEditLine, remove: removeEditLine } = useFieldArray({ control: editControl, name: "lines" });
+  } = editForm;
 
   const updateMutation = useMutation({
     mutationFn: (input: EditOrderForm) => updateOrder(token, editingOrder!.id, input),
@@ -211,7 +208,15 @@ export function SalesOrdersPage() {
     resetEdit({
       partner_id: order.partner_id,
       location_id: order.location_id,
-      lines: order.lines.map((line) => ({ ...line })),
+      discount_rate: order.discount_rate ?? 0,
+      lines: order.lines.map((line) => ({
+        product_id: line.product_id,
+        quantity: line.quantity,
+        unit_price: line.unit_price,
+        discount_rate: line.discount_rate ?? 0,
+        vat_rate: line.vat_rate ?? 0,
+        price_list_id: line.price_list_id ?? null,
+      })),
     });
     setEditDialogOpen(true);
   }
@@ -335,10 +340,10 @@ export function SalesOrdersPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => confirmMutation.mutate(order.id)}
-              disabled={confirmMutation.isPending && confirmMutation.variables === order.id}
+              onClick={() => setConfirmingOrder(order)}
+              disabled={confirmMutation.isPending && confirmMutation.variables?.orderId === order.id}
             >
-              {confirmMutation.isPending && confirmMutation.variables === order.id ? t("sales.confirming") : t("sales.confirm")}
+              {confirmMutation.isPending && confirmMutation.variables?.orderId === order.id ? t("sales.confirming") : t("sales.confirm")}
             </Button>
           )}
         </div>
@@ -393,7 +398,7 @@ export function SalesOrdersPage() {
                 {t("sales.new")}
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{t("sales.dialog.title")}</DialogTitle>
                 <DialogDescription>{t("sales.dialog.description")}</DialogDescription>
@@ -425,80 +430,13 @@ export function SalesOrdersPage() {
                   {errors.location_id && <p className="text-sm text-destructive">{errors.location_id.message}</p>}
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>{t("sales.field.lines")}</Label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => append({ product_id: "", quantity: 1, unit_price: 0 })}
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      {t("sales.addLine")}
-                    </Button>
-                  </div>
-                  <AnimatePresence initial={false}>
-                    {fields.map((field, index) => (
-                      <motion.div
-                        key={field.id}
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.18 }}
-                        className="flex items-start gap-2"
-                      >
-                        <div className="flex-1 space-y-1">
-                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
-                            {t("sales.field.productId")}
-                          </span>
-                          <ProductSelect
-                            products={catalogProducts}
-                            placeholder={t("sales.field.productId")}
-                            {...register(`lines.${index}.product_id` as const)}
-                          />
-                        </div>
-                        <div className="w-24 space-y-1">
-                          <span className="block text-xs font-medium text-foreground">
-                            {t("sales.field.qty")} ({packagingWord(watch(`lines.${index}.product_id`))})
-                          </span>
-                          <Input
-                            type="number"
-                            step={productRequiresIntegerQuantity(watch(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
-                            {...register(`lines.${index}.quantity` as const)}
-                          />
-                        </div>
-                        <div className="w-24 space-y-1">
-                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
-                            {t("sales.field.unitPrice")}
-                          </span>
-                          <Input
-                            type="number"
-                            step="any"
-                            placeholder={t("sales.field.unitPrice")}
-                            {...register(`lines.${index}.unit_price` as const)}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
-                            &nbsp;
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            disabled={fields.length === 1}
-                            onClick={() => remove(index)}
-                            aria-label={t("sales.removeLine")}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                  {errors.lines?.message && <p className="text-sm text-destructive">{errors.lines.message}</p>}
-                </div>
+                <PricedLinesFields
+                  form={createForm as unknown as UseFormReturn<PricedFormShape>}
+                  products={catalogProducts}
+                  idPrefix="order"
+                  quantityLabel={(productId) => `${t("sales.field.qty")} (${packagingWord(productId)})`}
+                  quantityStep={(productId) => (productRequiresIntegerQuantity(productId, products, uoms) ? "1" : "any")}
+                />
 
                 {createMutation.isError && (
                   <p className="text-sm text-destructive">
@@ -518,7 +456,7 @@ export function SalesOrdersPage() {
               if (!open) setEditingOrder(null);
             }}
           >
-            <DialogContent className="max-w-lg">
+            <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>{t("sales.dialog.editTitle")}</DialogTitle>
                 <DialogDescription>{t("sales.dialog.editDescription")}</DialogDescription>
@@ -550,80 +488,13 @@ export function SalesOrdersPage() {
                   {editErrors.location_id && <p className="text-sm text-destructive">{editErrors.location_id.message}</p>}
                 </div>
 
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <Label>{t("sales.field.lines")}</Label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      onClick={() => appendEditLine({ product_id: "", quantity: 1, unit_price: 0 })}
-                    >
-                      <Plus className="h-3.5 w-3.5" />
-                      {t("sales.addLine")}
-                    </Button>
-                  </div>
-                  <AnimatePresence initial={false}>
-                    {editFields.map((field, index) => (
-                      <motion.div
-                        key={field.id}
-                        initial={{ opacity: 0, height: 0 }}
-                        animate={{ opacity: 1, height: "auto" }}
-                        exit={{ opacity: 0, height: 0 }}
-                        transition={{ duration: 0.18 }}
-                        className="flex items-start gap-2"
-                      >
-                        <div className="flex-1 space-y-1">
-                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
-                            {t("sales.field.productId")}
-                          </span>
-                          <ProductSelect
-                            products={catalogProducts}
-                            placeholder={t("sales.field.productId")}
-                            {...registerEdit(`lines.${index}.product_id` as const)}
-                          />
-                        </div>
-                        <div className="w-24 space-y-1">
-                          <span className="block text-xs font-medium text-foreground">
-                            {t("sales.field.qty")} ({packagingWord(watchEdit(`lines.${index}.product_id`))})
-                          </span>
-                          <Input
-                            type="number"
-                            step={productRequiresIntegerQuantity(watchEdit(`lines.${index}.product_id`), products, uoms) ? "1" : "any"}
-                            {...registerEdit(`lines.${index}.quantity` as const)}
-                          />
-                        </div>
-                        <div className="w-24 space-y-1">
-                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
-                            {t("sales.field.unitPrice")}
-                          </span>
-                          <Input
-                            type="number"
-                            step="any"
-                            placeholder={t("sales.field.unitPrice")}
-                            {...registerEdit(`lines.${index}.unit_price` as const)}
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <span aria-hidden className="block select-none text-xs font-medium text-transparent">
-                            &nbsp;
-                          </span>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            disabled={editFields.length === 1}
-                            onClick={() => removeEditLine(index)}
-                            aria-label={t("sales.removeLine")}
-                          >
-                            <Trash2 className="h-3.5 w-3.5" />
-                          </Button>
-                        </div>
-                      </motion.div>
-                    ))}
-                  </AnimatePresence>
-                  {editErrors.lines?.message && <p className="text-sm text-destructive">{editErrors.lines.message}</p>}
-                </div>
+                <PricedLinesFields
+                  form={editForm as unknown as UseFormReturn<PricedFormShape>}
+                  products={catalogProducts}
+                  idPrefix="edit_order"
+                  quantityLabel={(productId) => `${t("sales.field.qty")} (${packagingWord(productId)})`}
+                  quantityStep={(productId) => (productRequiresIntegerQuantity(productId, products, uoms) ? "1" : "any")}
+                />
 
                 {updateMutation.isError && (
                   <p className="text-sm text-destructive">
@@ -692,6 +563,15 @@ export function SalesOrdersPage() {
         </CardContent>
       </Card>
       <InvoiceDetailDialog invoiceId={invoiceDetailId} onClose={() => setInvoiceDetailId(null)} />
+      {confirmingOrder && (
+        <ConfirmOrderCreditDialog
+          order={confirmingOrder}
+          customerName={partnerName(confirmingOrder.partner_id)}
+          pending={confirmMutation.isPending}
+          onConfirm={(override) => confirmMutation.mutate({ orderId: confirmingOrder.id, override })}
+          onClose={() => setConfirmingOrder(null)}
+        />
+      )}
     </div>
   );
 }

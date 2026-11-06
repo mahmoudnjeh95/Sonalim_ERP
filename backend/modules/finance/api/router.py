@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
@@ -26,6 +28,7 @@ class UpdateInvoiceRequest(BaseModel):
     partner_id: str | None = None
     amount: float | None = None
     currency: str | None = None
+    due_date: datetime.date | None = None
 
 
 def _invoice_response(invoice, connection=None, tenant_id: str | None = None) -> dict:
@@ -108,6 +111,7 @@ def update_invoice(
             partner_id=body.partner_id,
             amount=body.amount,
             currency=body.currency,
+            due_date=body.due_date,
         )
         if isinstance(result, Err):
             connection.rollback()

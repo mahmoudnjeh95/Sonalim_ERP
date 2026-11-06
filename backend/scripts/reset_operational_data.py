@@ -52,6 +52,12 @@ from core.db import get_connection
 # Tables emptied completely.
 PURGE_TABLES = [
     "core.audit_log",
+    "finance.dunning_actions",
+    "finance.dunning_notices",
+    "finance.invoice_installments",
+    "sales.quote_lines",
+    "sales.quotes",
+    "sales.document_counters",
     "events.outbox",
     "events.processed_events",
     "crm.activities",
@@ -208,11 +214,20 @@ EDITED_TABLES = [
     "maintenance.programs",
     "warehouse.stock_items",
     "treasury.accounts",
+    # A customer's pricing and credit terms go with the customer (see purge()).
+    "sales.customer_pricing",
+    "finance.customer_credit",
 ]
 
 # Master data and configuration: never touched.
 KEPT_TABLES = [
     "warehouse.settings",
+    "core.payment_terms",
+    "finance.dunning_levels",
+    "finance.receivables_settings",
+    "sales.settings",
+    "sales.price_lists",
+    "sales.price_list_items",
     "core.companies",
     "core.currencies",
     "core.exchange_rates",
@@ -364,6 +379,14 @@ def purge(connection, tenant_id: str, *, keep_customers: bool = False) -> dict[s
     if not keep_customers:
         customers = sql.SQL("kind = 'customer' AND tenant_id = %s")
         report["core.partners (customers)"] = _count(connection, "core.partners", customers, (tenant_id,))
+        for table in ("sales.customer_pricing", "finance.customer_credit"):
+            if table in live:
+                report[table] = _count(
+                    connection, table, sql.SQL("partner_id IN (SELECT id FROM core.partners WHERE kind = 'customer' AND tenant_id = %s)"),
+                    (tenant_id,))
+                connection.execute(
+                    sql.SQL("DELETE FROM {} WHERE partner_id IN (SELECT id FROM core.partners WHERE kind = 'customer' AND tenant_id = %s)")
+                    .format(_ident(table)), (tenant_id,))
         connection.execute(
             "DELETE FROM core.partner_tag_links WHERE partner_id IN "
             "(SELECT id FROM core.partners WHERE kind = 'customer' AND tenant_id = %s)",

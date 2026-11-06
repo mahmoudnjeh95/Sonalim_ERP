@@ -28,6 +28,8 @@ import { CheckWizard } from "../features/maintenance/wizard/CheckWizard";
 import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPage";
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
+import { QuotesPage } from "../features/sales/QuotesPage";
+import { PriceListsPage } from "../features/sales/PriceListsPage";
 import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
 import { EntriesPage } from "../features/finance/EntriesPage";
 import { AccountsPage } from "../features/finance/AccountsPage";
@@ -35,6 +37,7 @@ import { PostingRulesPage } from "../features/finance/PostingRulesPage";
 import { TrialBalancePage } from "../features/finance/TrialBalancePage";
 import { GeneralLedgerPage } from "../features/finance/GeneralLedgerPage";
 import { PeriodsPage } from "../features/finance/PeriodsPage";
+import { ReceivablesPage } from "../features/finance/ReceivablesPage";
 import { ProfilePage } from "../features/profile/ProfilePage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
@@ -127,8 +130,11 @@ const protectedChildren: RouteObject[] = [
   { path: "/procurement/invoices", element: <PurchaseInvoicesPage /> },
   { path: "/treasury", element: <TreasuryPage /> },
   { path: "/sales", element: <SalesOrdersPage /> },
+  { path: "/sales/quotes", element: <QuotesPage /> },
+  { path: "/sales/price-lists", element: <PriceListsPage /> },
   { path: "/finance", element: <FinanceInvoicesPage /> },
   { path: "/finance/entries", element: <EntriesPage /> },
+  { path: "/finance/receivables", element: <ReceivablesPage /> },
   { path: "/finance/accounts", element: <AccountsPage /> },
   { path: "/finance/posting-rules", element: <PostingRulesPage /> },
   { path: "/finance/trial-balance", element: <TrialBalancePage /> },

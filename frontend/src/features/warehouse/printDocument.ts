@@ -1,5 +1,7 @@
 export interface PrintableDocument {
   title: string;
+  /** The line above the title; Sonalim when not given. */
+  brand?: string;
   /** Label and value pairs shown above the table. */
   fields: [string, string][];
   headers: string[];
@@ -20,7 +22,7 @@ function toHtml(doc: PrintableDocument) {
     .brand{color:#555;margin-bottom:16px}.fields{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;margin-bottom:16px}
     table{width:100%;border-collapse:collapse}th,td{border:1px solid #999;padding:6px 8px;text-align:left;height:18px}th{background:#eee}
     .footer{margin-top:16px;white-space:pre-wrap}
-  </style></head><body><div class="brand">Sonalim</div><h1>${escapeHtml(doc.title)}</h1><div class="fields">${fields}</div>
+  </style></head><body><div class="brand">${escapeHtml(doc.brand ?? "Sonalim")}</div><h1>${escapeHtml(doc.title)}</h1><div class="fields">${fields}</div>
   <table><thead><tr>${head}</tr></thead><tbody>${rows}</tbody></table>
   ${doc.footer ? `<div class="footer">${escapeHtml(doc.footer)}</div>` : ""}</body></html>`;
 }

@@ -27,7 +27,7 @@ PAYROLL_LINE_KINDS = (
 PAYMENT_METHODS = ("bank", "mobile_money", "cash")
 RULE_KINDS: dict[str, tuple[str, ...]] = {
     "payroll": PAYROLL_LINE_KINDS + ("payment",),
-    "invoice": ("issued", "paid"),
+    "invoice": ("issued", "paid", "vat"),
     "purchase_invoice": ("validated", "vat"),
     "treasury": ("receipt_payment", "receipt_advance", "receipt_withheld", "disbursement_payment", "disbursement_advance", "disbursement_withheld", "instrument_collected", "instrument_unpaid", "instrument_rejection_fee", "account_opening"),
 }
@@ -188,11 +188,15 @@ def to_xof(raw: object, *, currency: str) -> Result[Decimal]:
 
 
 def invoice_entry(
-    kind: str, *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule], mirror: bool = False
+    kind: str, *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule], mirror: bool = False,
+    vat: Decimal = ZERO,
 ) -> Result[tuple[str, list[EntryLine]]]:
     """The entry of an issued invoice (the customer side is the debit) or of its payment (the
     customer side is the credit). The partner id rides on the customer line only. `mirror` swaps the
-    sides of the issued rule: a credit note takes back from the customer what the invoice charged."""
+    sides of the issued rule: a credit note takes back from the customer what the invoice charged.
+
+    `vat` (issued invoices and credit notes only): the collected VAT inside `amount`, credited to the
+    invoice / vat / * rule's account while the sales account gets the rest."""
     resolved = resolve_rule(rules, source="invoice", source_kind=kind, code=WILDCARD)
     if isinstance(resolved, Err):
         return resolved
@@ -205,6 +209,21 @@ def invoice_entry(
         EntryLine(str(rule.debit_account_code), debit=amount, label=label, partner_id=partner_id if customer_on_debit else None),
         EntryLine(str(rule.credit_account_code), credit=amount, label=label, partner_id=None if customer_on_debit else partner_id),
     ]
+    if vat and kind == "issued":
+        vat_rule = resolve_rule(rules, source="invoice", source_kind="vat", code=WILDCARD)
+        if isinstance(vat_rule, Err):
+            return vat_rule
+        if not vat_rule.value.credit_account_code:
+            return Err(
+                "INVALID_POSTING_RULE",
+                "the invoice / vat / * rule needs the collected VAT account on the credit",
+                "la règle invoice / vat / * doit indiquer le compte de TVA facturée au crédit",
+            )
+        lines = [
+            lines[0],
+            EntryLine(str(rule.credit_account_code), credit=amount - vat, label=label),
+            EntryLine(str(vat_rule.value.credit_account_code), credit=vat, label=label),
+        ]
     if mirror:
         lines = [replace(line, debit=line.credit, credit=line.debit) for line in lines]
     return Ok((str(rule.journal_code), lines))
