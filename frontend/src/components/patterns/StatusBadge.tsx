@@ -11,6 +11,7 @@ type Status =
   | "completed"
   | "issued"
   | "paid"
+  | "partially_paid"
   | "archived"
   | "new"
   | "qualified"
@@ -48,6 +49,7 @@ const STATUS_VARIANT: Record<Status, BadgeProps["variant"]> = {
   completed: "success",
   issued: "primary",
   paid: "success",
+  partially_paid: "warning",
   archived: "outline",
   new: "default",
   qualified: "primary",

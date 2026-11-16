@@ -1,15 +1,19 @@
 {
   "name": "procurement",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "depends": ["core"],
   "optional_depends": ["warehouse"],
-  "provides_api": ["PurchaseOrderService"],
-  "publishes_events": ["procurement.purchase_order.status_changed", "procurement.purchase_order_receipt.confirmed"],
-  "subscribes_events": ["warehouse.replenishment.approved", "maintenance.parts.purchase_requested"],
+  "provides_api": ["PurchaseOrderService", "PurchaseInvoiceService", "PurchaseCreditNoteService"],
+  "publishes_events": ["procurement.purchase_order.status_changed", "procurement.purchase_order_receipt.confirmed", "procurement.purchase_invoice.validated", "procurement.purchase_invoice.cancelled", "procurement.purchase_credit_note.validated"],
+  "subscribes_events": ["warehouse.replenishment.approved", "maintenance.parts.purchase_requested", "treasury.disbursement.posted", "treasury.disbursement.cancelled", "treasury.instrument.unpaid"],
   "migrations_path": "./migrations",
   "permissions": [
     "procurement.view_purchase_orders",
     "procurement.manage_purchase_orders",
-    "procurement.admin_purchase_orders"
+    "procurement.admin_purchase_orders",
+    "procurement.view_purchase_invoices",
+    "procurement.manage_purchase_invoices",
+    "procurement.admin_purchase_invoices",
+    "procurement.admin_invoice_beyond_receipts"
   ]
 }

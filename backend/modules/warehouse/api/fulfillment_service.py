@@ -93,6 +93,21 @@ class FulfillmentService:
         if existing is not None:
             return Ok(_pick_list_from_row(existing))
 
+        # The reservation can be released by hand before the worker gets here, and a voucher can then
+        # issue the order. Picking it afterwards would ship the goods again, and the release at ship
+        # would eat into whatever other orders hold at this location.
+        issued = self._connection.execute(
+            "SELECT number FROM warehouse.vouchers WHERE tenant_id = %s AND type = 'issue' AND status = 'posted' "
+            "AND ref_type = 'sales_order' AND ref_id = %s LIMIT 1",
+            (tenant_id, order_id),
+        ).fetchone()
+        if issued is not None:
+            return Err(
+                "ORDER_ALREADY_ISSUED",
+                f"order {order_id} already left the warehouse on voucher {issued[0]}",
+                f"la commande {order_id} est déjà sortie de l'entrepôt par le bon {issued[0]}",
+            )
+
         totals = aggregate_order_lines(lines)
         if not totals:
             return Err("EMPTY_ORDER", f"order {order_id} has nothing to pick", f"la commande {order_id} n'a rien à prélever")
@@ -236,7 +251,7 @@ class FulfillmentService:
             )
 
         for line in self.list_pick_lines(tenant_id=tenant_id, pick_list_id=pick_list_id):
-            released = self._stock.release_stock_reservation(
+            released = self._stock.release_what_is_still_held(
                 tenant_id=tenant_id,
                 product_id=line.product_id,
                 location_id=pick_list.value.location_id,
@@ -421,7 +436,7 @@ class FulfillmentService:
         lines = self.list_pick_lines(tenant_id=tenant_id, pick_list_id=pick_list.value.id)
         shipment_reference = f"shipment:{shipment_id}"
         for line in lines:
-            released = self._stock.release_stock_reservation(
+            released = self._stock.release_what_is_still_held(
                 tenant_id=tenant_id,
                 product_id=line.product_id,
                 location_id=pick_list.value.location_id,
@@ -462,11 +477,13 @@ class FulfillmentService:
         publish_event(
             self._connection,
             event_type="warehouse.shipment.shipped",
+            event_version="1.1",
             producer="warehouse",
             tenant_id=tenant_id,
             correlation_id=correlation_id,
             payload={
                 "shipment_id": shipment_id,
+                "number": shipment.value.number,
                 "pick_list_id": pick_list.value.id,
                 "source_type": pick_list.value.source_type,
                 "source_id": pick_list.value.source_id,

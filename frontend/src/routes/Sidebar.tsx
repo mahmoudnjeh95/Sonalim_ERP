@@ -3,6 +3,7 @@ import { NavLink, useLocation } from "react-router-dom";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import {
   AlertOctagon,
+  BellRing,
   BookOpen,
   Boxes,
   Building2,
@@ -18,6 +19,7 @@ import {
   Factory,
   FileSpreadsheet,
   FileText,
+  Tags,
   Fingerprint,
   FlaskConical,
   Gauge,
@@ -40,6 +42,8 @@ import {
   Sparkles,
   Tag,
   Target,
+  Landmark,
+  Receipt,
   TrendingUp,
   Truck,
   Users,
@@ -201,16 +205,20 @@ const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/warehouse", labelKey: "nav.warehouse", icon: WarehouseIcon },
       { to: "/products", labelKey: "nav.products", icon: PackageSearch },
-      { to: "/inventories", labelKey: "nav.inventories", icon: ClipboardList },
       { to: "/shipments", labelKey: "nav.shipments", icon: Truck },
       { to: "/procurement", labelKey: "nav.purchaseOrders", icon: FileText },
+      { to: "/procurement/invoices", labelKey: "nav.purchaseInvoices", icon: Receipt, permission: "procurement.view_purchase_invoices" },
     ],
   },
   {
     labelKey: "nav.commerce",
     items: [
-      { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart },
+      { to: "/sales", labelKey: "nav.sales", icon: ShoppingCart, exact: true },
+      { to: "/sales/quotes", labelKey: "nav.quotes", icon: FileText, permission: "sales.view_quotes" },
+      { to: "/sales/price-lists", labelKey: "nav.priceLists", icon: Tags, permission: "sales.view_orders" },
       { to: "/finance", labelKey: "nav.finance", icon: Wallet, exact: true },
+      { to: "/treasury", labelKey: "nav.treasury", icon: Landmark, permission: "treasury.view" },
+      { to: "/finance/receivables", labelKey: "nav.receivables", icon: BellRing, permission: "finance.view_receivables" },
     ],
   },
   {

@@ -18,7 +18,12 @@ env:
   OCR_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-ocr
 
 jobs:
+  # Nothing is built or deployed unless the backend and frontend tests pass.
+  test:
+    uses: ./.github/workflows/tests.yml
+
   build:
+    needs: test
     runs-on: ubuntu-latest
 
     steps:

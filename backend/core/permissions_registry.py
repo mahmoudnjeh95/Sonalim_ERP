@@ -24,6 +24,7 @@ MODULE_LABELS = {
     "qc": "Qualité",
     "scan": "Numérisation",
     "sales": "Ventes",
+    "treasury": "Trésorerie",
     "warehouse": "Entrepôt",
 }
 
@@ -45,6 +46,14 @@ DELIBERATE_GRANT_PERMISSIONS = {
     "hr.view_payroll",
     "hr.manage_payroll",
     "scan.use_cloud_reader",
+}
+
+# The only codes the full-access role doesn't get: they move money into the books or past a closed
+# year, so even an administrator holds them only if granted one by one. Their admin_ prefix already
+# keeps them out of the everyday treasury role.
+ADMINISTRATOR_HELD_BACK_PERMISSIONS = {
+    "treasury.admin_ledger_posting",
+    "treasury.admin_add_prior_year_invoice",
 }
 
 # Single-purpose roles for deliberate grants, so an admin hands one out by role instead of
@@ -127,7 +136,7 @@ def default_role_catalog() -> list[dict[str, object]]:
             "code": ADMINISTRATOR_ROLE_CODE,
             "name": "Administrateur",
             "description": "Accès complet à toutes les permissions déclarées, tous modules confondus.",
-            "permissions": [entry["permission"] for entry in catalog],
+            "permissions": [entry["permission"] for entry in catalog if entry["permission"] not in ADMINISTRATOR_HELD_BACK_PERMISSIONS],
         }
     )
     return roles

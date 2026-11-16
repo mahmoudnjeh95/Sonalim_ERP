@@ -230,6 +230,8 @@ class _FakeResponse:
 
 
 def test_run_turn_executes_a_tool_call_then_returns_final_text(monkeypatch):
+    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     calls = []
 
     def fake_urlopen(request, timeout=None):
@@ -268,7 +270,7 @@ def test_run_turn_executes_a_tool_call_then_returns_final_text(monkeypatch):
     )
 
     text, trace = svc._run_turn(
-        None, tenant_id=TENANT, api_key="test-key", history=[], user_text="Why did the line stop?", language="English"
+        None, tenant_id=TENANT, history=[], user_text="Why did the line stop?", language="English"
     )
     assert text == "Downtime was mostly changeovers."
     assert len(calls) == 2
@@ -276,6 +278,8 @@ def test_run_turn_executes_a_tool_call_then_returns_final_text(monkeypatch):
 
 
 def test_run_turn_raises_when_tool_budget_exhausted(monkeypatch):
+    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     def fake_urlopen(request, timeout=None):
         return _FakeResponse(
             {
@@ -304,16 +308,18 @@ def test_run_turn_raises_when_tool_budget_exhausted(monkeypatch):
     )
 
     with pytest.raises(svc.IaAssistantUnavailable):
-        svc._run_turn(None, tenant_id=TENANT, api_key="test-key", history=[], user_text="Why?", language="English")
+        svc._run_turn(None, tenant_id=TENANT, history=[], user_text="Why?", language="English")
 
 
 def test_run_turn_raises_on_empty_final_text(monkeypatch):
+    monkeypatch.delenv("CLAUDE_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
     monkeypatch.setattr(
         "modules.production.api.ia_assistant_service.urllib.request.urlopen",
         lambda request, timeout=None: _FakeResponse({"choices": [{"message": {"role": "assistant", "content": "  "}}]}),
     )
     with pytest.raises(svc.IaAssistantUnavailable):
-        svc._run_turn(None, tenant_id=TENANT, api_key="test-key", history=[], user_text="Hi", language="English")
+        svc._run_turn(None, tenant_id=TENANT, history=[], user_text="Hi", language="English")
 
 
 # ---------------------------------------------------------------------------

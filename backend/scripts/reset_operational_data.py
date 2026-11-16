@@ -52,13 +52,24 @@ from core.db import get_connection
 # Tables emptied completely.
 PURGE_TABLES = [
     "core.audit_log",
+    "finance.dunning_actions",
+    "finance.dunning_notices",
+    "finance.invoice_installments",
+    "sales.quote_lines",
+    "sales.quotes",
+    "sales.document_counters",
     "events.outbox",
     "events.processed_events",
     "crm.activities",
     "crm.contacts",
     "crm.leads",
     "crm.opportunities",
+    "finance.credit_note_lines",
+    "finance.credit_notes",
+    "finance.document_counters",
+    "finance.invoice_lines",
     "finance.invoices",
+    "finance.invoice_payment_deltas",
     "finance.journal_entries",
     "finance.journal_lines",
     "finance.posting_failures",
@@ -98,6 +109,15 @@ PURGE_TABLES = [
     "procurement.purchase_order_receipt_lines",
     "procurement.purchase_order_receipts",
     "procurement.purchase_orders",
+    "procurement.purchase_invoices",
+    "procurement.purchase_invoice_lines",
+    "procurement.invoice_counters",
+    "procurement.invoice_payment_deltas",
+    "procurement.purchase_invoice_receipts",
+    "procurement.purchase_invoice_attachments",
+    "procurement.purchase_credit_notes",
+    "procurement.purchase_credit_note_lines",
+    "procurement.credit_note_counters",
     "sales.order_lines",
     "sales.orders",
     "qc.nc_dispositions",
@@ -145,6 +165,28 @@ PURGE_TABLES = [
     "warehouse.stock_moves",
     "warehouse.lot_stock",
     "warehouse.lots",
+    "warehouse.vouchers",
+    "warehouse.voucher_lines",
+    "warehouse.voucher_counters",
+    "warehouse.document_attachments",
+    # legacy: the inventory feature was replaced by cycle counts; no migration creates these any more,
+    # but a database that applied the earlier 0020 still has them
+    "warehouse.inventories",
+    "warehouse.inventory_lines",
+    "treasury.documents",
+    "treasury.document_allocations",
+    "treasury.document_payments",
+    "treasury.document_counters",
+    "treasury.instruments",
+    "treasury.deposit_slips",
+    "treasury.deposit_slip_items",
+    "treasury.payment_orders",
+    "treasury.invoice_payment_orders",
+    "treasury.document_attachments",
+    "treasury.user_notifications",
+    "treasury.account_movements",
+    "treasury.bank_statement_lines",
+    "treasury.statement_imports",
     "warehouse.cycle_count_lines",
     "warehouse.cycle_counts",
     "warehouse.shipments",
@@ -171,10 +213,21 @@ EDITED_TABLES = [
     "core.sequences",
     "maintenance.programs",
     "warehouse.stock_items",
+    "treasury.accounts",
+    # A customer's pricing and credit terms go with the customer (see purge()).
+    "sales.customer_pricing",
+    "finance.customer_credit",
 ]
 
 # Master data and configuration: never touched.
 KEPT_TABLES = [
+    "warehouse.settings",
+    "core.payment_terms",
+    "finance.dunning_levels",
+    "finance.receivables_settings",
+    "sales.settings",
+    "sales.price_lists",
+    "sales.price_list_items",
     "core.companies",
     "core.currencies",
     "core.exchange_rates",
@@ -247,6 +300,14 @@ KEPT_TABLES = [
     "production.work_centers",
     "scan.scan_aliases",
     "warehouse.locations",
+    "treasury.banks",
+    "treasury.bank_branches",
+    "treasury.settings",
+    "procurement.invoice_settings",
+    "treasury.alert_rules",
+    "treasury.account_format_rules",
+    "treasury.statement_profiles",
+    "warehouse.stock_valuation",  # legacy: created by a dropped weighted-average migration, still present in databases that applied it
     "warehouse.sites",
     "warehouse.putaway_rules",
     "warehouse.product_barcodes",
@@ -318,6 +379,14 @@ def purge(connection, tenant_id: str, *, keep_customers: bool = False) -> dict[s
     if not keep_customers:
         customers = sql.SQL("kind = 'customer' AND tenant_id = %s")
         report["core.partners (customers)"] = _count(connection, "core.partners", customers, (tenant_id,))
+        for table in ("sales.customer_pricing", "finance.customer_credit"):
+            if table in live:
+                report[table] = _count(
+                    connection, table, sql.SQL("partner_id IN (SELECT id FROM core.partners WHERE kind = 'customer' AND tenant_id = %s)"),
+                    (tenant_id,))
+                connection.execute(
+                    sql.SQL("DELETE FROM {} WHERE partner_id IN (SELECT id FROM core.partners WHERE kind = 'customer' AND tenant_id = %s)")
+                    .format(_ident(table)), (tenant_id,))
         connection.execute(
             "DELETE FROM core.partner_tag_links WHERE partner_id IN "
             "(SELECT id FROM core.partners WHERE kind = 'customer' AND tenant_id = %s)",
@@ -335,6 +404,14 @@ def purge(connection, tenant_id: str, *, keep_customers: bool = False) -> dict[s
         (tenant_id,),
     )
     report["warehouse.stock_items (zeroed)"] = cursor.rowcount
+
+    if "treasury.accounts" in live:
+        # The movements are gone, so each account goes back to its opening balance.
+        cursor = connection.execute(
+            "UPDATE treasury.accounts SET balance = opening_balance WHERE tenant_id = %s AND balance <> opening_balance",
+            (tenant_id,),
+        )
+        report["treasury.accounts (balance reset)"] = cursor.rowcount
 
     cursor = connection.execute(
         "UPDATE core.sequences SET next_value = 0 WHERE tenant_id = %s AND name = ANY(%s) AND next_value <> 0",

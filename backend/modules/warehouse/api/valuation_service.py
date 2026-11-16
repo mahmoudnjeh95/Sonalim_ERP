@@ -3,14 +3,18 @@ from __future__ import annotations
 import psycopg
 from ulid import ULID
 
+from core.audit import record_audit
+from core.domain.result import Err, Ok, Result
 from modules.warehouse.domain.valuation import (
     NEUTRAL_MOVE_TYPES,
+    VALUATION_METHODS,
     Allocation,
     CostLayer,
     ProductValuation,
     allocate_fifo,
     allocation_cost,
     value_layers,
+    weighted_average,
 )
 
 _LAYER_COLUMNS = "id, tenant_id, product_id, reference, move_type, quantity_in, quantity_remaining, unit_cost, received_at"
@@ -24,7 +28,7 @@ def _layer_from_row(row) -> CostLayer:
 
 
 class ValuationService:
-    """FIFO cost layers. StockService calls record_inflow / record_outflow in
+    """Cost layers, valued FIFO unless the tenant chose the weighted average. StockService calls record_inflow / record_outflow in
     the same transaction as every movement that changes what the plant owns,
     so a layer never drifts from the stock it values. Imports nothing from
     StockService -- the dependency only runs one way.
@@ -44,6 +48,59 @@ class ValuationService:
             return None
         return float(row[0])
 
+    def valuation_method(self, *, tenant_id: str) -> str:
+        row = self._connection.execute("SELECT valuation_method FROM warehouse.settings WHERE tenant_id = %s", (tenant_id,)).fetchone()
+        return row[0] if row else "fifo"
+
+    def set_valuation_method(self, *, tenant_id: str, actor_id: str, method: str) -> Result[str]:
+        """Takes effect from now on and never rewrites past movements. Choosing the average brings the
+        open layers to it at once, so the stock value shown doesn't depend on the next receipt. Going
+        back to FIFO leaves those layers at the average they already carry."""
+        if method not in VALUATION_METHODS:
+            return Err("INVALID_VALUATION_METHOD", f"unknown valuation method {method}", f"méthode de valorisation inconnue {method}")
+        previous = self.valuation_method(tenant_id=tenant_id)
+        self._connection.execute(
+            """
+            INSERT INTO warehouse.settings (tenant_id, valuation_method, updated_by) VALUES (%s, %s, %s)
+            ON CONFLICT (tenant_id) DO UPDATE SET valuation_method = EXCLUDED.valuation_method,
+                updated_by = EXCLUDED.updated_by, updated_at = NOW()
+            """,
+            (tenant_id, method, actor_id),
+        )
+        if method == "average" and previous != "average":
+            products = self._connection.execute(
+                "SELECT DISTINCT product_id FROM warehouse.cost_layers WHERE tenant_id = %s AND quantity_remaining > 0", (tenant_id,)
+            ).fetchall()
+            for (product_id,) in products:
+                self._level_to_average(tenant_id, product_id)
+        record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="warehouse.valuation_method.changed",
+                     entity_type="warehouse_settings", entity_id=tenant_id, payload={"from": previous, "to": method})
+        return Ok(method)
+
+    def _open_layers_for_update(self, tenant_id: str, product_id: str) -> list[tuple[float, float | None]]:
+        rows = self._connection.execute(
+            """
+            SELECT quantity_remaining, unit_cost FROM warehouse.cost_layers
+            WHERE tenant_id = %s AND product_id = %s AND quantity_remaining > 0
+            ORDER BY received_at, id
+            FOR UPDATE
+            """,
+            (tenant_id, product_id),
+        ).fetchall()
+        return [(float(remaining), float(cost) if cost is not None else None) for remaining, cost in rows]
+
+    def _level_to_average(self, tenant_id: str, product_id: str) -> None:
+        """Every open valued layer takes the weighted average, so whichever one a later outflow draws
+        from, the goods leave at that average."""
+        average = weighted_average(self._open_layers_for_update(tenant_id, product_id))
+        if average is None:
+            return
+        self._connection.execute(
+            "UPDATE warehouse.cost_layers SET unit_cost = %s WHERE tenant_id = %s AND product_id = %s "
+            "AND quantity_remaining > 0 AND unit_cost IS NOT NULL",
+            (average, tenant_id, product_id),
+        )
+
     def record_inflow(
         self,
         *,
@@ -59,7 +116,12 @@ class ValuationService:
         layer is unvalued rather than priced at an invented 0."""
         if move_type in NEUTRAL_MOVE_TYPES or quantity <= 0:
             return
-        cost = unit_cost if unit_cost is not None and unit_cost >= 0 else self._fallback_unit_cost(tenant_id, product_id)
+        average_method = self.valuation_method(tenant_id=tenant_id) == "average"
+        cost = unit_cost if unit_cost is not None and unit_cost >= 0 else None
+        if cost is None and average_method:
+            cost = weighted_average(self._open_layers_for_update(tenant_id, product_id))
+        if cost is None:
+            cost = self._fallback_unit_cost(tenant_id, product_id)
         self._connection.execute(
             f"""
             INSERT INTO warehouse.cost_layers ({_LAYER_COLUMNS})
@@ -71,6 +133,8 @@ class ValuationService:
             """,
             (str(ULID()), tenant_id, product_id, reference, move_type, quantity, quantity, cost),
         )
+        if average_method:
+            self._level_to_average(tenant_id, product_id)
 
     def record_outflow(
         self, *, tenant_id: str, product_id: str, quantity: float, reference: str, move_type: str

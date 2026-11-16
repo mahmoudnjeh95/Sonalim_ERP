@@ -28,6 +28,8 @@ import { CheckWizard } from "../features/maintenance/wizard/CheckWizard";
 import { WorkOrderDetailsPage } from "../features/production/WorkOrderDetailsPage";
 import { WarehousePage } from "../features/warehouse/WarehousePage";
 import { SalesOrdersPage } from "../features/sales/SalesOrdersPage";
+import { QuotesPage } from "../features/sales/QuotesPage";
+import { PriceListsPage } from "../features/sales/PriceListsPage";
 import { FinanceInvoicesPage } from "../features/finance/FinanceInvoicesPage";
 import { EntriesPage } from "../features/finance/EntriesPage";
 import { AccountsPage } from "../features/finance/AccountsPage";
@@ -35,6 +37,7 @@ import { PostingRulesPage } from "../features/finance/PostingRulesPage";
 import { TrialBalancePage } from "../features/finance/TrialBalancePage";
 import { GeneralLedgerPage } from "../features/finance/GeneralLedgerPage";
 import { PeriodsPage } from "../features/finance/PeriodsPage";
+import { ReceivablesPage } from "../features/finance/ReceivablesPage";
 import { ProfilePage } from "../features/profile/ProfilePage";
 import { SettingsPage } from "../features/settings/SettingsPage";
 import { HrPage } from "../features/hr/HrPage";
@@ -48,8 +51,10 @@ import { LeavePage } from "../features/hr/leave/LeavePage";
 import { RunPage } from "../features/payroll/runs/RunPage";
 import { RulesPage } from "../features/payroll/rules/RulesPage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
+import { PurchaseInvoicesPage } from "../features/procurement/PurchaseInvoicesPage";
+import { TreasuryPage } from "../features/treasury/TreasuryPage";
 import { ProductsPage } from "../features/products/ProductsPage";
-import { InventoriesPage, ShipmentsPage } from "../features/productsServices/ComingSoonPages";
+import { ShipmentsPage } from "../features/productsServices/ComingSoonPages";
 import { RunsPage } from "../features/payroll/runs/RunsPage";
 import { PayslipPage } from "../features/payroll/payslips/PayslipPage";
 import { PayslipPrintPage } from "../features/payroll/print/PayslipPrintPage";
@@ -119,12 +124,17 @@ const protectedChildren: RouteObject[] = [
   { path: "/maintenance/jobs/:jobId", element: <JobPage /> },
   { path: "/warehouse", element: <WarehousePage /> },
   { path: "/products", element: <ProductsPage /> },
-  { path: "/inventories", element: <InventoriesPage /> },
+  { path: "/inventories", element: <Navigate to="/warehouse?tab=cycle-counts" replace /> },
   { path: "/shipments", element: <ShipmentsPage /> },
   { path: "/procurement", element: <PurchaseOrdersPage /> },
+  { path: "/procurement/invoices", element: <PurchaseInvoicesPage /> },
+  { path: "/treasury", element: <TreasuryPage /> },
   { path: "/sales", element: <SalesOrdersPage /> },
+  { path: "/sales/quotes", element: <QuotesPage /> },
+  { path: "/sales/price-lists", element: <PriceListsPage /> },
   { path: "/finance", element: <FinanceInvoicesPage /> },
   { path: "/finance/entries", element: <EntriesPage /> },
+  { path: "/finance/receivables", element: <ReceivablesPage /> },
   { path: "/finance/accounts", element: <AccountsPage /> },
   { path: "/finance/posting-rules", element: <PostingRulesPage /> },
   { path: "/finance/trial-balance", element: <TrialBalancePage /> },

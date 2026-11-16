@@ -12,6 +12,7 @@ from core.events import consumers as event_consumers
 from core.events.dispatcher import EXCHANGE, dispatch_pending
 from core.exchange_rate_rollover import roll_forward_missing_rates
 from core.migrations.runner import migrate_on_startup
+from modules.finance.api.dunning_service import DunningService
 from modules.maintenance.api.program_service import ProgramService
 from modules.scan.api.claude_reader import ClaudeReader
 from modules.scan.api.ocr_client import OcrClient
@@ -24,6 +25,8 @@ from modules.finance.events import consumers as _finance_consumers  # noqa: F401
 from modules.finance.events import ledger_consumers as _finance_ledger_consumers  # noqa: F401
 from modules.hr.events import consumers as _hr_consumers  # noqa: F401
 from modules.procurement.events import consumers as _procurement_consumers  # noqa: F401
+from modules.finance.events import treasury_consumers as _finance_treasury_consumers  # noqa: F401
+from modules.procurement.events import treasury_consumers as _procurement_treasury_consumers  # noqa: F401
 from modules.production.events import consumers as _production_consumers  # noqa: F401
 from modules.sales.events import consumers as _sales_consumers  # noqa: F401
 from modules.warehouse.events import consumers as _warehouse_consumers  # noqa: F401
@@ -33,6 +36,7 @@ EXCHANGE_RATE_ROLLOVER_HOUR_UTC = 18
 RESERVATION_EXPIRY_INTERVAL_SECONDS = 60
 REPLENISHMENT_INTERVAL_SECONDS = 900
 MAINTENANCE_SWEEP_INTERVAL_SECONDS = int(os.environ.get("MAINTENANCE_SWEEP_INTERVAL_SECONDS", "3600"))
+DUNNING_SWEEP_INTERVAL_SECONDS = int(os.environ.get("DUNNING_SWEEP_INTERVAL_SECONDS", "3600"))
 SCAN_READER_IDLE_SECONDS = 2
 SCAN_READER_RETRY_SECONDS = 15
 
@@ -125,6 +129,28 @@ def run_maintenance_programs() -> None:
         time.sleep(MAINTENANCE_SWEEP_INTERVAL_SECONDS)
 
 
+def run_dunning() -> None:
+    """Settles promises to pay whose date passed and tells the people who chase about customers reaching a
+    new dunning level. Each customer and level is announced once, so the hourly cadence only bounds how
+    soon after midnight a new day's lateness shows up. `POST /finance/dunning/run` does the same on demand."""
+    print("Dunning sweep started", flush=True)
+    while True:
+        try:
+            with get_connection() as db_connection:
+                service = DunningService(db_connection)
+                totals = {"promises_broken": 0, "levels_announced": 0}
+                for tenant_id in service.tenants_to_run():
+                    result = service.run(tenant_id=tenant_id, today=datetime.date.today())
+                    for key in totals:
+                        totals[key] += result[key]
+                db_connection.commit()
+            if any(totals.values()):
+                print(f"Dunning sweep: {totals['levels_announced']} level(s) announced, {totals['promises_broken']} promise(s) broken", flush=True)
+        except Exception as error:  # retried next tick, never kills the thread
+            print(f"Dunning sweep failed: {error}", flush=True)
+        time.sleep(DUNNING_SWEEP_INTERVAL_SECONDS)
+
+
 def run_scan_reader(readers: dict) -> None:
     """Has each scan's reader (the OCR container or Claude) read the queued photos, one at a
     time, in their own thread so a slow page never holds up the event consumers."""
@@ -157,6 +183,7 @@ def run() -> None:
     threading.Thread(target=run_reservation_expiry, daemon=True).start()
     threading.Thread(target=run_replenishment, daemon=True).start()
     threading.Thread(target=run_maintenance_programs, daemon=True).start()
+    threading.Thread(target=run_dunning, daemon=True).start()
     # Each scan picks its reader in the UI: the local OCR container (OCR_URL) or Claude
     # (CLAUDE_API_KEY, the photos are sent to the Anthropic API). Both run when configured.
     readers = {}
