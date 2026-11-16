@@ -143,6 +143,12 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
 
+- 2026-11-16 — PR #16 merged: `main` now contains `huge_production_migration` plus the test
+  gate. WP-0.1 stays unticked: on its first run both test jobs ended ~4 s after queueing with
+  no runner and no logs, i.e. GitHub Actions did not start them (every `Build and Deploy` run
+  here since 2026-10-05 failed the same way). Owner must fix Actions for this repository
+  (check the run page annotation; likely minutes or spending limit), then re-run Tests.
+  Until then the gate would block deploys from this repository.
 - 2026-11-16 — Merged `huge_production_migration` into the work branch (61 commits the
   review had not seen) and re-marked the packages above. WP-0.1 built: `tests.yml` (backend
   on an empty Postgres 18 with all migrations + `seed_dev`, frontend `tsc` + vitest);
