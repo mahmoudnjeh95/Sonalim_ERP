@@ -31,7 +31,6 @@ jobs:
           --health-retries 20
     env:
       DATABASE_URL: postgresql://erp:erp@localhost:5432/erp
-      PGPASSWORD: erp
       PYTHONUTF8: "1"
     defaults:
       run:
@@ -51,10 +50,9 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      - name: Create schemas and apply every migration
-        run: |
-          psql -h localhost -U erp -d erp -v ON_ERROR_STOP=1 -q -f docker/postgres/init.sql
-          python -c "from core.migrations.runner import apply_all_migrations; apply_all_migrations()"
+      # The runner bootstraps an empty database (schemas, outbox) before migrating.
+      - name: Apply every migration to the empty database
+        run: python -c "from core.migrations.runner import apply_all_migrations; apply_all_migrations()"
 
       - name: Seed demo data
         run: python -m scripts.seed_dev

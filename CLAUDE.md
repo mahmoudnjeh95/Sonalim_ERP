@@ -13,7 +13,7 @@ Windows box; backend venv lives at `backend/.venv`.
 - Single test: `.venv/Scripts/python -m pytest modules/production/api/test_shift_validation_integration.py::test_name -q`
 - Seed dev data: `.venv/Scripts/python -m scripts.seed_dev` (demo login `demo@sonalim-erp.local` / `demo1234`); other month seeds in `backend/scripts/seed_*.py`
 
-CI: `.github/workflows/tests.yml` runs the backend suite (fresh Postgres: `backend/docker/postgres/init.sql`, all migrations, `seed_dev`) and frontend `tsc` + vitest on every PR and push to `main`; `deploy.yml` will not build or deploy unless it passes.
+CI: `.github/workflows/tests.yml` runs the backend suite (empty Postgres, all migrations, `seed_dev`) and frontend `tsc` + vitest on every PR and push to `main`; `deploy.yml` will not build or deploy unless it passes.
 
 Tests: `test_*.py` sit next to the code. Domain tests (`*/domain/test_*.py`) need no DB. `*_integration.py` tests use the `db` fixture from `backend/conftest.py`, which connects to `TEST_DATABASE_URL` → `DATABASE_URL` → `postgresql://erp:erp@localhost:5432/erp`, requires migrated schema, rolls back every test, and **skips** (not fails) when no DB is reachable — a green run with many skips means nothing was tested.
 
