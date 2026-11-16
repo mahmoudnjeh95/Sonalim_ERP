@@ -1,0 +1,11 @@
+# Crontab for the `debian` user on the server: `crontab -e` and paste these lines.
+# Times are the server's clock (check with `date`). See docs/backups.md.
+SHELL=/bin/bash
+PATH=/usr/local/bin:/usr/bin:/bin
+ERP=/home/debian/Sonalim_erp/Erpsonalim
+
+# Nightly backup at 02:17.
+17 2 * * * bash $ERP/tools/backup/backup.sh >> /home/debian/sonalim-erp-backups/backup.log 2>&1
+
+# Restore drill from the off-site copy on the 1st of each month at 04:43.
+43 4 1 * * bash $ERP/tools/backup/restore.sh --drill --from-remote >> /home/debian/sonalim-erp-backups/backup.log 2>&1

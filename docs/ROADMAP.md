@@ -52,6 +52,8 @@ keep work branches merged up to it.
   workflow has run green on GitHub at least once.
 - [ ] **WP-0.2 Backups.** Scheduled `pg_dump` with retention and an off-server copy, plus a
   documented restore drill. *Done when* a restore has been run once from a backup.
+  *Built 2026-11-16* (`tools/backup/`, runbook `docs/backups.md`); tick once the one-time
+  server setup is done and `restore.sh --drill --from-remote` has passed on the server.
 - [ ] **WP-0.3 Connection pool.** Replace per-request `psycopg.connect` in `core/db.py`
   with `psycopg_pool`. *Small.*
 - [ ] **WP-0.4 Money as Decimal.** Remove `float` for amounts in sales, finance invoices,
@@ -142,6 +144,22 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-16 — WP-0.2 built (spec `specs/2026-11-16-backups-design.md`, plan
+  `plans/2026-11-16-backups.md`). `tools/backup/`: `backup.sh` (nightly `pg_dump -Fc`
+  through `docker compose exec`, verified by `pg_restore --list`, `.sha256`, GFS retention
+  14 d / 8 w / 12 m, rclone copy to an encrypted `crypt` remote + `cryptcheck`, off-site
+  retention, healthchecks.io ping), `restore.sh` (`--drill` into a scratch DB and
+  `--into-live`, which restores beside the live DB and swaps by rename, keeping the old one),
+  `retention.py` + tests, cron and env examples. `deploy.yml` copies `tools/backup/` to the
+  server; `tests.yml` runs the retention tests and shellcheck. Tested on Postgres 18 in
+  Docker with the server's layout (204 migrations + `seed_dev`): backup, 120 simulated days
+  of retention (23 kept, same off-site), failures (no remote → exit 3, DB down, concurrent
+  run, tampered dump), drill from the encrypted copy, live restore with a stand-in app
+  holding connections; backend suite on the restored DB 3166 passed / 11 skipped. Left (on
+  the server, by the user): rclone remote, `backup.env`, first backup + drill, cron — then
+  tick. Branch `claude/wp-0.2-backups` (from `main`, which already includes
+  `huge_production_migration`).
 
 - 2026-11-16 — Merged `huge_production_migration` into the work branch (61 commits the
   review had not seen) and re-marked the packages above. WP-0.1 built: `tests.yml` (backend
