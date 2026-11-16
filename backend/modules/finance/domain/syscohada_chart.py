@@ -143,4 +143,7 @@ DEFAULT_POSTING_RULES: tuple[PostingRule, ...] = (
     _rule("payroll", "payment", "cash", "422", "571", "CAI"),
     _rule("invoice", "issued", "*", "411", "702", "VTE"),
     _rule("invoice", "paid", "*", "521", "411", "BNQ"),
+    _rule("invoice", "vat", "*", None, "443"),
+    _rule("purchase_invoice", "validated", "*", "601", "401", "ACH"),
+    _rule("purchase_invoice", "vat", "*", "445", None),
 )

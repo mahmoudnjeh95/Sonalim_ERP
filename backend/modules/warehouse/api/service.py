@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 import psycopg
 from ulid import ULID
@@ -23,6 +24,11 @@ from modules.warehouse.domain.entities import (
 )
 from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.domain.reservation import validate_reservation_expiry
+
+
+def count_start_lock_key(tenant_id: str, site_id: str) -> str:
+    """The per-site advisory lock between stock writers (shared) and a cycle count starting (exclusive)."""
+    return f"warehouse.cycle_count.start:{tenant_id}:{site_id}"
 
 
 class StockService:
@@ -83,6 +89,50 @@ class StockService:
             for row_location_id, product_id, on_hand, reserved, in_production in rows
         ]
 
+    def _hold_off_count_start(self, tenant_id: str, location_id: str) -> None:
+        """Held to the end of the transaction, so a count starting on this site either waits for this
+        write and reads its result, or commits first and this write sees the freeze. Taken before any
+        stock row lock, by everything that locks stock rows: a writer holding a row while it queued
+        behind a waiting start could otherwise deadlock with one holding this lock and wanting the row.
+        A location outside any site is in no count, so it needs nothing."""
+        self._connection.execute(
+            """
+            SELECT pg_advisory_xact_lock_shared(hashtextextended('warehouse.cycle_count.start:' || %s::text || ':' || site_id, 0))
+            FROM warehouse.locations WHERE id = %s AND tenant_id = %s AND site_id IS NOT NULL
+            """,
+            (tenant_id, location_id, tenant_id),
+        )
+
+    def _assert_not_frozen(self, tenant_id: str, location_id: str, own_count_id: str | None = None) -> Err | None:
+        """A full cycle count in progress (an interim one holds nothing) freezes the locations in its scope: counting a shelf while stock
+        moves in and out of it would make the counts meaningless. Only that count's own approved
+        adjustment (`own_count_id`) passes, and never through another count's freeze."""
+        self._hold_off_count_start(tenant_id, location_id)
+        row = self._connection.execute(
+            """
+            WITH RECURSIVE up AS (
+                SELECT id, parent_location_id, site_id FROM warehouse.locations WHERE id = %s AND tenant_id = %s
+                UNION ALL
+                SELECT l.id, l.parent_location_id, l.site_id
+                FROM warehouse.locations l JOIN up ON l.id = up.parent_location_id
+            )
+            SELECT COALESCE(cc.number, cc.id) FROM warehouse.cycle_counts cc
+            WHERE cc.tenant_id = %s AND cc.status = 'in_progress' AND cc.mode = 'full'
+              AND cc.site_id = (SELECT site_id FROM up LIMIT 1)
+              AND (cc.scope_location_id IS NULL OR cc.scope_location_id IN (SELECT id FROM up))
+              AND (%s::text IS NULL OR cc.id <> %s)
+            LIMIT 1
+            """,
+            (location_id, tenant_id, tenant_id, own_count_id, own_count_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return Err(
+            "LOCATION_FROZEN",
+            f"this location is frozen by cycle count {row[0]}; complete or cancel it before moving stock",
+            f"cet emplacement est gelé par l'inventaire {row[0]} ; terminez-le ou annulez-le avant de mouvementer le stock",
+        )
+
     def get_available_quantity(self, tenant_id: str, product_id: str, location_id: str) -> float:
         """What this location can actually promise.
 
@@ -128,6 +178,7 @@ class StockService:
             if isinstance(expiry, Err):
                 return expiry
 
+        self._hold_off_count_start(tenant_id, location_id)
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -237,6 +288,38 @@ class StockService:
             )
         return result
 
+    def release_what_is_still_held(
+        self,
+        *,
+        tenant_id: str,
+        product_id: str,
+        location_id: str,
+        quantity: float,
+        reference: str,
+        actor_id: str | None = None,
+    ) -> Result[None]:
+        """For a pick list letting go of its hold. The counter is shared by every order at the location,
+        so if this reference's hold was already closed (released by hand before that was refused, or
+        before its pick list opened), releasing the full quantity would drain another order's hold, or
+        refuse and strand the pick list. Only what the ledger still has open is released. A reference
+        with no ledger rows at all predates the ledger and keeps the old behaviour."""
+        self._hold_off_count_start(tenant_id, location_id)
+        rows = self._connection.execute(
+            """
+            SELECT quantity_open, status FROM warehouse.stock_reservations
+            WHERE tenant_id = %s AND product_id = %s AND location_id = %s AND reference = %s
+            FOR UPDATE
+            """,
+            (tenant_id, product_id, location_id, reference),
+        ).fetchall()
+        release = min(quantity, sum(float(open_) for open_, status in rows if status == "active")) if rows else quantity
+        if release <= 0:
+            return Ok(None)
+        released = self.release_stock_reservation(
+            tenant_id=tenant_id, product_id=product_id, location_id=location_id, quantity=release, reference=reference, actor_id=actor_id,
+        )
+        return released if isinstance(released, Err) else Ok(None)
+
     def release_reserved_quantity(
         self,
         *,
@@ -256,6 +339,7 @@ class StockService:
         if isinstance(validation, Err):
             return validation
 
+        self._hold_off_count_start(tenant_id, location_id)
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -332,6 +416,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -609,7 +696,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
-
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved
@@ -642,10 +731,10 @@ class StockService:
         )
         self._connection.execute(
             """
-            INSERT INTO warehouse.stock_moves (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+            INSERT INTO warehouse.stock_moves (id, tenant_id, location_id, product_id, quantity, move_type, reference, actor_id, unit_cost)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
-            (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id),
+            (str(ULID()), tenant_id, location_id, product_id, quantity, move_type, reference, actor_id, unit_cost),
         )
         self._valuation.record_inflow(
             tenant_id=tenant_id, product_id=product_id, quantity=quantity, reference=reference, move_type=move_type,
@@ -681,6 +770,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -739,6 +831,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -795,6 +890,9 @@ class StockService:
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=quantity)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -849,11 +947,15 @@ class StockService:
         reason: str,
         actor_id: str | None = None,
         reference: str = "manual_adjustment",
+        _for_cycle_count: str | None = None,
     ) -> Result[StockLevel]:
         """Records an "ajustement" — a manual correction to on-hand quantity (e.g. a physical count)."""
         validation = self._validate_quantity(tenant_id=tenant_id, product_id=product_id, quantity=delta)
         if isinstance(validation, Err):
             return validation
+        frozen = self._assert_not_frozen(tenant_id, location_id, own_count_id=_for_cycle_count)
+        if frozen is not None:
+            return frozen
 
         row = self._connection.execute(
             """
@@ -1032,6 +1134,9 @@ class StockService:
         promises about future stock, not records of the past, so a negative one
         is just wrong.
         """
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
         if quantity_reserved < 0 or quantity_in_production < 0:
             return Err(
                 "INVALID_QUANTITY",
@@ -1132,6 +1237,9 @@ class StockService:
     ) -> Result[None]:
         """Deletes a stock row entirely. The values are captured in the audit log
         before deletion, since the row itself won't be there to recover them from."""
+        frozen = self._assert_not_frozen(tenant_id, location_id)
+        if frozen is not None:
+            return frozen
         row = self._connection.execute(
             """
             SELECT quantity_on_hand, quantity_reserved, quantity_in_production

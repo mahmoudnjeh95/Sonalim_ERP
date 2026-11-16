@@ -8,6 +8,8 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
+from modules.procurement.api.invoice_router import credit_note_router as purchase_credit_note_router
+from modules.procurement.api.invoice_router import router as purchase_invoice_router
 from modules.procurement.api.service import PurchaseOrderService
 from modules.procurement.domain.entities import (
     PURCHASE_ORDER_MANUAL_TRANSITIONS,
@@ -18,6 +20,8 @@ from modules.procurement.domain.entities import (
 )
 
 router = APIRouter(prefix="/procurement", tags=["procurement"])
+router.include_router(purchase_invoice_router)
+router.include_router(purchase_credit_note_router)
 
 RECEIVING_STATUSES = {"partially_received", "fully_received"}
 ALL_PURCHASE_ORDER_STATUSES = sorted(set(PURCHASE_ORDER_MANUAL_TRANSITIONS.keys()) | RECEIVING_STATUSES)

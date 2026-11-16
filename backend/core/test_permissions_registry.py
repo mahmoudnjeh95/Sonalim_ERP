@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from core.permissions_registry import (
+    ADMINISTRATOR_HELD_BACK_PERMISSIONS,
     ADMINISTRATOR_ROLE_CODE,
     DELIBERATE_GRANT_PERMISSIONS,
     DELIBERATE_GRANT_ROLES,
@@ -82,9 +83,29 @@ def test_no_everyday_role_bundles_an_admin_code():
         assert not leaked, f"{role['code']} role bundles admin codes: {leaked}"
 
 
-def test_administrator_holds_every_declared_permission():
+def test_administrator_holds_every_declared_permission_but_the_held_back_ones():
     everything = {entry["permission"] for entry in permission_catalog()}
-    assert set(_role(ADMINISTRATOR_ROLE_CODE)["permissions"]) == everything
+    assert set(_role(ADMINISTRATOR_ROLE_CODE)["permissions"]) == everything - ADMINISTRATOR_HELD_BACK_PERMISSIONS
+
+
+def test_the_administrator_may_invoice_beyond_the_goods_receipts():
+    # By decision the Administrateur always holds it; the everyday procurement role does not.
+    assert "procurement.admin_invoice_beyond_receipts" in _role(ADMINISTRATOR_ROLE_CODE)["permissions"]
+    assert "procurement.admin_invoice_beyond_receipts" not in ADMINISTRATOR_HELD_BACK_PERMISSIONS
+
+
+def test_the_administrator_may_override_credit_control():
+    # By decision the Administrateur always holds it; the everyday finance role does not.
+    assert "finance.admin_credit_override" in _role(ADMINISTRATOR_ROLE_CODE)["permissions"]
+    assert "finance.admin_credit_override" not in ADMINISTRATOR_HELD_BACK_PERMISSIONS
+    assert all("finance.admin_credit_override" not in role["permissions"] for role in _everyday_roles())
+
+
+def test_held_back_codes_reach_no_default_role_once_declared(monkeypatch):
+    declared = permission_catalog() + [{"module": "treasury", "permission": code} for code in ADMINISTRATOR_HELD_BACK_PERMISSIONS]
+    monkeypatch.setattr("core.permissions_registry.permission_catalog", lambda: declared)
+    for role in default_role_catalog():
+        assert not ADMINISTRATOR_HELD_BACK_PERMISSIONS & set(role["permissions"]), f"{role['code']} holds a held-back code"
 
 
 def test_held_back_codes_reach_administrateur_but_no_everyday_role():

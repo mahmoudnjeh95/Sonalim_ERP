@@ -22,6 +22,7 @@ from modules.warehouse.api.reservation_service import ReservationService
 from modules.warehouse.api.service import StockService
 from modules.warehouse.api.site_service import SiteService
 from modules.warehouse.api.stock_export import ProductValue, StockExportLine, build_stock_workbook
+from modules.warehouse.api.stock_documents_router import router as stock_documents_router
 from modules.warehouse.api.valuation_service import ValuationService
 from modules.warehouse.domain.barcode import ProductBarcode
 from modules.warehouse.domain.cycle_count import CycleCount, CycleCountLine
@@ -34,6 +35,7 @@ from modules.warehouse.domain.reservation import StockReservation
 from modules.warehouse.domain.valuation import CostLayer
 
 router = APIRouter(prefix="/warehouse", tags=["warehouse"])
+router.include_router(stock_documents_router)
 
 
 class ReserveStockRequest(BaseModel):
@@ -499,7 +501,7 @@ def admin_set_stock(
         )
         if isinstance(result, Err):
             connection.rollback()
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
+            raise HTTPException(_admin_stock_err_status(result.code), err_detail(result))
         connection.commit()
     return {
         "location_id": result.value.location_id,
@@ -524,9 +526,14 @@ def delete_stock_item(
         )
         if isinstance(result, Err):
             connection.rollback()
-            code = status.HTTP_404_NOT_FOUND if result.code == "NOT_FOUND" else status.HTTP_400_BAD_REQUEST
-            raise HTTPException(code, err_detail(result))
+            raise HTTPException(_admin_stock_err_status(result.code), err_detail(result))
         connection.commit()
+
+
+def _admin_stock_err_status(code: str) -> int:
+    if code == "NOT_FOUND":
+        return status.HTTP_404_NOT_FOUND
+    return status.HTTP_409_CONFLICT if code == "LOCATION_FROZEN" else status.HTTP_400_BAD_REQUEST
 
 
 # --- Lots/serials -----------------------------------------------------------------------
@@ -634,11 +641,14 @@ class CreateCycleCountRequest(BaseModel):
     scope_location_id: str | None = None
     count_type: Literal["scheduled", "blind"] = "scheduled"
     scheduled_for: datetime.date | None = None
+    mode: Literal["full", "interim"] = "full"
+    note: str | None = None
 
 
 class UpdateCycleCountRequest(BaseModel):
     scheduled_for: datetime.date | None = None
     count_type: Literal["scheduled", "blind"] | None = None
+    note: str | None = None
 
 
 class SubmitLineCountRequest(BaseModel):
@@ -646,7 +656,13 @@ class SubmitLineCountRequest(BaseModel):
 
 
 class ResolveLineVarianceRequest(BaseModel):
-    decision: Literal["approve", "reject"]
+    decision: Literal["approve", "reject", "note"]
+    observation: str | None = None
+
+
+class AddFoundLineRequest(BaseModel):
+    location_id: str
+    product_id: str
 
 
 class CompleteCycleCountRequest(BaseModel):
@@ -656,6 +672,9 @@ class CompleteCycleCountRequest(BaseModel):
 def _cycle_count_response(count: CycleCount) -> dict:
     return {
         "id": count.id,
+        "number": count.number,
+        "mode": count.mode,
+        "note": count.note,
         "site_id": count.site_id,
         "scope_location_id": count.scope_location_id,
         "count_type": count.count_type,
@@ -682,15 +701,27 @@ def _cycle_count_line_response(line: CycleCountLine) -> dict:
         "counted_at": line.counted_at,
         "resolved_by": line.resolved_by,
         "resolved_at": line.resolved_at,
+        "count_1": line.count_1,
+        "count_2": line.count_2,
+        "count_3": line.count_3,
+        "counts_recorded": line.counts_recorded,
+        "observation": line.observation,
     }
 
 
 def _cycle_count_err_status(code: str) -> int:
     if code == "NOT_FOUND":
         return status.HTTP_404_NOT_FOUND
-    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNRESOLVED"):
+    if code in ("INVALID_TRANSITION", "INVALID_STATE", "LINES_UNRESOLVED", "COUNT_SCOPE_OVERLAP", "LOCATION_FROZEN", "LINE_ALREADY_EXISTS"):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
+
+
+@router.get("/frozen-locations")
+def list_frozen_locations(tenant: TenantContext = Depends(require_permission("warehouse.view_moves"))) -> list[dict]:
+    """Open to whoever sees stock moves, not only to those who manage counts: they are the ones refused."""
+    with get_connection() as connection:
+        return CycleCountService(connection).frozen_scopes(tenant_id=tenant.tenant_id)
 
 
 @router.get("/cycle-counts")
@@ -718,6 +749,8 @@ def create_cycle_count(
             scope_location_id=body.scope_location_id,
             count_type=body.count_type,
             scheduled_for=body.scheduled_for,
+            mode=body.mode,
+            note=body.note,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -755,6 +788,7 @@ def update_cycle_count(
             cycle_count_id=cycle_count_id,
             scheduled_for=body.scheduled_for,
             count_type=body.count_type,
+            note=body.note,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -775,6 +809,27 @@ def start_cycle_count(
             raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
         connection.commit()
     return _cycle_count_response(result.value)
+
+
+@router.post("/cycle-counts/{cycle_count_id}/lines", status_code=status.HTTP_201_CREATED)
+def add_cycle_count_found_line(
+    cycle_count_id: str,
+    body: AddFoundLineRequest,
+    tenant: TenantContext = Depends(require_permission("warehouse.manage_cycle_counts")),
+) -> dict:
+    with get_connection() as connection:
+        result = CycleCountService(connection).add_found_line(
+            tenant_id=tenant.tenant_id,
+            actor_id=tenant.user_id,
+            cycle_count_id=cycle_count_id,
+            location_id=body.location_id,
+            product_id=body.product_id,
+        )
+        if isinstance(result, Err):
+            connection.rollback()
+            raise HTTPException(_cycle_count_err_status(result.code), err_detail(result))
+        connection.commit()
+    return _cycle_count_line_response(result.value)
 
 
 @router.post("/cycle-counts/{cycle_count_id}/lines/{line_id}/count")
@@ -815,6 +870,7 @@ def resolve_cycle_count_line(
             cycle_count_id=cycle_count_id,
             line_id=line_id,
             decision=body.decision,
+            observation=body.observation,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -1340,7 +1396,7 @@ def _reservation_response(reservation: StockReservation) -> dict:
 def _reservation_err_status(code: str) -> int:
     if code == "NOT_FOUND":
         return status.HTTP_404_NOT_FOUND
-    if code in ("INVALID_STATE", "INSUFFICIENT_STOCK"):
+    if code in ("INVALID_STATE", "INSUFFICIENT_STOCK", "RESERVATION_IN_FULFILLMENT"):
         return status.HTTP_409_CONFLICT
     return status.HTTP_400_BAD_REQUEST
 
@@ -1418,6 +1474,7 @@ def get_valuation(tenant: TenantContext = Depends(require_permission("warehouse.
             "value": valuation.value,
             "unvalued_quantity": valuation.unvalued_quantity,
             "average_unit_cost": valuation.average_unit_cost,
+            "last_received_at": valuation.last_received_at,
             "currency": "XOF",
         }
         for valuation in valuations

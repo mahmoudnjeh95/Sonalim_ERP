@@ -7,17 +7,25 @@ from pydantic import BaseModel
 
 from core.db import get_connection
 from core.domain.result import Err, err_detail
-from core.tenancy import TenantContext, require_permission
+from core.tenancy import TenantContext, require_permission, user_has_permission
+from modules.sales.api.pricing_service import PricingService
+from modules.sales.api.quote_router import pricing_router, quote_router
 from modules.sales.api.service import SalesOrderService
 from modules.sales.domain.entities import OrderLine
 
 router = APIRouter(prefix="/sales", tags=["sales"])
+router.include_router(quote_router)
+router.include_router(pricing_router)
 
 
 class OrderLineRequest(BaseModel):
     product_id: str
     quantity: float
     unit_price: float
+    discount_rate: float = 0.0
+    # left out: the tenant's default VAT rate (sales settings)
+    vat_rate: float | None = None
+    price_list_id: str | None = None
 
 
 class CreateOrderRequest(BaseModel):
@@ -25,10 +33,13 @@ class CreateOrderRequest(BaseModel):
     location_id: str
     lines: list[OrderLineRequest]
     requested_ship_date: datetime.date | None = None
+    discount_rate: float = 0.0
 
 
 class ConfirmOrderRequest(BaseModel):
     correlation_id: str
+    # Confirm despite the credit rules; honoured only for holders of finance.admin_credit_override.
+    override_credit: bool = False
 
 
 class UpdateOrderRequest(BaseModel):
@@ -36,22 +47,47 @@ class UpdateOrderRequest(BaseModel):
     location_id: str | None = None
     lines: list[OrderLineRequest] | None = None
     requested_ship_date: datetime.date | None = None
+    discount_rate: float | None = None
 
 
 def _serialize_order(order) -> dict:
+    totals = order.totals
     return {
         "id": order.id,
         "partner_id": order.partner_id,
         "location_id": order.location_id,
         "status": order.status,
         "total_amount": order.total_amount,
+        "totals": {key: float(value) for key, value in totals.as_dict().items()},
+        "discount_rate": order.discount_rate,
+        "quote_id": order.quote_id,
         "requested_ship_date": order.requested_ship_date.isoformat() if order.requested_ship_date else None,
         "opportunity_id": order.opportunity_id,
         "lines": [
-            {"product_id": line.product_id, "quantity": line.quantity, "unit_price": line.unit_price}
+            {"product_id": line.product_id, "quantity": line.quantity, "unit_price": line.unit_price,
+             "discount_rate": line.discount_rate, "vat_rate": line.vat_rate, "price_list_id": line.price_list_id}
             for line in order.lines
         ],
     }
+
+
+def _lines(connection, tenant_id: str, requested: list[OrderLineRequest]) -> list[OrderLine]:
+    default_vat = float(PricingService(connection).get_settings(tenant_id=tenant_id)["default_vat_rate"])
+    return [
+        OrderLine(product_id=line.product_id, quantity=line.quantity, unit_price=line.unit_price, discount_rate=line.discount_rate,
+                  vat_rate=line.vat_rate if line.vat_rate is not None else default_vat, price_list_id=line.price_list_id)
+        for line in requested
+    ]
+
+
+def _check_pricing(connection, tenant: TenantContext, lines: list[OrderLine], discount_rate: float) -> None:
+    checked = SalesOrderService(connection).check_pricing(
+        tenant_id=tenant.tenant_id, lines=lines, discount_rate=discount_rate,
+        may_exceed_discount=user_has_permission(connection, user_id=tenant.user_id, permission="sales.admin_discounts"),
+    )
+    if isinstance(checked, Err):
+        code = status.HTTP_403_FORBIDDEN if checked.code == "DISCOUNT_ABOVE_LIMIT" else status.HTTP_400_BAD_REQUEST
+        raise HTTPException(code, err_detail(checked))
 
 
 @router.get("/orders")
@@ -69,8 +105,9 @@ def list_orders(
 def create_order(
     body: CreateOrderRequest, tenant: TenantContext = Depends(require_permission("sales.manage_orders"))
 ) -> dict:
-    lines = [OrderLine(product_id=line.product_id, quantity=line.quantity, unit_price=line.unit_price) for line in body.lines]
     with get_connection() as connection:
+        lines = _lines(connection, tenant.tenant_id, body.lines)
+        _check_pricing(connection, tenant, lines, body.discount_rate)
         service = SalesOrderService(connection)
         order = service.create_order(
             tenant_id=tenant.tenant_id,
@@ -79,6 +116,7 @@ def create_order(
             location_id=body.location_id,
             lines=lines,
             requested_ship_date=body.requested_ship_date,
+            discount_rate=body.discount_rate,
         )
         connection.commit()
     return _serialize_order(order)
@@ -90,13 +128,14 @@ def update_order(
     body: UpdateOrderRequest,
     tenant: TenantContext = Depends(require_permission("sales.admin_orders")),
 ) -> dict:
-    lines = (
-        [OrderLine(product_id=line.product_id, quantity=line.quantity, unit_price=line.unit_price) for line in body.lines]
-        if body.lines is not None
-        else None
-    )
     with get_connection() as connection:
+        lines = _lines(connection, tenant.tenant_id, body.lines) if body.lines is not None else None
         service = SalesOrderService(connection)
+        current = service.get_order(tenant_id=tenant.tenant_id, order_id=order_id)
+        if isinstance(current, Err):
+            raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(current))
+        _check_pricing(connection, tenant, lines if lines is not None else list(current.value.lines),
+                       body.discount_rate if body.discount_rate is not None else current.value.discount_rate)
         result = service.admin_update_order(
             tenant_id=tenant.tenant_id,
             actor_id=tenant.user_id,
@@ -105,6 +144,7 @@ def update_order(
             location_id=body.location_id,
             lines=lines,
             requested_ship_date=body.requested_ship_date,
+            discount_rate=body.discount_rate,
         )
         if isinstance(result, Err):
             connection.rollback()
@@ -122,8 +162,11 @@ def confirm_order(
 ) -> dict:
     with get_connection() as connection:
         service = SalesOrderService(connection)
+        override = body.override_credit and user_has_permission(
+            connection, user_id=tenant.user_id, permission="finance.admin_credit_override")
         result = service.confirm_order(
-            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, order_id=order_id, correlation_id=body.correlation_id
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, order_id=order_id, correlation_id=body.correlation_id,
+            override_credit=override,
         )
         if isinstance(result, Err):
             connection.rollback()

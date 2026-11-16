@@ -2,22 +2,37 @@
   "name": "finance",
   "version": "0.2.0",
   "depends": ["core"],
-  "optional_depends": ["sales", "payroll"],
+  "optional_depends": ["sales", "warehouse", "payroll", "procurement", "treasury"],
   "provides_api": [
     "InvoiceService",
+    "DeliveryBillingService",
+    "report_queries",
     "LedgerPostingService",
     "LedgerQueryService",
     "LedgerReportService",
-    "PeriodService"
+    "PeriodService",
+    "ReceivablesService",
+    "DunningService"
   ],
-  "publishes_events": ["finance.invoice.issued", "finance.invoice.paid", "finance.journal_entry.posted"],
+  "publishes_events": ["finance.invoice.issued", "finance.invoice.paid", "finance.credit_note.issued", "finance.journal_entry.posted"],
   "subscribes_events": [
-    "sales.order.confirmed",
+    "warehouse.voucher.posted",
+    "warehouse.shipment.shipped",
+    "finance.credit_note.issued",
     "payroll.run.approved",
     "payroll.run.paid",
     "payroll.run.reversed",
     "finance.invoice.issued",
-    "finance.invoice.paid"
+    "finance.invoice.paid",
+    "procurement.purchase_invoice.validated",
+    "procurement.purchase_invoice.cancelled",
+    "procurement.purchase_credit_note.validated",
+    "treasury.receipt.posted",
+    "treasury.receipt.cancelled",
+    "treasury.instrument.unpaid",
+    "treasury.disbursement.posted",
+    "treasury.disbursement.cancelled",
+    "treasury.instrument.collected"
   ],
   "migrations_path": "./migrations",
   "permissions": [
@@ -30,6 +45,11 @@
     "finance.manage_accounts",
     "finance.admin_accounts",
     "finance.admin_periods",
-    "finance.manage_posting_rules"
+    "finance.manage_posting_rules",
+    "finance.view_receivables",
+    "finance.manage_receivables",
+    "finance.admin_receivables",
+    "finance.manage_dunning",
+    "finance.admin_credit_override"
   ]
 }

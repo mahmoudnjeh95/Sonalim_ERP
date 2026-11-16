@@ -756,3 +756,29 @@ def test_packed_goods_wait_in_the_line_store_and_the_shift_records_it(db, env):
     packing_id = next(s for s in _shift(db, shift_id)["sections"] if s["key"] == "packing")["payload"]["rows"][0]["id"]
     stored = db.execute("SELECT finished_goods_location_id FROM production.shift_packing_rows WHERE id = %s", (packing_id,)).fetchone()[0]
     assert stored == line
+
+
+def test_validation_is_refused_while_a_cycle_count_freezes_a_location_it_would_post_to(db, env):
+    from modules.warehouse.api.cycle_count_service import CycleCountService
+    from modules.warehouse.api.site_service import SiteService
+
+    shift_id = _submitted_shift(db, env)
+    site = SiteService(db).create_site(tenant_id=TENANT, actor_id=env["actor"], code="frozen-site", name="Frozen").value
+    db.execute("UPDATE warehouse.locations SET site_id = %s, location_type = 'bin' WHERE id = %s", (site.id, env["location"]))
+    counts = CycleCountService(db)
+    count = counts.create_count(tenant_id=TENANT, actor_id=env["actor"], site_id=site.id, scope_location_id=env["location"])
+    assert isinstance(count, Ok), count
+    assert isinstance(counts.start_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.value.id), Ok)
+    semolina_before = _on_hand(db, env, "semolina")
+    moves_before = db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE tenant_id = %s", (TENANT,)).fetchone()[0]
+
+    refused = _validate(db, env, shift_id)
+
+    assert isinstance(refused, Err) and refused.code == "LOCATION_FROZEN"
+    assert _on_hand(db, env, "semolina") == semolina_before
+    assert db.execute("SELECT count(*) FROM warehouse.stock_moves WHERE tenant_id = %s", (TENANT,)).fetchone()[0] == moves_before
+    assert _shift(db, shift_id)["status"] == "submitted"
+
+    # Count cancelled, the same shift validates.
+    assert isinstance(counts.cancel_count(tenant_id=TENANT, actor_id=env["actor"], cycle_count_id=count.value.id), Ok)
+    assert isinstance(_validate(db, env, shift_id), Ok)

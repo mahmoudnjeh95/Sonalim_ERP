@@ -7,6 +7,7 @@ import { Menu } from "lucide-react";
 import { Sidebar } from "./Sidebar";
 import { AppLoader } from "../components/patterns/AppLoader";
 import { useI18n } from "../lib/i18n";
+import { TreasuryAlertBanner } from "../features/treasury/TreasuryAlertBanner";
 import { useIsMobile } from "../lib/useIsMobile";
 import { NotificationBell } from "../features/notifications/NotificationBell";
 import logoTile64 from "../assets/icons/brand/logo-3d-64.png";
@@ -151,6 +152,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <AppLoader label={t("app.loading")} className="py-8" />
           </div>
         )}
+
+        <TreasuryAlertBanner />
 
         <AnimatePresence mode="wait" onExitComplete={() => mainRef.current?.scrollTo({ top: 0 })}>
           <motion.div

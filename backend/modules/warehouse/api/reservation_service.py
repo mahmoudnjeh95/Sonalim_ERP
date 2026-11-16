@@ -73,6 +73,7 @@ class ReservationService:
         self, reservation: StockReservation, *, actor_id: str, new_status: str, move_type: str
     ) -> Result[float]:
         """Releases whatever of this one row is still open and closes it."""
+        self._stock._hold_off_count_start(reservation.tenant_id, reservation.location_id)  # before the stock row lock below
         release = expiry_release_quantity(quantity_open=reservation.quantity_open, quantity_reserved_now=self._reserved_now(reservation))
         if release > 0:
             released = self._stock.release_reserved_quantity(
@@ -87,6 +88,19 @@ class ReservationService:
         )
         return Ok(release)
 
+    def _pick_list_holding(self, tenant_id: str, reference: str) -> str | None:
+        """A pick list still in play owns its reservation: it releases it when it ships or is cancelled.
+        Once shipped or cancelled it has let go, so a leftover hold can be closed like any other."""
+        row = self._connection.execute(
+            """
+            SELECT number FROM warehouse.pick_lists
+            WHERE tenant_id = %s AND reservation_reference = %s AND status IN ('open', 'picking', 'picked')
+            LIMIT 1
+            """,
+            (tenant_id, reference),
+        ).fetchone()
+        return row[0] if row else None
+
     def release_reservation(self, *, tenant_id: str, actor_id: str, reservation_id: str) -> Result[StockReservation]:
         current = self._get_for_update(tenant_id=tenant_id, reservation_id=reservation_id)
         if isinstance(current, Err):
@@ -96,6 +110,13 @@ class ReservationService:
                 "INVALID_STATE",
                 f"reservation is already {current.value.status}",
                 f"la réservation est déjà {current.value.status}",
+            )
+        pick_list = self._pick_list_holding(tenant_id, current.value.reference)
+        if pick_list is not None:
+            return Err(
+                "RESERVATION_IN_FULFILLMENT",
+                f"pick list {pick_list} holds this reservation; cancel the pick list to release it",
+                f"la liste de prélèvement {pick_list} détient cette réservation ; annulez la liste pour la libérer",
             )
         closed = self._close(current.value, actor_id=actor_id, new_status="released", move_type="reservation_released")
         if isinstance(closed, Err):
@@ -149,8 +170,20 @@ class ReservationService:
         """The worker's sweep. Every tenant by default (the worker has no
         session); SKIP LOCKED so two workers never fight over one row, and a
         row someone is releasing by hand right now is simply left for the
-        next tick."""
-        clauses = ["status = 'active'", "expires_at IS NOT NULL", "expires_at <= %s"]
+        next tick. A hold a pick list still owns doesn't lapse: the goods are being
+        picked, and the pick list couldn't ship or cancel without it. Filtered here
+        rather than skipped in the loop, so such rows can't use up the limit."""
+        clauses = [
+            "status = 'active'",
+            "expires_at IS NOT NULL",
+            "expires_at <= %s",
+            """NOT EXISTS (
+                SELECT 1 FROM warehouse.pick_lists p
+                WHERE p.tenant_id = warehouse.stock_reservations.tenant_id
+                  AND p.reservation_reference = warehouse.stock_reservations.reference
+                  AND p.status IN ('open', 'picking', 'picked')
+            )""",
+        ]
         params: list[object] = [now]
         if tenant_id is not None:
             clauses.append("tenant_id = %s")

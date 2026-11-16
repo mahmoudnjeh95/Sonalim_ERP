@@ -17,6 +17,16 @@ SOURCES: dict[str, tuple[str, str, str]] = {
     "payroll.run.reversed": ("payroll", "run_id", "payroll_reversal"),
     "finance.invoice.issued": ("finance", "invoice_id", "invoice_issued"),
     "finance.invoice.paid": ("finance", "invoice_id", "invoice_paid"),
+    "finance.credit_note.issued": ("finance", "credit_note_id", "invoice_credit_note"),
+    "procurement.purchase_invoice.validated": ("procurement", "invoice_id", "purchase_invoice_validated"),
+    "procurement.purchase_invoice.cancelled": ("procurement", "invoice_id", "purchase_invoice_cancelled"),
+    "procurement.purchase_credit_note.validated": ("procurement", "credit_note_id", "purchase_credit_note_validated"),
+    "treasury.receipt.posted": ("treasury", "receipt_id", "receipt_payment"),
+    "treasury.receipt.cancelled": ("treasury", "receipt_id", "receipt_cancelled"),
+    "treasury.disbursement.posted": ("treasury", "disbursement_id", "disbursement_payment"),
+    "treasury.disbursement.cancelled": ("treasury", "disbursement_id", "disbursement_cancelled"),
+    "treasury.instrument.collected": ("treasury", "instrument_id", "instrument_collected"),
+    "treasury.instrument.unpaid": ("treasury", "instrument_id", "instrument_unpaid"),
 }
 
 
@@ -79,9 +89,77 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
             "causation_id": causation_id,
         }
         if event_type == "finance.invoice.issued":
-            return invoices.post_issued(issued_on=occurred_on(envelope), **common)
+            # 1.1 (additive): the collected VAT inside `amount`; a 1.0 event had none
+            return invoices.post_issued(issued_on=occurred_on(envelope), vat=payload.get("vat") or 0, **common)
         return invoices.post_paid(paid_on=occurred_on(envelope), **common)
+    if event_type == "finance.credit_note.issued":
+        from modules.finance.api.invoice_ledger_service import InvoiceLedgerService
+
+        return InvoiceLedgerService(connection).post_credit_note(
+            tenant_id=tenant_id, credit_note_id=str(payload["credit_note_id"]), invoice_id=str(payload["invoice_id"]),
+            partner_id=str(payload["partner_id"]), amount=payload["amount"], currency=str(payload["currency"]),
+            number=payload.get("number"), credited_on=occurred_on(envelope), correlation_id=correlation_id, causation_id=causation_id,
+            vat=payload.get("vat") or 0,
+        )
+    if event_type == "procurement.purchase_credit_note.validated":
+        from modules.finance.api.purchase_invoice_ledger_service import PurchaseInvoiceLedgerService
+
+        return PurchaseInvoiceLedgerService(connection).post_credit_note(
+            tenant_id=tenant_id, credit_note_id=str(payload["credit_note_id"]), partner_id=str(payload["partner_id"]),
+            amount=payload["amount"], vat=payload.get("total_vat", 0), lines=payload.get("lines"),
+            currency=str(payload["currency"]), validated_on=occurred_on(envelope), correlation_id=correlation_id,
+            causation_id=causation_id, number=payload.get("number"),
+        )
+    if event_type.startswith("procurement.purchase_invoice."):
+        from modules.finance.api.purchase_invoice_ledger_service import PurchaseInvoiceLedgerService
+
+        purchases = PurchaseInvoiceLedgerService(connection)
+        invoice_id = str(payload["invoice_id"])
+        if event_type == "procurement.purchase_invoice.validated":
+            # Version 1.1 carries the VAT and the lines; a 1.0 event posts its amount without VAT.
+            return purchases.post_validated(
+                tenant_id=tenant_id, invoice_id=invoice_id, partner_id=str(payload["partner_id"]), amount=payload["amount"],
+                currency=str(payload["currency"]), validated_on=occurred_on(envelope),
+                correlation_id=correlation_id, causation_id=causation_id,
+                vat=payload.get("total_vat", 0), lines=payload.get("lines"), number=payload.get("number"),
+            )
+        return purchases.post_cancelled(
+            tenant_id=tenant_id, invoice_id=invoice_id, cancelled_on=occurred_on(envelope),
+            correlation_id=correlation_id, causation_id=causation_id,
+        )
+    if event_type.startswith("treasury."):
+        return _post_treasury(connection, envelope, correlation_id, causation_id)
     raise ValueError(f"the ledger has no posting for {event_type}")
+
+
+def _post_treasury(
+    connection: psycopg.Connection, envelope: dict, correlation_id: str, causation_id: str
+) -> Result[list[dict]]:
+    from modules.finance.api.treasury_ledger_service import TreasuryLedgerService
+
+    treasury = TreasuryLedgerService(connection)
+    event_type = envelope["event_type"]
+    tenant_id = envelope["tenant_id"]
+    payload = envelope["payload"]
+    common = {"tenant_id": tenant_id, "correlation_id": correlation_id, "causation_id": causation_id}
+    if event_type in ("treasury.receipt.posted", "treasury.disbursement.posted"):
+        direction = "in" if event_type == "treasury.receipt.posted" else "out"
+        key = "receipt_id" if direction == "in" else "disbursement_id"
+        return treasury.post_document(direction=direction, document_id=str(payload[key]), **common)
+    if event_type in ("treasury.receipt.cancelled", "treasury.disbursement.cancelled"):
+        direction = "in" if event_type == "treasury.receipt.cancelled" else "out"
+        key = "receipt_id" if direction == "in" else "disbursement_id"
+        return treasury.cancel_document(
+            direction=direction, document_id=str(payload[key]), cancelled_on=occurred_on(envelope), **common
+        )
+    if event_type == "treasury.instrument.collected":
+        return treasury.post_instrument_collected(
+            instrument_id=str(payload["instrument_id"]), account_id=payload.get("account_id"),
+            collected_on=occurred_on(envelope), **common,
+        )
+    return treasury.post_instrument_unpaid(
+        instrument_id=str(payload["instrument_id"]), unpaid_on=occurred_on(envelope), **common
+    )
 
 
 def retry_failure(connection: psycopg.Connection, *, tenant_id: str, actor_id: str, failure_id: str) -> Result[list[dict]]:
@@ -101,6 +179,15 @@ def retry_failure(connection: psycopg.Connection, *, tenant_id: str, actor_id: s
             f"posting failure {failure_id} is already {failure['status']}",
             f"l'échec d'imputation {failure_id} est déjà {FAILURE_STATUS_FR[failure['status']]}",
         )
+    if failure["source_module"] == "treasury":
+        from modules.finance.api.treasury_ledger_service import ledger_posting_enabled
+
+        if not ledger_posting_enabled(connection, tenant_id):
+            return Err(
+                "LEDGER_POSTING_DISABLED",
+                "treasury ledger posting is switched off; turn it on before retrying",
+                "la comptabilisation de la trésorerie est désactivée ; activez-la avant de réessayer",
+            )
     result = post_for_event(connection, failure["envelope"])
     if isinstance(result, Err):
         return result

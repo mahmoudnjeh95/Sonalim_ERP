@@ -17,6 +17,7 @@ from modules.finance.api.chart_setup_service import ChartSetupService
 from modules.finance.api.ledger_event_postings import retry_failure
 from modules.finance.api.ledger_posting_service import entry_not_found
 from modules.finance.api.ledger_query_service import LedgerQueryService
+from modules.finance.api.ledger_status import MAX_SOURCES, LedgerStatusService, status_to_dict
 from modules.finance.api.ledger_report_service import LedgerReportService
 from modules.finance.api.manual_entry_service import ManualEntryService
 from modules.finance.api.period_service import PeriodService
@@ -28,7 +29,7 @@ router = APIRouter(prefix="/finance", tags=["finance.ledger"])
 
 CONFLICT_CODES = {
     "PERIOD_CLOSED", "ENTRY_POSTED", "INVALID_TRANSITION", "FISCAL_YEAR_EXISTS", "ACCOUNT_EXISTS",
-    "POSTING_RULE_EXISTS", "RUN_NOT_POSTED", "INVOICE_NOT_POSTED",
+    "POSTING_RULE_EXISTS", "RUN_NOT_POSTED", "INVOICE_NOT_POSTED", "LEDGER_POSTING_DISABLED",
 }
 
 
@@ -455,6 +456,46 @@ def source_postings(
             tenant_id=tenant.tenant_id, source_module=source_module, source_id=source_id
         )
     return {"entries": jsonable(entries), "failures": jsonable(failures)}
+
+
+# Who may see a document's ledger status: whoever may see the document in its own module, or the
+# ledger itself. The status says no more than the document's screen already shows.
+LEDGER_STATUS_READERS = {
+    "treasury": "treasury.view",
+    "procurement": "procurement.view_purchase_invoices",
+    "finance": "finance.view_invoices",
+    "payroll": "payroll.view_runs",
+}
+
+
+class LedgerStatusIn(BaseModel):
+    source_module: str
+    ids: list[str] = Field(max_length=MAX_SOURCES)
+
+
+@router.post("/ledger-status")
+def ledger_status(body: LedgerStatusIn, tenant: TenantContext = Depends(require_session)) -> dict:
+    """Posted / refused / reversed / not posted, for a page of one module's documents at once."""
+    reader = LEDGER_STATUS_READERS.get(body.source_module)
+    if reader is None:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            {"code": "INVALID_SOURCE_MODULE", "message": f"no ledger status for {body.source_module}",
+             "message_fr": f"aucun statut comptable pour {body.source_module}"},
+        )
+    with get_connection() as connection:
+        allowed = any(
+            user_has_permission(connection, user_id=tenant.user_id, permission=code) for code in (reader, "finance.view_ledger")
+        )
+        if not allowed:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN,
+                {"code": "FORBIDDEN", "message": f"missing permission {reader}", "message_fr": f"permission manquante : {reader}"},
+            )
+        statuses = LedgerStatusService(connection).statuses(
+            tenant_id=tenant.tenant_id, sources=[(body.source_module, source_id) for source_id in body.ids]
+        )
+    return {"statuses": {source_id: status_to_dict(value) for (_module, source_id), value in statuses.items()}}
 
 
 # Reports.

@@ -55,6 +55,11 @@ export function CycleCountsTab() {
 
   const columns: ColumnDef<CycleCount>[] = [
     {
+      key: "number",
+      header: t("warehouse.cycleCounts.column.number"),
+      cell: (row) => row.number ?? "—",
+    },
+    {
       key: "site",
       header: t("warehouse.cycleCounts.column.site"),
       cell: (row) => siteName(row.site_id),

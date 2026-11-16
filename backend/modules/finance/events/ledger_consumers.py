@@ -26,9 +26,18 @@ def consumer_name(event_type: str) -> str:
     return "finance.ledger." + event_type.replace(".", "_")
 
 
+def _treasury_posting_enabled(connection: psycopg.Connection, tenant_id: str) -> bool:
+    from modules.finance.api.treasury_ledger_service import ledger_posting_enabled
+
+    return ledger_posting_enabled(connection, tenant_id)
+
+
 def handle_ledger_event(connection: psycopg.Connection, envelope: dict) -> None:
     source_module, source_id, source_kind = source_of(envelope)
     tenant_id = envelope["tenant_id"]
+    if source_module == "treasury" and not _treasury_posting_enabled(connection, tenant_id):
+        # Off until the accountant confirms the accounts: no entry and, deliberately, no failure row.
+        return
     result = post_for_event(connection, envelope)
     failures = PostingFailureService(connection)
     if isinstance(result, Err):

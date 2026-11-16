@@ -1,6 +1,8 @@
 import { useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Coins, Layers } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Coins, Download, Layers } from "lucide-react";
+import { toast } from "sonner";
+import { ApiError } from "../../../lib/api";
 import { useAuth } from "../../../lib/auth";
 import { currentLocale, useI18n } from "../../../lib/i18n";
 import { formatXof } from "../../../lib/currency";
@@ -8,6 +10,8 @@ import { useColumnFilters } from "../../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../../lib/useTableColumns";
 import { formatMoveReference, useReferenceKindLabels } from "../../../lib/stockMoveTypes";
 import { Button } from "../../../components/ui/button";
+import { Label } from "../../../components/ui/label";
+import { Select } from "../../../components/ui/select";
 import { Badge } from "../../../components/ui/badge";
 import { Table, TableHeader, TableBody, TableRow, TableCell, TableHead, ResizableTableHead } from "../../../components/ui/table";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from "../../../components/ui/dialog";
@@ -17,6 +21,7 @@ import { ColumnVisibilityMenu } from "../../../components/patterns/ColumnVisibil
 import { EmptyState } from "../../../components/patterns/EmptyState";
 import { StatCard } from "../../../components/patterns/StatCard";
 import { useProductCatalog } from "../../products/catalog";
+import { downloadValuedStock, getValuationMethod, saveBlob, setValuationMethod, type ValuationMethod } from "../stockDocumentsApi";
 import { costLayersQueryKey, getValuation, listCostLayers, VALUATION_QUERY_KEY, type ProductValuation } from "./api";
 
 function formatNumber(value: number) {
@@ -83,9 +88,20 @@ type CoverageFilter = (typeof COVERAGE_FILTERS)[number];
 
 export function ValuationTab() {
   const { t } = useI18n();
-  const { session } = useAuth();
+  const { session, hasPermission } = useAuth();
   const token = session!.token;
+  const queryClient = useQueryClient();
   const { products } = useProductCatalog();
+  const { data: method } = useQuery({ queryKey: ["warehouse", "valuation", "method"], queryFn: () => getValuationMethod(token) });
+  const methodMutation = useMutation({
+    mutationFn: (next: ValuationMethod) => setValuationMethod(token, next),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: VALUATION_QUERY_KEY }),
+    onError: (error) => toast.error(t("warehouse.valuation.method.error"), { description: error instanceof ApiError ? error.message : undefined }),
+  });
+  const exportMutation = useMutation({
+    mutationFn: (format: "csv" | "xlsx") => downloadValuedStock(token, format).then((blob) => saveBlob(blob, `valued-stock.${format}`)),
+    onError: (error) => toast.error(t("warehouse.valuation.method.error"), { description: error instanceof ApiError ? error.message : undefined }),
+  });
   const { data: valuations = [] } = useQuery({ queryKey: VALUATION_QUERY_KEY, queryFn: () => getValuation(token) });
 
   const [coverageFilter, setCoverageFilter] = useState<CoverageFilter>("all");
@@ -105,6 +121,12 @@ export function ValuationTab() {
       header: t("warehouse.valuation.column.product"),
       cell: (row) => productName(row.product_id),
       filterCell: columnFilters.textCell("product", t("warehouse.valuation.column.product")),
+    },
+    {
+      key: "lastReceived",
+      header: t("warehouse.valuation.column.lastReceived"),
+      cell: (row) => (row.last_received_at ? new Date(row.last_received_at).toLocaleDateString() : "—"),
+      filterCell: { type: "blank" },
     },
     { key: "quantity", header: t("warehouse.valuation.column.quantity"), cell: (row) => formatNumber(row.quantity), filterCell: columnFilters.rangeCell("quantity") },
     {
@@ -152,7 +174,30 @@ export function ValuationTab() {
         <StatCard label={t("warehouse.valuation.stat.total")} value={Math.round(totalValue)} icon={<Coins className="h-5 w-5" />} unit="XOF" accent="primary" />
         <StatCard label={t("warehouse.valuation.stat.unvaluedProducts")} value={unvaluedProducts} icon={<Layers className="h-5 w-5" />} accent="warning" />
       </div>
-      <p className="text-sm text-muted-foreground">{t("warehouse.valuation.description")}</p>
+      <p className="text-sm text-muted-foreground">{t(method?.method === "average" ? "warehouse.valuation.description.average" : "warehouse.valuation.description")}</p>
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="valuation-method">{t("warehouse.valuation.method.label")}</Label>
+          <Select
+            id="valuation-method"
+            className="w-auto"
+            value={method?.method ?? "fifo"}
+            disabled={!hasPermission("warehouse.admin_stock") || methodMutation.isPending}
+            onChange={(event) => methodMutation.mutate(event.target.value as ValuationMethod)}
+          >
+            <option value="fifo">{t("warehouse.valuation.method.fifo")}</option>
+            <option value="average">{t("warehouse.valuation.method.average")}</option>
+          </Select>
+        </div>
+        <Button variant="outline" size="sm" disabled={exportMutation.isPending} onClick={() => exportMutation.mutate("xlsx")}>
+          <Download className="h-3.5 w-3.5" />
+          Excel
+        </Button>
+        <Button variant="outline" size="sm" disabled={exportMutation.isPending} onClick={() => exportMutation.mutate("csv")}>
+          <Download className="h-3.5 w-3.5" />
+          CSV
+        </Button>
+      </div>
       <div className="flex flex-wrap items-center gap-2">
         <FilterTabs
           value={coverageFilter}

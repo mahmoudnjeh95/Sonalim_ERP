@@ -2,11 +2,16 @@ import { apiFetch } from "../../../lib/api";
 
 export type CycleCountStatus = "draft" | "in_progress" | "completed" | "cancelled";
 export type CycleCountType = "scheduled" | "blind";
+// full freezes its scope and corrects the stock; interim does neither and only records the variances.
+export type CycleCountMode = "full" | "interim";
 export type CycleCountLineStatus = "pending" | "counted";
-export type CycleCountLineResolution = "matched" | "approved" | "rejected" | null;
+export type CycleCountLineResolution = "matched" | "approved" | "rejected" | "noted" | null;
 
 export interface CycleCount {
   id: string;
+  number: string | null;
+  mode: CycleCountMode;
+  note: string | null;
   site_id: string;
   scope_location_id: string | null;
   count_type: CycleCountType;
@@ -32,6 +37,13 @@ export interface CycleCountLine {
   counted_at: string | null;
   resolved_by: string | null;
   resolved_at: string | null;
+  // Two equal counts settle a line, two different ones need a third. counted_quantity is the settled
+  // figure; the raw counts stay null until then, so only their number is known while counting.
+  count_1: number | null;
+  count_2: number | null;
+  count_3: number | null;
+  counts_recorded: number;
+  observation: string | null;
 }
 
 export interface CycleCountDetail extends CycleCount {
@@ -52,6 +64,20 @@ export function listCycleCounts(token: string, params: { site_id?: string; statu
   return apiFetch<CycleCount[]>(`/warehouse/cycle-counts${suffix}`, { token });
 }
 
+export interface FrozenLocation {
+  cycle_count_id: string;
+  number: string;
+  name: string;
+}
+
+export function listFrozenLocations(token: string) {
+  return apiFetch<FrozenLocation[]>("/warehouse/frozen-locations", { token });
+}
+
+export function addCycleCountFoundLine(token: string, cycleCountId: string, input: { location_id: string; product_id: string }) {
+  return apiFetch<CycleCountLine>(`/warehouse/cycle-counts/${cycleCountId}/lines`, { method: "POST", token, body: input });
+}
+
 export function getCycleCount(token: string, cycleCountId: string) {
   return apiFetch<CycleCountDetail>(`/warehouse/cycle-counts/${cycleCountId}`, { token });
 }
@@ -61,6 +87,8 @@ export interface CreateCycleCountInput {
   scope_location_id?: string | null;
   count_type?: CycleCountType;
   scheduled_for?: string | null;
+  mode?: CycleCountMode;
+  note?: string | null;
 }
 
 export function createCycleCount(token: string, input: CreateCycleCountInput) {
@@ -79,11 +107,11 @@ export function submitCycleCountLine(token: string, cycleCountId: string, lineId
   });
 }
 
-export function resolveCycleCountLine(token: string, cycleCountId: string, lineId: string, decision: "approve" | "reject") {
+export function resolveCycleCountLine(token: string, cycleCountId: string, lineId: string, decision: "approve" | "reject" | "note", observation: string) {
   return apiFetch<CycleCountLine>(`/warehouse/cycle-counts/${cycleCountId}/lines/${lineId}/resolve`, {
     method: "POST",
     token,
-    body: { decision },
+    body: { decision, observation },
   });
 }
 

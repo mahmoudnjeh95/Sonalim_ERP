@@ -14,6 +14,7 @@ COPY core ./core
 COPY modules ./modules
 COPY events ./events
 COPY scripts ./scripts
+COPY docker/postgres/init.sql ./docker/postgres/init.sql
 
 EXPOSE 8000
 
