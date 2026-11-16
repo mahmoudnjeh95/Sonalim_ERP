@@ -37,6 +37,8 @@ setup). Findings are summarised in "Why" below; the review did not run the app.
 
 - [ ] **WP-0.1 CI tests before deploy.** Add a test job (Postgres service, backend pytest,
   frontend `tsc` + vitest) that `deploy` needs. *Done when* a failing test blocks deploy.
+  *Built 2026-11-16* (`.github/workflows/tests.yml`, called by `deploy.yml`); tick once the
+  workflow has run green on GitHub at least once.
 - [ ] **WP-0.2 Backups.** Scheduled `pg_dump` with retention and an off-server copy, plus a
   documented restore drill. *Done when* a restore has been run once from a backup.
 - [ ] **WP-0.3 Connection pool.** Replace per-request `psycopg.connect` in `core/db.py`
@@ -86,7 +88,9 @@ setup). Findings are summarised in "Why" below; the review did not run the app.
 ## Phase 3 — Make it multi-customer
 
 - [ ] **WP-3.1 Company and user provisioning.** Create tenant, first admin, invite users;
-  setup wizard (chart of accounts, sites, currency).
+  setup wizard (chart of accounts, sites, currency). Include fresh install: `compose.yaml`
+  does not mount `backend/docker/postgres/init.sql`, and the migration runner fails on an
+  empty database without it (schemas `core`, `events`, ... are created only there).
 - [ ] **WP-3.2 Account security.** Email sending, password reset and change, 2FA,
   session list and revoke.
 - [ ] **WP-3.3 Row-level security.** Postgres RLS on every tenant table, tenant set per
@@ -120,4 +124,11 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
 
+- 2026-11-16 — WP-0.1 built: `tests.yml` (backend on Postgres 18 with init.sql +
+  migrations + `seed_dev`, frontend `tsc` + vitest), `deploy.yml` build now needs it; fixed 3
+  stale tests in `test_ia_assistant_service.py`. Local baseline (Postgres 16, Python 3.13):
+  backend 2683 passed / 11 skipped (need a work center or a converted shift), frontend 188
+  passed. Left: see it run green on GitHub, then tick. Note: this repo has no
+  `huge_production_migration` branch and the images point at `smarttoolsagro`, so the deploy
+  path itself only runs in the upstream repo. Branch `claude/zen-ptolemy-m1jrr1`.
 - 2026-11-16 — Review done, roadmap written. No WP started. Branch `claude/zen-ptolemy-m1jrr1`.
