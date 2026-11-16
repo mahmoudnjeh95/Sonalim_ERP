@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Current mission
+
+All work is driven by `docs/ROADMAP.md` (market-readiness roadmap): read it at the start of every session, take one work package per session, and update its Progress log and checkboxes before stopping.
+
 ## Commands
 
 Windows box; backend venv lives at `backend/.venv`. 
