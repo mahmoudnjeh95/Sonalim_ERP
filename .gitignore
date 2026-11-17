@@ -36,3 +36,6 @@ docs/superpowers/specs/2026-09-29-paper-scan-design.md.local
 .claude/skills/vite/
 .gitmodules
 website/
+
+# Server-only backup settings (rclone remote, monitor URLs): never in git.
+tools/backup/backup.env

@@ -40,5 +40,6 @@ Production is the largest and most active module. The per-shift report (`shift_r
 
 - Every push to `huge_production_migration` builds and deploys to the live server (`.github/workflows/deploy.yml`). Don't push without the user asking.
 - A deploy applies pending schema migrations automatically (`AUTO_MIGRATE` defaults to true in `compose.yaml`) but never loads data: no seed script runs, and migrations can't carry test data (guard test above). To apply by hand instead, set `AUTO_MIGRATE=false` in the server `.env` and use `docker compose exec -T app python -m scripts.migration_sql > pending.sql` then `docker compose exec -T postgres psql -U erp -d erp < pending.sql`.
+- Backups: nightly `pg_dump` with retention and an encrypted off-site copy (rclone), monthly restore drill, run by cron on the server from `tools/backup/` (a deploy copies that folder; the server's `tools/backup/backup.env` is not in git). Runbook, restore and disaster recovery: `docs/backups.md`.
 - Git hooks: `git config core.hooksPath tools/git-hooks` — the pre-commit hook refuses DB dumps/backups (`*.dump`, `*.bak`, …), which may contain real customer data.
 - UI is bilingual (en/fr) via `frontend/src/lib/i18n.tsx` — add both keys for new strings. The currency is F CFA.

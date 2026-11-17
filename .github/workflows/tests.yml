@@ -69,6 +69,28 @@ jobs:
             exit 1
           fi
 
+  # Backup scripts (docs/backups.md): retention unit tests and a lint of the shell scripts.
+  backup-tools:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/backup
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Retention tests
+        run: pip install pytest && python -m pytest -q -p no:cacheprovider
+
+      - name: Lint shell scripts
+        run: shellcheck -x -S warning backup.sh restore.sh lib.sh
+
   frontend:
     runs-on: ubuntu-latest
     defaults:
