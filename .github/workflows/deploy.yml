@@ -1,10 +1,16 @@
 name: Build and Deploy
 
+# main is the only branch: every push to it is tested, built and deployed to the VPS.
 on:
   push:
     branches:
-      - huge_production_migration
+      - main
   workflow_dispatch:
+
+# One deploy at a time; a newer push waits for the running one instead of cutting it off.
+concurrency:
+  group: deploy-vps
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -95,7 +101,18 @@ jobs:
           key: ${{ secrets.SERVER_SSH_KEY }}
           script: |
             set -e
+            umask 077
             cd /home/debian/Sonalim_erp/Erpsonalim
+            # The new app applies pending migrations to the live database on start, so take
+            # a dump first and stop the deploy if it fails (docs/backups.md, "Pre-deploy dumps").
+            B=/home/debian/sonalim-erp-backups
+            mkdir -p "$B" && chmod 700 "$B"
+            f="$B/pre-deploy_$(date -u +%Y%m%dT%H%M%SZ).dump"
+            docker compose exec -T postgres pg_dump -U erp -d erp --format=custom > "$f"
+            test -s "$f" || { echo "::error::pre-deploy dump is empty, not deploying"; exit 1; }
+            echo "pre-deploy dump $f ($(du -h "$f" | cut -f1))"
+            ls -1 "$B" | python3 tools/backup/retention.py --prefix pre-deploy --keep-daily 10 --keep-weekly 0 --keep-monthly 0 \
+              | sed "s|^|$B/|" | xargs -r rm -f -- || echo "::warning::old pre-deploy dumps not pruned"
             echo "${{ secrets.SECRET_SONALIM }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
             docker compose pull app worker web
             docker compose up -d app worker web

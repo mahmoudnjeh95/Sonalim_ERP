@@ -26,6 +26,18 @@ server and not in the backup bucket:
 Kept, both on the server and off-site: the newest dump of each of the last **14 days,
 8 weeks and 12 months**. Everything is logged to `~/sonalim-erp-backups/backup.log`.
 
+## Pre-deploy dumps
+
+Every deploy (each push to `main`) first runs `pg_dump` of the live database into
+`~/sonalim-erp-backups/pre-deploy_<UTC time>.dump`, before the new app starts and applies
+its migrations. If the dump fails or is empty, the deploy stops. The newest one per day is
+kept for the last 10 days with a deploy. They stay on the server only (not off-site, no
+`.sha256`) and are restored like any other dump:
+
+```bash
+bash tools/backup/restore.sh --into-live --confirm-database erp ~/sonalim-erp-backups/pre-deploy_<time>.dump
+```
+
 ## One-time setup on the server
 
 Run as `debian`, from the compose folder, after a deploy has copied `tools/backup/`:

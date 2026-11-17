@@ -1,12 +1,9 @@
 name: Tests
 
-# Runs on every pull request and on pushes to main, and is called by the deploy
-# workflow: a deploy only starts once this passes.
+# Runs on every pull request, and on every push to main through the deploy workflow,
+# which calls it first: a deploy only starts once this passes.
 on:
   pull_request:
-  push:
-    branches:
-      - main
   workflow_call:
 
 permissions:

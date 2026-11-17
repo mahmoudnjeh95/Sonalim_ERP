@@ -14,8 +14,9 @@ depth check before anything is added, `[ ]` not found. The re-check was by keywo
 table names, not a full read, so the first step of any `[~]` package is to read what is
 there.
 
-**Base branch for all work: `huge_production_migration`** (not `main`). Branch from it and
-keep work branches merged up to it.
+**Base branch for all work: `main`** (user's instruction, 2026-11-17). `main` already holds
+everything from `huge_production_migration`, which is retired. Every push to `main` is
+tested, built and deployed to the VPS.
 
 ## How to work through this (read before starting a package)
 
@@ -25,8 +26,8 @@ keep work branches merged up to it.
 3. Follow `CLAUDE.md` and `.claude/skills/erp-platform-architecture/SKILL.md`: modules never
    read each other's tables, new events go in `backend/events/CATALOG.md`, migrations are
    new numbered files, both `en` and `fr` strings.
-4. Work on a feature branch. Never push to `huge_production_migration` (it deploys to the
-   live server) unless the user asks.
+4. Commit to `main` and push there. A push deploys to the live server, so first run the
+   `tests.yml` steps locally (backend on a real Postgres, frontend `tsc` + vitest).
 5. When stopping, for any reason, update the **Progress log** at the bottom and tick the
    checkboxes, then commit and push. The log is what lets the next session resume.
 6. A WP is done only when its tests pass against a real database (a green run full of
@@ -46,10 +47,10 @@ keep work branches merged up to it.
 
 ## Phase 0 — Safety net (do first; everything after depends on it)
 
-- [ ] **WP-0.1 CI tests before deploy.** Add a test job (Postgres service, backend pytest,
+- [x] **WP-0.1 CI tests before deploy.** Add a test job (Postgres service, backend pytest,
   frontend `tsc` + vitest) that `deploy` needs. *Done when* a failing test blocks deploy.
   *Built 2026-11-16* (`.github/workflows/tests.yml`, called by `deploy.yml`); tick once the
-  workflow has run green on GitHub at least once.
+  workflow has run green on GitHub at least once. *Green on GitHub 2026-11-17* (run 44163478513).
 - [ ] **WP-0.2 Backups.** Scheduled `pg_dump` with retention and an off-server copy, plus a
   documented restore drill. *Done when* a restore has been run once from a backup.
   *Built 2026-11-16* (`tools/backup/`, runbook `docs/backups.md`); tick once the one-time
@@ -144,6 +145,15 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-17 — GitHub Actions unblocked (billing). WP-0.1 ticked: `tests.yml` green on
+  GitHub on `main`. WP-0.2 merged to `main` (PR #17) after the `tests.yml` steps passed
+  locally. By the user's instruction `main` is now the only branch and deploys to the VPS
+  (`huge_production_migration` retired); each deploy first takes a `pre-deploy_*.dump` of
+  the live database. Open: every deploy since 2026-10-05 failed with 403 pushing images to
+  `ghcr.io/smarttoolsagro/*` (the repo needs Write under each package's "Manage Actions
+  access", set by a `smarttoolsagro` owner); WP-0.2 server setup and first drill. Next WP:
+  WP-0.3. Branch `main`.
 
 - 2026-11-16 — WP-0.2 built (spec `specs/2026-11-16-backups-design.md`, plan
   `plans/2026-11-16-backups.md`). `tools/backup/`: `backup.sh` (nightly `pg_dump -Fc`

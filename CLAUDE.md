@@ -13,7 +13,7 @@ Windows box; backend venv lives at `backend/.venv`.
 - Single test: `.venv/Scripts/python -m pytest modules/production/api/test_shift_validation_integration.py::test_name -q`
 - Seed dev data: `.venv/Scripts/python -m scripts.seed_dev` (demo login `demo@sonalim-erp.local` / `demo1234`); other month seeds in `backend/scripts/seed_*.py`
 
-CI: `.github/workflows/tests.yml` runs the backend suite (empty Postgres, all migrations, `seed_dev`) and frontend `tsc` + vitest on every PR and push to `main`; `deploy.yml` will not build or deploy unless it passes.
+CI: `.github/workflows/tests.yml` runs the backend suite (empty Postgres, all migrations, `seed_dev`), frontend `tsc` + vitest and the backup-tool tests on every PR, and `deploy.yml` calls it on every push to `main`: nothing is built or deployed unless it passes.
 
 Tests: `test_*.py` sit next to the code. Domain tests (`*/domain/test_*.py`) need no DB. `*_integration.py` tests use the `db` fixture from `backend/conftest.py`, which connects to `TEST_DATABASE_URL` → `DATABASE_URL` → `postgresql://erp:erp@localhost:5432/erp`, requires migrated schema, rolls back every test, and **skips** (not fails) when no DB is reachable — a green run with many skips means nothing was tested.
 
@@ -38,7 +38,7 @@ Production is the largest and most active module. The per-shift report (`shift_r
 
 ## Deployment and safety
 
-- Every push to `huge_production_migration` builds and deploys to the live server (`.github/workflows/deploy.yml`). Don't push without the user asking.
+- **All work goes to `main`** (user's instruction, 2026-11-17; `huge_production_migration` is retired). Every push to `main` runs the tests, then builds and deploys to the live VPS (`.github/workflows/deploy.yml`), so run the `tests.yml` steps locally before pushing. Each deploy first saves `~/sonalim-erp-backups/pre-deploy_*.dump` of the live database and stops if that fails.
 - A deploy applies pending schema migrations automatically (`AUTO_MIGRATE` defaults to true in `compose.yaml`) but never loads data: no seed script runs, and migrations can't carry test data (guard test above). To apply by hand instead, set `AUTO_MIGRATE=false` in the server `.env` and use `docker compose exec -T app python -m scripts.migration_sql > pending.sql` then `docker compose exec -T postgres psql -U erp -d erp < pending.sql`.
 - Backups: nightly `pg_dump` with retention and an encrypted off-site copy (rclone), monthly restore drill, run by cron on the server from `tools/backup/` (a deploy copies that folder; the server's `tools/backup/backup.env` is not in git). Runbook, restore and disaster recovery: `docs/backups.md`.
 - Git hooks: `git config core.hooksPath tools/git-hooks` — the pre-commit hook refuses DB dumps/backups (`*.dump`, `*.bak`, …), which may contain real customer data.
