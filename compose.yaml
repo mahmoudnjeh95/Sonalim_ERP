@@ -1,6 +1,6 @@
 services:
   app:
-    image: ghcr.io/smarttoolsagro/erpsonalim-backend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/mahmoudnjeh95}/erpsonalim-backend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     environment:
       DATABASE_URL: ${DATABASE_URL:-postgresql://erp:${POSTGRES_PASSWORD:-erp}@postgres:5432/erp}
@@ -33,7 +33,7 @@ services:
       start_period: 10s
 
   web:
-    image: ghcr.io/smarttoolsagro/erpsonalim-frontend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/mahmoudnjeh95}/erpsonalim-frontend:${IMAGE_TAG:-latest}
     restart: unless-stopped
     ports:
       - "127.0.0.1:${WEB_PORT:-8080}:80"
@@ -46,7 +46,7 @@ services:
       timeout: 5s
 
   worker:
-    image: ghcr.io/smarttoolsagro/erpsonalim-backend:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/mahmoudnjeh95}/erpsonalim-backend:${IMAGE_TAG:-latest}
     command: ["python", "-m", "worker.main"]
     restart: unless-stopped
     environment:
@@ -64,7 +64,7 @@ services:
         condition: service_healthy
 
   ocr:
-    image: ghcr.io/smarttoolsagro/erpsonalim-ocr:${IMAGE_TAG:-latest}
+    image: ${IMAGE_REGISTRY:-ghcr.io/mahmoudnjeh95}/erpsonalim-ocr:${IMAGE_TAG:-latest}
     restart: unless-stopped
     # CPU-only server shared with the ERP: one photo at a time, capped.
     mem_limit: 1536m

@@ -16,12 +16,14 @@ permissions:
   contents: read
   packages: write
 
+# Images live under the repo owner's account, where this workflow's GITHUB_TOKEN may push
+# (it got 403 on the old ghcr.io/smarttoolsagro namespace). Keep in step with compose.yaml.
 env:
   REGISTRY: ghcr.io
-  IMAGE_OWNER: smarttoolsagro
-  BACKEND_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-backend
-  FRONTEND_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-frontend
-  OCR_IMAGE: ghcr.io/smarttoolsagro/erpsonalim-ocr
+  IMAGE_OWNER: mahmoudnjeh95
+  BACKEND_IMAGE: ghcr.io/mahmoudnjeh95/erpsonalim-backend
+  FRONTEND_IMAGE: ghcr.io/mahmoudnjeh95/erpsonalim-frontend
+  OCR_IMAGE: ghcr.io/mahmoudnjeh95/erpsonalim-ocr
 
 jobs:
   # Nothing is built or deployed unless the backend and frontend tests pass.
@@ -48,6 +50,7 @@ jobs:
         with:
           context: ./backend
           push: true
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             ${{ env.BACKEND_IMAGE }}:latest
             ${{ env.BACKEND_IMAGE }}:${{ github.sha }}
@@ -57,6 +60,7 @@ jobs:
         with:
           context: ./frontend
           push: true
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           build-args: |
             VITE_API_BASE_URL=/api
           tags: |
@@ -69,6 +73,7 @@ jobs:
         with:
           context: ./ocr
           push: true
+          labels: org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           tags: |
             ${{ env.OCR_IMAGE }}:latest
             ${{ env.OCR_IMAGE }}:${{ github.sha }}
@@ -93,16 +98,24 @@ jobs:
           target: "/home/debian/Sonalim_erp/Erpsonalim"
           overwrite: true
 
+      # The server pulls with this run's GITHUB_TOKEN (read access to the repo's packages,
+      # valid until the job ends). If the pull fails, nothing has been stopped yet.
       - name: Deploy on VPS
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          GHCR_USER: ${{ github.actor }}
+          GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: GHCR_USER,GHCR_TOKEN
           script: |
             set -e
             umask 077
             cd /home/debian/Sonalim_erp/Erpsonalim
+            echo "$GHCR_TOKEN" | docker login ghcr.io -u "$GHCR_USER" --password-stdin
+            docker compose pull app worker web
             # The new app applies pending migrations to the live database on start, so take
             # a dump first and stop the deploy if it fails (docs/backups.md, "Pre-deploy dumps").
             B=/home/debian/sonalim-erp-backups
@@ -113,8 +126,6 @@ jobs:
             echo "pre-deploy dump $f ($(du -h "$f" | cut -f1))"
             ls -1 "$B" | python3 tools/backup/retention.py --prefix pre-deploy --keep-daily 10 --keep-weekly 0 --keep-monthly 0 \
               | sed "s|^|$B/|" | xargs -r rm -f -- || echo "::warning::old pre-deploy dumps not pruned"
-            echo "${{ secrets.SECRET_SONALIM }}" | docker login ghcr.io -u "${{ github.repository_owner }}" --password-stdin
-            docker compose pull app worker web
             docker compose up -d app worker web
             docker compose pull ocr && docker compose up -d ocr || echo "::warning::OCR image not pulled or started; scanned photos stay queued"
             docker image prune -f

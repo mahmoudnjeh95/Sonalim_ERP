@@ -157,7 +157,9 @@ On a new VPS (Docker installed, user `debian`):
 2. `sudo apt install -y rclone`, put `rclone.conf` from the password manager in
    `~/.config/rclone/`, `rclone ls offsite-crypt:` must list the dumps.
 3. Create `tools/backup/backup.env` as above.
-4. Log in to ghcr.io (as in `deploy.yml`) and start only the database:
+4. Log in to ghcr.io with a GitHub personal token that can read the repo's packages
+   (`echo <token> | docker login ghcr.io -u <github user> --password-stdin`) and start
+   only the database:
    `docker compose up -d postgres`.
 5. `bash tools/backup/restore.sh --into-live --confirm-database erp --from-remote`
 6. `docker compose up -d`, check the app, then set up cron again (step 4 above) and

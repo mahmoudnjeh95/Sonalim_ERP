@@ -146,6 +146,10 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
 
+- 2026-11-17 — Deploy fix: images moved from `ghcr.io/smarttoolsagro/*` (403 since
+  2026-10-05) to `ghcr.io/mahmoudnjeh95/*`, linked to the repo; the server pulls with the
+  run's `GITHUB_TOKEN`, then takes the pre-deploy dump, then restarts. Branch `main`.
+
 - 2026-11-17 — GitHub Actions unblocked (billing). WP-0.1 ticked: `tests.yml` green on
   GitHub on `main`. WP-0.2 merged to `main` (PR #17) after the `tests.yml` steps passed
   locally. By the user's instruction `main` is now the only branch and deploys to the VPS
