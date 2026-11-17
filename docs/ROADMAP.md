@@ -148,7 +148,11 @@ Newest first. One line per session: date, WP, what was finished, what is left, b
 
 - 2026-11-17 — Deploy fix: images moved from `ghcr.io/smarttoolsagro/*` (403 since
   2026-10-05) to `ghcr.io/mahmoudnjeh95/*`, linked to the repo; the server pulls with the
-  run's `GITHUB_TOKEN`, then takes the pre-deploy dump, then restarts. Branch `main`.
+  run's `GITHUB_TOKEN`, then takes the pre-deploy dump, then restarts. Run 44177243620:
+  tests and image push green; deploy stopped at the first step because the repo has no
+  `SERVER_HOST` / `SERVER_USER` / `SERVER_SSH_KEY` secrets (left in the old repo). Left: a
+  repo admin adds them, then "Re-run failed jobs". `SECRET_SONALIM` is no longer used.
+  Branch `main`.
 
 - 2026-11-17 — GitHub Actions unblocked (billing). WP-0.1 ticked: `tests.yml` green on
   GitHub on `main`. WP-0.2 merged to `main` (PR #17) after the `tests.yml` steps passed
