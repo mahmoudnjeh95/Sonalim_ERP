@@ -10,13 +10,13 @@ from dotenv import load_dotenv
 # no .env exists (Docker, Vercel), which already inject these variables directly.
 load_dotenv()
 
-import psycopg
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from prometheus_fastapi_instrumentator import Instrumentator
 
 from core.audit import router as core_audit_router
 from core.auth import router as auth_router
+from core.db import close_pool, get_connection
 from core.exchange_rates import currencies_router as core_currencies_router
 from core.exchange_rates import router as core_exchange_rates_router
 from core.migrations.runner import migrate_on_startup
@@ -52,6 +52,7 @@ from modules.treasury.api.router import router as treasury_router
 async def lifespan(app: FastAPI):
     migrate_on_startup()
     yield
+    close_pool()
 
 
 app = FastAPI(title="Sonalim ERP", version="0.1.0", lifespan=lifespan)
@@ -107,7 +108,6 @@ def index() -> dict[str, str]:
 
 @app.get("/health")
 def health() -> dict[str, str]:
-    database_url = os.environ["DATABASE_URL"]
-    with psycopg.connect(database_url) as connection:
+    with get_connection() as connection:
         connection.execute("SELECT 1")
     return {"status": "healthy"}

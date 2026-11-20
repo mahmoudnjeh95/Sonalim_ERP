@@ -55,8 +55,8 @@ tested, built and deployed to the VPS.
   documented restore drill. *Done when* a restore has been run once from a backup.
   *Built 2026-11-16* (`tools/backup/`, runbook `docs/backups.md`); tick once the one-time
   server setup is done and `restore.sh --drill --from-remote` has passed on the server.
-- [ ] **WP-0.3 Connection pool.** Replace per-request `psycopg.connect` in `core/db.py`
-  with `psycopg_pool`. *Small.*
+- [x] **WP-0.3 Connection pool.** Replace per-request `psycopg.connect` in `core/db.py`
+  with `psycopg_pool`. *Small.* *Done 2026-11-20.*
 - [ ] **WP-0.4 Money as Decimal.** Remove `float` for amounts in sales, finance invoices,
   procurement (about 37 annotations). Fix invoice currency default (`USD`).
 - [~] **WP-0.5 Module manifests.** `depends` is declared but incomplete (production lists
@@ -145,6 +145,18 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-20 — WP-0.3 done. `core/db.py`: `get_connection()` draws from one lazy
+  `psycopg_pool.ConnectionPool` per process (same commit-on-exit / rollback-on-error contract;
+  `DB_POOL_MIN_SIZE` 1, `DB_POOL_MAX_SIZE` 20, `DB_POOL_TIMEOUT` 30 s, in `.env.example`);
+  `/health` uses it, the app lifespan closes it. Connections are checked on checkout, and the
+  first dead one purges the whole idle set: the pool's own per-connection backoff made the
+  first request after a Postgres restart time out (reproduced, 20 dead connections > 30 s; now
+  0.07 s). Pinned `psycopg-pool==3.2.6`. Tests `core/test_db_integration.py` (reuse, commit /
+  rollback, dead connection, restart recovery). Postgres 16 local: backend 3172 passed /
+  11 skipped (known); uvicorn smoke 400 requests at 40-way on 17 connections, 100/100 right
+  after a Postgres restart. No frontend change. Next WP: WP-0.4. Branch
+  `claude/serene-cray-5ygicm`.
 
 - 2026-11-17 — Deploy fix: images moved from `ghcr.io/smarttoolsagro/*` (403 since
   2026-10-05) to `ghcr.io/mahmoudnjeh95/*`, linked to the repo; the server pulls with the
