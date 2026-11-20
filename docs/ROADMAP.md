@@ -57,8 +57,8 @@ tested, built and deployed to the VPS.
   server setup is done and `restore.sh --drill --from-remote` has passed on the server.
 - [x] **WP-0.3 Connection pool.** Replace per-request `psycopg.connect` in `core/db.py`
   with `psycopg_pool`. *Small.* *Done 2026-11-20.*
-- [ ] **WP-0.4 Money as Decimal.** Remove `float` for amounts in sales, finance invoices,
-  procurement (about 37 annotations). Fix invoice currency default (`USD`).
+- [x] **WP-0.4 Money as Decimal.** Remove `float` for amounts in sales, finance invoices,
+  procurement (about 37 annotations). Fix invoice currency default (`USD`). *Done 2026-11-20.*
 - [~] **WP-0.5 Module manifests.** `depends` is declared but incomplete (production lists
   only `core` yet imports warehouse, qc, maintenance, procurement, hr). Complete `depends`
   and published/consumed events in every `module.json`; add a test that the manifests match real imports and the catalog.
@@ -145,6 +145,19 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-20 — WP-0.4 done (spec `specs/2026-11-20-money-as-decimal-design.md`, plan
+  `plans/2026-11-20-money-as-decimal.md`). Sales orders, finance invoices and procurement
+  orders/receipts keep amounts, and the quantities and rates they come from, as `Decimal` from
+  the NUMERIC row to the API; `core/domain/money.py` (`to_decimal` via `str`, `json_number`):
+  responses and event/audit payloads still carry JSON numbers, so no frontend or event change.
+  Domain dataclasses coerce float callers (CRM, seeds). Fixed: 0.1 + 0.2 t received against
+  0.3 t ordered was refused as an over-receipt. Left float on purpose: warehouse call
+  arguments, the procurement read-only cost/price reports (production does float maths on
+  them), `core` exchange rates. The `USD` default was already fixed by `finance/0002`.
+  Postgres 16 local: backend 3176 passed / 11 skipped (known), frontend `tsc` + 194 vitest
+  passed. Not yet on `main` (needs the user's go-ahead to push there). Next WP: WP-0.5.
+  Branch `claude/epic-keller-b2cjzb`.
 
 - 2026-11-20 — WP-0.3 done. `core/db.py`: `get_connection()` draws from one lazy
   `psycopg_pool.ConnectionPool` per process (same commit-on-exit / rollback-on-error contract;
