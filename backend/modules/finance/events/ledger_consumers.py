@@ -17,6 +17,10 @@ from modules.finance.api.posting_failure_service import PostingFailureService
 
 
 class PostingRefused(Exception):
+    # A business refusal, already recorded in finance.posting_failures and announced from there:
+    # core.observability logs it as a warning and does not send it to Sentry.
+    expected_refusal = True
+
     def __init__(self, err: Err) -> None:
         super().__init__(f"{err.code}: {err.message}")
         self.err = err

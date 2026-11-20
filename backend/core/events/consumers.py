@@ -7,6 +7,7 @@ import pika
 import psycopg
 
 from core.db import get_connection
+from core.observability import report_exception
 
 EXCHANGE = "erp.events"
 DEAD_LETTER_EXCHANGE = "erp.events.dlx"
@@ -42,8 +43,10 @@ def _process(connection: psycopg.Connection, envelope: dict) -> bool:
                 (event_id, consumer_name),
             )
             connection.commit()
-        except Exception:
+        except Exception as error:
+            # The message is dead-lettered below; this is the only trace of why.
             connection.rollback()
+            report_exception(error, where="consumer", consumer=consumer_name, event_type=event_type, event_id=event_id)
             return False
     return True
 

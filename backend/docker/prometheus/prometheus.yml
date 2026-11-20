@@ -6,3 +6,9 @@ scrape_configs:
     metrics_path: /metrics
     static_configs:
       - targets: ["app:8000"]
+
+  # Worker gauges: erp_dead_letter_messages, erp_posting_failures_open{tenant}.
+  - job_name: erp-worker
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["worker:9101"]

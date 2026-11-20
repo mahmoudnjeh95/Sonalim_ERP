@@ -21,6 +21,7 @@ from core.exchange_rates import currencies_router as core_currencies_router
 from core.exchange_rates import router as core_exchange_rates_router
 from core.migrations.runner import migrate_on_startup
 from core.notifications import router as core_notifications_router
+from core.observability import ErrorReportingMiddleware, init_error_reporting, setup_logging
 from core.partners import router as core_partners_router
 from core.report_options import router as core_report_options_router
 from core.roles import router as core_roles_router
@@ -48,6 +49,10 @@ from modules.qc.api.router import router as qc_router
 from modules.treasury.api.router import router as treasury_router
 
 
+setup_logging()
+init_error_reporting("api")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     migrate_on_startup()
@@ -57,6 +62,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Sonalim ERP", version="0.1.0", lifespan=lifespan)
 Instrumentator().instrument(app).expose(app)
+
+# Added before CORS so it sits inside it: the 500 it answers with gets the CORS headers and the
+# browser can read the {"detail": {...}} error instead of reporting a CORS failure.
+app.add_middleware(ErrorReportingMiddleware)
 
 # Dev-only: the Vite dev server and the API run on different origins (ports),
 # so the browser blocks every request without this. Restrict to configured

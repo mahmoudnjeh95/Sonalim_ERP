@@ -2,7 +2,9 @@
 
 One row per (source_module, source_id, source_kind): a new refusal of the same posting overwrites
 the reason and reopens it. The consumer writes it in its own committed transaction before the
-event is dead-lettered; a later successful posting resolves it; reversing the run cancels it."""
+event is dead-lettered; a later successful posting resolves it; reversing the run cancels it.
+Whoever reads the ledger is notified in-app when a failure opens (new, or reopened after it was
+resolved), not each time an already open one is refused again."""
 from __future__ import annotations
 
 import psycopg
@@ -11,6 +13,7 @@ from ulid import ULID
 
 from core.audit import record_audit
 from core.domain.result import Err
+from core.notifications import notify, users_with_permission
 from modules.finance.api.ledger_posting_service import SYSTEM_ACTOR
 
 FAILURE_KEYS = (
@@ -19,6 +22,8 @@ FAILURE_KEYS = (
 )
 FAILURE_COLUMNS = ", ".join(FAILURE_KEYS)
 FAILURE_STATUS_FR = {"open": "ouvert", "resolved": "résolu", "cancelled": "annulé"}
+NOTIFY_PERMISSION = "finance.view_ledger"
+NOTIFICATION_KIND = "finance.posting.refused"
 
 
 class PostingFailureService:
@@ -28,6 +33,11 @@ class PostingFailureService:
     def record(
         self, *, tenant_id: str, source_module: str, source_id: str, source_kind: str, envelope: dict, err: Err
     ) -> str:
+        previous = self._connection.execute(
+            "SELECT status FROM finance.posting_failures"
+            " WHERE tenant_id = %s AND source_module = %s AND source_id = %s AND source_kind = %s",
+            (tenant_id, source_module, source_id, source_kind),
+        ).fetchone()
         row = self._connection.execute(
             """
             INSERT INTO finance.posting_failures
@@ -61,7 +71,26 @@ class PostingFailureService:
             entity_id=row[0],
             payload={"source_module": source_module, "source_id": source_id, "source_kind": source_kind, "code": err.code},
         )
+        if previous is None or previous[0] != "open":
+            notify(
+                self._connection,
+                tenant_id=tenant_id,
+                user_ids=users_with_permission(self._connection, tenant_id, NOTIFY_PERMISSION),
+                kind=NOTIFICATION_KIND,
+                title=f"Automatic posting refused: {source_module} {source_kind}",
+                title_fr=f"Écriture automatique refusée : {source_module} {source_kind}",
+                body=err.message,
+                body_fr=err.message_fr or err.message,
+                link="/finance/entries",
+            )
         return row[0]
+
+    def open_counts_by_tenant(self) -> dict[str, int]:
+        """Open failures per tenant, every tenant: the worker's alert monitor watches this grow."""
+        rows = self._connection.execute(
+            "SELECT tenant_id, count(*) FROM finance.posting_failures WHERE status = 'open' GROUP BY tenant_id"
+        ).fetchall()
+        return {tenant_id: count for tenant_id, count in rows}
 
     def resolve(
         self, *, tenant_id: str, source_module: str, source_id: str, source_kind: str, actor_id: str = SYSTEM_ACTOR

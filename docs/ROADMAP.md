@@ -62,8 +62,9 @@ tested, built and deployed to the VPS.
 - [x] **WP-0.5 Module manifests.** `depends` is declared but incomplete (production lists
   only `core` yet imports warehouse, qc, maintenance, procurement, hr). Complete `depends`
   and published/consumed events in every `module.json`; add a test that the manifests match real imports and the catalog. *Done 2026-11-20.*
-- [ ] **WP-0.6 Error tracking and alerts.** Error reporting for API and worker, alert on
-  dead-letter queue growth and on `finance.posting_failures`.
+- [x] **WP-0.6 Error tracking and alerts.** Error reporting for API and worker, alert on
+  dead-letter queue growth and on `finance.posting_failures`. *Done 2026-11-20*; delivery
+  needs `SENTRY_DSN` and/or `ALERT_WEBHOOK_URL` in the server `.env` (`docs/operations-alerts.md`).
 
 ## Phase 1 — Close the money loop
 
@@ -145,6 +146,26 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-20 — WP-0.6 done (spec `specs/2026-11-20-error-tracking-alerts-design.md`, plan
+  `plans/2026-11-20-error-tracking-alerts.md`, runbook `docs/operations-alerts.md`). New
+  `core/observability.py`: one log format, optional Sentry (`SENTRY_DSN`; the framework
+  integrations are off, so `report_exception` is the only sender and each error goes once),
+  `send_alert` (log + Sentry + JSON POST to `ALERT_WEBHOOK_URL`), `GrowthWatch`, and an ASGI
+  middleware inside CORS that turns an escaped exception into the usual 500 `detail` with an
+  en/fr message and a reference (before, the browser saw a CORS error). Worker: a failing
+  consumer used to be dead-lettered with nothing logged; it is now reported with consumer,
+  event type and id. The outbox dispatcher had no `try`, so one broker hiccup stopped all
+  events for good; it now reports and reconnects. Sweeps call `report_exception` instead of
+  `print`. `worker/alerts.py` checks the DLQ depth and open `finance.posting_failures` per
+  tenant every 5 min, alerts on growth, and serves both as gauges on `:9101` (scraped by the
+  compose Prometheus). Finance notifies `finance.view_ledger` holders in-app when a posting
+  failure opens (not when an open one is refused again); `PostingRefused` is marked
+  `expected_refusal`, so it is a warning, not a Sentry error. New dependency `sentry-sdk`.
+  Postgres 16 local (migrations + `seed_dev`): backend 3265 passed / 11 skipped (known). No
+  frontend change. **Server to-do:** set `SENTRY_DSN` and/or `ALERT_WEBHOOK_URL` in the server
+  `.env`; without them, errors and alerts are only in `docker compose logs`. Next WP: WP-1.1
+  (WP-0.2 still waits on its server drill). Branch `claude/exciting-hypatia-vlnkca`.
 
 - 2026-11-20 — WP-0.5 done (spec `specs/2026-11-20-module-manifests-design.md`, plan
   `plans/2026-11-20-module-manifests.md`). The fields now have a defined meaning: `depends` =

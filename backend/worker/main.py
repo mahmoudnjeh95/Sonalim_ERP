@@ -6,12 +6,14 @@ import threading
 import time
 
 import pika
+from prometheus_client import start_http_server
 
 from core.db import get_connection
 from core.events import consumers as event_consumers
 from core.events.dispatcher import EXCHANGE, dispatch_pending
 from core.exchange_rate_rollover import roll_forward_missing_rates
 from core.migrations.runner import migrate_on_startup
+from core.observability import init_error_reporting, report_exception, setup_logging
 from modules.finance.api.dunning_service import DunningService
 from modules.maintenance.api.program_service import ProgramService
 from modules.scan.api.claude_reader import ClaudeReader
@@ -19,6 +21,7 @@ from modules.scan.api.ocr_client import OcrClient
 from modules.scan.api.reader import read_next_page, requeue_stale_reads
 from modules.warehouse.api.replenishment_service import ReplenishmentService
 from modules.warehouse.api.reservation_service import ReservationService
+from worker.alerts import run_alert_monitor
 
 # Imported for the side effect of registering their event handlers with core.events.consumers.
 from modules.finance.events import consumers as _finance_consumers  # noqa: F401
@@ -39,17 +42,35 @@ MAINTENANCE_SWEEP_INTERVAL_SECONDS = int(os.environ.get("MAINTENANCE_SWEEP_INTER
 DUNNING_SWEEP_INTERVAL_SECONDS = int(os.environ.get("DUNNING_SWEEP_INTERVAL_SECONDS", "3600"))
 SCAN_READER_IDLE_SECONDS = 2
 SCAN_READER_RETRY_SECONDS = 15
+DISPATCHER_RECONNECT_SECONDS = 10
+# Prometheus scrapes the worker's gauges (dead letters, open posting failures) here; 0 turns it off.
+WORKER_METRICS_PORT = int(os.environ.get("WORKER_METRICS_PORT", "9101"))
+
+
+def _dispatch_until_failure(rabbitmq_url: str) -> None:
+    connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
+    try:
+        channel = connection.channel()
+        channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
+        print("Outbox dispatcher started", flush=True)
+        while True:
+            with get_connection() as db_connection:
+                dispatch_pending(db_connection, channel)
+            time.sleep(5)
+    finally:
+        if connection.is_open:
+            connection.close()
 
 
 def run_outbox_dispatcher(rabbitmq_url: str) -> None:
-    connection = pika.BlockingConnection(pika.URLParameters(rabbitmq_url))
-    channel = connection.channel()
-    channel.exchange_declare(exchange=EXCHANGE, exchange_type="topic", durable=True)
-    print("Outbox dispatcher started", flush=True)
+    """Publishes the outbox. A broker or database failure is reported and the dispatcher reconnects:
+    left to die, this daemon thread would stop every event while the rest of the worker ran on."""
     while True:
-        with get_connection() as db_connection:
-            dispatch_pending(db_connection, channel)
-        time.sleep(5)
+        try:
+            _dispatch_until_failure(rabbitmq_url)
+        except Exception as error:
+            report_exception(error, where="outbox_dispatcher")
+        time.sleep(DISPATCHER_RECONNECT_SECONDS)
 
 
 def run_exchange_rate_rollover() -> None:
@@ -80,7 +101,7 @@ def run_reservation_expiry() -> None:
             if expired:
                 print(f"Reservation expiry: released {len(expired)} lapsed reservation(s)", flush=True)
         except Exception as error:  # a failed sweep is retried next tick, never kills the thread
-            print(f"Reservation expiry sweep failed: {error}", flush=True)
+            report_exception(error, where="reservation_expiry")
         time.sleep(RESERVATION_EXPIRY_INTERVAL_SECONDS)
 
 
@@ -100,7 +121,7 @@ def run_replenishment() -> None:
             if raised:
                 print(f"Replenishment: raised {raised} proposal(s)", flush=True)
         except Exception as error:  # retried next tick, never kills the thread
-            print(f"Replenishment evaluation failed: {error}", flush=True)
+            report_exception(error, where="replenishment")
         time.sleep(REPLENISHMENT_INTERVAL_SECONDS)
 
 
@@ -125,7 +146,7 @@ def run_maintenance_programs() -> None:
             if created or overdue:
                 print(f"Maintenance sweep: created {created} job(s), notified {overdue} overdue job(s)", flush=True)
         except Exception as error:  # retried next tick, never kills the thread
-            print(f"Maintenance program sweep failed: {error}", flush=True)
+            report_exception(error, where="maintenance_programs")
         time.sleep(MAINTENANCE_SWEEP_INTERVAL_SECONDS)
 
 
@@ -147,7 +168,7 @@ def run_dunning() -> None:
             if any(totals.values()):
                 print(f"Dunning sweep: {totals['levels_announced']} level(s) announced, {totals['promises_broken']} promise(s) broken", flush=True)
         except Exception as error:  # retried next tick, never kills the thread
-            print(f"Dunning sweep failed: {error}", flush=True)
+            report_exception(error, where="dunning")
         time.sleep(DUNNING_SWEEP_INTERVAL_SECONDS)
 
 
@@ -161,13 +182,13 @@ def run_scan_reader(readers: dict) -> None:
         if requeued:
             print(f"Scan reader: put {requeued} interrupted page(s) back in the queue", flush=True)
     except Exception as error:  # a startup DB hiccup must not silently kill the reader thread
-        print(f"Scan reader: requeue of stale reads failed at startup: {error}", flush=True)
+        report_exception(error, where="scan_reader_requeue")
     while True:
         try:
             with get_connection() as db_connection:
                 step = read_next_page(db_connection, readers)
         except Exception as error:  # retried next tick, never kills the thread
-            print(f"Scan reader failed: {error}", flush=True)
+            report_exception(error, where="scan_reader")
             step = ("", "retry")
         if step is None:
             time.sleep(SCAN_READER_IDLE_SECONDS)
@@ -176,8 +197,13 @@ def run_scan_reader(readers: dict) -> None:
 
 
 def run() -> None:
+    setup_logging()
+    init_error_reporting("worker")
     migrate_on_startup()
     rabbitmq_url = os.environ["RABBITMQ_URL"]
+    if WORKER_METRICS_PORT:
+        start_http_server(WORKER_METRICS_PORT)
+    threading.Thread(target=run_alert_monitor, args=(rabbitmq_url,), daemon=True).start()
     threading.Thread(target=run_outbox_dispatcher, args=(rabbitmq_url,), daemon=True).start()
     threading.Thread(target=run_exchange_rate_rollover, daemon=True).start()
     threading.Thread(target=run_reservation_expiry, daemon=True).start()
@@ -195,7 +221,11 @@ def run() -> None:
         threading.Thread(target=run_scan_reader, args=(readers,), daemon=True).start()
     else:
         print("Neither OCR_URL nor CLAUDE_API_KEY set: scanned photos stay queued until one is", flush=True)
-    event_consumers.consume_forever(rabbitmq_url)
+    try:
+        event_consumers.consume_forever(rabbitmq_url)
+    except Exception as error:  # the process exits (Docker restarts it); say why first
+        report_exception(error, where="event_consumer")
+        raise
 
 
 if __name__ == "__main__":
