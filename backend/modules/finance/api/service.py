@@ -8,6 +8,7 @@ import psycopg
 from ulid import ULID
 
 from core.audit import record_audit
+from core.domain.money import json_number, to_decimal
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.finance.domain.entities import Invoice, check_new_invoice_currency, status_for_payment, transition
@@ -43,7 +44,7 @@ class InvoiceService:
         *,
         tenant_id: str,
         partner_id: str,
-        amount: float,
+        amount: Decimal,
         currency: str = "XOF",
         source_order_id: str | None = None,
         actor_id: str | None = None,
@@ -51,6 +52,7 @@ class InvoiceService:
         from modules.finance.api.billing_service import INVOICE_PREFIX, next_number
 
         invoice_id = str(ULID())
+        amount = to_decimal(amount)
         today = datetime.date.today()
         number = next_number(self._connection, tenant_id, INVOICE_PREFIX, today.year)
         self._connection.execute(
@@ -72,7 +74,7 @@ class InvoiceService:
             action="invoice.created",
             entity_type="invoice",
             entity_id=invoice_id,
-            payload={"partner_id": partner_id, "amount": amount, "currency": currency, "source_order_id": source_order_id},
+            payload={"partner_id": partner_id, "amount": json_number(amount), "currency": currency, "source_order_id": source_order_id},
         )
         return Invoice(id=invoice_id, partner_id=partner_id, amount=amount, currency=currency, status="draft")
 
@@ -99,8 +101,8 @@ class InvoiceService:
             ).fetchall()
         return [
             Invoice(
-                id=invoice_id, partner_id=partner_id, amount=float(amount), currency=currency,
-                status=invoice_status, amount_paid=float(amount_paid),
+                id=invoice_id, partner_id=partner_id, amount=amount, currency=currency,
+                status=invoice_status, amount_paid=amount_paid,
             )
             for invoice_id, partner_id, amount, currency, invoice_status, amount_paid in rows
         ]
@@ -184,7 +186,7 @@ class InvoiceService:
         if new_paid < 0 or new_paid > amount:
             return Err("OVER_ALLOCATION", f"payment {new_paid} is outside 0..{amount} for this invoice",
                        f"un paiement de {new_paid} sort de la plage 0..{amount} pour cette facture")
-        new_status = status_for_payment(float(amount), float(new_paid))
+        new_status = status_for_payment(amount, new_paid)
         self._connection.execute(
             "UPDATE finance.invoices SET amount_paid = %s, status = %s WHERE id = %s", (new_paid, new_status, invoice_id)
         )
@@ -206,7 +208,7 @@ class InvoiceService:
         actor_id: str,
         invoice_id: str,
         partner_id: str | None = None,
-        amount: float | None = None,
+        amount: Decimal | None = None,
         currency: str | None = None,
         due_date: datetime.date | None = None,
     ) -> Result[Invoice]:
@@ -221,7 +223,7 @@ class InvoiceService:
         updated = Invoice(
             id=invoice_id,
             partner_id=partner_id if partner_id is not None else current_partner_id,
-            amount=amount if amount is not None else float(current_amount),
+            amount=amount if amount is not None else current_amount,
             currency=currency if currency is not None else current_currency,
             status=status,
         )
@@ -244,7 +246,7 @@ class InvoiceService:
             # Another customer, another agreement: the new customer's terms apply.
             self._connection.execute("UPDATE finance.invoices SET payment_term_rule = NULL WHERE id = %s", (invoice_id,))
             payment_schedule.redate(self._connection, tenant_id=tenant_id, invoice_id=invoice_id)
-        elif Decimal(str(updated.amount)) != Decimal(str(current_amount)):
+        elif updated.amount != current_amount:
             payment_schedule.redate(self._connection, tenant_id=tenant_id, invoice_id=invoice_id)
         record_audit(
             self._connection,
@@ -253,7 +255,7 @@ class InvoiceService:
             action="invoice.updated",
             entity_type="invoice",
             entity_id=invoice_id,
-            payload={"partner_id": updated.partner_id, "amount": updated.amount, "currency": updated.currency,
+            payload={"partner_id": updated.partner_id, "amount": json_number(updated.amount), "currency": updated.currency,
                      "due_date": due_date.isoformat() if due_date else None},
         )
         return Ok(updated)
@@ -300,7 +302,7 @@ class InvoiceService:
                 "this invoice already has receipts allocated; its status follows them",
                 "cette facture a déjà des encaissements ; son statut les suit",
             )
-        current = Invoice(id=invoice_id, partner_id=partner_id, amount=float(amount), currency=currency, status=status)
+        current = Invoice(id=invoice_id, partner_id=partner_id, amount=amount, currency=currency, status=status)
         result = transition(current, new_status)
         if isinstance(result, Err):
             return result
@@ -317,8 +319,8 @@ class InvoiceService:
             correlation_id=correlation_id,
             # 1.1 (additive): the collected VAT inside `amount`
             event_version="1.1",
-            payload={"invoice_id": invoice_id, "partner_id": partner_id, "amount": float(amount), "currency": currency,
-                     "vat": float(vat_amount or 0)},
+            payload={"invoice_id": invoice_id, "partner_id": partner_id, "amount": json_number(amount), "currency": currency,
+                     "vat": json_number(vat_amount or 0)},
         )
         record_audit(
             self._connection,

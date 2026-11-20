@@ -8,6 +8,7 @@ import psycopg
 from ulid import ULID
 
 from core.audit import record_audit
+from core.domain.money import json_number, to_decimal
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.sales.domain.entities import OrderLine, SalesOrder, confirm, covers_all_lines, mark_shipped
@@ -29,8 +30,7 @@ class SalesOrderService:
             (order_id,),
         ).fetchall()
         return tuple(
-            OrderLine(product_id=r[0], quantity=float(r[1]), unit_price=float(r[2]), discount_rate=float(r[3]),
-                      vat_rate=float(r[4]), price_list_id=r[5])
+            OrderLine(product_id=r[0], quantity=r[1], unit_price=r[2], discount_rate=r[3], vat_rate=r[4], price_list_id=r[5])
             for r in rows
         )
 
@@ -38,7 +38,7 @@ class SalesOrderService:
         partner_id, location_id, status, requested_ship_date, opportunity_id, discount_rate, quote_id = row
         return SalesOrder(
             id=order_id, partner_id=partner_id, location_id=location_id, status=status, lines=self._lines_of(order_id),
-            requested_ship_date=requested_ship_date, opportunity_id=opportunity_id, discount_rate=float(discount_rate),
+            requested_ship_date=requested_ship_date, opportunity_id=opportunity_id, discount_rate=discount_rate,
             quote_id=quote_id,
         )
 
@@ -53,21 +53,22 @@ class SalesOrderService:
                  line.vat_rate, line.price_list_id),
             )
 
-    def check_pricing(self, *, tenant_id: str, lines, discount_rate: float, may_exceed_discount: bool) -> Result[None]:
+    def check_pricing(self, *, tenant_id: str, lines, discount_rate: Decimal, may_exceed_discount: bool) -> Result[None]:
         """Every line well formed, and no discount above what the user may give (sales.settings)."""
         from modules.sales.api.pricing_service import PricingService
 
-        checked = check_rate(Decimal(str(discount_rate)), what="discount")
+        discount_rate = to_decimal(discount_rate)
+        checked = check_rate(discount_rate, what="discount")
         if isinstance(checked, Err):
             return checked
         for line in lines:
-            checked = check_line(quantity=Decimal(str(line.quantity)), unit_price=Decimal(str(line.unit_price)),
-                                 discount_rate=Decimal(str(line.discount_rate)), vat_rate=Decimal(str(line.vat_rate)))
+            checked = check_line(quantity=line.quantity, unit_price=line.unit_price, discount_rate=line.discount_rate,
+                                 vat_rate=line.vat_rate)
             if isinstance(checked, Err):
                 return checked
         settings = PricingService(self._connection).get_settings(tenant_id=tenant_id)
-        return check_discount_limit((Decimal(str(line.discount_rate)) for line in lines), Decimal(str(discount_rate)),
-                                    limit=Decimal(str(settings["max_discount_rate"])), may_exceed=may_exceed_discount)
+        return check_discount_limit((line.discount_rate for line in lines), discount_rate,
+                                    limit=to_decimal(settings["max_discount_rate"]), may_exceed=may_exceed_discount)
 
     def create_order(
         self,
@@ -79,11 +80,12 @@ class SalesOrderService:
         lines: list[OrderLine],
         requested_ship_date: datetime.date | None = None,
         opportunity_id: str | None = None,
-        discount_rate: float = 0.0,
+        discount_rate: Decimal = Decimal("0"),
         quote_id: str | None = None,
     ) -> SalesOrder:
         """Creates a draft order as given; callers that take prices from a person run check_pricing first."""
         order_id = str(ULID())
+        discount_rate = to_decimal(discount_rate)
         self._connection.execute(
             """
             INSERT INTO sales.orders (id, tenant_id, partner_id, location_id, status, requested_ship_date, opportunity_id,
@@ -101,7 +103,7 @@ class SalesOrderService:
             entity_type="sales_order",
             entity_id=order_id,
             payload={"partner_id": partner_id, "line_count": len(lines), "opportunity_id": opportunity_id,
-                     "discount_rate": discount_rate, "quote_id": quote_id},
+                     "discount_rate": json_number(discount_rate), "quote_id": quote_id},
         )
         return SalesOrder(
             id=order_id,
@@ -141,7 +143,7 @@ class SalesOrderService:
         location_id: str | None = None,
         lines: list[OrderLine] | None = None,
         requested_ship_date: datetime.date | None = None,
-        discount_rate: float | None = None,
+        discount_rate: Decimal | None = None,
     ) -> Result[SalesOrder]:
         row = self._connection.execute(
             f"SELECT {_ORDER_COLUMNS} FROM sales.orders WHERE id = %s AND tenant_id = %s FOR UPDATE", (order_id, tenant_id)
@@ -173,7 +175,7 @@ class SalesOrderService:
             entity_type="sales_order",
             entity_id=order_id,
             payload={"partner_id": updated.partner_id, "location_id": updated.location_id, "line_count": len(updated.lines),
-                     "discount_rate": updated.discount_rate},
+                     "discount_rate": json_number(updated.discount_rate)},
         )
         return Ok(updated)
 
@@ -197,7 +199,7 @@ class SalesOrderService:
 
         credit = ReceivablesService(self._connection).check_order_credit(
             tenant_id=tenant_id, actor_id=actor_id, partner_id=partner_id, order_id=order_id,
-            order_amount=Decimal(str(result.value.total_amount)), override=override_credit)
+            order_amount=result.value.total_amount, override=override_credit)
         if isinstance(credit, Err):
             return credit
 
@@ -210,7 +212,8 @@ class SalesOrderService:
                 actor_id=actor_id,
                 product_id=line.product_id,
                 location_id=location_id,
-                quantity=line.quantity,
+                # warehouse takes a float quantity
+                quantity=float(line.quantity),
                 correlation_id=correlation_id,
                 reference=f"sales_order:{order_id}",
             )
@@ -228,13 +231,13 @@ class SalesOrderService:
             payload={
                 "order_id": order_id,
                 "partner_id": partner_id,
-                "total_amount": result.value.total_amount,
+                "total_amount": json_number(result.value.total_amount),
                 "currency": "XOF",
                 # 1.1 (additive): what warehouse needs to open a pick list
                 # against the reservation made just above.
                 "location_id": location_id,
                 "reservation_reference": f"sales_order:{order_id}",
-                "lines": [{"product_id": line.product_id, "quantity": line.quantity} for line in lines],
+                "lines": [{"product_id": line.product_id, "quantity": json_number(line.quantity)} for line in lines],
             },
         )
         record_audit(
@@ -244,12 +247,12 @@ class SalesOrderService:
             action="sales_order.confirmed",
             entity_type="sales_order",
             entity_id=order_id,
-            payload={"total_amount": result.value.total_amount},
+            payload={"total_amount": json_number(result.value.total_amount)},
         )
         return result
 
     def mark_order_issued(
-        self, *, tenant_id: str, order_id: str, voucher_id: str, issued_to_date: dict[str, float], actor_id: str = "system:event-consumer"
+        self, *, tenant_id: str, order_id: str, voucher_id: str, issued_to_date: dict[str, Decimal | float], actor_id: str = "system:event-consumer"
     ) -> Result[None]:
         """Issue vouchers are the other way an order leaves: shipped once they cover every line, and
         left confirmed while part of it is still to go."""

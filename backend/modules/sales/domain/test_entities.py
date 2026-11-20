@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from core.domain.result import Err, Ok
 from modules.sales.domain.entities import OrderLine, SalesOrder, confirm, covers_all_lines
 
@@ -41,3 +43,12 @@ def test_covers_all_lines_counts_lines_of_one_product_together():
     assert covers_all_lines(lines, {"a": 15, "b": 2}) is True
     assert covers_all_lines(lines, {"a": 10, "b": 2}) is False
     assert covers_all_lines(lines, {"a": 15}) is False
+
+
+def test_amounts_are_decimal_even_from_float_callers():
+    # CRM and the seed scripts still build lines from floats.
+    line = OrderLine("p1", 0.1, 0.2)
+    assert (line.quantity, line.unit_price) == (Decimal("0.1"), Decimal("0.2"))
+    order = SalesOrder(id="o3", partner_id="c1", location_id="loc1", status="draft", discount_rate=2.5, lines=(line,))
+    assert order.discount_rate == Decimal("2.5")
+    assert isinstance(order.total_amount, Decimal)

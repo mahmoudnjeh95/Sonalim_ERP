@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
+from core.domain.money import to_decimal
 from core.domain.result import Err, Ok, Result
 
 VALID_TRANSITIONS = {
@@ -16,10 +18,15 @@ VALID_TRANSITIONS = {
 class Invoice:
     id: str
     partner_id: str
-    amount: float
+    amount: Decimal
     currency: str
     status: str
-    amount_paid: float = 0.0
+    amount_paid: Decimal = Decimal("0")
+
+    def __post_init__(self) -> None:
+        # Event payloads carry amounts as JSON numbers; callers may pass them on as they came.
+        object.__setattr__(self, "amount", to_decimal(self.amount))
+        object.__setattr__(self, "amount_paid", to_decimal(self.amount_paid))
 
 
 def transition(invoice: Invoice, new_status: str) -> Result[Invoice]:
@@ -48,7 +55,7 @@ def check_new_invoice_currency(currency: str) -> Result[None]:
     return Ok(None)
 
 
-def status_for_payment(amount: float, amount_paid: float) -> str:
+def status_for_payment(amount: Decimal, amount_paid: Decimal) -> str:
     """The status an issued invoice has once `amount_paid` has been applied to it. Treasury pays in
     whole francs, so what is left under one franc of an amount with cents can never be paid: settled.
     `amount` is what is due once credit notes are taken off: an invoice credited in full is settled,

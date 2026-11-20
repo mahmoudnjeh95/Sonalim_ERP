@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal
 
+from core.domain.money import to_decimal
 from core.domain.result import Err, Ok, Result
+
+
+def _as_decimals(obj, *names: str) -> None:
+    """Money and the quantities it is computed from are Decimal (NUMERIC columns); a frozen
+    dataclass built from floats or ints still holds Decimals."""
+    for name in names:
+        object.__setattr__(obj, name, to_decimal(getattr(obj, name)))
 
 # Manual, caller-initiated transitions only. "partially_received" and "fully_received" are
 # deliberately unreachable here — they can only be reached through receive_against_order,
@@ -102,14 +111,17 @@ class PurchaseOrderLine:
     purchase_order_id: str
     product_id: str
     uom_id: str
-    quantity_ordered: float
-    quantity_received: float
+    quantity_ordered: Decimal
+    quantity_received: Decimal
     status: str
-    unit_price: float
+    unit_price: Decimal
     unit_price_currency: str
 
+    def __post_init__(self) -> None:
+        _as_decimals(self, "quantity_ordered", "quantity_received", "unit_price")
 
-def validate_new_purchase_order_line(*, quantity_ordered: float, unit_price: float = 0) -> Result[None]:
+
+def validate_new_purchase_order_line(*, quantity_ordered: Decimal, unit_price: Decimal = Decimal("0")) -> Result[None]:
     if quantity_ordered <= 0:
         return Err("INVALID_QUANTITY", "quantity_ordered must be positive", "quantity_ordered doit être positive")
     if unit_price < 0:
@@ -117,11 +129,12 @@ def validate_new_purchase_order_line(*, quantity_ordered: float, unit_price: flo
     return Ok(None)
 
 
-def apply_receipt_to_line(line: PurchaseOrderLine, quantity: float) -> Result[PurchaseOrderLine]:
+def apply_receipt_to_line(line: PurchaseOrderLine, quantity: Decimal) -> Result[PurchaseOrderLine]:
     """Records that `quantity` more of this line's product has physically arrived in one
     goods receipt. Example: a line ordered for 10t, already at 0 received, gets a 5t
     delivery -> quantity_received becomes 5, status becomes 'partially_received'; a later
     5t delivery brings it to 10/10 -> 'fully_received'."""
+    quantity = to_decimal(quantity)
     if quantity <= 0:
         return Err("INVALID_QUANTITY", "received quantity must be positive", "la quantité reçue doit être positive")
     new_received = line.quantity_received + quantity
@@ -147,12 +160,16 @@ def apply_receipt_to_line(line: PurchaseOrderLine, quantity: float) -> Result[Pu
     )
 
 
-def _line_status(quantity_ordered: float, quantity_received: float) -> str:
+def _line_status(quantity_ordered: Decimal, quantity_received: Decimal) -> str:
     if quantity_received <= 0:
         return "pending"
     if quantity_received >= quantity_ordered:
         return "fully_received"
     return "partially_received"
+
+
+# The cost fields a goods receipt carries, summed into its landed cost.
+RECEIPT_FEES = ("base_cost", "license_fee", "insurance_fee", "transit_fee", "transport_fee", "customs_duty", "handling_fee")
 
 
 @dataclass(frozen=True)
@@ -169,15 +186,18 @@ class PurchaseOrderReceipt:
     carrier: str | None
     transport_company_name: str | None
     driver_name: str | None
-    base_cost: float
-    license_fee: float
-    insurance_fee: float
-    transit_fee: float
-    transport_fee: float
-    customs_duty: float
-    handling_fee: float
-    total_cost: float
+    base_cost: Decimal
+    license_fee: Decimal
+    insurance_fee: Decimal
+    transit_fee: Decimal
+    transport_fee: Decimal
+    customs_duty: Decimal
+    handling_fee: Decimal
+    total_cost: Decimal
     confirmed_at: str | None
+
+    def __post_init__(self) -> None:
+        _as_decimals(self, *RECEIPT_FEES, "total_cost")
 
 
 def confirm_purchase_order_receipt(status: str) -> Result[str]:
@@ -196,25 +216,32 @@ class PurchaseOrderReceiptLine:
     tenant_id: str
     purchase_order_receipt_id: str
     purchase_order_line_id: str
-    quantity: float
+    quantity: Decimal
     lot_number: str | None
-    cost_per_unit: float
+    cost_per_unit: Decimal
+
+    def __post_init__(self) -> None:
+        _as_decimals(self, "quantity", "cost_per_unit")
 
 
 def compute_landed_cost(
     *,
-    base_cost: float,
-    license_fee: float,
-    insurance_fee: float,
-    transit_fee: float,
-    transport_fee: float,
-    customs_duty: float,
-    quantity: float,
-    handling_fee: float = 0,
-) -> Result[tuple[float, float]]:
+    base_cost: Decimal,
+    license_fee: Decimal,
+    insurance_fee: Decimal,
+    transit_fee: Decimal,
+    transport_fee: Decimal,
+    customs_duty: Decimal,
+    quantity: Decimal,
+    handling_fee: Decimal = Decimal("0"),
+) -> Result[tuple[Decimal, Decimal]]:
+    """(total cost, cost per unit). The per-unit cost is exact to Decimal's 28 digits; the column
+    stores it at its own scale."""
+    quantity = to_decimal(quantity)
     if quantity <= 0:
         return Err("INVALID_QUANTITY", "quantity must be positive", "la quantité doit être positive")
-    total_cost = base_cost + license_fee + insurance_fee + transit_fee + transport_fee + customs_duty + handling_fee
+    total_cost = sum((to_decimal(fee) for fee in (base_cost, license_fee, insurance_fee, transit_fee, transport_fee,
+                                                  customs_duty, handling_fee)), Decimal("0"))
     return Ok((total_cost, total_cost / quantity))
 
 
@@ -245,10 +272,10 @@ IMPORT_ONLY_FEES = ("license_fee", "insurance_fee", "transit_fee", "customs_duty
 def validate_receipt_fees(
     *,
     is_import: bool,
-    license_fee: float,
-    insurance_fee: float,
-    transit_fee: float,
-    customs_duty: float,
+    license_fee: Decimal,
+    insurance_fee: Decimal,
+    transit_fee: Decimal,
+    customs_duty: Decimal,
 ) -> Result[None]:
     if is_import:
         return Ok(None)

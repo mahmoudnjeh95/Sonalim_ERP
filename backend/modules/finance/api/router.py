@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from core.db import get_connection
+from core.domain.money import json_number
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.finance.api.service import InvoiceService
@@ -16,7 +18,7 @@ router = APIRouter(prefix="/finance", tags=["finance"])
 
 class CreateInvoiceRequest(BaseModel):
     partner_id: str
-    amount: float
+    amount: Decimal
     currency: str = "XOF"
 
 
@@ -26,7 +28,7 @@ class TransitionRequest(BaseModel):
 
 class UpdateInvoiceRequest(BaseModel):
     partner_id: str | None = None
-    amount: float | None = None
+    amount: Decimal | None = None
     currency: str | None = None
     due_date: datetime.date | None = None
 
@@ -40,10 +42,10 @@ def _invoice_response(invoice, connection=None, tenant_id: str | None = None) ->
     return {
         "id": invoice.id,
         "partner_id": invoice.partner_id,
-        "amount": invoice.amount,
+        "amount": json_number(invoice.amount),
         "currency": invoice.currency,
         "status": invoice.status,
-        "amount_paid": invoice.amount_paid,
+        "amount_paid": json_number(invoice.amount_paid),
     }
 
 

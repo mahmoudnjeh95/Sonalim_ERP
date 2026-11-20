@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from core.domain.result import Err, Ok
 from modules.procurement.domain.entities import (
     PurchaseOrder,
@@ -254,3 +256,21 @@ def test_confirm_purchase_order_receipt_rejects_already_confirmed():
     result = confirm_purchase_order_receipt("confirmed")
     assert isinstance(result, Err)
     assert result.code == "INVALID_TRANSITION"
+
+
+def test_receipts_add_up_exactly_to_what_was_ordered():
+    # In float, 0.1 + 0.2 > 0.3: the second delivery used to be refused as an over-receipt.
+    first = apply_receipt_to_line(_line(quantity_ordered=0.3), 0.1)
+    second = apply_receipt_to_line(first.value, 0.2)
+    assert isinstance(second, Ok)
+    assert second.value.quantity_received == Decimal("0.3")
+    assert second.value.status == "fully_received"
+
+
+def test_landed_cost_is_decimal_to_the_cent():
+    result = compute_landed_cost(
+        base_cost=0.1, license_fee=0, insurance_fee=0, transit_fee=0, transport_fee=0.2, customs_duty=0, quantity=1
+    )
+    total_cost, cost_per_unit = result.value
+    assert total_cost == Decimal("0.3")
+    assert isinstance(cost_per_unit, Decimal)

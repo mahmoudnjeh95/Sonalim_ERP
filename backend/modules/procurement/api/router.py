@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from core.db import get_connection
+from core.domain.money import json_number
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission
 from modules.procurement.api.invoice_router import credit_note_router as purchase_credit_note_router
@@ -30,8 +32,8 @@ ALL_PURCHASE_ORDER_STATUSES = sorted(set(PURCHASE_ORDER_MANUAL_TRANSITIONS.keys(
 class PurchaseOrderLineRequest(BaseModel):
     product_id: str
     uom_id: str
-    quantity_ordered: float
-    unit_price: float = 0
+    quantity_ordered: Decimal
+    unit_price: Decimal = Decimal("0")
     unit_price_currency: str = "XOF"
 
 
@@ -48,8 +50,8 @@ class CreatePurchaseOrderRequest(BaseModel):
 class AddPurchaseOrderLineRequest(BaseModel):
     product_id: str
     uom_id: str
-    quantity_ordered: float
-    unit_price: float = 0
+    quantity_ordered: Decimal
+    unit_price: Decimal = Decimal("0")
     unit_price_currency: str = "XOF"
 
 
@@ -64,7 +66,7 @@ class UpdatePurchaseOrderRequest(BaseModel):
 
 class ReceiptLineRequest(BaseModel):
     purchase_order_line_id: str
-    quantity: float
+    quantity: Decimal
     lot_number: str | None = None
 
 
@@ -78,13 +80,13 @@ class CreateReceiptRequest(BaseModel):
     carrier: str | None = None
     transport_company_name: str | None = None
     driver_name: str | None = None
-    base_cost: float = 0
-    license_fee: float = 0
-    insurance_fee: float = 0
-    transit_fee: float = 0
-    transport_fee: float = 0
-    customs_duty: float = 0
-    handling_fee: float = 0
+    base_cost: Decimal = Decimal("0")
+    license_fee: Decimal = Decimal("0")
+    insurance_fee: Decimal = Decimal("0")
+    transit_fee: Decimal = Decimal("0")
+    transport_fee: Decimal = Decimal("0")
+    customs_duty: Decimal = Decimal("0")
+    handling_fee: Decimal = Decimal("0")
 
 
 class ConfirmReceiptRequest(BaseModel):
@@ -110,10 +112,10 @@ def _line_response(line: PurchaseOrderLine) -> dict:
         "purchase_order_id": line.purchase_order_id,
         "product_id": line.product_id,
         "uom_id": line.uom_id,
-        "quantity_ordered": line.quantity_ordered,
-        "quantity_received": line.quantity_received,
+        "quantity_ordered": json_number(line.quantity_ordered),
+        "quantity_received": json_number(line.quantity_received),
         "status": line.status,
-        "unit_price": line.unit_price,
+        "unit_price": json_number(line.unit_price),
         "unit_price_currency": line.unit_price_currency,
     }
 
@@ -131,14 +133,14 @@ def _receipt_response(receipt: PurchaseOrderReceipt) -> dict:
         "carrier": receipt.carrier,
         "transport_company_name": receipt.transport_company_name,
         "driver_name": receipt.driver_name,
-        "base_cost": receipt.base_cost,
-        "license_fee": receipt.license_fee,
-        "insurance_fee": receipt.insurance_fee,
-        "transit_fee": receipt.transit_fee,
-        "transport_fee": receipt.transport_fee,
-        "customs_duty": receipt.customs_duty,
-        "handling_fee": receipt.handling_fee,
-        "total_cost": receipt.total_cost,
+        "base_cost": json_number(receipt.base_cost),
+        "license_fee": json_number(receipt.license_fee),
+        "insurance_fee": json_number(receipt.insurance_fee),
+        "transit_fee": json_number(receipt.transit_fee),
+        "transport_fee": json_number(receipt.transport_fee),
+        "customs_duty": json_number(receipt.customs_duty),
+        "handling_fee": json_number(receipt.handling_fee),
+        "total_cost": json_number(receipt.total_cost),
         "confirmed_at": receipt.confirmed_at,
     }
 
@@ -148,9 +150,9 @@ def _receipt_line_response(line: PurchaseOrderReceiptLine) -> dict:
         "id": line.id,
         "purchase_order_receipt_id": line.purchase_order_receipt_id,
         "purchase_order_line_id": line.purchase_order_line_id,
-        "quantity": line.quantity,
+        "quantity": json_number(line.quantity),
         "lot_number": line.lot_number,
-        "cost_per_unit": line.cost_per_unit,
+        "cost_per_unit": json_number(line.cost_per_unit),
     }
 
 

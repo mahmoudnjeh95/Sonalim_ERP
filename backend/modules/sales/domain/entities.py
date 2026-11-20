@@ -4,6 +4,7 @@ import datetime
 from dataclasses import dataclass, replace
 from decimal import Decimal
 
+from core.domain.money import to_decimal
 from core.domain.result import Err, Ok, Result
 from modules.sales.domain.pricing import PricedLine, Totals, compute_totals
 
@@ -20,16 +21,20 @@ VALID_TRANSITIONS = {
 @dataclass(frozen=True)
 class OrderLine:
     product_id: str
-    quantity: float
-    unit_price: float
+    quantity: Decimal
+    unit_price: Decimal
     # 0 for orders created before discounts and VAT existed, so they total what they always did
-    discount_rate: float = 0.0
-    vat_rate: float = 0.0
+    discount_rate: Decimal = Decimal("0")
+    vat_rate: Decimal = Decimal("0")
     price_list_id: str | None = None
 
+    def __post_init__(self) -> None:
+        # Callers outside sales (CRM, seed scripts) may still pass floats.
+        for name in ("quantity", "unit_price", "discount_rate", "vat_rate"):
+            object.__setattr__(self, name, to_decimal(getattr(self, name)))
+
     def priced(self) -> PricedLine:
-        return PricedLine(Decimal(str(self.quantity)), Decimal(str(self.unit_price)),
-                          Decimal(str(self.discount_rate)), Decimal(str(self.vat_rate)))
+        return PricedLine(self.quantity, self.unit_price, self.discount_rate, self.vat_rate)
 
 
 @dataclass(frozen=True)
@@ -41,21 +46,24 @@ class SalesOrder:
     lines: tuple[OrderLine, ...]
     requested_ship_date: datetime.date | None = None
     opportunity_id: str | None = None
-    discount_rate: float = 0.0
+    discount_rate: Decimal = Decimal("0")
     quote_id: str | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "discount_rate", to_decimal(self.discount_rate))
 
     @property
     def totals(self) -> Totals:
-        return compute_totals((line.priced() for line in self.lines), Decimal(str(self.discount_rate)))
+        return compute_totals((line.priced() for line in self.lines), self.discount_rate)
 
     @property
-    def total_amount(self) -> float:
+    def total_amount(self) -> Decimal:
         """What the customer pays, VAT included, in whole francs."""
-        return float(self.totals.incl_tax)
+        return self.totals.incl_tax
 
     def net_unit_price(self, line: OrderLine) -> Decimal:
         """The price one unit of the line is invoiced at, excluding tax, after both discounts."""
-        return line.priced().net_unit_price(Decimal(str(self.discount_rate)))
+        return line.priced().net_unit_price(self.discount_rate)
 
 
 def confirm(order: SalesOrder) -> Result[SalesOrder]:
@@ -68,12 +76,12 @@ def confirm(order: SalesOrder) -> Result[SalesOrder]:
     return Ok(replace(order, status="confirmed"))
 
 
-def covers_all_lines(lines: tuple[OrderLine, ...], issued_to_date: dict[str, float]) -> bool:
+def covers_all_lines(lines: tuple[OrderLine, ...], issued_to_date: dict[str, Decimal | float]) -> bool:
     """Whether what left the warehouse covers everything ordered. Lines of one product count together."""
-    ordered: dict[str, float] = {}
+    ordered: dict[str, Decimal] = {}
     for line in lines:
-        ordered[line.product_id] = ordered.get(line.product_id, 0.0) + line.quantity
-    return all(issued_to_date.get(product_id, 0.0) >= quantity - 1e-6 for product_id, quantity in ordered.items())
+        ordered[line.product_id] = ordered.get(line.product_id, Decimal("0")) + line.quantity
+    return all(to_decimal(issued_to_date.get(product_id, 0)) >= quantity for product_id, quantity in ordered.items())
 
 
 def mark_shipped(order_status: str) -> Result[str]:

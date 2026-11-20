@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel
 
 from core.db import get_connection
+from core.domain.money import json_number
 from core.domain.result import Err, err_detail
 from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.sales.api.pricing_service import PricingService
@@ -20,11 +22,11 @@ router.include_router(pricing_router)
 
 class OrderLineRequest(BaseModel):
     product_id: str
-    quantity: float
-    unit_price: float
-    discount_rate: float = 0.0
+    quantity: Decimal
+    unit_price: Decimal
+    discount_rate: Decimal = Decimal("0")
     # left out: the tenant's default VAT rate (sales settings)
-    vat_rate: float | None = None
+    vat_rate: Decimal | None = None
     price_list_id: str | None = None
 
 
@@ -33,7 +35,7 @@ class CreateOrderRequest(BaseModel):
     location_id: str
     lines: list[OrderLineRequest]
     requested_ship_date: datetime.date | None = None
-    discount_rate: float = 0.0
+    discount_rate: Decimal = Decimal("0")
 
 
 class ConfirmOrderRequest(BaseModel):
@@ -47,7 +49,7 @@ class UpdateOrderRequest(BaseModel):
     location_id: str | None = None
     lines: list[OrderLineRequest] | None = None
     requested_ship_date: datetime.date | None = None
-    discount_rate: float | None = None
+    discount_rate: Decimal | None = None
 
 
 def _serialize_order(order) -> dict:
@@ -57,22 +59,24 @@ def _serialize_order(order) -> dict:
         "partner_id": order.partner_id,
         "location_id": order.location_id,
         "status": order.status,
-        "total_amount": order.total_amount,
-        "totals": {key: float(value) for key, value in totals.as_dict().items()},
-        "discount_rate": order.discount_rate,
+        # JSON numbers, as before money became Decimal
+        "total_amount": json_number(order.total_amount),
+        "totals": {key: json_number(value) for key, value in totals.as_dict().items()},
+        "discount_rate": json_number(order.discount_rate),
         "quote_id": order.quote_id,
         "requested_ship_date": order.requested_ship_date.isoformat() if order.requested_ship_date else None,
         "opportunity_id": order.opportunity_id,
         "lines": [
-            {"product_id": line.product_id, "quantity": line.quantity, "unit_price": line.unit_price,
-             "discount_rate": line.discount_rate, "vat_rate": line.vat_rate, "price_list_id": line.price_list_id}
+            {"product_id": line.product_id, "quantity": json_number(line.quantity), "unit_price": json_number(line.unit_price),
+             "discount_rate": json_number(line.discount_rate), "vat_rate": json_number(line.vat_rate),
+             "price_list_id": line.price_list_id}
             for line in order.lines
         ],
     }
 
 
 def _lines(connection, tenant_id: str, requested: list[OrderLineRequest]) -> list[OrderLine]:
-    default_vat = float(PricingService(connection).get_settings(tenant_id=tenant_id)["default_vat_rate"])
+    default_vat = PricingService(connection).get_settings(tenant_id=tenant_id)["default_vat_rate"]
     return [
         OrderLine(product_id=line.product_id, quantity=line.quantity, unit_price=line.unit_price, discount_rate=line.discount_rate,
                   vat_rate=line.vat_rate if line.vat_rate is not None else default_vat, price_list_id=line.price_list_id)
@@ -80,7 +84,7 @@ def _lines(connection, tenant_id: str, requested: list[OrderLineRequest]) -> lis
     ]
 
 
-def _check_pricing(connection, tenant: TenantContext, lines: list[OrderLine], discount_rate: float) -> None:
+def _check_pricing(connection, tenant: TenantContext, lines: list[OrderLine], discount_rate: Decimal) -> None:
     checked = SalesOrderService(connection).check_pricing(
         tenant_id=tenant.tenant_id, lines=lines, discount_rate=discount_rate,
         may_exceed_discount=user_has_permission(connection, user_id=tenant.user_id, permission="sales.admin_discounts"),

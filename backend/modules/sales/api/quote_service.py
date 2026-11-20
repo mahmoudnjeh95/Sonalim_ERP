@@ -357,13 +357,13 @@ class QuoteService:
         if not location_id:
             return Err("LOCATION_REQUIRED", "choose the warehouse the order ships from", "choisissez l'entrepôt d'expédition de la commande")
         detail = self.get_quote(tenant_id=tenant_id, quote_id=quote_id).value
-        lines = [OrderLine(product_id=l["product_id"], quantity=float(l["quantity"]), unit_price=float(l["unit_price"]),
-                           discount_rate=float(l["discount_rate"]), vat_rate=float(l["vat_rate"]), price_list_id=l["price_list_id"])
+        lines = [OrderLine(product_id=l["product_id"], quantity=l["quantity"], unit_price=l["unit_price"],
+                           discount_rate=l["discount_rate"], vat_rate=l["vat_rate"], price_list_id=l["price_list_id"])
                  for l in detail["lines"]]
         order = SalesOrderService(self._connection).create_order(
             tenant_id=tenant_id, actor_id=actor_id, partner_id=quote["partner_id"], location_id=location_id, lines=lines,
             requested_ship_date=requested_ship_date, opportunity_id=quote["opportunity_id"],
-            discount_rate=float(quote["discount_rate"]), quote_id=quote_id,
+            discount_rate=quote["discount_rate"], quote_id=quote_id,
         )
         self._connection.execute("UPDATE sales.quotes SET order_id = %s WHERE id = %s", (order.id, quote_id))
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="quote.converted", entity_type="quote",

@@ -69,3 +69,17 @@ def test_an_order_lists_its_delivery_invoices_with_lines_and_credit_notes(api):
     [note] = client.get("/finance/credit-notes").json()
     assert note["invoice_number"] == listed["number"] and float(note["amount"]) == 150
     assert client.get("/finance/invoices/missing").status_code == 404
+
+
+def test_an_invoice_amount_is_stored_exactly_as_sent(api):
+    api["grant"]("finance.manage_invoices", "finance.admin_invoices")
+    client, db = api["client"], api["db"]
+    created = client.post("/finance/invoices", json={"partner_id": api["partner"], "amount": 1234.56})
+    assert created.status_code == 201
+    invoice_id = created.json()["id"]
+    stored = lambda: db.execute("SELECT amount FROM finance.invoices WHERE id = %s", (invoice_id,)).fetchone()[0]  # noqa: E731
+    assert stored() == Decimal("1234.56")
+    # a decimal string is an amount too
+    assert client.patch(f"/finance/invoices/{invoice_id}", json={"amount": "0.30"}).status_code == 200
+    assert stored() == Decimal("0.30")
+    assert client.post("/finance/invoices", json={"partner_id": api["partner"], "amount": "lots"}).status_code == 422

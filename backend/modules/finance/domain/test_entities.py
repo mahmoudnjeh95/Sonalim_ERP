@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from core.domain.result import Err, Ok
 from modules.finance.domain.entities import Invoice, transition
 
@@ -34,3 +36,8 @@ def test_status_follows_amount_paid():
 
 def test_partially_paid_invoice_cannot_be_marked_paid_by_hand():
     assert transition(_invoice("partially_paid"), "paid").code == "INVALID_TRANSITION"
+
+
+def test_invoice_amounts_are_decimal():
+    invoice = Invoice(id="1", partner_id="c1", amount=0.1, currency="XOF", status="draft", amount_paid=0.2)
+    assert invoice.amount + invoice.amount_paid == Decimal("0.3")

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+from decimal import Decimal
 
 import psycopg
 from ulid import ULID
@@ -8,6 +9,7 @@ from ulid import ULID
 from core.api.service import CoreService
 from core.audit import record_audit
 from core.domain.exchange_rate import BASE_CURRENCY
+from core.domain.money import json_number, to_decimal
 from core.domain.result import Err, Ok, Result
 from core.events.outbox import publish_event
 from modules.procurement.domain.entities import (
@@ -65,10 +67,10 @@ def _row_to_line(row: tuple) -> PurchaseOrderLine:
         purchase_order_id=purchase_order_id,
         product_id=product_id,
         uom_id=uom_id,
-        quantity_ordered=float(quantity_ordered),
-        quantity_received=float(quantity_received),
+        quantity_ordered=quantity_ordered,
+        quantity_received=quantity_received,
         status=status,
-        unit_price=float(unit_price),
+        unit_price=unit_price,
         unit_price_currency=unit_price_currency,
     )
 
@@ -92,14 +94,14 @@ def _row_to_receipt(row: tuple) -> PurchaseOrderReceipt:
         carrier=carrier,
         transport_company_name=transport_company_name,
         driver_name=driver_name,
-        base_cost=float(base_cost),
-        license_fee=float(license_fee),
-        insurance_fee=float(insurance_fee),
-        transit_fee=float(transit_fee),
-        transport_fee=float(transport_fee),
-        customs_duty=float(customs_duty),
-        handling_fee=float(handling_fee),
-        total_cost=float(total_cost),
+        base_cost=base_cost,
+        license_fee=license_fee,
+        insurance_fee=insurance_fee,
+        transit_fee=transit_fee,
+        transport_fee=transport_fee,
+        customs_duty=customs_duty,
+        handling_fee=handling_fee,
+        total_cost=total_cost,
         confirmed_at=confirmed_at.isoformat() if confirmed_at else None,
     )
 
@@ -111,9 +113,9 @@ def _row_to_receipt_line(row: tuple) -> PurchaseOrderReceiptLine:
         tenant_id=tenant_id,
         purchase_order_receipt_id=purchase_order_receipt_id,
         purchase_order_line_id=purchase_order_line_id,
-        quantity=float(quantity),
+        quantity=quantity,
         lot_number=lot_number,
-        cost_per_unit=float(cost_per_unit),
+        cost_per_unit=cost_per_unit,
     )
 
 
@@ -376,8 +378,8 @@ class PurchaseOrderService:
         purchase_order_id: str,
         product_id: str,
         uom_id: str,
-        quantity_ordered: float,
-        unit_price: float = 0,
+        quantity_ordered: Decimal,
+        unit_price: Decimal = Decimal("0"),
         unit_price_currency: str = "XOF",
     ) -> Result[PurchaseOrderLine]:
         order = self._get_order(tenant_id, purchase_order_id, for_update=True)
@@ -412,7 +414,7 @@ class PurchaseOrderService:
             action="purchase_order.line_added",
             entity_type="purchase_order",
             entity_id=purchase_order_id,
-            payload={"line_id": line_id, "product_id": product_id, "quantity_ordered": quantity_ordered},
+            payload={"line_id": line_id, "product_id": product_id, "quantity_ordered": json_number(quantity_ordered)},
         )
         row = self._connection.execute(
             f"SELECT {_LINE_COLUMNS} FROM procurement.purchase_order_lines WHERE id = %s", (line_id,)
@@ -534,13 +536,13 @@ class PurchaseOrderService:
         carrier: str | None = None,
         transport_company_name: str | None = None,
         driver_name: str | None = None,
-        base_cost: float = 0,
-        license_fee: float = 0,
-        insurance_fee: float = 0,
-        transit_fee: float = 0,
-        transport_fee: float = 0,
-        customs_duty: float = 0,
-        handling_fee: float = 0,
+        base_cost: Decimal = Decimal("0"),
+        license_fee: Decimal = Decimal("0"),
+        insurance_fee: Decimal = Decimal("0"),
+        transit_fee: Decimal = Decimal("0"),
+        transport_fee: Decimal = Decimal("0"),
+        customs_duty: Decimal = Decimal("0"),
+        handling_fee: Decimal = Decimal("0"),
     ) -> Result[PurchaseOrderReceipt]:
         """Drafts a goods-receipt event covering one or more lines of one order. No stock or
         line quantities are touched yet -- that only happens on confirm_receipt, so a draft
@@ -576,7 +578,7 @@ class PurchaseOrderService:
         if isinstance(fee_validation, Err):
             return fee_validation
 
-        total_quantity = sum(line["quantity"] for line in lines)
+        total_quantity = sum((to_decimal(line["quantity"]) for line in lines), Decimal("0"))
         cost_result = compute_landed_cost(
             base_cost=base_cost,
             license_fee=license_fee,
@@ -622,7 +624,7 @@ class PurchaseOrderService:
             action="purchase_order_receipt.created",
             entity_type="purchase_order_receipt",
             entity_id=receipt_id,
-            payload={"purchase_order_id": purchase_order_id, "line_count": len(lines), "total_cost": total_cost},
+            payload={"purchase_order_id": purchase_order_id, "line_count": len(lines), "total_cost": json_number(total_cost)},
         )
         row = self._connection.execute(
             f"SELECT {_RECEIPT_COLUMNS} FROM procurement.purchase_order_receipts WHERE id = %s", (receipt_id,)
@@ -691,7 +693,7 @@ class PurchaseOrderService:
         event_lines: list[dict] = []
         # Landed cost per line, in the receipt's currency and the line's unit --
         # kept beside event_lines rather than in them, so the event payload is unchanged.
-        line_costs: list[float] = []
+        line_costs: list[Decimal] = []
         for receipt_line in receipt_lines:
             line_row = self._connection.execute(
                 f"SELECT {_LINE_COLUMNS} FROM procurement.purchase_order_lines WHERE id = %s AND tenant_id = %s FOR UPDATE",
@@ -723,7 +725,7 @@ class PurchaseOrderService:
             event_lines.append(
                 {
                     "product_id": updated_line.product_id,
-                    "quantity": receipt_line.quantity,
+                    "quantity": json_number(receipt_line.quantity),
                     "uom_id": updated_line.uom_id,
                     "lot_number": receipt_line.lot_number,
                 }
@@ -792,10 +794,12 @@ class PurchaseOrderService:
                     f"line unit {line_uom.code} does not match product unit {product_uom.code}",
                     f"l'unité de la ligne {line_uom.code} ne correspond pas à l'unité du produit {product_uom.code}",
                 )
-            converted_quantity = event_line["quantity"] * float(line_uom.ratio_to_base) / float(product_uom.ratio_to_base)
+            line_ratio, product_ratio = to_decimal(line_uom.ratio_to_base), to_decimal(product_uom.ratio_to_base)
+            # Computed in Decimal; warehouse takes floats.
+            converted_quantity = float(to_decimal(event_line["quantity"]) * line_ratio / product_ratio)
             # Same total cost spread over the product-unit quantity.
             unit_cost_base = (
-                line_cost * float(exchange_rate.rate_to_base) * float(product_uom.ratio_to_base) / float(line_uom.ratio_to_base)
+                float(line_cost * to_decimal(exchange_rate.rate_to_base) * product_ratio / line_ratio)
                 if exchange_rate is not None and line_cost > 0
                 else None
             )

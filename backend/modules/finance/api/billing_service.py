@@ -235,7 +235,7 @@ class DeliveryBillingService:
         self._insert_lines("finance.credit_note_lines", "credit_note_id", credit_note_id, None, lines)
         new_credited = credited + total
         # A draft keeps its status; an issued invoice's status follows what is now due.
-        new_status = status if status == "draft" else status_for_payment(float(amount_due(amount, new_credited)), float(paid))
+        new_status = status if status == "draft" else status_for_payment(amount_due(amount, new_credited), paid)
         self._connection.execute(
             "UPDATE finance.invoices SET amount_credited = %s, status = %s WHERE id = %s", (new_credited, new_status, invoice_id)
         )
