@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "depends": ["core"],
   "optional_depends": ["finance", "procurement"],
-  "provides_api": ["AccountService", "AccountMovementService"],
+  "provides_api": ["AccountService", "AccountMovementService", "TreasuryPostingService"],
   "publishes_events": ["treasury.receipt.posted", "treasury.receipt.cancelled", "treasury.disbursement.posted", "treasury.disbursement.cancelled", "treasury.instrument.collected", "treasury.instrument.unpaid"],
   "subscribes_events": [],
   "migrations_path": "./migrations",

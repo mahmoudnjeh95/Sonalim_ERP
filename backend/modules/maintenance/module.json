@@ -1,8 +1,8 @@
 {
   "name": "maintenance",
   "version": "0.3.0",
-  "depends": ["core"],
-  "optional_depends": ["hr", "warehouse", "production"],
+  "depends": ["core", "hr", "warehouse"],
+  "optional_depends": ["production"],
   "provides_api": ["EquipmentService", "JobService", "PartsService"],
   "publishes_events": ["maintenance.parts.purchase_requested"],
   "subscribes_events": [],

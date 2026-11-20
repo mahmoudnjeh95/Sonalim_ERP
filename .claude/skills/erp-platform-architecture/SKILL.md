@@ -57,6 +57,13 @@ Every module manifest follows this shape:
 }
 ```
 
+What the fields mean, enforced by `backend/core/test_module_manifests.py`. Every list must be exact:
+- `depends`: modules imported at module level by non-test code (`core` first). No cycles.
+- `optional_depends`: modules imported only inside a function or a guard. Tests are not counted. Events are not dependencies.
+- `publishes_events` / `subscribes_events`: exactly what `publish_event(producer=...)` and the `events/` handlers do. A computed `event_type` must be listed in the test's `DYNAMIC_EVENT_TYPES`.
+- `provides_api`: classes or submodules of `api/`. Every `*Service` another module imports must be listed.
+- Every event has a `events/CATALOG.md` row whose Consumers names exactly the subscribing modules. The worker imports every `events/` file that registers handlers.
+
 ## Events
 
 Name events `{module}.{aggregate}.{past_tense_verb}`. Every event uses this envelope:

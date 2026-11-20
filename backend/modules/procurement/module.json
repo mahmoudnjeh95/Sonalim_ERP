@@ -1,9 +1,9 @@
 {
   "name": "procurement",
   "version": "0.3.0",
-  "depends": ["core"],
-  "optional_depends": ["warehouse"],
-  "provides_api": ["PurchaseOrderService", "PurchaseInvoiceService", "PurchaseCreditNoteService"],
+  "depends": ["core", "warehouse"],
+  "optional_depends": [],
+  "provides_api": ["PurchaseOrderService", "PurchaseInvoiceService", "PurchaseCreditNoteService", "report_queries"],
   "publishes_events": ["procurement.purchase_order.status_changed", "procurement.purchase_order_receipt.confirmed", "procurement.purchase_invoice.validated", "procurement.purchase_invoice.cancelled", "procurement.purchase_credit_note.validated"],
   "subscribes_events": ["warehouse.replenishment.approved", "maintenance.parts.purchase_requested", "treasury.disbursement.posted", "treasury.disbursement.cancelled", "treasury.instrument.unpaid"],
   "migrations_path": "./migrations",

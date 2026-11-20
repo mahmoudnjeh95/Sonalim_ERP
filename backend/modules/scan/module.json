@@ -1,8 +1,8 @@
 {
   "name": "scan",
   "version": "0.1.0",
-  "depends": ["core", "production"],
-  "optional_depends": ["maintenance", "qc"],
+  "depends": ["core", "maintenance", "production"],
+  "optional_depends": [],
   "provides_api": ["ScanSessionService", "ScanAliasService"],
   "publishes_events": [],
   "subscribes_events": [],

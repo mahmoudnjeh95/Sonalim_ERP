@@ -10,7 +10,6 @@
     "GradeService",
     "ContractService",
     "LeaveService",
-    "HrDashboardService",
     "HrAlertService",
     "PayrollSnapshotService",
     "PresenceService",

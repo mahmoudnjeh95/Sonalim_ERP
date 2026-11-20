@@ -1,8 +1,8 @@
 {
   "name": "qc",
   "version": "0.1.0",
-  "depends": ["core"],
-  "optional_depends": ["production", "warehouse"],
+  "depends": ["core", "warehouse"],
+  "optional_depends": ["production"],
   "provides_api": [
     "QualityReportService",
     "FollowUpService",

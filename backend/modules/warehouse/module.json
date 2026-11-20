@@ -2,7 +2,7 @@
   "name": "warehouse",
   "version": "0.16.0",
   "depends": ["core"],
-  "optional_depends": ["sales", "procurement"],
+  "optional_depends": ["finance", "procurement", "sales"],
   "provides_api": [
     "StockService",
     "LocationService",

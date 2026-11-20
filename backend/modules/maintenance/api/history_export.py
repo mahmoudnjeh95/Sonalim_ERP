@@ -6,8 +6,6 @@ import io
 
 from openpyxl import Workbook
 
-from modules.production.api.xlsx_report_style import autofit, data_row, header_row, title_row, total_row
-
 _TEXT = {
     "fr": {
         "sheet": "Journal",
@@ -31,6 +29,10 @@ _TEXT = {
 
 
 def journal_workbook(journal: dict, *, lang: str) -> bytes:
+    # Imported here: production imports maintenance at load time, so a module-level import back
+    # would make the two depend on each other (see core/test_module_manifests.py).
+    from modules.production.api.xlsx_report_style import autofit, data_row, header_row, title_row, total_row
+
     text = _TEXT.get(lang, _TEXT["fr"])
     headers = list(text["headers"]) + ([text["cost"]] if journal["costs_visible"] else [])
     span = len(headers)

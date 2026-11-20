@@ -2,7 +2,7 @@
   "name": "finance",
   "version": "0.2.0",
   "depends": ["core"],
-  "optional_depends": ["sales", "warehouse", "payroll", "procurement", "treasury"],
+  "optional_depends": ["payroll", "procurement", "sales", "treasury"],
   "provides_api": [
     "InvoiceService",
     "DeliveryBillingService",
@@ -12,7 +12,8 @@
     "LedgerReportService",
     "PeriodService",
     "ReceivablesService",
-    "DunningService"
+    "DunningService",
+    "TreasuryLedgerService"
   ],
   "publishes_events": ["finance.invoice.issued", "finance.invoice.paid", "finance.credit_note.issued", "finance.journal_entry.posted"],
   "subscribes_events": [

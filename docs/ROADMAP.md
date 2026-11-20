@@ -59,9 +59,9 @@ tested, built and deployed to the VPS.
   with `psycopg_pool`. *Small.* *Done 2026-11-20.*
 - [x] **WP-0.4 Money as Decimal.** Remove `float` for amounts in sales, finance invoices,
   procurement (about 37 annotations). Fix invoice currency default (`USD`). *Done 2026-11-20.*
-- [~] **WP-0.5 Module manifests.** `depends` is declared but incomplete (production lists
+- [x] **WP-0.5 Module manifests.** `depends` is declared but incomplete (production lists
   only `core` yet imports warehouse, qc, maintenance, procurement, hr). Complete `depends`
-  and published/consumed events in every `module.json`; add a test that the manifests match real imports and the catalog.
+  and published/consumed events in every `module.json`; add a test that the manifests match real imports and the catalog. *Done 2026-11-20.*
 - [ ] **WP-0.6 Error tracking and alerts.** Error reporting for API and worker, alert on
   dead-letter queue growth and on `finance.posting_failures`.
 
@@ -145,6 +145,21 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-20 — WP-0.5 done (spec `specs/2026-11-20-module-manifests-design.md`, plan
+  `plans/2026-11-20-module-manifests.md`). The fields now have a defined meaning: `depends` =
+  modules imported at module level by non-test code, `optional_depends` = modules imported only
+  inside functions, both exact. `core/test_module_manifests.py` (no DB, 67 tests) checks them
+  against the imports and checks that `depends` has no cycle. It also checks publishes against
+  `publish_event` calls (computed names listed in `DYNAMIC_EVENT_TYPES`), subscribes against the
+  consumer registry, that the worker imports every consumer file, that `CATALOG.md` producers
+  and consumers are right, and `provides_api`. It found 22 mismatches, now fixed in ten
+  manifests. Two other fixes: maintenance ↔ production imported each other at load time, so
+  `history_export` now imports production's xlsx style lazily; the catalog now lists hr as a
+  consumer of the payroll run events, and payroll is no longer listed for
+  `hr.presence_month.closed`. Postgres 16 local (migrations + `seed_dev`): backend 3248 passed /
+  11 skipped (known). No frontend change, so `tsc` and vitest were not run. Next WP: WP-0.6.
+  Branch `claude/elegant-cerf-f5ox2b`.
 
 - 2026-11-20 — WP-0.4 done (spec `specs/2026-11-20-money-as-decimal-design.md`, plan
   `plans/2026-11-20-money-as-decimal.md`). Sales orders, finance invoices and procurement
