@@ -156,8 +156,12 @@ Newest first. One line per session: date, WP, what was finished, what is left, b
   arguments, the procurement read-only cost/price reports (production does float maths on
   them), `core` exchange rates. The `USD` default was already fixed by `finance/0002`.
   Postgres 16 local: backend 3176 passed / 11 skipped (known), frontend `tsc` + 194 vitest
-  passed. Not yet on `main` (needs the user's go-ahead to push there). Next WP: WP-0.5.
-  Branch `claude/epic-keller-b2cjzb`.
+  passed. Pushed to `main` (4d5966a) on the user's go-ahead. Run 44817101453 (and 44812738880,
+  WP-0.3) failed in 3 s with no runner assigned and no logs: GitHub Actions is not starting jobs
+  (likely billing / spending limit, as on 2026-11-17), so nothing was tested, built or deployed.
+  Left: the user unblocks Actions, then "Re-run all jobs" on the latest run; the deploy secrets
+  (`SERVER_HOST` / `SERVER_USER` / `SERVER_SSH_KEY`) are still needed for the deploy step.
+  Next WP: WP-0.5. Branch `claude/epic-keller-b2cjzb`, then `main`.
 
 - 2026-11-20 — WP-0.3 done. `core/db.py`: `get_connection()` draws from one lazy
   `psycopg_pool.ConnectionPool` per process (same commit-on-exit / rollback-on-error contract;
