@@ -179,8 +179,11 @@ Newest first. One line per session: date, WP, what was finished, what is left, b
   `history_export` now imports production's xlsx style lazily; the catalog now lists hr as a
   consumer of the payroll run events, and payroll is no longer listed for
   `hr.presence_month.closed`. Postgres 16 local (migrations + `seed_dev`): backend 3248 passed /
-  11 skipped (known). No frontend change, so `tsc` and vitest were not run. Next WP: WP-0.6.
-  Branch `claude/elegant-cerf-f5ox2b`.
+  11 skipped (known). No frontend change, so `tsc` and vitest were not run. Pushed to `main`
+  (aec81c3) on the user's go-ahead. Run 44823962482 failed like the two before it: every job
+  failed in 3 s, with no logs. Actions is still not starting jobs, so nothing was tested on
+  GitHub, built or deployed. Left: the same as for WP-0.4. Next WP: WP-0.6.
+  Branch `claude/elegant-cerf-f5ox2b`, then `main`.
 
 - 2026-11-20 — WP-0.4 done (spec `specs/2026-11-20-money-as-decimal-design.md`, plan
   `plans/2026-11-20-money-as-decimal.md`). Sales orders, finance invoices and procurement
