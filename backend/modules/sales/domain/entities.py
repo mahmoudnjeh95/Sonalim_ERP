@@ -27,6 +27,8 @@ class OrderLine:
     discount_rate: Decimal = Decimal("0")
     vat_rate: Decimal = Decimal("0")
     price_list_id: str | None = None
+    # core.tax_codes.code the rate came from; None on lines written before tax codes
+    tax_code: str | None = None
 
     def __post_init__(self) -> None:
         # Callers outside sales (CRM, seed scripts) may still pass floats.

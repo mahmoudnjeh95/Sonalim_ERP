@@ -1,3 +1,4 @@
+import { useEffect } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Plus, Tags, Trash2 } from "lucide-react";
 import { useFieldArray, type UseFormReturn } from "react-hook-form";
@@ -12,6 +13,8 @@ import { Input } from "../../components/ui/input";
 import { Label } from "../../components/ui/label";
 import { ProductSelect } from "../../components/patterns/ProductSelect";
 import type { CatalogProduct } from "../products/catalog";
+import { useResolvedTaxes, useTaxCodes } from "../taxes/api";
+import { TaxCodeSelect } from "../taxes/TaxCodeSelect";
 import { getSalesSettings, resolvePrices, SALES_SETTINGS_QUERY_KEY } from "./pricingApi";
 import { computeTotals, largestDiscount, lineNet } from "./salesMath";
 
@@ -22,6 +25,10 @@ export const pricedLineSchema = z.object({
   unit_price: z.coerce.number().nonnegative("Must be ≥ 0"),
   discount_rate: z.coerce.number().min(0).max(100).default(0),
   vat_rate: z.coerce.number().min(0).max(100).default(18),
+  // core.tax_codes.code; null: only a rate (the server finds its code)
+  tax_code: z.string().nullable().optional(),
+  // chosen by hand or loaded from a saved document: the customer's / product's code no longer replaces it
+  tax_manual: z.boolean().optional(),
   price_list_id: z.string().nullable().optional(),
 });
 export type PricedLineForm = z.infer<typeof pricedLineSchema>;
@@ -34,7 +41,7 @@ export interface PricedFormShape {
 }
 
 export function newPricedLine(defaultVat: number): PricedLineForm {
-  return { product_id: "", quantity: 1, unit_price: 0, discount_rate: 0, vat_rate: defaultVat, price_list_id: null };
+  return { product_id: "", quantity: 1, unit_price: 0, discount_rate: 0, vat_rate: defaultVat, tax_code: null, tax_manual: false, price_list_id: null };
 }
 
 export function useSalesSettings() {
@@ -70,6 +77,20 @@ export function PricedLinesFields({ form, products, idPrefix, quantityLabel, qua
   const partnerId = watch("partner_id");
   const totals = computeTotals(lines, documentDiscount);
   const overLimit = !settings?.may_exceed_discount && largestDiscount(lines, documentDiscount) > maxDiscount + 0.005;
+  const { codes: taxCodes } = useTaxCodes("sales");
+  const resolved = useResolvedTaxes("sales", partnerId ?? "", lines.map((line) => line.product_id), defaultVat).data;
+
+  // A line nobody taxed by hand follows the customer's code (an exemption), else the product's, else the default.
+  useEffect(() => {
+    if (!resolved) return;
+    lines.forEach((line, index) => {
+      if (line.tax_manual) return;
+      const tax = resolved[line.product_id || "*"] ?? resolved["*"];
+      if (!tax) return;
+      if ((line.tax_code ?? null) !== tax.tax_code) setValue(`lines.${index}.tax_code`, tax.tax_code);
+      if (Number(line.vat_rate) !== tax.rate) setValue(`lines.${index}.vat_rate`, tax.rate);
+    });
+  }, [resolved, lines, setValue]);
 
   const priceMutation = useMutation({
     mutationFn: () =>
@@ -119,7 +140,7 @@ export function PricedLinesFields({ form, products, idPrefix, quantityLabel, qua
         {fields.map((field, index) => {
           const productId = lines[index]?.product_id ?? "";
           return (
-            <div key={field.id} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[minmax(0,1fr)_5rem_6.5rem_4.5rem_4.5rem_auto]">
+            <div key={field.id} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[minmax(0,1fr)_5rem_6.5rem_4.5rem_8.5rem_auto]">
               <div className="col-span-2 space-y-1 sm:col-span-1">
                 <span className="block text-xs font-medium text-muted-foreground">{t("sales.field.productId")}</span>
                 <ProductSelect id={`${idPrefix}_product_${index}`} products={products} placeholder={t("sales.field.productId")}
@@ -139,7 +160,21 @@ export function PricedLinesFields({ form, products, idPrefix, quantityLabel, qua
               </div>
               <div className="space-y-1">
                 <span className="block text-xs font-medium text-muted-foreground">{t("sales.pricing.vatPct")}</span>
-                <Input type="number" step="any" min={0} max={100} {...register(`lines.${index}.vat_rate` as const)} />
+                {taxCodes.length ? (
+                  <TaxCodeSelect
+                    id={`${idPrefix}_tax_${index}`}
+                    codes={taxCodes}
+                    taxCode={lines[index]?.tax_code}
+                    rate={Number(lines[index]?.vat_rate ?? 0)}
+                    onChange={(code, rate) => {
+                      setValue(`lines.${index}.tax_code`, code, { shouldDirty: true });
+                      setValue(`lines.${index}.vat_rate`, rate, { shouldDirty: true });
+                      setValue(`lines.${index}.tax_manual`, true, { shouldDirty: true });
+                    }}
+                  />
+                ) : (
+                  <Input type="number" step="any" min={0} max={100} {...register(`lines.${index}.vat_rate` as const)} />
+                )}
               </div>
               <div className="flex items-end justify-between gap-2 sm:flex-col sm:items-end">
                 <span className="text-xs tabular-nums text-muted-foreground">{formatXofWithCode(Math.round(lineNet(lines[index] ?? field)))}</span>

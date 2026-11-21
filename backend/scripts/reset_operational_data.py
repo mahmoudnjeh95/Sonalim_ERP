@@ -70,6 +70,7 @@ PURGE_TABLES = [
     "finance.invoice_lines",
     "finance.invoices",
     "finance.invoice_payment_deltas",
+    "finance.tax_entries",
     "finance.journal_entries",
     "finance.journal_lines",
     "finance.posting_failures",
@@ -223,6 +224,7 @@ EDITED_TABLES = [
 KEPT_TABLES = [
     "warehouse.settings",
     "core.payment_terms",
+    "core.tax_codes",
     "finance.dunning_levels",
     "finance.receivables_settings",
     "sales.settings",

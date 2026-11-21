@@ -37,6 +37,7 @@ export interface PurchaseInvoiceLine {
   unit_price: string;
   discount_rate: string;
   vat_rate: string;
+  tax_code: string | null;
   purchase_order_line_id: string | null;
   receipt_id: string | null;
   total_excl_tax: string;
@@ -96,6 +97,7 @@ export interface InvoiceLineInput {
   unit_price: number;
   discount_rate?: number;
   vat_rate?: number | null;
+  tax_code?: string | null;
   uom_id?: string | null;
   purchase_order_line_id?: string | null;
   receipt_id?: string | null;

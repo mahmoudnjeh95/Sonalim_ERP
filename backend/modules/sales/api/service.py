@@ -25,12 +25,13 @@ class SalesOrderService:
 
     def _lines_of(self, order_id: str) -> tuple[OrderLine, ...]:
         rows = self._connection.execute(
-            "SELECT product_id, quantity, unit_price, discount_rate, vat_rate, price_list_id FROM sales.order_lines "
+            "SELECT product_id, quantity, unit_price, discount_rate, vat_rate, price_list_id, tax_code FROM sales.order_lines "
             "WHERE order_id = %s ORDER BY id",
             (order_id,),
         ).fetchall()
         return tuple(
-            OrderLine(product_id=r[0], quantity=r[1], unit_price=r[2], discount_rate=r[3], vat_rate=r[4], price_list_id=r[5])
+            OrderLine(product_id=r[0], quantity=r[1], unit_price=r[2], discount_rate=r[3], vat_rate=r[4], price_list_id=r[5],
+                      tax_code=r[6])
             for r in rows
         )
 
@@ -46,11 +47,12 @@ class SalesOrderService:
         for line in lines:
             self._connection.execute(
                 """
-                INSERT INTO sales.order_lines (id, order_id, tenant_id, product_id, quantity, unit_price, discount_rate, vat_rate, price_list_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO sales.order_lines (id, order_id, tenant_id, product_id, quantity, unit_price, discount_rate, vat_rate,
+                                               price_list_id, tax_code)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (str(ULID()), order_id, tenant_id, line.product_id, line.quantity, line.unit_price, line.discount_rate,
-                 line.vat_rate, line.price_list_id),
+                 line.vat_rate, line.price_list_id, line.tax_code),
             )
 
     def check_pricing(self, *, tenant_id: str, lines, discount_rate: Decimal, may_exceed_discount: bool) -> Result[None]:

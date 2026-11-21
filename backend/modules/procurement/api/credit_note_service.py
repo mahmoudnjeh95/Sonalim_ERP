@@ -12,6 +12,7 @@ from ulid import ULID
 from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from core.domain.tax import breakdown_payload, vat_breakdown
 from core.events.outbox import publish_event
 from modules.procurement.domain.purchase_invoice import Line, check_credit_lines, check_line, compute_totals
 
@@ -30,6 +31,10 @@ def _to_dict(row: tuple) -> dict[str, Any]:
     keys = ["id", "number", "invoice_id", "partner_id", "note_date", "reason", "status", "total_gross", "total_discount",
             "total_excl_tax", "total_vat", "total_incl_tax", "created_at", "validated_at"]
     return dict(zip(keys, row, strict=True))
+
+
+def _line_tax_code(line: dict[str, Any], invoice_line: dict[str, Any]) -> str | None:
+    return invoice_line.get("tax_code") if Decimal(str(line["vat_rate"])) == Decimal(str(invoice_line["vat_rate"])) else None
 
 
 def _line_dict(row: tuple) -> dict[str, Any]:
@@ -159,8 +164,13 @@ class PurchaseCreditNoteService:
                 "total_vat": str(current["total_vat"]),
                 "lines": [{"product_id": invoice_lines[line["invoice_line_id"]]["product_id"], "net": str(line["total_excl_tax"])}
                           for line in lines],
+                # 1.1 (additive): the VAT per tax code and rate; a line keeps its invoice line's code while it keeps its rate
+                "vat_breakdown": breakdown_payload(vat_breakdown(
+                    (_line_tax_code(line, invoice_lines[line["invoice_line_id"]]), line["vat_rate"], line["total_excl_tax"])
+                    for line in lines)),
                 "currency": "XOF",
             },
+            event_version="1.1",
         )
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="purchase_credit_note.validated",
                      entity_type="purchase_credit_note", entity_id=note_id,

@@ -19,6 +19,8 @@ class BilledLine:
     # excluding tax, after the order's discounts
     unit_price: Decimal
     vat_rate: Decimal = ZERO
+    # core.tax_codes.code the rate came from (None before tax codes)
+    tax_code: str | None = None
 
     @property
     def amount(self) -> Decimal:
@@ -45,6 +47,7 @@ def lines_to_invoice(
     ordered: Mapping[str, tuple[Decimal, Decimal]],
     already_invoiced: Mapping[str, Decimal],
     vat_rates: Mapping[str, Decimal] | None = None,
+    tax_codes: Mapping[str, str | None] | None = None,
 ) -> list[BilledLine]:
     """What a delivery bills. A product the order doesn't hold is not billed; past what the order holds
     nothing more is billed, so a second delivery of the same goods can't bill them twice."""
@@ -56,7 +59,7 @@ def lines_to_invoice(
         left = on_order - already_invoiced.get(product_id, ZERO)
         billed = min(quantity, left)
         if billed > 0:
-            lines.append(BilledLine(product_id, billed, price, (vat_rates or {}).get(product_id, ZERO)))
+            lines.append(BilledLine(product_id, billed, price, (vat_rates or {}).get(product_id, ZERO), (tax_codes or {}).get(product_id)))
     return lines
 
 
@@ -81,11 +84,17 @@ def document_totals(lines: Iterable[BilledLine]) -> tuple[Decimal, Decimal, Deci
 def order_vat_rates(lines: Iterable[tuple[str, Decimal, Decimal]]) -> dict[str, Decimal]:
     """Per product, the VAT rate of its order lines: (product, net value, rate). A product on lines at different
     rates (unusual) takes the rate of the larger value."""
-    best: dict[str, tuple[Decimal, Decimal]] = {}
-    for product_id, value, rate in lines:
+    return {product_id: rate for product_id, (rate, _) in order_taxes((p, v, r, None) for p, v, r in lines).items()}
+
+
+def order_taxes(lines: Iterable[tuple[str, Decimal, Decimal, str | None]]) -> dict[str, tuple[Decimal, str | None]]:
+    """Per product, the (VAT rate, tax code) of its order lines: (product, net value, rate, code). A product on lines
+    taxed differently (unusual) takes the tax of the larger value."""
+    best: dict[str, tuple[Decimal, Decimal, str | None]] = {}
+    for product_id, value, rate, code in lines:
         if product_id not in best or value > best[product_id][0]:
-            best[product_id] = (value, rate)
-    return {product_id: rate for product_id, (_, rate) in best.items()}
+            best[product_id] = (value, rate, code)
+    return {product_id: (rate, code) for product_id, (_, rate, code) in best.items()}
 
 
 @dataclass(frozen=True)
@@ -97,6 +106,8 @@ class CreditableInvoice:
     credited: Mapping[str, Decimal]
     # product -> VAT rate invoiced
     vat_rates: Mapping[str, Decimal] = field(default_factory=dict)
+    # product -> tax code invoiced
+    tax_codes: Mapping[str, str | None] = field(default_factory=dict)
 
 
 def lines_to_credit(returned: Mapping[str, Decimal], invoices: Iterable[CreditableInvoice]) -> dict[str, list[BilledLine]]:
@@ -114,7 +125,7 @@ def lines_to_credit(returned: Mapping[str, Decimal], invoices: Iterable[Creditab
             take = min(wanted, room)
             if take > 0:
                 result.setdefault(invoice.invoice_id, []).append(
-                    BilledLine(product_id, take, price, invoice.vat_rates.get(product_id, ZERO)))
+                    BilledLine(product_id, take, price, invoice.vat_rates.get(product_id, ZERO), invoice.tax_codes.get(product_id)))
                 left[product_id] = wanted - take
     return result
 

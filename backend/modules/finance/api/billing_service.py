@@ -15,6 +15,7 @@ from ulid import ULID
 from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from core.domain.tax import breakdown_payload, vat_breakdown
 from core.events.outbox import publish_event
 from modules.finance.domain.billing import (
     BilledLine,
@@ -24,7 +25,7 @@ from modules.finance.domain.billing import (
     lines_to_credit,
     lines_to_invoice,
     order_prices,
-    order_vat_rates,
+    order_taxes,
 )
 from modules.finance.domain.entities import status_for_payment
 
@@ -87,11 +88,12 @@ class DeliveryBillingService:
         list_prices = order_prices(
             (line.product_id, Decimal(str(line.quantity)), Decimal(str(line.unit_price))) for line in order.value.lines
         )
-        vat_rates = order_vat_rates(
-            (line.product_id, Decimal(str(line.quantity)) * order.value.net_unit_price(line), Decimal(str(line.vat_rate)))
+        taxes = order_taxes(
+            (line.product_id, Decimal(str(line.quantity)) * order.value.net_unit_price(line), Decimal(str(line.vat_rate)), line.tax_code)
             for line in order.value.lines
         )
-        lines = lines_to_invoice(delivered, ordered, self._invoiced_for_order(tenant_id, order_id), vat_rates)
+        lines = lines_to_invoice(delivered, ordered, self._invoiced_for_order(tenant_id, order_id),
+                                 {p: rate for p, (rate, _) in taxes.items()}, {p: code for p, (_, code) in taxes.items()})
         if not lines:
             return Ok(None)
         invoice_id = str(ULID())
@@ -173,6 +175,7 @@ class DeliveryBillingService:
         result = []
         for invoice_id, source_type in rows:
             vat_rates: dict[str, Decimal] = {}
+            tax_codes: dict[str, str | None] = {}
             if source_type == "order":
                 from_order = self._order_lines_of(tenant_id, order_id)
                 if isinstance(from_order, Err):
@@ -180,13 +183,14 @@ class DeliveryBillingService:
                 lines = from_order.value
             else:
                 lines = {}
-                for product_id, quantity, price, rate in self._connection.execute(
-                    "SELECT product_id, SUM(quantity), SUM(quantity * unit_price) / NULLIF(SUM(quantity), 0), MAX(vat_rate) "
+                for product_id, quantity, price, rate, code in self._connection.execute(
+                    "SELECT product_id, SUM(quantity), SUM(quantity * unit_price) / NULLIF(SUM(quantity), 0), MAX(vat_rate), MAX(tax_code) "
                     "FROM finance.invoice_lines WHERE invoice_id = %s GROUP BY product_id",
                     (invoice_id,),
                 ).fetchall():
                     lines[product_id] = (Decimal(str(quantity)), Decimal(str(price)))
                     vat_rates[product_id] = Decimal(str(rate))
+                    tax_codes[product_id] = code
             credited = {
                 product_id: Decimal(str(quantity))
                 for product_id, quantity in self._connection.execute(
@@ -195,7 +199,7 @@ class DeliveryBillingService:
                     (invoice_id,),
                 ).fetchall()
             }
-            result.append(CreditableInvoice(invoice_id, lines, credited, vat_rates))
+            result.append(CreditableInvoice(invoice_id, lines, credited, vat_rates, tax_codes))
         return Ok(result)
 
     def _order_lines_of(self, tenant_id: str, order_id: str | None) -> Result[dict[str, tuple[Decimal, Decimal]]]:
@@ -242,10 +246,11 @@ class DeliveryBillingService:
         publish_event(
             self._connection, event_type="finance.credit_note.issued", producer="finance", tenant_id=tenant_id,
             correlation_id=correlation_id,
-            event_version="1.1",
-            # 1.1 (additive): the VAT inside `amount`
+            event_version="1.2",
+            # 1.1 (additive): the VAT inside `amount`; 1.2: its split per tax code
             payload={"credit_note_id": credit_note_id, "number": number, "invoice_id": invoice_id, "partner_id": partner_id,
-                     "amount": str(total), "currency": currency, "vat": str(vat)},
+                     "amount": str(total), "currency": currency, "vat": str(vat),
+                     "vat_breakdown": breakdown_payload(vat_breakdown((l.tax_code, l.vat_rate, l.amount) for l in lines))},
         )
         record_audit(
             self._connection, tenant_id=tenant_id, actor_id=actor_id, action="credit_note.issued", entity_type="credit_note",
@@ -260,9 +265,9 @@ class DeliveryBillingService:
         for line in lines:
             if tenant_id is None:
                 self._connection.execute(
-                    f"INSERT INTO {table} (id, {parent_column}, product_id, quantity, unit_price, amount, vat_rate) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (str(ULID()), parent_id, line.product_id, line.quantity, line.unit_price, line.amount, line.vat_rate),
+                    f"INSERT INTO {table} (id, {parent_column}, product_id, quantity, unit_price, amount, vat_rate, tax_code) "
+                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (str(ULID()), parent_id, line.product_id, line.quantity, line.unit_price, line.amount, line.vat_rate, line.tax_code),
                 )
             else:
                 # The list price and the combined discount the net price came from, for the invoice to show.
@@ -270,9 +275,9 @@ class DeliveryBillingService:
                 discount = (Decimal("100") * (1 - line.unit_price / list_price)).quantize(Decimal("0.0001")) if list_price else Decimal("0")
                 self._connection.execute(
                     f"INSERT INTO {table} (id, tenant_id, {parent_column}, product_id, quantity, unit_price, amount, vat_rate, list_price, "
-                    "discount_rate) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                    "discount_rate, tax_code) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                     (str(ULID()), tenant_id, parent_id, line.product_id, line.quantity, line.unit_price, line.amount, line.vat_rate,
-                     list_price, max(discount, Decimal("0"))),
+                     list_price, max(discount, Decimal("0")), line.tax_code),
                 )
 
     def _invoice(self, tenant_id: str, invoice_id: str) -> Ok:
@@ -291,14 +296,15 @@ class DeliveryBillingService:
             (credit_note_id, tenant_id),
         ).fetchone()
         lines = self._connection.execute(
-            "SELECT product_id, quantity, unit_price, amount, vat_rate FROM finance.credit_note_lines WHERE credit_note_id = %s ORDER BY id",
+            "SELECT product_id, quantity, unit_price, amount, vat_rate, tax_code FROM finance.credit_note_lines WHERE credit_note_id = %s ORDER BY id",
             (credit_note_id,),
         ).fetchall()
         return {
             "id": row[0], "number": row[1], "invoice_id": row[2], "invoice_number": row[3], "partner_id": row[4],
             "return_id": row[5], "return_number": row[6], "credit_date": row[7], "amount": row[8], "currency": row[9],
             "amount_excl_tax": row[10], "vat_amount": row[11],
-            "lines": [{"product_id": l[0], "quantity": l[1], "unit_price": l[2], "amount": l[3], "vat_rate": l[4]} for l in lines],
+            "lines": [{"product_id": l[0], "quantity": l[1], "unit_price": l[2], "amount": l[3], "vat_rate": l[4], "tax_code": l[5]}
+                      for l in lines],
         }
 
     def list_credit_notes(self, *, tenant_id: str, invoice_id: str | None = None) -> list[dict[str, Any]]:

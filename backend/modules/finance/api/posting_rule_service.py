@@ -62,6 +62,13 @@ class PostingRuleService:
     def _validate(self, tenant_id: str, rule: PostingRule) -> Result[PostingRule]:
         ledger = LedgerPostingService(self._connection)
         codes = [code for code in (rule.debit_account_code, rule.credit_account_code) if code]
+        if rule.source in ("invoice", "purchase_invoice") and rule.source_kind == "vat" and rule.code.strip() != "*":
+            # A VAT rule's code is one of the tenant's tax codes (core.tax_codes).
+            from core.tax_codes import TaxCodeService
+
+            if TaxCodeService(self._connection).find_code(tenant_id=tenant_id, code=rule.code) is None:
+                return Err("TAX_CODE_NOT_FOUND", f"tax code {rule.code.strip()} does not exist",
+                           f"le code de taxe {rule.code.strip()} n'existe pas")
         return validate_rule(rule, ledger.load_accounts(tenant_id=tenant_id, codes=codes), ledger.journal_codes(tenant_id=tenant_id))
 
     def create_rule(
@@ -81,7 +88,8 @@ class PostingRuleService:
             PostingRule(
                 source=source.strip(),
                 source_kind=source_kind.strip(),
-                code=code,
+                # tax codes are upper case (core.tax_codes)
+                code=code.strip().upper() if source_kind == "vat" else code,
                 debit_account_code=_merge(None, debit_account_code),
                 credit_account_code=_merge(None, credit_account_code),
                 journal_code=_merge(None, journal_code),

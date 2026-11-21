@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from core.db import get_connection
 from core.domain.money import json_number
 from core.domain.result import Err, err_detail
+from core.tax_codes import resolve_lines
 from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.sales.api.pricing_service import PricingService
 from modules.sales.api.quote_router import pricing_router, quote_router
@@ -27,6 +28,8 @@ class OrderLineRequest(BaseModel):
     discount_rate: Decimal = Decimal("0")
     # left out: the tenant's default VAT rate (sales settings)
     vat_rate: Decimal | None = None
+    # a tax code (core.tax_codes) gives the rate; left out with vat_rate: the customer's, then the product's code
+    tax_code: str | None = None
     price_list_id: str | None = None
 
 
@@ -69,18 +72,24 @@ def _serialize_order(order) -> dict:
         "lines": [
             {"product_id": line.product_id, "quantity": json_number(line.quantity), "unit_price": json_number(line.unit_price),
              "discount_rate": json_number(line.discount_rate), "vat_rate": json_number(line.vat_rate),
-             "price_list_id": line.price_list_id}
+             "tax_code": line.tax_code, "price_list_id": line.price_list_id}
             for line in order.lines
         ],
     }
 
 
-def _lines(connection, tenant_id: str, requested: list[OrderLineRequest]) -> list[OrderLine]:
-    default_vat = PricingService(connection).get_settings(tenant_id=tenant_id)["default_vat_rate"]
+def _lines(connection, tenant_id: str, partner_id: str | None, requested: list[OrderLineRequest]) -> list[OrderLine]:
+    """Each line's tax code and rate (core.tax_codes): what the user gave, else the customer's or product's code,
+    else the default VAT rate of the sales settings."""
+    default_vat = Decimal(str(PricingService(connection).get_settings(tenant_id=tenant_id)["default_vat_rate"]))
+    taxes = resolve_lines(connection, tenant_id=tenant_id, side="sales", partner_id=partner_id, default_rate=default_vat,
+                          lines=[line.model_dump() for line in requested])
+    if isinstance(taxes, Err):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(taxes))
     return [
         OrderLine(product_id=line.product_id, quantity=line.quantity, unit_price=line.unit_price, discount_rate=line.discount_rate,
-                  vat_rate=line.vat_rate if line.vat_rate is not None else default_vat, price_list_id=line.price_list_id)
-        for line in requested
+                  vat_rate=tax.rate, tax_code=tax.tax_code, price_list_id=line.price_list_id)
+        for line, tax in zip(requested, taxes.value)
     ]
 
 
@@ -110,7 +119,7 @@ def create_order(
     body: CreateOrderRequest, tenant: TenantContext = Depends(require_permission("sales.manage_orders"))
 ) -> dict:
     with get_connection() as connection:
-        lines = _lines(connection, tenant.tenant_id, body.lines)
+        lines = _lines(connection, tenant.tenant_id, body.partner_id, body.lines)
         _check_pricing(connection, tenant, lines, body.discount_rate)
         service = SalesOrderService(connection)
         order = service.create_order(
@@ -133,11 +142,12 @@ def update_order(
     tenant: TenantContext = Depends(require_permission("sales.admin_orders")),
 ) -> dict:
     with get_connection() as connection:
-        lines = _lines(connection, tenant.tenant_id, body.lines) if body.lines is not None else None
         service = SalesOrderService(connection)
         current = service.get_order(tenant_id=tenant.tenant_id, order_id=order_id)
         if isinstance(current, Err):
             raise HTTPException(status.HTTP_404_NOT_FOUND, err_detail(current))
+        lines = _lines(connection, tenant.tenant_id, body.partner_id or current.value.partner_id, body.lines) \
+            if body.lines is not None else None
         _check_pricing(connection, tenant, lines if lines is not None else list(current.value.lines),
                        body.discount_rate if body.discount_rate is not None else current.value.discount_rate)
         result = service.admin_update_order(

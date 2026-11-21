@@ -146,6 +146,8 @@ export function QuotesPage() {
         unit_price: Number(line.unit_price),
         discount_rate: Number(line.discount_rate),
         vat_rate: Number(line.vat_rate),
+        tax_code: line.tax_code ?? null,
+        tax_manual: true,
         price_list_id: line.price_list_id,
       })),
     });
@@ -168,6 +170,7 @@ export function QuotesPage() {
           unit_price: line.unit_price,
           discount_rate: line.discount_rate,
           vat_rate: line.vat_rate,
+          tax_code: line.tax_code ?? null,
           price_list_id: line.price_list_id ?? null,
         })),
       };

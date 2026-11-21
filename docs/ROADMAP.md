@@ -68,9 +68,9 @@ tested, built and deployed to the VPS.
 
 ## Phase 1 — Close the money loop
 
-- [~] **WP-1.1 Tax engine.** (VAT rate per line exists in sales, finance, procurement; check
+- [x] **WP-1.1 Tax engine.** (VAT rate per line exists in sales, finance, procurement; check
   tax accounts, exemptions and a tax report.) Tax codes and rates (per tenant), applied to sales and
-  purchase lines; tax accounts in posting rules.
+  purchase lines; tax accounts in posting rules. *Done 2026-11-21* (`core.tax_codes`, VAT register and return).
 - [~] **WP-1.2 Real customer invoices.** (Lines, VAT, counters, instalments, credit notes
   exist.) Invoice lines, tax, numbering sequence, due date
   and payment terms, partial payments, credit notes. Migrate existing single-amount rows.
@@ -146,6 +146,30 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-21 — WP-1.1 done (spec `specs/2026-11-21-tax-engine-design.md`, plan
+  `plans/2026-11-21-tax-engine.md`). Found: a VAT rate per line everywhere, one VAT account per side
+  (`invoice / vat / *` → 443, `purchase_invoice / vat / *` → 445), no codes, no exemptions, no report.
+  Added: `core.tax_codes` per tenant (code, fr/en name, rate, scope sales/purchases/both, `exempt` +
+  legal mention; lazily seeded with Mali's `TVA18` and `EXO`), a sales and a purchase code on products and
+  partners (a partner's code is the exemption that beats the product's), `core/domain/tax.py` (resolution,
+  breakdown, whole-franc split) and `core/tax_codes.py` (service + `/core/tax-codes`, permission
+  `core.manage_tax_codes`, granted to Administrateur by `core/0031`). Lines keep a `tax_code` snapshot
+  beside `vat_rate` (sales `0006`, finance `0013`, procurement `0011`); a rate sent without a code keeps
+  its rate and gets the matching non-exempt code, so old callers total exactly as before. Events
+  `finance.invoice.issued` 1.2, `finance.credit_note.issued` 1.2, `procurement.purchase_invoice.validated`
+  1.2, `procurement.purchase_credit_note.validated` 1.1 add `vat_breakdown`. Posting rules
+  `invoice|purchase_invoice / vat / <tax code>` are now allowed (code checked against the catalog), `*`
+  stays the fallback; finance splits the VAT across codes in whole F CFA. New `finance.tax_entries` (VAT
+  register, written with each VAT-bearing entry, negated on credit notes and purchase cancellations) and
+  `GET /finance/reports/vat` (per direction and code, net due, ledger check of the VAT accounts).
+  Frontend: Accounting > Tax codes and > VAT return; quote/order and purchase invoice lines pick a code
+  (following partner → product → default until touched). Postgres 16 local (migrations + `seed_dev`):
+  backend 3291 passed / 11 skipped (known); frontend `tsc` + 194 vitest passed; API and screens checked
+  in a browser. Not done: the register is not backfilled for documents posted before this release (the
+  ledger-check column shows them as a difference); per-code rules must be created by hand under Posting
+  rules (none seeded). Branch `claude/sleepy-einstein-qr5ivm`; not yet on `main` (needs the user's
+  go-ahead, a push to `main` deploys). Next WP: WP-1.2.
 
 - 2026-11-20 — WP-0.6 done (spec `specs/2026-11-20-error-tracking-alerts-design.md`, plan
   `plans/2026-11-20-error-tracking-alerts.md`, runbook `docs/operations-alerts.md`). New

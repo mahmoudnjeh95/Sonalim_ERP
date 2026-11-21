@@ -79,6 +79,7 @@ CORE_PERMISSIONS = [
     "core.manage_products",
     "core.view_audit_log",
     "core.manage_report_options",
+    "core.manage_tax_codes",
 ]
 
 

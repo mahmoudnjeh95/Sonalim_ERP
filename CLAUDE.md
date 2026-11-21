@@ -23,7 +23,7 @@ Env: a repo-root `.env` is auto-loaded by `app/main.py` (see `.env.example`). Mi
 
 Modular monolith: FastAPI + raw SQL via `psycopg` (no ORM), React SPA. Full rules in `.claude/skills/erp-platform-architecture/SKILL.md` — load it before touching module boundaries, events, or migrations.
 
-- `backend/core/` — shared kernel (auth, tenancy, users/roles/permissions, products, partners, UoM, currencies/exchange rates, audit, outbox events, migration runner).
+- `backend/core/` — shared kernel (auth, tenancy, users/roles/permissions, products, partners, UoM, currencies/exchange rates, payment terms, tax codes, audit, outbox events, migration runner). VAT: every priced line resolves its `tax_code`/`vat_rate` through `core.tax_codes.resolve_lines`; finance posts each code's VAT on its `vat / <code>` rule and writes the VAT register (`finance.tax_entries`, report `/finance/reports/vat`).
 - `backend/modules/<module>/` — bounded contexts (warehouse, production, crm, sales, finance, hr, payroll, procurement, qc, maintenance, treasury, scan), each with `domain/` (pure logic), `api/` (services + `router.py`), `events/` (consumers), `migrations/` (numbered SQL), and `module.json` (manifest: deps, provided services, events, **permissions**).
 - Modules never read each other's tables; they call the other module's `api/` services or react to events. Only shared-kernel tables are referenced across modules.
 - Events: transactional outbox row written in the same transaction as the change; `backend/worker/main.py` dispatches the outbox to RabbitMQ and runs consumers (must be idempotent on `event_id`). Register every new event in `backend/events/CATALOG.md`.

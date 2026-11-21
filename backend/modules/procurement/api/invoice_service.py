@@ -11,7 +11,9 @@ from ulid import ULID
 from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from core.domain.tax import breakdown_payload, vat_breakdown
 from core.events.outbox import publish_event
+from core.tax_codes import resolve_lines
 from modules.procurement.domain.purchase_invoice import (
     DEFAULT_VAT_RATE,
     PAYABLE_STATUSES,
@@ -39,7 +41,7 @@ COLUMNS = (
 )
 LINE_COLUMNS = (
     "id, line_no, product_id, description, quantity, uom_id, unit_price, discount_rate, vat_rate, "
-    "purchase_order_line_id, receipt_id"
+    "purchase_order_line_id, receipt_id, tax_code"
 )
 HEADER_FIELDS = {"partner_id", "supplier_invoice_number", "purchase_order_id", "invoice_date", "due_date", "currency", "note"}
 TWO_PLACES = Decimal("0.01")
@@ -81,7 +83,7 @@ def _to_dict(row: tuple) -> dict[str, Any]:
 
 def _line_dict(row: tuple) -> dict[str, Any]:
     keys = ["id", "line_no", "product_id", "description", "quantity", "uom_id", "unit_price", "discount_rate", "vat_rate",
-            "purchase_order_line_id", "receipt_id"]
+            "purchase_order_line_id", "receipt_id", "tax_code"]
     line = dict(zip(keys, row, strict=True))
     amounts = Line(line["quantity"], line["unit_price"], line["discount_rate"], line["vat_rate"])
     line["total_excl_tax"] = amounts.net.quantize(TWO_PLACES)
@@ -349,7 +351,6 @@ class PurchaseInvoiceService:
             return Err("RECEIPTS_OTHER_SUPPLIERS", "the goods receipts of one invoice come from one supplier",
                        "les bons de réception d'une facture viennent d'un seul fournisseur")
         orders = {r["purchase_order_id"] for r in chosen}
-        default_vat = self.default_vat_rate(tenant_id=tenant_id)
         lines = []
         for receipt in chosen:
             for line in receipt["lines"]:
@@ -357,7 +358,7 @@ class PurchaseInvoiceService:
                 lines.append({
                     "product_id": line["product_id"], "description": line["product_name"], "quantity": line["to_invoice"],
                     "uom_id": line["uom_id"], "unit_price": round(price, 4) if price is not None else 0, "discount_rate": 0,
-                    "vat_rate": default_vat,
+                    # the supplier's or the product's tax code, else the default VAT rate
                     "purchase_order_line_id": line["purchase_order_line_id"], "receipt_id": receipt["receipt_id"],
                 })
         return self.create_draft(
@@ -461,7 +462,7 @@ class PurchaseInvoiceService:
         )
         publish_event(
             self._connection, event_type="procurement.purchase_invoice.validated", producer="procurement",
-            tenant_id=tenant_id, correlation_id=correlation_id, event_version="1.1",
+            tenant_id=tenant_id, correlation_id=correlation_id, event_version="1.2",
             payload={
                 "invoice_id": invoice_id,
                 "number": number,
@@ -471,6 +472,9 @@ class PurchaseInvoiceService:
                 "total_vat": str(current["total_vat"]),
                 # Excluding tax per product, so the ledger can use each product's purchase account.
                 "lines": [{"product_id": line["product_id"], "net": str(line["total_excl_tax"])} for line in lines],
+                # 1.2 (additive): the VAT per tax code and rate
+                "vat_breakdown": breakdown_payload(vat_breakdown(
+                    (line["tax_code"], line["vat_rate"], line["total_excl_tax"]) for line in lines)),
                 "currency": current["currency"],
                 "due_date": current["due_date"].isoformat() if current["due_date"] else None,
             },
@@ -575,13 +579,17 @@ class PurchaseInvoiceService:
         return _to_dict(row)  # type: ignore[return-value]
 
     def _prepare_lines(self, tenant_id: str, partner_id: str, lines: list[dict]) -> Result[list[dict[str, Any]]]:
-        """Checks and fills each line: a product's name stands in for a missing description, a missing VAT
-        rate is the tenant's default, an order line must belong to this supplier's orders."""
+        """Checks and fills each line: a product's name stands in for a missing description, the tax code and rate
+        come from core.tax_codes (the line's code, else the supplier's or the product's, else the tenant's default
+        rate), an order line must belong to this supplier's orders."""
         if not lines:
             return Err("LINES_REQUIRED", "an invoice needs at least one line", "une facture doit avoir au moins une ligne")
-        default_vat = None
+        taxes = resolve_lines(self._connection, tenant_id=tenant_id, side="purchases", partner_id=partner_id,
+                              default_rate=Decimal(str(self.default_vat_rate(tenant_id=tenant_id))), lines=lines)
+        if isinstance(taxes, Err):
+            return taxes
         prepared = []
-        for index, line in enumerate(lines, start=1):
+        for index, (line, tax) in enumerate(zip(lines, taxes.value), start=1):
             product_id = line.get("product_id") or None
             description = (line.get("description") or "").strip()
             if product_id:
@@ -591,10 +599,6 @@ class PurchaseInvoiceService:
                 if product is None:
                     return Err("NOT_FOUND", f"product {product_id} not found", f"produit {product_id} introuvable")
                 description = description or product[0]
-            vat_rate = line.get("vat_rate")
-            if vat_rate is None:
-                default_vat = default_vat if default_vat is not None else self.default_vat_rate(tenant_id=tenant_id)
-                vat_rate = default_vat
             values = {
                 "line_no": index,
                 "product_id": product_id,
@@ -603,7 +607,8 @@ class PurchaseInvoiceService:
                 "uom_id": line.get("uom_id") or None,
                 "unit_price": Decimal(str(line["unit_price"])),
                 "discount_rate": Decimal(str(line.get("discount_rate") or 0)),
-                "vat_rate": Decimal(str(vat_rate)),
+                "vat_rate": tax.rate,
+                "tax_code": tax.tax_code,
                 "purchase_order_line_id": line.get("purchase_order_line_id") or None,
                 "receipt_id": line.get("receipt_id") or None,
             }
@@ -644,11 +649,11 @@ class PurchaseInvoiceService:
         for line in lines:
             self._connection.execute(
                 "INSERT INTO procurement.purchase_invoice_lines (id, tenant_id, invoice_id, line_no, product_id, description, "
-                "quantity, uom_id, unit_price, discount_rate, vat_rate, purchase_order_line_id, receipt_id) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                "quantity, uom_id, unit_price, discount_rate, vat_rate, purchase_order_line_id, receipt_id, tax_code) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
                 (str(ULID()), tenant_id, invoice_id, line["line_no"], line["product_id"], line["description"], line["quantity"],
                  line["uom_id"], line["unit_price"], line["discount_rate"], line["vat_rate"], line["purchase_order_line_id"],
-                 line["receipt_id"]),
+                 line["receipt_id"], line.get("tax_code")),
             )
 
     def _check_receipts(self, tenant_id: str, partner_id: str, receipt_ids: list[str]) -> Result[list[str]]:

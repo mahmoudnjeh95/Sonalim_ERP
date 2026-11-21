@@ -187,16 +187,53 @@ def to_xof(raw: object, *, currency: str) -> Result[Decimal]:
     return Ok(amount)
 
 
+# (source, which side of the VAT rule holds the tax account, the side's name for messages)
+VAT_RULE_SIDES = {"invoice": ("credit", "collected VAT", "TVA facturée"), "purchase_invoice": ("debit", "deductible VAT", "TVA déductible")}
+
+
+def vat_account(rules: Iterable[PostingRule], *, source: str, tax_code: str | None) -> Result[str]:
+    """The VAT account of a tax code: the `<source> / vat / <code>` rule, else the `*` rule."""
+    side, what, what_fr = VAT_RULE_SIDES[source]
+    resolved = resolve_rule(rules, source=source, source_kind="vat", code=tax_code or WILDCARD)
+    if isinstance(resolved, Err):
+        return resolved
+    account = resolved.value.credit_account_code if side == "credit" else resolved.value.debit_account_code
+    if not account:
+        return Err(
+            "POSTING_RULE_MISSING" if source == "purchase_invoice" else "INVALID_POSTING_RULE",
+            f"the {source} / vat / {resolved.value.code} rule needs the {what} account on the {side}",
+            f"la règle {source} / vat / {resolved.value.code} doit indiquer le compte de {what_fr} au {'crédit' if side == 'credit' else 'débit'}",
+        )
+    return Ok(str(account))
+
+
+def vat_accounts(rules: Iterable[PostingRule], *, source: str, vat: Decimal,
+                 vat_lines: Iterable[tuple[str | None, Decimal]] = ()) -> Result[list[tuple[str, Decimal]]]:
+    """(account, VAT) per tax account: each code's share on its own rule's account; without a split, the whole
+    VAT on the `*` rule's account."""
+    rules = list(rules)
+    shares = [(code, value) for code, value in vat_lines if value] or ([(None, vat)] if vat else [])
+    grouped: dict[str, Decimal] = {}
+    for code, value in shares:
+        account = vat_account(rules, source=source, tax_code=code)
+        if isinstance(account, Err):
+            return account
+        grouped[account.value] = grouped.get(account.value, ZERO) + value
+    return Ok(list(grouped.items()))
+
+
 def invoice_entry(
     kind: str, *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule], mirror: bool = False,
-    vat: Decimal = ZERO,
+    vat: Decimal = ZERO, vat_lines: Iterable[tuple[str | None, Decimal]] = (),
 ) -> Result[tuple[str, list[EntryLine]]]:
     """The entry of an issued invoice (the customer side is the debit) or of its payment (the
     customer side is the credit). The partner id rides on the customer line only. `mirror` swaps the
     sides of the issued rule: a credit note takes back from the customer what the invoice charged.
 
     `vat` (issued invoices and credit notes only): the collected VAT inside `amount`, credited to the
-    invoice / vat / * rule's account while the sales account gets the rest."""
+    invoice / vat / * rule's account while the sales account gets the rest. `vat_lines` split it per tax
+    code (summing to `vat`): each share goes to its `invoice / vat / <code>` rule's account, else the `*` one."""
+    rules = list(rules)
     resolved = resolve_rule(rules, source="invoice", source_kind=kind, code=WILDCARD)
     if isinstance(resolved, Err):
         return resolved
@@ -210,19 +247,13 @@ def invoice_entry(
         EntryLine(str(rule.credit_account_code), credit=amount, label=label, partner_id=None if customer_on_debit else partner_id),
     ]
     if vat and kind == "issued":
-        vat_rule = resolve_rule(rules, source="invoice", source_kind="vat", code=WILDCARD)
-        if isinstance(vat_rule, Err):
-            return vat_rule
-        if not vat_rule.value.credit_account_code:
-            return Err(
-                "INVALID_POSTING_RULE",
-                "the invoice / vat / * rule needs the collected VAT account on the credit",
-                "la règle invoice / vat / * doit indiquer le compte de TVA facturée au crédit",
-            )
+        accounts = vat_accounts(rules, source="invoice", vat=vat, vat_lines=vat_lines)
+        if isinstance(accounts, Err):
+            return accounts
         lines = [
             lines[0],
             EntryLine(str(rule.credit_account_code), credit=amount - vat, label=label),
-            EntryLine(str(vat_rule.value.credit_account_code), credit=vat, label=label),
+            *(EntryLine(account, credit=value, label=label) for account, value in accounts.value),
         ]
     if mirror:
         lines = [replace(line, debit=line.credit, credit=line.debit) for line in lines]
@@ -246,13 +277,15 @@ def _split_whole(total: Decimal, parts: list[tuple[str, Decimal]]) -> list[tuple
 def purchase_invoice_entry(
     *, amount: Decimal, partner_id: str, label: str, rules: Iterable[PostingRule], vat: Decimal = ZERO,
     lines: Iterable[tuple[str | None, Decimal]] = (), mirror: bool = False,
+    vat_lines: Iterable[tuple[str | None, Decimal]] = (),
 ) -> Result[tuple[str, list[EntryLine]]]:
     """A validated purchase invoice: the purchases excluding tax on the debit, the deductible VAT on the
     debit, the supplier on the credit for the total including tax (`amount`), with the partner id.
 
     `lines` are (purchase account or None, value excluding tax): a line whose product names its own purchase
     account posts there, the others to the rule's account. Without lines everything but the VAT goes to the
-    rule's account. `mirror` swaps the sides, for a credit note."""
+    rule's account. `mirror` swaps the sides, for a credit note. `vat_lines` split the VAT per tax code, each
+    share on its `purchase_invoice / vat / <code>` rule's account (else the `*` one)."""
     rules = list(rules)
     resolved = resolve_rule(rules, source="purchase_invoice", source_kind="validated", code=WILDCARD)
     if isinstance(resolved, Err):
@@ -261,18 +294,9 @@ def purchase_invoice_entry(
     if isinstance(complete, Err):
         return complete
     rule = complete.value
-    vat_account: str | None = None
-    if vat:
-        vat_rule = resolve_rule(rules, source="purchase_invoice", source_kind="vat", code=WILDCARD)
-        if isinstance(vat_rule, Err):
-            return vat_rule
-        if not vat_rule.value.debit_account_code:
-            return Err(
-                "POSTING_RULE_MISSING",
-                "the purchase_invoice / vat / * rule needs the deductible VAT account on the debit",
-                "la règle purchase_invoice / vat / * doit indiquer le compte de TVA déductible au débit",
-            )
-        vat_account = str(vat_rule.value.debit_account_code)
+    accounts = vat_accounts(rules, source="purchase_invoice", vat=vat, vat_lines=vat_lines)
+    if isinstance(accounts, Err):
+        return accounts
     excl = amount - vat
     parts = [(account or str(rule.debit_account_code), value) for account, value in lines] or [(str(rule.debit_account_code), excl)]
     purchases = _split_whole(excl, parts)
@@ -283,8 +307,7 @@ def purchase_invoice_entry(
         return EntryLine(account, credit=value, label=label, partner_id=partner)
 
     entry = [side(account, value, debit=True) for account, value in purchases]
-    if vat_account:
-        entry.append(side(vat_account, vat, debit=True))
+    entry.extend(side(account, value, debit=True) for account, value in accounts.value)
     entry.append(side(str(rule.credit_account_code), amount, debit=False, partner=partner_id))
     return Ok((str(rule.journal_code), entry))
 
@@ -325,11 +348,12 @@ def validate_rule(rule: PostingRule, accounts: Mapping[str, Account], journal_co
                 f"a {rule.source_kind} rule's code is a payment method (or in/out for instruments), or '*'",
                 f"le code d'une règle {rule.source_kind} est un mode de paiement (ou in/out pour les effets), ou « * »",
             )
-    if rule.source in ("invoice", "purchase_invoice") and code != WILDCARD:
+    # A VAT rule may name a tax code (core.tax_codes), for that code's own account; the other invoice rules are '*'.
+    if rule.source in ("invoice", "purchase_invoice") and code != WILDCARD and rule.source_kind != "vat":
         return Err(
             "INVALID_POSTING_RULE",
-            "invoice rules use the code '*'",
-            "les règles de facture utilisent le code « * »",
+            "invoice rules use the code '*' (VAT rules may name a tax code)",
+            "les règles de facture utilisent le code « * » (les règles de TVA peuvent indiquer un code de taxe)",
         )
     # A collection rule may name only its journal: both sides come from elsewhere (the slip's account and
     # the payment rule's holding account).
