@@ -165,7 +165,12 @@ Newest first. One line per session: date, WP, what was finished, what is left, b
   Postgres 16 local (migrations + `seed_dev`): backend 3265 passed / 11 skipped (known). No
   frontend change. **Server to-do:** set `SENTRY_DSN` and/or `ALERT_WEBHOOK_URL` in the server
   `.env`; without them, errors and alerts are only in `docker compose logs`. Next WP: WP-1.1
-  (WP-0.2 still waits on its server drill). Branch `claude/exciting-hypatia-vlnkca`.
+  (WP-0.2 still waits on its server drill). Branch `claude/exciting-hypatia-vlnkca`, then
+  `main` (d6abcb6, which also makes `tools/git-hooks/pre-commit` executable: git had been
+  skipping it). Run 44850869670 failed like the three before it (every job in 2–3 s, no logs):
+  Actions is still not starting jobs, so WP-0.3 to WP-0.6 are on `main` but not built or
+  deployed. Left: fix Actions (billing/spending limit under the account's Settings > Billing,
+  as on 2026-11-17), then re-run the latest `Build and Deploy` run.
 
 - 2026-11-20 — WP-0.5 done (spec `specs/2026-11-20-module-manifests-design.md`, plan
   `plans/2026-11-20-module-manifests.md`). The fields now have a defined meaning: `depends` =
