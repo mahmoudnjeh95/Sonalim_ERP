@@ -11,6 +11,7 @@ from ulid import ULID
 from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from core.tax_codes import TaxCodeService
 from core.events.outbox import publish_event
 from modules.procurement.domain.purchase_invoice import (
     DEFAULT_VAT_RATE,
@@ -110,7 +111,11 @@ class PurchaseInvoiceService:
         row = self._connection.execute(
             "SELECT default_vat_rate FROM procurement.invoice_settings WHERE tenant_id = %s", (tenant_id,)
         ).fetchone()
-        return row[0] if row else DEFAULT_VAT_RATE
+        stored = row[0] if row else DEFAULT_VAT_RATE
+        # The default is the tenant's default purchase tax code (core.tax_codes); the stored value is the
+        # fallback and what the catalogue adopts the first time it is filled.
+        code_rate = TaxCodeService(self._connection).default_rate(tenant_id=tenant_id, side="purchase", legacy_rate=stored)
+        return code_rate if code_rate is not None else stored
 
     def set_default_vat_rate(self, *, tenant_id: str, actor_id: str, rate: Decimal) -> Result[dict[str, Any]]:
         if not ZERO <= rate <= Decimal("100"):
@@ -123,6 +128,9 @@ class PurchaseInvoiceService:
             """,
             (tenant_id, rate),
         )
+        made_default = TaxCodeService(self._connection).set_default_rate(tenant_id=tenant_id, actor_id=actor_id, side="purchase", rate=rate)
+        if isinstance(made_default, Err):
+            return made_default
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="purchase_invoice.settings_changed",
                      entity_type="purchase_invoice_settings", entity_id=tenant_id,
                      payload={"default_vat_rate": {"from": str(before), "to": str(rate)}})

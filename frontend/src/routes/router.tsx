@@ -37,6 +37,7 @@ import { PostingRulesPage } from "../features/finance/PostingRulesPage";
 import { TrialBalancePage } from "../features/finance/TrialBalancePage";
 import { GeneralLedgerPage } from "../features/finance/GeneralLedgerPage";
 import { PeriodsPage } from "../features/finance/PeriodsPage";
+import { TaxPage } from "../features/finance/TaxPage";
 import { ReceivablesPage } from "../features/finance/ReceivablesPage";
 import { ProfilePage } from "../features/profile/ProfilePage";
 import { SettingsPage } from "../features/settings/SettingsPage";
@@ -140,6 +141,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/finance/trial-balance", element: <TrialBalancePage /> },
   { path: "/finance/ledger", element: <GeneralLedgerPage /> },
   { path: "/finance/periods", element: <PeriodsPage /> },
+  { path: "/finance/tax", element: <TaxPage /> },
   { path: "/admin/users", element: <UsersPage /> },
   { path: "/admin/roles", element: <RolesPage /> },
   { path: "/admin/activity-log", element: <ActivityLogPage /> },

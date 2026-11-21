@@ -51,6 +51,7 @@
     "finance.manage_receivables",
     "finance.admin_receivables",
     "finance.manage_dunning",
+    "finance.manage_tax_codes",
     "finance.admin_credit_override"
   ]
 }

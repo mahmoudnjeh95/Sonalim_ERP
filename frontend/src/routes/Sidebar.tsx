@@ -49,6 +49,7 @@ import {
   Users,
   Wallet,
   Zap,
+  Percent,
   Scale,
   BookText,
   CalendarRange,
@@ -230,6 +231,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/finance/trial-balance", labelKey: "nav.trialBalance", icon: Scale, permission: "finance.view_ledger" },
       { to: "/finance/ledger", labelKey: "nav.generalLedger", icon: BookText, permission: "finance.view_ledger" },
       { to: "/finance/periods", labelKey: "nav.accountingPeriods", icon: CalendarRange, permission: "finance.view_ledger" },
+      { to: "/finance/tax", labelKey: "nav.taxes", icon: Percent, permission: "finance.view_ledger" },
     ],
   },
   {

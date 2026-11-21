@@ -19,6 +19,7 @@ from ulid import ULID
 from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from core.tax_codes import TaxCodeService
 from modules.sales.domain.pricing import ListWindow, PriceBreak, check_price_list, check_rate, resolve
 
 MAX_IMPORT_BYTES = 5 * 1024 * 1024
@@ -37,9 +38,15 @@ class PricingService:
         row = self._connection.execute(
             "SELECT default_vat_rate, max_discount_rate, quote_validity_days FROM sales.settings WHERE tenant_id = %s", (tenant_id,)
         ).fetchone()
-        if row is None:
-            return dict(DEFAULT_SETTINGS)
-        return {"default_vat_rate": row[0], "max_discount_rate": row[1], "quote_validity_days": row[2]}
+        settings = dict(DEFAULT_SETTINGS) if row is None else {
+            "default_vat_rate": row[0], "max_discount_rate": row[1], "quote_validity_days": row[2]}
+        # The default VAT rate is the tenant's default sales tax code (core.tax_codes); the stored value is the
+        # fallback and what the catalogue adopts the first time it is filled.
+        code_rate = TaxCodeService(self._connection).default_rate(
+            tenant_id=tenant_id, side="sales", legacy_rate=Decimal(str(settings["default_vat_rate"])))
+        if code_rate is not None:
+            settings["default_vat_rate"] = code_rate
+        return settings
 
     def update_settings(self, *, tenant_id: str, actor_id: str, default_vat_rate: Decimal | None = None,
                         max_discount_rate: Decimal | None = None, quote_validity_days: int | None = None) -> Result[dict[str, Any]]:
@@ -65,6 +72,11 @@ class PricingService:
             """,
             (tenant_id, merged["default_vat_rate"], merged["max_discount_rate"], merged["quote_validity_days"], actor_id),
         )
+        if default_vat_rate is not None:
+            made_default = TaxCodeService(self._connection).set_default_rate(
+                tenant_id=tenant_id, actor_id=actor_id, side="sales", rate=Decimal(str(merged["default_vat_rate"])))
+            if isinstance(made_default, Err):
+                return made_default
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="sales_settings.updated",
                      entity_type="sales_settings", entity_id=tenant_id, payload={k: str(v) for k, v in merged.items()})
         return Ok(self.get_settings(tenant_id=tenant_id))

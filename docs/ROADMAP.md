@@ -68,7 +68,7 @@ tested, built and deployed to the VPS.
 
 ## Phase 1 — Close the money loop
 
-- [~] **WP-1.1 Tax engine.** (VAT rate per line exists in sales, finance, procurement; check
+- [x] **WP-1.1 Tax engine.** *Done 2026-11-21.* (VAT rate per line exists in sales, finance, procurement; check
   tax accounts, exemptions and a tax report.) Tax codes and rates (per tenant), applied to sales and
   purchase lines; tax accounts in posting rules.
 - [~] **WP-1.2 Real customer invoices.** (Lines, VAT, counters, instalments, credit notes
@@ -146,6 +146,26 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-21 — WP-1.1 done (spec `specs/2026-11-21-tax-engine-design.md`, plan
+  `plans/2026-11-21-tax-engine.md`). Read first: a VAT rate per line, VAT posting to 443/445 and
+  credit-note mirrors already existed; missing were named codes, one default and a tax report. Added
+  `core.tax_codes` (migration core/0031, per tenant: rate, applies to sales/purchase/both, exempt,
+  active, one default per side; filled with TVA18 + EXO on first read, like payment terms),
+  `core/tax_codes.py` + pure `core/domain/tax.py`. The sales and procurement "default VAT rate"
+  settings now read the default code and writing them sets it (a rate stored before codes existed is
+  adopted, so no tenant's default changes); lines still keep their own `vat_rate`, so issued documents
+  never change. Finance: `GET/POST/PATCH /finance/tax-codes`, `POST .../{id}/default` (new permission
+  `finance.manage_tax_codes`, granted to Administrateur by finance/0013), `GET /finance/reports/vat`
+  (sales by rate from invoice lines less credit notes, 0 % shown as exempt/zero-rated; collected,
+  deductible, payable from the ledger accounts of the `invoice/vat` and `purchase_invoice/vat` rules;
+  purchase side via the ledger because finance may not read procurement tables). Frontend page
+  `/finance/tax` (en/fr). Postgres 16 local: backend 3282 passed / 11 skipped (known), frontend `tsc`
+  + 194 vitest passed. **Left out on purpose:** tax code on the line and on events (needs an event
+  version bump), withholding / reverse charge, per-product default code, per-rate purchase breakdown.
+  Next WP: WP-1.2 (WP-0.2 still waits on its server drill; deploy still waits on the SSH secrets).
+  Branch `claude/admiring-sagan-5n2e7k` (not merged to `main`: this session's instructions limit
+  pushes to that branch).
 
 - 2026-11-20 — WP-0.6 done (spec `specs/2026-11-20-error-tracking-alerts-design.md`, plan
   `plans/2026-11-20-error-tracking-alerts.md`, runbook `docs/operations-alerts.md`). New
