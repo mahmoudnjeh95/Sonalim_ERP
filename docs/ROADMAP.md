@@ -167,10 +167,14 @@ Newest first. One line per session: date, WP, what was finished, what is left, b
   `.env`; without them, errors and alerts are only in `docker compose logs`. Next WP: WP-1.1
   (WP-0.2 still waits on its server drill). Branch `claude/exciting-hypatia-vlnkca`, then
   `main` (d6abcb6, which also makes `tools/git-hooks/pre-commit` executable: git had been
-  skipping it). Run 44850869670 failed like the three before it (every job in 2–3 s, no logs):
-  Actions is still not starting jobs, so WP-0.3 to WP-0.6 are on `main` but not built or
-  deployed. Left: fix Actions (billing/spending limit under the account's Settings > Billing,
-  as on 2026-11-17), then re-run the latest `Build and Deploy` run.
+  skipping it). 2026-11-21: billing fixed by the user; re-run of 44850869670 (attempt 2): tests
+  (backend, frontend, backup tools) and build (three images pushed to ghcr.io) green, **deploy
+  failed**: `appleboy/scp-action` "can't connect without a private SSH key or password". Same
+  error as run 44177243620 (2026-11-17), so the repository has no usable `SERVER_SSH_KEY`
+  secret (deploy.yml also reads `SERVER_HOST`, `SERVER_USER`). Nothing has been deployed since
+  early October. Left: the user adds those three secrets (repo Settings > Secrets and variables
+  > Actions), then re-runs the latest `Build and Deploy` run; then `SENTRY_DSN` /
+  `ALERT_WEBHOOK_URL` on the server.
 
 - 2026-11-20 — WP-0.5 done (spec `specs/2026-11-20-module-manifests-design.md`, plan
   `plans/2026-11-20-module-manifests.md`). The fields now have a defined meaning: `depends` =
