@@ -208,6 +208,7 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/shipments", labelKey: "nav.shipments", icon: Truck },
       { to: "/procurement", labelKey: "nav.purchaseOrders", icon: FileText },
       { to: "/procurement/invoices", labelKey: "nav.purchaseInvoices", icon: Receipt, permission: "procurement.view_purchase_invoices" },
+      { to: "/procurement/payables", labelKey: "nav.payables", icon: Landmark, permission: "procurement.view_purchase_invoices" },
     ],
   },
   {
