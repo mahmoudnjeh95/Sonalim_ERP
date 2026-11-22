@@ -53,6 +53,7 @@ import { LeavePage } from "../features/hr/leave/LeavePage";
 import { RunPage } from "../features/payroll/runs/RunPage";
 import { RulesPage } from "../features/payroll/rules/RulesPage";
 import { PurchaseOrdersPage } from "../features/procurement/PurchaseOrdersPage";
+import { PayablesPage } from "../features/procurement/PayablesPage";
 import { PurchaseInvoicesPage } from "../features/procurement/PurchaseInvoicesPage";
 import { TreasuryPage } from "../features/treasury/TreasuryPage";
 import { ProductsPage } from "../features/products/ProductsPage";
@@ -130,6 +131,7 @@ const protectedChildren: RouteObject[] = [
   { path: "/shipments", element: <ShipmentsPage /> },
   { path: "/procurement", element: <PurchaseOrdersPage /> },
   { path: "/procurement/invoices", element: <PurchaseInvoicesPage /> },
+  { path: "/procurement/payables", element: <PayablesPage /> },
   { path: "/treasury", element: <TreasuryPage /> },
   { path: "/sales", element: <SalesOrdersPage /> },
   { path: "/sales/quotes", element: <QuotesPage /> },

@@ -133,3 +133,16 @@ def test_from_receipts_route_refuses_an_unknown_receipt(api):
         "receipt_ids": [str(ULID())], "supplier_invoice_number": "R-1", "invoice_date": TODAY})
     assert refused.status_code == 409 and refused.json()["detail"]["code"] == "RECEIPT_NOT_INVOICEABLE"
     assert _ok(api.get("/procurement/purchase-invoices/invoiceable-receipts")) == []
+
+
+def test_payables_aging_and_statement_over_http(api, supplier):
+    invoice = _ok(api.post("/procurement/purchase-invoices", json={
+        "partner_id": supplier, "supplier_invoice_number": "PAY-1", "invoice_date": "2020-01-01", "due_date": "2020-02-01",
+        "lines": [{"description": "Farine", "quantity": 1, "unit_price": 5000, "vat_rate": 0}]}, ), 201)
+    _ok(api.post(f"/procurement/purchase-invoices/{invoice['id']}/validate"))
+    rows = _ok(api.get("/procurement/purchase-invoices/payables/aging"))
+    mine = next(r for r in rows if r["partner_id"] == supplier)
+    assert mine["bucket_over_90"] == "5000.00" or float(mine["bucket_over_90"]) == 5000
+    assert api.get("/procurement/purchase-invoices/payables/aging?format=csv&lang=en").status_code == 200
+    statement = _ok(api.get(f"/procurement/purchase-invoices/payables/statement/{supplier}"))
+    assert float(statement["closing_balance"]) == 5000 and [l["kind"] for l in statement["lines"]] == ["invoice"]

@@ -77,9 +77,9 @@ tested, built and deployed to the VPS.
 - [x] **WP-1.3 Invoice from shipment.** (Finance consumes `warehouse.shipment.shipped` and
   `warehouse.voucher.posted`.) Create the invoice from `warehouse.shipment.shipped`
   (shipped quantities) instead of `sales.order.confirmed` (ordered total). *Verified 2026-11-22: already built.*
-- [~] **WP-1.4 Supplier bills and payables.** (Purchase invoices, receipt matching, credit
+- [x] **WP-1.4 Supplier bills and payables.** (Purchase invoices, receipt matching, credit
   notes and ledger posting exist.) Supplier invoice against PO and receipt
-  (3-way match), posting to the purchases journal, supplier payments.
+  (3-way match), posting to the purchases journal, supplier payments. *Verified and completed 2026-11-22: the missing piece was the payables view (aged balance, supplier statement).*
 - [~] **WP-1.5 Payments, cash and bank.** (Treasury module exists: receipts,
   disbursements, cheques, deposit slips, statement import, reconciliation, payment orders.
   Check ageing reports and customer statement; decide when to enable ledger posting.) Payment records for customers and suppliers,
@@ -146,6 +146,23 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-22 — WP-1.4 done. Read first: purchase invoices with priced lines and VAT, invoicing
+  from goods receipts, the three-way match (quantity over received-not-yet-invoiced needs
+  `procurement.admin_invoice_beyond_receipts`; price vs the receipt's goods price warns),
+  supplier credit notes, posting to the ledger (`purchase_invoice` rules, reversal on cancel,
+  credit-note mirror, always on) and payment progress from treasury disbursement events were
+  all already built and tested. What was missing was the payables side: new
+  `procurement/domain/payables.py` and `api/payables_service.py`, endpoints
+  `GET /procurement/purchase-invoices/payables/aging` (csv/xlsx too) and
+  `.../payables/statement/{partner_id}` (invoices, credit notes, payments, running balance,
+  opening balance; disbursement number/date read from treasury when installed, so `treasury`
+  is now an `optional_depends` of procurement), and a "Supplier balances" page
+  (`/procurement/payables`, sidebar, en/fr). Tests: `test_payables_integration.py`, one HTTP
+  test. Postgres 16 local (migrations + `seed_dev`): backend 3270 passed / 11 skipped
+  (known), frontend `tsc` + 194 vitest passed. Not done (WP-1.5): customer/supplier ageing is
+  still two separate screens, no payment-run proposal. No migration, no new event. Next WP:
+  WP-1.5. Branch `claude/wp-1-4-fi0mcz` (not pushed to `main`: this session's branch rule).
 
 - 2026-11-22 — WP-1.3 done, by reading what was there: no new code was needed. Finance
   `events/consumers.py` already bills `warehouse.shipment.shipped` (shipped quantities) and

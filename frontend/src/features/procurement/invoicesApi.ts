@@ -241,3 +241,47 @@ export const validateCreditNote = (token: string, id: string) =>
 
 export const cancelCreditNote = (token: string, id: string) =>
   apiFetch<CreditNote>(`/procurement/purchase-credit-notes/${id}/cancel`, { method: "POST", token });
+
+// ---- payables: what we owe suppliers ------------------------------------------------------------------
+
+export interface PayablesAgingRow {
+  partner_id: string;
+  partner_name: string | null;
+  remaining: string;
+  overdue: string;
+  invoices: number;
+  max_days_overdue: number;
+  bucket_not_due: string;
+  bucket_1_30: string;
+  bucket_31_60: string;
+  bucket_61_90: string;
+  bucket_over_90: string;
+}
+
+export interface SupplierStatementLine {
+  date: string;
+  kind: "invoice" | "credit_note" | "payment" | "payment_reversed";
+  reference: string;
+  due_date: string | null;
+  against?: string;
+  debit: string;
+  credit: string;
+  balance: string;
+}
+
+export interface SupplierStatement {
+  partner_id: string;
+  partner_name: string | null;
+  opening_balance: string;
+  closing_balance: string;
+  remaining: string;
+  overdue: string;
+  lines: SupplierStatementLine[];
+}
+
+export const PAYABLES_KEY = ["procurement", "payables"] as const;
+export const getPayablesAging = (token: string) => apiFetch<PayablesAgingRow[]>(`${BASE}/payables/aging`, { token });
+export const getSupplierStatement = (token: string, partnerId: string) =>
+  apiFetch<SupplierStatement>(`${BASE}/payables/statement/${partnerId}`, { token });
+export const exportPayablesAging = (token: string, format: "csv" | "xlsx", lang: string) =>
+  download(token, `${BASE}/payables/aging?format=${format}&lang=${lang}`);

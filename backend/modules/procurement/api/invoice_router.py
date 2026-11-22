@@ -16,6 +16,8 @@ from core.tenancy import TenantContext, require_permission, user_has_permission
 from modules.procurement.api.credit_note_service import PurchaseCreditNoteService
 from modules.procurement.api.invoice_attachment_service import PurchaseInvoiceAttachmentService
 from modules.procurement.api.invoice_service import PurchaseInvoiceService
+from modules.procurement.api.payables_service import PayablesService
+from modules.procurement.domain.payables import BUCKETS
 
 router = APIRouter(prefix="/purchase-invoices", tags=["procurement"])
 credit_note_router = APIRouter(prefix="/purchase-credit-notes", tags=["procurement"])
@@ -197,6 +199,33 @@ def export_purchase_invoices(
     ]
     headers = EXPORT_HEADERS["en" if lang == "en" else "fr"]
     return tabular_response(headers, rows, "csv" if fmt == "csv" else "xlsx", "factures-achat" if lang != "en" else "purchase-invoices")
+
+
+AGING_HEADERS = {
+    "fr": ["Fournisseur", "Reste dû", "Non échu", "1-30 j", "31-60 j", "61-90 j", "> 90 j", "Retard max (j)"],
+    "en": ["Supplier", "Remaining", "Not due", "1-30 d", "31-60 d", "61-90 d", "> 90 d", "Max days late"],
+}
+
+
+@router.get("/payables/aging", response_model=None)
+def payables_aging(format: str | None = None, lang: str = "fr", tenant: TenantContext = Depends(require_permission(VIEW))):
+    """What we owe each supplier, aged by days past the invoice's due date."""
+    with get_connection() as connection:
+        rows = PayablesService(connection).aging(tenant_id=tenant.tenant_id)
+    if format not in ("csv", "xlsx"):
+        return rows
+    table = [[r["partner_name"], r["remaining"], *[r[f"bucket_{k}"] for k, _, _ in BUCKETS], r["max_days_overdue"]] for r in rows]
+    language = "en" if lang == "en" else "fr"
+    return tabular_response(AGING_HEADERS[language], table, format, "balance-agee-fournisseurs" if language == "fr" else "payables-aging")
+
+
+@router.get("/payables/statement/{partner_id}")
+def payables_statement(partner_id: str, date_from: datetime.date | None = None, date_to: datetime.date | None = None,
+                       tenant: TenantContext = Depends(require_permission(VIEW))) -> dict:
+    """A supplier's account: invoices, credit notes and payments with a running balance (positive = we owe)."""
+    with get_connection() as connection:
+        return PayablesService(connection).statement(
+            tenant_id=tenant.tenant_id, partner_id=partner_id, date_from=date_from, date_to=date_to)
 
 
 @router.get("/settings")
