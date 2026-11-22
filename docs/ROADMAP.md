@@ -71,7 +71,7 @@ tested, built and deployed to the VPS.
 - [x] **WP-1.1 Tax engine.** *Done 2026-11-21.* (VAT rate per line exists in sales, finance, procurement; check
   tax accounts, exemptions and a tax report.) Tax codes and rates (per tenant), applied to sales and
   purchase lines; tax accounts in posting rules.
-- [~] **WP-1.2 Real customer invoices.** (Lines, VAT, counters, instalments, credit notes
+- [x] **WP-1.2 Real customer invoices.** *Done 2026-11-22.* (Lines, VAT, counters, instalments, credit notes
   exist.) Invoice lines, tax, numbering sequence, due date
   and payment terms, partial payments, credit notes. Migrate existing single-amount rows.
 - [~] **WP-1.3 Invoice from shipment.** (Finance consumes `warehouse.shipment.shipped` and
@@ -146,6 +146,23 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-22 — WP-1.2 done (spec `specs/2026-11-22-real-customer-invoices-design.md`). Read first:
+  delivery invoices already had lines, VAT, `FV-YYYY-nnnnnn` numbering, payment terms with instalments,
+  partial payments and credit notes. The gaps were invoices made by hand or from an order confirmation
+  (one amount, no lines, no VAT), no draft line editing, old rows without lines, and issuing an empty
+  invoice. Now: `finance/0014` (`description`, `line_no`, nullable `product_id`; backfills one lump-sum
+  line per line-less invoice, totals unchanged); pure `ManualLine` / `check_manual_lines`;
+  `InvoiceService.create_invoice` (lines with discount and a WP-1.1 `tax_code`, or the default sales rate;
+  dated and numbered; instalments from the customer's terms), `replace_lines` (draft only, totals and
+  instalments redone), `INVOICE_EMPTY` on issue; `create_draft_invoice(amount)` still works and writes its
+  lump-sum line; the admin amount edit moves the lump-sum line and refuses (`AMOUNT_FROM_LINES`) an invoice
+  whose total comes from real lines. API: `POST /finance/invoices` takes `lines` or `amount`,
+  `PUT /finance/invoices/{id}/lines`. Frontend: invoice editor dialog (create, and re-type a draft) with live
+  totals, free lines show their description on the detail and print view. Postgres 16 local: backend 3295
+  passed / 11 skipped (known), frontend `tsc` + 194 vitest passed; the editor was not exercised in a browser.
+  **Left out:** manual credit notes (a credit note still comes from a return voucher: WP-2.3), PDF (WP-2.5),
+  invoice date set at issue. Next WP: WP-1.3 (invoice from shipment). Branch `claude/admiring-sagan-5n2e7k`.
 
 - 2026-11-21 — WP-1.1 done (spec `specs/2026-11-21-tax-engine-design.md`, plan
   `plans/2026-11-21-tax-engine.md`). Read first: a VAT rate per line, VAT posting to 443/445 and

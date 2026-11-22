@@ -182,7 +182,7 @@ class DeliveryBillingService:
                 lines = {}
                 for product_id, quantity, price, rate in self._connection.execute(
                     "SELECT product_id, SUM(quantity), SUM(quantity * unit_price) / NULLIF(SUM(quantity), 0), MAX(vat_rate) "
-                    "FROM finance.invoice_lines WHERE invoice_id = %s GROUP BY product_id",
+                    "FROM finance.invoice_lines WHERE invoice_id = %s AND product_id IS NOT NULL GROUP BY product_id",
                     (invoice_id,),
                 ).fetchall():
                     lines[product_id] = (Decimal(str(quantity)), Decimal(str(price)))

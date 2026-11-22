@@ -71,6 +71,12 @@ class TaxCodeService:
                                        (tenant_id, code_id)).fetchone()
         return _row(row) if row else None
 
+    def get_by_code(self, *, tenant_id: str, code: str) -> dict[str, Any] | None:
+        self._ensure_defaults(tenant_id)
+        row = self._connection.execute(f"SELECT {_COLUMNS} FROM core.tax_codes WHERE tenant_id = %s AND code = %s",
+                                       (tenant_id, (code or "").strip().upper())).fetchone()
+        return _row(row) if row else None
+
     def default_code(self, *, tenant_id: str, side: str) -> dict[str, Any] | None:
         if side not in SIDES:
             return None
