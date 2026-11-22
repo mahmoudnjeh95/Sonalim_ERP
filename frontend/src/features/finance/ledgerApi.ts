@@ -375,3 +375,29 @@ export function getGeneralLedger(token: string, accountCode: string, from: strin
 export function getBalances(token: string, asOf: string) {
   return apiFetch<AccountBalance[]>(`/finance/reports/balances${query({ as_of: asOf, prefixes: "42,43,44" })}`, { token });
 }
+
+export interface VatReturnRow {
+  tax_code: string | null;
+  rate: number | null;
+  exempt: boolean;
+  base: number;
+  vat: number;
+  documents: number;
+}
+
+export interface VatReturn {
+  date_from: string;
+  date_to: string;
+  collected: VatReturnRow[];
+  deductible: VatReturnRow[];
+  totals: Record<"collected" | "deductible", { base: number; vat: number }>;
+  /** > 0: VAT to pay for the period; < 0: a credit carried forward */
+  net_vat_due: number;
+  ledger: Record<"collected" | "deductible", { accounts: string[]; movement: number; difference: number }>;
+}
+
+export const VAT_RETURN_KEY = (from: string, to: string) => ["finance", "ledger", "reports", "vat", from, to] as const;
+
+export function getVatReturn(token: string, from: string, to: string) {
+  return apiFetch<VatReturn>(`/finance/reports/vat${query({ date_from: from, date_to: to })}`, { token });
+}

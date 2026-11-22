@@ -12,6 +12,7 @@ export interface QuoteLine {
   unit_price: string;
   discount_rate: string;
   vat_rate: string;
+  tax_code: string | null;
   price_list_id: string | null;
   net_amount: string;
 }
@@ -52,6 +53,7 @@ export interface QuoteLineInput {
   unit_price?: number | null;
   discount_rate?: number | null;
   vat_rate?: number | null;
+  tax_code?: string | null;
   price_list_id?: string | null;
 }
 

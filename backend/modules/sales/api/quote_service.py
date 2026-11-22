@@ -12,6 +12,7 @@ from ulid import ULID
 from core.atomic import atomic
 from core.audit import record_audit
 from core.domain.result import Err, Ok, Result
+from core.tax_codes import resolve_lines
 from modules.sales.api.pricing_service import PricingService
 from modules.sales.domain.entities import OrderLine
 from modules.sales.domain.pricing import (
@@ -82,7 +83,8 @@ class QuoteService:
     def _with_lines(self, quote: dict[str, Any]) -> dict[str, Any]:
         rows = self._connection.execute(
             """
-            SELECT l.id, l.line_no, l.product_id, p.sku, p.name, l.quantity, l.unit_price, l.discount_rate, l.vat_rate, l.price_list_id
+            SELECT l.id, l.line_no, l.product_id, p.sku, p.name, l.quantity, l.unit_price, l.discount_rate, l.vat_rate, l.price_list_id,
+                   l.tax_code
             FROM sales.quote_lines l JOIN core.products p ON p.id = l.product_id
             WHERE l.quote_id = %s ORDER BY l.line_no
             """,
@@ -93,7 +95,7 @@ class QuoteService:
         for r in rows:
             priced = PricedLine(Decimal(str(r[5])), Decimal(str(r[6])), Decimal(str(r[7])), Decimal(str(r[8])))
             lines.append({"id": r[0], "line_no": r[1], "product_id": r[2], "sku": r[3], "product_name": r[4], "quantity": r[5],
-                          "unit_price": r[6], "discount_rate": r[7], "vat_rate": r[8], "price_list_id": r[9],
+                          "unit_price": r[6], "discount_rate": r[7], "vat_rate": r[8], "price_list_id": r[9], "tax_code": r[10],
                           # after the line discount only: the document discount shows once, in the totals
                           "net_amount": priced.net().quantize(Decimal("0.01"))})
         totals = compute_totals((PricedLine(Decimal(str(l["quantity"])), Decimal(str(l["unit_price"])),
@@ -139,15 +141,20 @@ class QuoteService:
         )
         if isinstance(resolved, Err):
             return resolved
+        taxes = resolve_lines(self._connection, tenant_id=tenant_id, side="sales", partner_id=partner_id,
+                              default_rate=Decimal(str(settings["default_vat_rate"])), lines=lines)
+        if isinstance(taxes, Err):
+            return taxes
         priced = []
-        for line, price in zip(lines, resolved.value):
+        for line, price, tax in zip(lines, resolved.value, taxes.value):
             unit_price = line.get("unit_price")
             item = {
                 "product_id": str(line["product_id"]),
                 "quantity": Decimal(str(line["quantity"])),
                 "unit_price": Decimal(str(unit_price)) if unit_price is not None else Decimal(str(price["unit_price"])),
                 "discount_rate": Decimal(str(line.get("discount_rate") or 0)),
-                "vat_rate": Decimal(str(line["vat_rate"])) if line.get("vat_rate") is not None else Decimal(str(settings["default_vat_rate"])),
+                "vat_rate": tax.rate,
+                "tax_code": tax.tax_code,
                 "price_list_id": price["price_list_id"] if unit_price is None else line.get("price_list_id"),
             }
             checked = check_line(quantity=item["quantity"], unit_price=item["unit_price"], discount_rate=item["discount_rate"],
@@ -170,11 +177,11 @@ class QuoteService:
             self._connection.execute(
                 """
                 INSERT INTO sales.quote_lines (id, tenant_id, quote_id, line_no, product_id, quantity, unit_price, discount_rate,
-                                               vat_rate, price_list_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                               vat_rate, price_list_id, tax_code)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (str(ULID()), tenant_id, quote_id, number, line["product_id"], line["quantity"], line["unit_price"],
-                 line["discount_rate"], line["vat_rate"], line.get("price_list_id")),
+                 line["discount_rate"], line["vat_rate"], line.get("price_list_id"), line.get("tax_code")),
             )
 
     @atomic
@@ -243,7 +250,7 @@ class QuoteService:
         else:
             new_lines = [{"product_id": l["product_id"], "quantity": Decimal(str(l["quantity"])), "unit_price": Decimal(str(l["unit_price"])),
                           "discount_rate": Decimal(str(l["discount_rate"])), "vat_rate": Decimal(str(l["vat_rate"])),
-                          "price_list_id": l["price_list_id"]} for l in self.get_quote(tenant_id=tenant_id, quote_id=quote_id).value["lines"]]
+                          "price_list_id": l["price_list_id"], "tax_code": l["tax_code"]} for l in self.get_quote(tenant_id=tenant_id, quote_id=quote_id).value["lines"]]
         checked = self._check_discounts(tenant_id=tenant_id, lines=new_lines, discount_rate=new["discount_rate"], may_exceed=may_exceed_discount)
         if isinstance(checked, Err):
             return checked
@@ -326,12 +333,13 @@ class QuoteService:
              today, today + datetime.timedelta(days=validity), quote["discount_rate"], quote["note"], actor_id),
         )
         copied = self._connection.execute(
-            "SELECT product_id, quantity, unit_price, discount_rate, vat_rate, price_list_id FROM sales.quote_lines "
+            "SELECT product_id, quantity, unit_price, discount_rate, vat_rate, price_list_id, tax_code FROM sales.quote_lines "
             "WHERE quote_id = %s ORDER BY line_no",
             (quote_id,),
         ).fetchall()
         self._write_lines(tenant_id, new_id, [
-            {"product_id": r[0], "quantity": r[1], "unit_price": r[2], "discount_rate": r[3], "vat_rate": r[4], "price_list_id": r[5]}
+            {"product_id": r[0], "quantity": r[1], "unit_price": r[2], "discount_rate": r[3], "vat_rate": r[4], "price_list_id": r[5],
+             "tax_code": r[6]}
             for r in copied
         ])
         record_audit(self._connection, tenant_id=tenant_id, actor_id=actor_id, action="quote.revised", entity_type="quote", entity_id=new_id,
@@ -358,7 +366,8 @@ class QuoteService:
             return Err("LOCATION_REQUIRED", "choose the warehouse the order ships from", "choisissez l'entrepôt d'expédition de la commande")
         detail = self.get_quote(tenant_id=tenant_id, quote_id=quote_id).value
         lines = [OrderLine(product_id=l["product_id"], quantity=l["quantity"], unit_price=l["unit_price"],
-                           discount_rate=l["discount_rate"], vat_rate=l["vat_rate"], price_list_id=l["price_list_id"])
+                           discount_rate=l["discount_rate"], vat_rate=l["vat_rate"], price_list_id=l["price_list_id"],
+                           tax_code=l["tax_code"])
                  for l in detail["lines"]]
         order = SalesOrderService(self._connection).create_order(
             tenant_id=tenant_id, actor_id=actor_id, partner_id=quote["partner_id"], location_id=location_id, lines=lines,

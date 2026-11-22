@@ -543,3 +543,25 @@ def account_balances(
                 as_of=as_of,
             )
         )
+
+
+@router.get("/reports/vat")
+def vat_return(
+    date_from: datetime.date,
+    date_to: datetime.date,
+    tenant: TenantContext = Depends(require_permission("finance.view_ledger")),
+) -> dict:
+    """The VAT return of a period, from the VAT register: base and VAT per direction and tax code, the net VAT
+    due, and the movement of the ledger's VAT accounts as a check."""
+    from modules.finance.api.tax_register_service import TaxRegisterService
+
+    with get_connection() as connection:
+        result = TaxRegisterService(connection).vat_return(tenant_id=tenant.tenant_id, date_from=date_from, date_to=date_to)
+    if isinstance(result, Err):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(result))
+    report = result.value
+    for direction in ("collected", "deductible"):
+        for row in report[direction]:
+            # rates keep their decimals (jsonable makes whole francs of every Decimal)
+            row["rate"] = float(row["rate"]) if row["rate"] is not None else None
+    return jsonable(report)

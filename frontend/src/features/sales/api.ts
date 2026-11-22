@@ -10,6 +10,8 @@ export interface OrderLine {
   discount_rate?: number;
   /** left out on a new line: the tenant's default rate (sales settings) */
   vat_rate?: number | null;
+  /** core.tax_codes code the rate comes from; null on lines from before tax codes */
+  tax_code?: string | null;
   price_list_id?: string | null;
 }
 

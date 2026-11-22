@@ -215,6 +215,8 @@ export function SalesOrdersPage() {
         unit_price: line.unit_price,
         discount_rate: line.discount_rate ?? 0,
         vat_rate: line.vat_rate ?? 0,
+        tax_code: line.tax_code ?? null,
+        tax_manual: true,
         price_list_id: line.price_list_id ?? null,
       })),
     });

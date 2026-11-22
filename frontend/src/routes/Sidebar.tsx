@@ -44,6 +44,8 @@ import {
   Target,
   Landmark,
   Receipt,
+  Percent,
+  Calculator,
   TrendingUp,
   Truck,
   Users,
@@ -230,6 +232,8 @@ const NAV_GROUPS: NavGroup[] = [
       { to: "/finance/trial-balance", labelKey: "nav.trialBalance", icon: Scale, permission: "finance.view_ledger" },
       { to: "/finance/ledger", labelKey: "nav.generalLedger", icon: BookText, permission: "finance.view_ledger" },
       { to: "/finance/periods", labelKey: "nav.accountingPeriods", icon: CalendarRange, permission: "finance.view_ledger" },
+      { to: "/finance/vat", labelKey: "nav.vatReturn", icon: Calculator, permission: "finance.view_ledger" },
+      { to: "/finance/tax-codes", labelKey: "nav.taxCodes", icon: Percent, permission: "finance.view_ledger" },
     ],
   },
   {

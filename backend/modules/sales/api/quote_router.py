@@ -60,6 +60,8 @@ class QuoteLineRequest(BaseModel):
     unit_price: Decimal | None = None
     discount_rate: Decimal | None = None
     vat_rate: Decimal | None = None
+    # a tax code gives the rate; left out with vat_rate: the customer's, then the product's code
+    tax_code: str | None = None
     price_list_id: str | None = None
 
 

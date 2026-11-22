@@ -14,6 +14,8 @@ import type { Partner } from "../partners/api";
 import type { Product } from "../warehouse/api";
 import { computeTotals, lineNet, lineVat } from "./invoiceMath";
 import { formatXof } from "./invoiceFormat";
+import { useResolvedTaxes, useTaxCodes } from "../taxes/api";
+import { TaxCodeSelect } from "../taxes/TaxCodeSelect";
 import {
   createPurchaseInvoice,
   updatePurchaseInvoice,
@@ -28,6 +30,9 @@ interface DraftLine {
   unit_price: string;
   discount_rate: string;
   vat_rate: string;
+  tax_code: string | null;
+  // chosen by hand or loaded from the saved draft: the supplier's / product's code no longer replaces it
+  tax_manual: boolean;
   uom_id: string | null;
   purchase_order_line_id: string | null;
   receipt_id: string | null;
@@ -35,7 +40,7 @@ interface DraftLine {
 
 function emptyLine(defaultVat: number): DraftLine {
   return { product_id: "", description: "", quantity: "1", unit_price: "0", discount_rate: "0", vat_rate: String(defaultVat),
-    uom_id: null, purchase_order_line_id: null, receipt_id: null };
+    tax_code: null, tax_manual: false, uom_id: null, purchase_order_line_id: null, receipt_id: null };
 }
 
 const asNumbers = (line: DraftLine) => ({
@@ -89,6 +94,8 @@ export function PurchaseInvoiceFormDialog({
             unit_price: String(Number(l.unit_price)),
             discount_rate: String(Number(l.discount_rate)),
             vat_rate: String(Number(l.vat_rate)),
+            tax_code: l.tax_code ?? null,
+            tax_manual: true,
             uom_id: l.uom_id,
             purchase_order_line_id: l.purchase_order_line_id,
             receipt_id: l.receipt_id,
@@ -98,6 +105,24 @@ export function PurchaseInvoiceFormDialog({
   }, [open, invoice, defaultVat]);
 
   const totals = computeTotals(lines.map(asNumbers), defaultVat);
+  const { codes: taxCodes } = useTaxCodes("purchases");
+  const resolved = useResolvedTaxes("purchases", partnerId, lines.map((line) => line.product_id), defaultVat).data;
+
+  // A line nobody taxed by hand follows the supplier's code, else the product's, else the default rate.
+  useEffect(() => {
+    if (!resolved) return;
+    setLines((all) => {
+      let changed = false;
+      const next = all.map((line) => {
+        if (line.tax_manual) return line;
+        const tax = resolved[line.product_id || "*"] ?? resolved["*"];
+        if (!tax || (line.tax_code === tax.tax_code && Number(line.vat_rate) === tax.rate)) return line;
+        changed = true;
+        return { ...line, tax_code: tax.tax_code, vat_rate: String(tax.rate) };
+      });
+      return changed ? next : all;
+    });
+  }, [resolved]);
   const change = (index: number, patch: Partial<DraftLine>) => setLines((all) => all.map((l, i) => (i === index ? { ...l, ...patch } : l)));
 
   const mutation = useMutation({
@@ -110,6 +135,7 @@ export function PurchaseInvoiceFormDialog({
         note: note || null,
         lines: lines.map<InvoiceLineInput>((l) => ({
           ...asNumbers(l),
+          tax_code: l.tax_code,
           product_id: l.product_id || null,
           description: l.description,
           uom_id: l.uom_id,
@@ -236,8 +262,13 @@ export function PurchaseInvoiceFormDialog({
                             onChange={(e) => change(index, { discount_rate: e.target.value })} />
                         </td>
                         <td className="py-1 pr-2">
-                          <Input aria-label={t("purchaseInvoice.line.vat")} type="number" step="any" min="0" max="100" value={line.vat_rate}
-                            onChange={(e) => change(index, { vat_rate: e.target.value })} />
+                          {taxCodes.length ? (
+                            <TaxCodeSelect codes={taxCodes} taxCode={line.tax_code} rate={Number(line.vat_rate) || 0}
+                              onChange={(code, rate) => change(index, { tax_code: code, vat_rate: String(rate), tax_manual: true })} />
+                          ) : (
+                            <Input aria-label={t("purchaseInvoice.line.vat")} type="number" step="any" min="0" max="100" value={line.vat_rate}
+                              onChange={(e) => change(index, { vat_rate: e.target.value, tax_code: null, tax_manual: true })} />
+                          )}
                         </td>
                         <td className="py-1 pr-2 text-right tabular-nums">
                           {formatXof(lineNet(amounts))}

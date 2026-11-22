@@ -90,7 +90,9 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
         }
         if event_type == "finance.invoice.issued":
             # 1.1 (additive): the collected VAT inside `amount`; a 1.0 event had none
-            return invoices.post_issued(issued_on=occurred_on(envelope), vat=payload.get("vat") or 0, **common)
+            # 1.2 (additive): `vat_breakdown`, the VAT per tax code; without it all the VAT goes to the '*' rule
+            return invoices.post_issued(issued_on=occurred_on(envelope), vat=payload.get("vat") or 0,
+                                        vat_breakdown=payload.get("vat_breakdown"), **common)
         return invoices.post_paid(paid_on=occurred_on(envelope), **common)
     if event_type == "finance.credit_note.issued":
         from modules.finance.api.invoice_ledger_service import InvoiceLedgerService
@@ -99,7 +101,7 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
             tenant_id=tenant_id, credit_note_id=str(payload["credit_note_id"]), invoice_id=str(payload["invoice_id"]),
             partner_id=str(payload["partner_id"]), amount=payload["amount"], currency=str(payload["currency"]),
             number=payload.get("number"), credited_on=occurred_on(envelope), correlation_id=correlation_id, causation_id=causation_id,
-            vat=payload.get("vat") or 0,
+            vat=payload.get("vat") or 0, vat_breakdown=payload.get("vat_breakdown"),
         )
     if event_type == "procurement.purchase_credit_note.validated":
         from modules.finance.api.purchase_invoice_ledger_service import PurchaseInvoiceLedgerService
@@ -108,7 +110,7 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
             tenant_id=tenant_id, credit_note_id=str(payload["credit_note_id"]), partner_id=str(payload["partner_id"]),
             amount=payload["amount"], vat=payload.get("total_vat", 0), lines=payload.get("lines"),
             currency=str(payload["currency"]), validated_on=occurred_on(envelope), correlation_id=correlation_id,
-            causation_id=causation_id, number=payload.get("number"),
+            causation_id=causation_id, number=payload.get("number"), vat_breakdown=payload.get("vat_breakdown"),
         )
     if event_type.startswith("procurement.purchase_invoice."):
         from modules.finance.api.purchase_invoice_ledger_service import PurchaseInvoiceLedgerService
@@ -122,6 +124,7 @@ def post_for_event(connection: psycopg.Connection, envelope: dict) -> Result[lis
                 currency=str(payload["currency"]), validated_on=occurred_on(envelope),
                 correlation_id=correlation_id, causation_id=causation_id,
                 vat=payload.get("total_vat", 0), lines=payload.get("lines"), number=payload.get("number"),
+                vat_breakdown=payload.get("vat_breakdown"),
             )
         return purchases.post_cancelled(
             tenant_id=tenant_id, invoice_id=invoice_id, cancelled_on=occurred_on(envelope),

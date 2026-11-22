@@ -10,6 +10,7 @@ from ulid import ULID
 from core.audit import record_audit
 from core.domain.money import json_number, to_decimal
 from core.domain.result import Err, Ok, Result
+from core.domain.tax import breakdown_payload, vat_breakdown
 from core.events.outbox import publish_event
 from modules.finance.domain.entities import Invoice, check_new_invoice_currency, status_for_payment, transition
 
@@ -139,7 +140,7 @@ class InvoiceService:
         if isinstance(invoice, Err):
             return invoice
         lines = self._connection.execute(
-            "SELECT product_id, quantity, unit_price, amount, vat_rate, list_price, discount_rate FROM finance.invoice_lines "
+            "SELECT product_id, quantity, unit_price, amount, vat_rate, list_price, discount_rate, tax_code FROM finance.invoice_lines "
             "WHERE invoice_id = %s ORDER BY id",
             (invoice_id,),
         ).fetchall()
@@ -151,7 +152,7 @@ class InvoiceService:
             "amount_excl_tax": totals[0],
             "vat_amount": totals[1],
             "lines": [{"product_id": l[0], "quantity": l[1], "unit_price": l[2], "amount": l[3], "vat_rate": l[4], "list_price": l[5],
-                       "discount_rate": l[6]} for l in lines],
+                       "discount_rate": l[6], "tax_code": l[7]} for l in lines],
             "credit_notes": DeliveryBillingService(self._connection).list_credit_notes(tenant_id=tenant_id, invoice_id=invoice_id),
         })
 
@@ -311,16 +312,23 @@ class InvoiceService:
             "UPDATE finance.invoices SET status = %s, amount_paid = CASE WHEN %s::text = 'paid' THEN amount - amount_credited ELSE amount_paid END WHERE id = %s",
             (new_status, new_status, invoice_id),
         )
+        payload = {"invoice_id": invoice_id, "partner_id": partner_id, "amount": json_number(amount), "currency": currency,
+                   "vat": json_number(vat_amount or 0)}
+        if event_type == "finance.invoice.issued":
+            lines = self._connection.execute(
+                "SELECT tax_code, vat_rate, amount FROM finance.invoice_lines WHERE invoice_id = %s", (invoice_id,)
+            ).fetchall()
+            # An invoice without lines (billed whole from an order before deliveries were billed) has no split.
+            payload["vat_breakdown"] = breakdown_payload(vat_breakdown(lines)) if lines else []
         publish_event(
             self._connection,
             event_type=event_type,
             producer="finance",
             tenant_id=tenant_id,
             correlation_id=correlation_id,
-            # 1.1 (additive): the collected VAT inside `amount`
-            event_version="1.1",
-            payload={"invoice_id": invoice_id, "partner_id": partner_id, "amount": json_number(amount), "currency": currency,
-                     "vat": json_number(vat_amount or 0)},
+            # 1.1 (additive): the collected VAT inside `amount`; 1.2 (issued only): its split per tax code
+            event_version="1.2" if event_type == "finance.invoice.issued" else "1.1",
+            payload=payload,
         )
         record_audit(
             self._connection,

@@ -12,6 +12,7 @@ import psycopg
 from core.domain.result import Err, Ok, Result
 from modules.finance.api.ledger_posting_service import SYSTEM_ACTOR, LedgerPostingService
 from modules.finance.api.posting_rule_service import PostingRuleService
+from modules.finance.api.tax_register_service import TaxRegisterService, allocated_parts
 from modules.finance.domain.ledger import SourceRef
 from modules.finance.domain.posting import invoice_entry, to_xof
 
@@ -37,10 +38,12 @@ class InvoiceLedgerService:
         correlation_id: str,
         causation_id: str | None = None,
         vat: object = 0,
+        vat_breakdown: object = None,
     ) -> Result[list[dict]]:
         return self._post(
             "issued", tenant_id=tenant_id, invoice_id=invoice_id, partner_id=partner_id, amount=amount,
             currency=currency, entry_date=issued_on, correlation_id=correlation_id, causation_id=causation_id, vat=vat,
+            vat_breakdown=vat_breakdown,
         )
 
     def post_paid(
@@ -81,6 +84,7 @@ class InvoiceLedgerService:
         correlation_id: str,
         causation_id: str | None = None,
         vat: object = 0,
+        vat_breakdown: object = None,
     ) -> Result[list[dict]]:
         """The mirror of the invoice's VTE entry for what a credit note took back. Like a payment, it waits
         for the invoice's own entry: an invoice still in draft has charged the customer nothing yet."""
@@ -94,7 +98,7 @@ class InvoiceLedgerService:
         return self._post(
             "credit_note", tenant_id=tenant_id, invoice_id=credit_note_id, partner_id=partner_id, amount=amount,
             currency=currency, entry_date=credited_on, correlation_id=correlation_id, causation_id=causation_id,
-            label_ref=number or credit_note_id, vat=vat,
+            label_ref=number or credit_note_id, vat=vat, vat_breakdown=vat_breakdown,
         )
 
     def _post(
@@ -111,6 +115,7 @@ class InvoiceLedgerService:
         causation_id: str | None,
         label_ref: str | None = None,
         vat: object = 0,
+        vat_breakdown: object = None,
     ) -> Result[list[dict]]:
         source = SourceRef(INVOICE_MODULE, invoice_id, f"invoice_{kind}")
         existing = self._posting.find_by_source(tenant_id=tenant_id, source=source)
@@ -126,11 +131,13 @@ class InvoiceLedgerService:
                 return vat_xof
             vat_amount = vat_xof.value
         label = LABELS[kind].format(invoice_id=label_ref or invoice_id)
+        taxed = kind in ("issued", "credit_note")
+        parts = allocated_parts(vat_breakdown, amount=xof.value, vat=vat_amount) if taxed else []
         # A credit note has no rule of its own: it reverses the issued invoice's rule.
         entry = invoice_entry(
             "issued" if kind == "credit_note" else kind, amount=xof.value, partner_id=partner_id, label=label,
             rules=self._rules.rules_for(tenant_id=tenant_id, source="invoice"), mirror=kind == "credit_note",
-            vat=vat_amount,
+            vat=vat_amount, vat_lines=[(part.tax_code, part.vat) for part in parts],
         )
         if isinstance(entry, Err):
             return entry
@@ -149,4 +156,10 @@ class InvoiceLedgerService:
         )
         if isinstance(posted, Err):
             return posted
+        if taxed:
+            TaxRegisterService(self._connection).record(
+                tenant_id=tenant_id, source_rule="invoice", source=source, entry=posted.value,
+                entry_date=posted.value.get("entry_date") or entry_date, parts=parts, sign=-1 if kind == "credit_note" else 1,
+                partner_id=partner_id, reference=label_ref or invoice_id,
+            )
         return Ok([posted.value])

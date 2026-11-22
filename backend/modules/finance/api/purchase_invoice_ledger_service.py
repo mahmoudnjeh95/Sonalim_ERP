@@ -17,6 +17,7 @@ import psycopg
 from core.domain.result import Err, Ok, Result
 from modules.finance.api.ledger_posting_service import SYSTEM_ACTOR, LedgerPostingService
 from modules.finance.api.posting_rule_service import PostingRuleService
+from modules.finance.api.tax_register_service import TaxRegisterService, allocated_parts
 from modules.finance.domain.ledger import SourceRef
 from modules.finance.domain.posting import purchase_invoice_entry, to_xof
 
@@ -53,7 +54,7 @@ class PurchaseInvoiceLedgerService:
 
     def _post(self, *, tenant_id: str, source: SourceRef, label: str, reference: str, partner_id: str, amount: object,
               vat: object, lines: list[dict] | None, currency: str, entry_date: datetime.date, correlation_id: str,
-              causation_id: str | None, mirror: bool) -> Result[list[dict]]:
+              causation_id: str | None, mirror: bool, vat_breakdown: object = None) -> Result[list[dict]]:
         xof = to_xof(amount, currency=currency)
         if isinstance(xof, Err):
             return xof
@@ -63,9 +64,11 @@ class PurchaseInvoiceLedgerService:
             if isinstance(vat_xof, Err):
                 return vat_xof
             vat_amount = vat_xof.value
+        parts = allocated_parts(vat_breakdown, amount=xof.value, vat=vat_amount)
         entry = purchase_invoice_entry(
             amount=xof.value, vat=vat_amount, partner_id=partner_id, label=label, mirror=mirror,
             lines=self._account_lines(tenant_id, lines), rules=self._rules.rules_for(tenant_id=tenant_id, source="purchase_invoice"),
+            vat_lines=[(part.tax_code, part.vat) for part in parts],
         )
         if isinstance(entry, Err):
             return entry
@@ -76,12 +79,17 @@ class PurchaseInvoiceLedgerService:
         )
         if isinstance(posted, Err):
             return posted
+        TaxRegisterService(self._connection).record(
+            tenant_id=tenant_id, source_rule="purchase_invoice", source=source, entry=posted.value,
+            entry_date=posted.value.get("entry_date") or entry_date, parts=parts, sign=-1 if mirror else 1,
+            partner_id=partner_id, reference=reference,
+        )
         return Ok([posted.value])
 
     def post_validated(
         self, *, tenant_id: str, invoice_id: str, partner_id: str, amount: object, currency: str,
         validated_on: datetime.date, correlation_id: str, causation_id: str | None = None,
-        vat: object = 0, lines: list[dict] | None = None, number: str | None = None,
+        vat: object = 0, lines: list[dict] | None = None, number: str | None = None, vat_breakdown: object = None,
     ) -> Result[list[dict]]:
         source = SourceRef(PROCUREMENT_MODULE, invoice_id, KIND_VALIDATED)
         existing = self._posting.find_by_source(tenant_id=tenant_id, source=source)
@@ -94,13 +102,13 @@ class PurchaseInvoiceLedgerService:
         return self._post(
             tenant_id=tenant_id, source=source, label=f"Facture d'achat {number or invoice_id}", reference=number or invoice_id,
             partner_id=partner_id, amount=amount, vat=vat, lines=lines, currency=currency, entry_date=validated_on,
-            correlation_id=correlation_id, causation_id=causation_id, mirror=False,
+            correlation_id=correlation_id, causation_id=causation_id, mirror=False, vat_breakdown=vat_breakdown,
         )
 
     def post_credit_note(
         self, *, tenant_id: str, credit_note_id: str, partner_id: str, amount: object, vat: object, lines: list[dict] | None,
         currency: str, validated_on: datetime.date, correlation_id: str, causation_id: str | None = None,
-        number: str | None = None,
+        number: str | None = None, vat_breakdown: object = None,
     ) -> Result[list[dict]]:
         """The purchase entry turned around: the supplier is debited, purchases and VAT are credited."""
         source = SourceRef(PROCUREMENT_MODULE, credit_note_id, KIND_CREDIT_NOTE)
@@ -111,6 +119,7 @@ class PurchaseInvoiceLedgerService:
             tenant_id=tenant_id, source=source, label=f"Avoir fournisseur {number or credit_note_id}",
             reference=number or credit_note_id, partner_id=partner_id, amount=amount, vat=vat, lines=lines, currency=currency,
             entry_date=validated_on, correlation_id=correlation_id, causation_id=causation_id, mirror=True,
+            vat_breakdown=vat_breakdown,
         )
 
     def post_cancelled(
@@ -127,4 +136,9 @@ class PurchaseInvoiceLedgerService:
         )
         if isinstance(done, Err):
             return done
+        TaxRegisterService(self._connection).record_reversal(
+            tenant_id=tenant_id, original=SourceRef(PROCUREMENT_MODULE, invoice_id, KIND_VALIDATED),
+            reversal=SourceRef(PROCUREMENT_MODULE, invoice_id, "purchase_invoice_cancelled"), entry=done.value,
+            entry_date=done.value.get("entry_date") or cancelled_on,
+        )
         return Ok([done.value])
