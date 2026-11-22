@@ -83,3 +83,26 @@ def test_an_invoice_amount_is_stored_exactly_as_sent(api):
     assert client.patch(f"/finance/invoices/{invoice_id}", json={"amount": "0.30"}).status_code == 200
     assert stored() == Decimal("0.30")
     assert client.post("/finance/invoices", json={"partner_id": api["partner"], "amount": "lots"}).status_code == 422
+
+
+def test_a_manual_invoice_with_lines_is_created_edited_and_refused_once_issued(api):
+    api["grant"]("finance.manage_invoices", "finance.view_invoices")
+    client = api["client"]
+    body = {"partner_id": api["partner"], "invoice_date": "2026-06-15",
+            "lines": [{"description": "Transport", "quantity": 2, "unit_price": 1000, "tax_code": "TVA18"}]}
+    created = client.post("/finance/invoices", json=body)
+    assert created.status_code == 201, created.text
+    invoice = created.json()
+    assert float(invoice["total"]) == 2360 and float(invoice["vat_amount"]) == 360 and invoice["lines"][0]["description"] == "Transport"
+
+    edited = client.put(f"/finance/invoices/{invoice['id']}/lines",
+                        json={"lines": [{"description": "Transport", "quantity": 1, "unit_price": 500, "tax_code": "EXO"}]})
+    assert edited.status_code == 200 and float(edited.json()["total"]) == 500
+
+    assert client.post("/finance/invoices", json={"partner_id": api["partner"]}).status_code == 400
+    assert client.post("/finance/invoices", json={**body, "lines": []}).json()["detail"]["code"] == "INVOICE_EMPTY"
+    assert client.post(f"/finance/invoices/{invoice['id']}/issue", json={"correlation_id": "c"}).status_code == 200
+    again = client.put(f"/finance/invoices/{invoice['id']}/lines", json={"lines": [{"description": "x", "unit_price": 1}]})
+    assert again.status_code == 409 and again.json()["detail"]["code"] == "INVOICE_NOT_DRAFT"
+    legacy = client.post("/finance/invoices", json={"partner_id": api["partner"], "amount": 750})
+    assert legacy.status_code == 201

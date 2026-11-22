@@ -26,13 +26,17 @@ export interface Invoice {
 }
 
 export interface BilledLine {
-  product_id: string;
+  /** null on a free line (a service, a fee, a lump sum) */
+  product_id: string | null;
+  description?: string | null;
   quantity: number;
   /** excluding tax, after the order's discounts */
   unit_price: number;
   /** excluding tax */
   amount: number;
   vat_rate?: number;
+  /** core.tax_codes code the rate came from (null on lines older than tax codes) */
+  tax_code?: string | null;
   /** the order's price before discounts, and the combined discount, when the line came from an order */
   list_price?: number | null;
   discount_rate?: number;
@@ -79,6 +83,32 @@ export interface CreateInvoiceInput {
   partner_id: string;
   amount: number;
   currency: string;
+}
+
+/** A line as typed on an invoice: a product or a description, a list price, a discount and a tax code. */
+export interface InvoiceLineInput {
+  product_id?: string | null;
+  description?: string | null;
+  quantity: number;
+  unit_price: number;
+  discount_rate: number;
+  tax_code: string;
+}
+
+export interface InvoiceWithLinesInput {
+  partner_id: string;
+  invoice_date?: string | null;
+  lines: InvoiceLineInput[];
+}
+
+export async function createInvoiceWithLines(token: string, input: InvoiceWithLinesInput) {
+  const detail = await apiFetch<InvoiceDetail>("/finance/invoices", { method: "POST", token, body: input });
+  return { ...numbers(detail), lines: detail.lines.map(numbers), credit_notes: [] };
+}
+
+export async function replaceInvoiceLines(token: string, invoiceId: string, input: Omit<InvoiceWithLinesInput, "partner_id">) {
+  const detail = await apiFetch<InvoiceDetail>(`/finance/invoices/${invoiceId}/lines`, { method: "PUT", token, body: input });
+  return { ...numbers(detail), lines: detail.lines.map(numbers), credit_notes: [] };
 }
 
 export interface UpdateInvoiceInput {

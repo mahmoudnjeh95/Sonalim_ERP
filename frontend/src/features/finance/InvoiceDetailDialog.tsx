@@ -33,7 +33,8 @@ export function InvoiceDetailDialog({ invoiceId, onClose }: { invoiceId: string 
   });
   const { data: products = [] } = useQuery({ queryKey: ["core", "products"], queryFn: () => listProducts(token), enabled: invoiceId !== null });
   const ledgerStatuses = useLedgerStatuses("finance", invoice ? [invoice.id, ...invoice.credit_notes.map((note) => note.id)] : []);
-  const productName = (id: string) => products.find((p) => p.id === id)?.name ?? id;
+  const productName = (id: string | null, description?: string | null) =>
+    id ? (products.find((p) => p.id === id)?.name ?? id) : (description ?? "—");
   const hasVat = (invoice?.vat_amount ?? 0) > 0 || (invoice?.lines ?? []).some((line) => (line.vat_rate ?? 0) > 0);
 
   function print(printNow: boolean) {
@@ -48,7 +49,7 @@ export function InvoiceDetailDialog({ invoiceId, onClose }: { invoiceId: string 
         ],
         headers: [t("finance.detail.product"), t("finance.detail.quantity"), t("finance.detail.unitPrice"), t("finance.detail.discount"), t("finance.detail.vatRate"), t("finance.detail.amountExclTax")],
         rows: invoice.lines.map((line) => [
-          productName(line.product_id),
+          productName(line.product_id, line.description),
           line.quantity,
           money(line.unit_price),
           line.discount_rate ? `${Number(line.discount_rate.toFixed(2))} %` : "—",
@@ -135,7 +136,7 @@ export function InvoiceDetailDialog({ invoiceId, onClose }: { invoiceId: string 
                   <TableBody>
                     {invoice.lines.map((line, i) => (
                       <TableRow key={i}>
-                        <TableCell>{productName(line.product_id)}</TableCell>
+                        <TableCell>{productName(line.product_id, line.description)}</TableCell>
                         <TableCell className="text-right tabular-nums">{line.quantity}</TableCell>
                         <TableCell className="text-right tabular-nums">
                           {formatXofWithCode(line.unit_price)}

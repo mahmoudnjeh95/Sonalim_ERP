@@ -9,18 +9,21 @@ from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Iterable, Mapping
 
+from core.domain.result import Err, Ok, Result
+
 ZERO = Decimal("0")
 
 
 @dataclass(frozen=True)
 class BilledLine:
-    product_id: str
+    product_id: str | None
     quantity: Decimal
     # excluding tax, after the order's discounts
     unit_price: Decimal
     vat_rate: Decimal = ZERO
     # core.tax_codes.code the rate came from (None before tax codes)
     tax_code: str | None = None
+    description: str | None = None
 
     @property
     def amount(self) -> Decimal:
@@ -137,3 +140,43 @@ def amount_due(amount: Decimal, credited: Decimal) -> Decimal:
 def customer_credit(due: Decimal, paid: Decimal) -> Decimal:
     """What the company owes back once a credit note brings what is due below what was already paid."""
     return max(paid - due, ZERO)
+
+
+@dataclass(frozen=True)
+class ManualLine:
+    """A line typed in by hand on an invoice: a product or a free description, at a list price less a discount."""
+    product_id: str | None
+    description: str | None
+    quantity: Decimal
+    list_price: Decimal
+    discount_rate: Decimal = ZERO
+    vat_rate: Decimal = ZERO
+    # core.tax_codes.code the rate came from, resolved by finance (None when no code has the rate)
+    tax_code: str | None = None
+
+    @property
+    def net_unit_price(self) -> Decimal:
+        return (self.list_price * (Decimal("100") - self.discount_rate) / Decimal("100")).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+
+    def billed(self) -> BilledLine:
+        return BilledLine(product_id=self.product_id, quantity=self.quantity, unit_price=self.net_unit_price,
+                          vat_rate=self.vat_rate, tax_code=self.tax_code, description=self.description)
+
+
+def check_manual_lines(lines: Iterable[ManualLine]) -> Result[list[ManualLine]]:
+    """An invoice needs at least one line; each names a product or says what it bills, and its numbers make sense."""
+    lines = list(lines)
+    if not lines:
+        return Err("INVOICE_EMPTY", "an invoice needs at least one line", "une facture a besoin d'au moins une ligne")
+    for number, line in enumerate(lines, start=1):
+        if not line.product_id and not (line.description or "").strip():
+            return Err("INVALID_LINE", f"line {number} needs a product or a description", f"la ligne {number} a besoin d'un produit ou d'une description")
+        if line.quantity <= 0:
+            return Err("INVALID_LINE", f"line {number}: the quantity must be above 0", f"ligne {number} : la quantité doit être supérieure à 0")
+        if line.list_price < 0:
+            return Err("INVALID_LINE", f"line {number}: the price cannot be negative", f"ligne {number} : le prix ne peut pas être négatif")
+        if not ZERO <= line.discount_rate <= Decimal("100"):
+            return Err("INVALID_LINE", f"line {number}: the discount is between 0 and 100 %", f"ligne {number} : la remise est comprise entre 0 et 100 %")
+        if not ZERO <= line.vat_rate <= Decimal("100"):
+            return Err("INVALID_LINE", f"line {number}: the VAT rate is between 0 and 100 %", f"ligne {number} : le taux de TVA est compris entre 0 et 100 %")
+    return Ok(lines)

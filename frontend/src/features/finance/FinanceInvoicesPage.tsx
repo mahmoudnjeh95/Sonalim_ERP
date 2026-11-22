@@ -18,7 +18,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Table, TableHeader, TableBody, TableRow, TableCell, ResizableTableHead } from "../../components/ui/table";
 import {
   Dialog,
-  DialogTrigger,
   DialogContent,
   DialogHeader,
   DialogTitle,
@@ -33,9 +32,10 @@ import { ColumnVisibilityMenu } from "../../components/patterns/ColumnVisibility
 import { HelpTooltip } from "../../components/patterns/HelpTooltip";
 import { useColumnFilters, type FilterField } from "../../lib/useColumnFilters";
 import { useTableColumns, type ColumnDef } from "../../lib/useTableColumns";
-import { createInvoice, issueInvoice, listInvoices, payInvoice, updateInvoice, type Invoice, type InvoiceStatus } from "./api";
+import { issueInvoice, listInvoices, payInvoice, updateInvoice, type Invoice, type InvoiceStatus } from "./api";
 import { TableLoadingRow } from "../../components/patterns/AppLoader";
 import { listPartners } from "../partners/api";
+import { InvoiceEditorDialog } from "./InvoiceEditorDialog";
 import { CreditNotesCard } from "./CreditNotesCard";
 import { InvoiceDetailDialog, invoiceSourceLabel } from "./InvoiceDetailDialog";
 import { LedgerStatusBadge, LedgerStatusFilterTabs, matchesLedgerFilter, useLedgerStatuses, type LedgerStatusFilter } from "./ledgerStatus";
@@ -69,7 +69,8 @@ export function FinanceInvoicesPage() {
   const { t } = useI18n();
   const token = session!.token;
   const queryClient = useQueryClient();
-  const [dialogOpen, setDialogOpen] = useState(false);
+  const [editorOpen, setEditorOpen] = useState(false);
+  const [editorInvoiceId, setEditorInvoiceId] = useState<string | null>(null);
   const [editDialogOpen, setEditDialogOpen] = useState(false);
   const [editingInvoice, setEditingInvoice] = useState<Invoice | null>(null);
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
@@ -77,28 +78,7 @@ export function FinanceInvoicesPage() {
 
   const { data: invoices = [], isLoading } = useQuery({ queryKey: QUERY_KEY, queryFn: () => listInvoices(token) });
   const { data: partners = [] } = useQuery({ queryKey: PARTNERS_QUERY_KEY, queryFn: () => listPartners(token) });
-  const activePartners = partners.filter((p) => p.status === "active");
   const partnerName = (id: string) => partners.find((p) => p.id === id)?.name ?? "—";
-
-  const {
-    register,
-    handleSubmit,
-    reset,
-    formState: { errors },
-  } = useForm<NewInvoiceForm>({ resolver: zodResolver(newInvoiceSchema), defaultValues: { currency: "XOF" } });
-
-  const createMutation = useMutation({
-    mutationFn: (input: NewInvoiceForm) => createInvoice(token, input),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: QUERY_KEY });
-      setDialogOpen(false);
-      reset({ currency: "XOF" });
-      toast.success(t("finance.created"));
-    },
-    onError: (error) => {
-      toast.error(t("finance.createError"), { description: error instanceof ApiError ? error.message : undefined });
-    },
-  });
 
   const issueMutation = useMutation({
     mutationFn: (id: string) => issueInvoice(token, id),
@@ -142,7 +122,14 @@ export function FinanceInvoicesPage() {
     },
   });
 
+  function openEditor(invoiceId: string | null) {
+    setEditorInvoiceId(invoiceId);
+    setEditorOpen(true);
+  }
+
   function openEditDialog(invoice: Invoice) {
+    // A draft is re-typed line by line; an issued invoice only has the admin edit (partner, due date).
+    if (invoice.status === "draft") return openEditor(invoice.id);
     setEditingInvoice(invoice);
     resetEdit({
       partner_id: invoice.partner_id,
@@ -322,53 +309,11 @@ export function FinanceInvoicesPage() {
             )}
             <ColumnVisibilityMenu columns={columns} isVisible={isVisible} onToggle={toggleVisible} onReset={resetAll} />
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4" />
-                {t("finance.new")}
-              </Button>
-            </DialogTrigger>
-            <DialogContent>
-              <DialogHeader>
-                <DialogTitle>{t("finance.dialog.title")}</DialogTitle>
-                <DialogDescription>{t("finance.dialog.description")}</DialogDescription>
-              </DialogHeader>
-              <form className="space-y-4" onSubmit={handleSubmit((input) => createMutation.mutate(input))}>
-                <div className="space-y-1.5">
-                  <Label htmlFor="partner_id">{t("finance.field.partnerId")}</Label>
-                  <Select id="partner_id" {...register("partner_id")}>
-                    <option value="">—</option>
-                    {activePartners.map((partner) => (
-                      <option key={partner.id} value={partner.id}>
-                        {partner.name}
-                      </option>
-                    ))}
-                  </Select>
-                  {errors.partner_id && <p className="text-sm text-destructive">{errors.partner_id.message}</p>}
-                </div>
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1.5">
-                    <Label htmlFor="amount">{t("finance.field.amount")}</Label>
-                    <Input id="amount" type="number" step="any" {...register("amount")} />
-                    {errors.amount && <p className="text-sm text-destructive">{errors.amount.message}</p>}
-                  </div>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="currency">{t("finance.field.currency")}</Label>
-                    <Input id="currency" value="F CFA" disabled />
-                  </div>
-                </div>
-                {createMutation.isError && (
-                  <p className="text-sm text-destructive">
-                    {createMutation.error instanceof ApiError ? createMutation.error.message : t("finance.createError")}
-                  </p>
-                )}
-                <Button type="submit" className="w-full" disabled={createMutation.isPending}>
-                  {createMutation.isPending ? t("finance.creating") : t("finance.create")}
-                </Button>
-              </form>
-            </DialogContent>
-          </Dialog>
+          <Button onClick={() => openEditor(null)}>
+            <Plus className="h-4 w-4" />
+            {t("finance.new")}
+          </Button>
+          <InvoiceEditorDialog open={editorOpen} onOpenChange={setEditorOpen} invoiceId={editorInvoiceId} invalidateKey={QUERY_KEY} />
           <Dialog
             open={editDialogOpen}
             onOpenChange={(open) => {

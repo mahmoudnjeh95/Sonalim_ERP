@@ -16,10 +16,29 @@ from modules.finance.domain.entities import check_new_invoice_currency
 router = APIRouter(prefix="/finance", tags=["finance"])
 
 
+class InvoiceLineBody(BaseModel):
+    product_id: str | None = None
+    description: str | None = None
+    quantity: Decimal = Decimal("1")
+    unit_price: Decimal
+    discount_rate: Decimal = Decimal("0")
+    # Name the VAT by tax code (WP-1.1) or by rate; neither takes the tenant's default sales rate.
+    tax_code: str | None = None
+    vat_rate: Decimal | None = None
+
+
 class CreateInvoiceRequest(BaseModel):
     partner_id: str
-    amount: Decimal
+    # Either `lines` (priced lines with VAT) or, as before, a single `amount`.
+    amount: Decimal | None = None
+    lines: list[InvoiceLineBody] | None = None
+    invoice_date: datetime.date | None = None
     currency: str = "XOF"
+
+
+class ReplaceLinesRequest(BaseModel):
+    lines: list[InvoiceLineBody]
+    invoice_date: datetime.date | None = None
 
 
 class TransitionRequest(BaseModel):
@@ -85,6 +104,15 @@ def create_invoice(
     currency_checked = check_new_invoice_currency(body.currency)
     if isinstance(currency_checked, Err):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, err_detail(currency_checked))
+    if body.lines is None and body.amount is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, {"code": "INVOICE_EMPTY", "message": "an invoice needs lines or an amount",
+                                                          "message_fr": "une facture a besoin de lignes ou d'un montant"})
+    if body.lines is not None:
+        with get_connection() as connection:
+            result = InvoiceService(connection).create_invoice(
+                tenant_id=tenant.tenant_id, actor_id=tenant.user_id, partner_id=body.partner_id,
+                lines=[line.model_dump() for line in body.lines], invoice_date=body.invoice_date, currency=body.currency)
+            return _detail_response(connection, result)
     with get_connection() as connection:
         service = InvoiceService(connection)
         invoice = service.create_draft_invoice(
@@ -96,6 +124,28 @@ def create_invoice(
         )
         connection.commit()
         return _invoice_response(invoice, connection, tenant.tenant_id)
+
+
+def _detail_response(connection, result) -> dict:
+    if isinstance(result, Err):
+        connection.rollback()
+        code = {"NOT_FOUND": status.HTTP_404_NOT_FOUND, "INVOICE_NOT_DRAFT": status.HTTP_409_CONFLICT}.get(result.code, status.HTTP_400_BAD_REQUEST)
+        raise HTTPException(code, err_detail(result))
+    connection.commit()
+    return result.value
+
+
+@router.put("/invoices/{invoice_id}/lines")
+def replace_invoice_lines(
+    invoice_id: str,
+    body: ReplaceLinesRequest,
+    tenant: TenantContext = Depends(require_permission("finance.manage_invoices")),
+) -> dict:
+    with get_connection() as connection:
+        result = InvoiceService(connection).replace_lines(
+            tenant_id=tenant.tenant_id, actor_id=tenant.user_id, invoice_id=invoice_id,
+            lines=[line.model_dump() for line in body.lines], invoice_date=body.invoice_date)
+        return _detail_response(connection, result)
 
 
 @router.patch("/invoices/{invoice_id}")

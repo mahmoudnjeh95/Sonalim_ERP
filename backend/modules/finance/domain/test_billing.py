@@ -48,3 +48,30 @@ def test_a_fully_credited_invoice_is_settled_and_one_credited_below_its_payments
     assert status_for_payment(0.0, 0.0) == "paid"
     assert status_for_payment(700.0, 1000.0) == "paid"
     assert status_for_payment(700.0, 200.0) == "partially_paid"
+
+
+# ---- manual invoice lines ---------------------------------------------------------------------------------
+
+from core.domain.result import Err as _Err, Ok as _Ok  # noqa: E402
+from modules.finance.domain.billing import ManualLine, check_manual_lines, document_totals  # noqa: E402
+
+
+def _manual(**kw):
+    base = dict(product_id=None, description="Transport", quantity=D("2"), list_price=D("1000"))
+    return ManualLine(**{**base, **kw})
+
+
+def test_manual_line_net_price_and_totals():
+    line = _manual(discount_rate=D("10"), vat_rate=D("18"))
+    assert line.net_unit_price == D("900.0000")
+    assert document_totals([line.billed()]) == (D("1800"), D("324"), D("2124"))
+
+
+def test_manual_lines_are_checked():
+    assert isinstance(check_manual_lines([_manual()]), _Ok)
+    assert check_manual_lines([]).code == "INVOICE_EMPTY"
+    assert check_manual_lines([_manual(description=" ")]).code == "INVALID_LINE"
+    assert check_manual_lines([_manual(product_id="p", description=None)]).__class__ is _Ok
+    for bad in ({"quantity": D("0")}, {"list_price": D("-1")}, {"discount_rate": D("101")}, {"vat_rate": D("101")}):
+        result = check_manual_lines([_manual(**bad)])
+        assert isinstance(result, _Err) and result.code == "INVALID_LINE"
