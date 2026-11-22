@@ -74,9 +74,9 @@ tested, built and deployed to the VPS.
 - [~] **WP-1.2 Real customer invoices.** (Lines, VAT, counters, instalments, credit notes
   exist.) Invoice lines, tax, numbering sequence, due date
   and payment terms, partial payments, credit notes. Migrate existing single-amount rows.
-- [~] **WP-1.3 Invoice from shipment.** (Finance consumes `warehouse.shipment.shipped` and
+- [x] **WP-1.3 Invoice from shipment.** (Finance consumes `warehouse.shipment.shipped` and
   `warehouse.voucher.posted`.) Create the invoice from `warehouse.shipment.shipped`
-  (shipped quantities) instead of `sales.order.confirmed` (ordered total).
+  (shipped quantities) instead of `sales.order.confirmed` (ordered total). *Verified 2026-11-22: already built.*
 - [~] **WP-1.4 Supplier bills and payables.** (Purchase invoices, receipt matching, credit
   notes and ledger posting exist.) Supplier invoice against PO and receipt
   (3-way match), posting to the purchases journal, supplier payments.
@@ -146,6 +146,17 @@ ERP (WP-4.2 becomes the largest item and moves earlier). Not yet decided by the 
 ## Progress log
 
 Newest first. One line per session: date, WP, what was finished, what is left, branch.
+
+- 2026-11-22 — WP-1.3 done, by reading what was there: no new code was needed. Finance
+  `events/consumers.py` already bills `warehouse.shipment.shipped` (shipped quantities) and
+  billable `warehouse.voucher.posted` delivery notes through `DeliveryBillingService`, at the
+  order's net prices and VAT, idempotent per shipment, capped at the ordered quantity, with
+  an advisory lock per order; `sales.order.confirmed` is no longer consumed by finance. Added
+  the one missing test: a short pick (5 of 12) is billed at 5. Postgres 16 local (migrations +
+  `seed_dev`): finance, sales and the warehouse fulfilment/event tests 302 passed / 0
+  skipped; full suite and frontend not run (test-only change). Invoice currency is still the
+  literal `'XOF'` in `billing_service.py` (belongs to WP-3.4). Next WP: WP-1.4. Branch
+  `claude/bold-goldberg-g9q7qx`.
 
 - 2026-11-20 — WP-0.6 done (spec `specs/2026-11-20-error-tracking-alerts-design.md`, plan
   `plans/2026-11-20-error-tracking-alerts.md`, runbook `docs/operations-alerts.md`). New

@@ -142,12 +142,12 @@ def test_a_re_delivery_after_a_return_is_not_billed(db, env):
     assert [i["total"] for i in _order_invoices(db, order_id)] == [D(3000)]
 
 
-def _ship(db, env, order_id) -> str:
+def _ship(db, env, order_id, picked=None) -> str:
     fulfillment = FulfillmentService(db)
     [pick_list] = [p for p in fulfillment.list_pick_lists(tenant_id=TENANT) if p.source_id == order_id]
     for line in fulfillment.list_pick_lines(tenant_id=TENANT, pick_list_id=pick_list.id):
         fulfillment.submit_pick(tenant_id=TENANT, actor_id=env["actor"], pick_list_id=pick_list.id, line_id=line.id,
-                                quantity_picked=line.quantity_requested)
+                                quantity_picked=picked if picked is not None else line.quantity_requested)
     fulfillment.complete_picking(tenant_id=TENANT, actor_id=env["actor"], pick_list_id=pick_list.id)
     shipment = fulfillment.pack(tenant_id=TENANT, actor_id=env["actor"], pick_list_id=pick_list.id, package_count=1).value
     assert isinstance(fulfillment.ship(tenant_id=TENANT, actor_id=env["actor"], shipment_id=shipment.id, correlation_id="c"), Ok)
@@ -161,6 +161,14 @@ def test_a_shipped_pick_list_is_billed_once(db, env):
     order_id = _confirmed_order(db, env, quantity=12, price=250.0)
     number = _ship(db, env, order_id)
     assert [(i["source_type"], i["source_number"], i["total"]) for i in _order_invoices(db, order_id)] == [("shipment", number, D(3000))]
+
+
+def test_a_short_shipment_is_billed_at_the_shipped_quantity_not_the_ordered_one(db, env):
+    order_id = _confirmed_order(db, env, quantity=12, price=250.0)
+    number = _ship(db, env, order_id, picked=5)
+    [invoice] = _order_invoices(db, order_id)
+    assert (invoice["source_number"], invoice["total"]) == (number, D(1250))
+    assert [(l["quantity"], l["unit_price"]) for l in InvoiceService(db).get_invoice_detail(tenant_id=TENANT, invoice_id=invoice["id"]).value["lines"]] == [(D(5), D(250))]
 
 
 def test_an_order_invoiced_when_it_was_confirmed_is_never_invoiced_again_at_delivery(db, env):
